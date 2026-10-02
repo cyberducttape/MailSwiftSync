@@ -1,5 +1,6 @@
 use super::batch::BatchExecutionMode;
 use super::batch_work_item::{BatchWorkerContext, process_batch_work_items, send_job_finished};
+use super::rate_domains::{RateDomainLimiter, RateDomainPath, SideIdentity};
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
@@ -15,156 +16,75 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
 };
 
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const MAX_BATCH_PENDING_EVENTS: usize = 4_096;
-const MAX_ADAPTIVE_PROVIDER_KEYS: usize = 4_096;
-/// Quiet period after a cooldown expires before a provider pair's escalation
-/// history is forgotten. Throttling episodes closer together than this keep
-/// doubling the shared backoff instead of starting over at the base delay.
-const PROVIDER_ESCALATION_RESET_AFTER: Duration = Duration::from_secs(300);
 
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
 pub(crate) type OAuthRefreshLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
 
-struct ProviderCooldown {
-    blocked_until: Instant,
-    last_capacity_failure: Instant,
-    consecutive_capacity_failures: u8,
-}
-
-impl ProviderCooldown {
-    fn escalation_expired(&self, now: Instant) -> bool {
-        self.blocked_until + PROVIDER_ESCALATION_RESET_AFTER <= now
-    }
-}
-
-/// Shared, endpoint-scoped capacity control for one batch wave.
-///
-/// This reacts only to observed capacity/rate-limit failures. It deliberately
-/// does not encode undocumented provider quotas. A cooldown affects later
-/// launches for the same source/destination endpoint pair, while unrelated
-/// provider pairs continue to make progress.
-///
-/// Escalation history outlives the cooldown itself: an expired entry stays
-/// until a job launched after its last capacity failure succeeds, or until
-/// `PROVIDER_ESCALATION_RESET_AFTER` passes without another capacity failure.
-pub(crate) struct AdaptiveProviderLimiter {
-    state: Mutex<HashMap<String, ProviderCooldown>>,
-}
-
-impl AdaptiveProviderLimiter {
-    pub(crate) fn new() -> Self {
-        Self {
-            state: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub(crate) fn wait(&self, key: &str, cancel: &AtomicBool) -> bool {
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
-            }
-            let wait = {
-                let state = match self.state.lock() {
-                    Ok(state) => state,
-                    Err(_) => return false,
-                };
-                let now = Instant::now();
-                match state.get(key).map(|value| value.blocked_until) {
-                    Some(blocked_until) if blocked_until > now => blocked_until - now,
-                    _ => return true,
-                }
-            };
-            thread::sleep(wait.min(Duration::from_millis(100)));
-        }
-    }
-
-    /// Hold an endpoint pair closed until `until`, as an observed capacity
-    /// failure would, without depending on provider retry-delay tables.
-    #[cfg(all(test, unix))]
-    pub(crate) fn hold_until(&self, key: &str, until: Instant) {
-        let now = Instant::now();
-        self.state.lock().unwrap().insert(
-            key.to_owned(),
-            ProviderCooldown {
-                blocked_until: until,
-                last_capacity_failure: now,
-                consecutive_capacity_failures: 1,
-            },
-        );
-    }
-
-    /// Record a failure; returns when the endpoint pair's cooldown ends if
-    /// this was a capacity failure that (re)armed one.
-    pub(crate) fn observe_failure(&self, key: &str, error: &str) -> Option<Instant> {
-        if crate::controller::failure::classify_failure(error)
-            != crate::controller::failure::FailureClass::Capacity
-        {
-            return None;
-        }
-        let base = crate::core::provider_intelligence::ProviderErrorClassifier::classify(
-            "generic",
-            crate::controller::failure::control_error_text(error),
-        )
-        .suggested_retry_delay()
-        .unwrap_or(Duration::from_secs(5));
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => return None,
-        };
-        let now = Instant::now();
-        state.retain(|_, value| !value.escalation_expired(now));
-        if state.len() >= MAX_ADAPTIVE_PROVIDER_KEYS && !state.contains_key(key) {
-            return None;
-        }
-        let entry = state.entry(key.to_owned()).or_insert(ProviderCooldown {
-            blocked_until: now,
-            last_capacity_failure: now,
-            consecutive_capacity_failures: 0,
-        });
-        entry.last_capacity_failure = now;
-        let multiplier = 1u32 << entry.consecutive_capacity_failures.min(5);
-        let cooldown = base
-            .saturating_mul(multiplier)
-            .min(Duration::from_secs(120));
-        entry.blocked_until = entry.blocked_until.max(now + cooldown);
-        entry.consecutive_capacity_failures = entry.consecutive_capacity_failures.saturating_add(1);
-        Some(entry.blocked_until)
-    }
-
-    /// Record that a job admitted at `launched_at` completed. Only a launch
-    /// that began after the most recent capacity failure proves the provider
-    /// recovered; a long transfer that started before throttling must not
-    /// erase the escalation earned by later failures.
-    pub(crate) fn observe_success(&self, key: &str, launched_at: Instant) {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => return,
-        };
-        let now = Instant::now();
-        if state.get(key).is_some_and(|value| {
-            value.blocked_until <= now && launched_at >= value.last_capacity_failure
-        }) {
-            state.remove(key);
-        }
-    }
-}
-
-pub(crate) fn provider_scope_key(form: &crate::Form) -> String {
-    let source = canonical_provider_endpoint(
+fn source_endpoint(form: &crate::Form) -> String {
+    canonical_provider_endpoint(
         &form.profile.source_host,
         &form.profile.source_port,
         &form.profile.source_tls,
-    );
-    let destination = canonical_provider_endpoint(
+    )
+}
+
+fn destination_endpoint(form: &crate::Form) -> String {
+    canonical_provider_endpoint(
         &form.profile.destination_host,
         &form.profile.destination_port,
         crate::effective_destination_tls(&form.profile.destination_tls),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn provider_scope_key(form: &crate::Form) -> String {
+    format!("{}|{}", source_endpoint(form), destination_endpoint(form))
+}
+
+/// Authentication principal that a provider may meter: the OAuth refresh
+/// credential, else the keyring credential, else (empty) the user itself.
+fn rate_principal(auth: &str, oauth_refresh_id: &str, credential_id: &str) -> String {
+    if crate::migration_plan::auth_method_is_oauth(auth) && !oauth_refresh_id.trim().is_empty() {
+        format!("oauth:{}", oauth_refresh_id.trim())
+    } else if !credential_id.trim().is_empty() {
+        format!("keyring:{}", credential_id.trim())
+    } else {
+        String::new()
+    }
+}
+
+/// Place one mailbox job in the global → provider → tenant → credential →
+/// mailbox rate-domain hierarchy for both sides.
+pub(crate) fn rate_domain_path(form: &crate::Form) -> RateDomainPath {
+    let profile = &form.profile;
+    let source_endpoint = source_endpoint(form);
+    let destination_endpoint = destination_endpoint(form);
+    let source_principal = rate_principal(
+        &profile.source_auth,
+        &profile.source_oauth_refresh_credential_id,
+        &profile.source_credential_id,
     );
-    format!("{source}|{destination}")
+    let destination_principal = rate_principal(
+        &profile.destination_auth,
+        &profile.destination_oauth_refresh_credential_id,
+        &profile.destination_credential_id,
+    );
+    RateDomainPath::new(
+        &SideIdentity {
+            endpoint: &source_endpoint,
+            user: &profile.source_user,
+            principal: &source_principal,
+        },
+        &SideIdentity {
+            endpoint: &destination_endpoint,
+            user: &profile.destination_user,
+            principal: &destination_principal,
+        },
+    )
 }
 
 fn canonical_provider_endpoint(host: &str, configured_port: &str, tls_mode: &str) -> String {
@@ -252,7 +172,7 @@ pub(crate) fn spawn_batch_worker(
         diagnostic_logger,
     } = context;
     let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
-    let provider_limiter = Arc::new(AdaptiveProviderLimiter::new());
+    let provider_limiter = Arc::new(RateDomainLimiter::new(concurrency));
     let oauth_refresh_locks: OAuthRefreshLocks = Arc::new(Mutex::new(HashMap::new()));
     thread::spawn(move || {
         let failed = Arc::new(AtomicBool::new(false));
@@ -423,8 +343,7 @@ pub(crate) fn spawn_batch_worker(
 
 #[cfg(test)]
 mod tests {
-    use super::{AdaptiveProviderLimiter, provider_scope_key};
-    use std::sync::atomic::AtomicBool;
+    use super::provider_scope_key;
 
     fn form(
         source_host: &str,
@@ -490,135 +409,5 @@ mod tests {
             provider_scope_key(&standard),
             provider_scope_key(&alternate)
         );
-    }
-
-    #[test]
-    fn adaptive_provider_limiter_scopes_capacity_and_honors_cancellation() {
-        let limiter = AdaptiveProviderLimiter::new();
-        let key = "imap.gmail.com:993|imap.destination.example:993";
-        limiter.observe_failure(key, "too many requests");
-        let state = limiter.state.lock().unwrap();
-        assert!(
-            state
-                .get(key)
-                .is_some_and(|cooldown| cooldown.blocked_until > std::time::Instant::now())
-        );
-        drop(state);
-
-        let cancel = AtomicBool::new(true);
-        assert!(!limiter.wait(key, &cancel));
-        assert!(!limiter.wait("other-provider:993|other-destination:993", &cancel));
-    }
-
-    fn expire_cooldown(limiter: &AdaptiveProviderLimiter, key: &str, ago: std::time::Duration) {
-        let mut state = limiter.state.lock().unwrap();
-        let entry = state.get_mut(key).expect("cooldown recorded");
-        let past = std::time::Instant::now() - ago;
-        entry.blocked_until = past;
-        entry.last_capacity_failure = past;
-    }
-
-    fn remaining_cooldown(limiter: &AdaptiveProviderLimiter, key: &str) -> std::time::Duration {
-        limiter.state.lock().unwrap()[key]
-            .blocked_until
-            .saturating_duration_since(std::time::Instant::now())
-    }
-
-    #[test]
-    fn sequential_throttling_episodes_escalate_after_cooldown_expires() {
-        let limiter = AdaptiveProviderLimiter::new();
-        let key = "provider-pair";
-        let never = AtomicBool::new(false);
-        limiter.observe_failure(key, "too many requests");
-        let first = remaining_cooldown(&limiter, key);
-
-        expire_cooldown(&limiter, key, std::time::Duration::from_secs(1));
-        assert!(limiter.wait(key, &never));
-        limiter.observe_failure(key, "too many requests");
-        let second = remaining_cooldown(&limiter, key);
-
-        assert_eq!(
-            limiter.state.lock().unwrap()[key].consecutive_capacity_failures,
-            2
-        );
-        assert!(
-            second > first + first / 2,
-            "{second:?} should double {first:?}"
-        );
-    }
-
-    #[test]
-    fn provider_escalation_resets_after_quiet_period() {
-        let limiter = AdaptiveProviderLimiter::new();
-        let key = "provider-pair";
-        limiter.observe_failure(key, "too many requests");
-        limiter.observe_failure(key, "too many requests");
-        expire_cooldown(
-            &limiter,
-            key,
-            super::PROVIDER_ESCALATION_RESET_AFTER + std::time::Duration::from_secs(1),
-        );
-
-        limiter.observe_failure(key, "too many requests");
-        assert_eq!(
-            limiter.state.lock().unwrap()[key].consecutive_capacity_failures,
-            1
-        );
-    }
-
-    #[test]
-    fn only_success_launched_after_last_failure_resets_escalation() {
-        let limiter = AdaptiveProviderLimiter::new();
-        let key = "provider-pair";
-        let stale_launch = std::time::Instant::now() - std::time::Duration::from_secs(60);
-        limiter.observe_failure(key, "too many requests");
-        expire_cooldown(&limiter, key, std::time::Duration::from_secs(1));
-
-        limiter.observe_success(key, stale_launch);
-        assert!(limiter.state.lock().unwrap().contains_key(key));
-
-        limiter.observe_success(key, std::time::Instant::now());
-        assert!(!limiter.state.lock().unwrap().contains_key(key));
-    }
-
-    #[test]
-    fn success_does_not_lift_active_cooldown() {
-        let limiter = AdaptiveProviderLimiter::new();
-        let key = "provider-pair";
-        limiter.observe_failure(key, "too many requests");
-        limiter.observe_success(key, std::time::Instant::now());
-        assert!(remaining_cooldown(&limiter, key) > std::time::Duration::ZERO);
-    }
-
-    #[test]
-    fn mixed_disconnect_and_capacity_error_activates_long_provider_cooldown() {
-        let limiter = AdaptiveProviderLimiter::new();
-        limiter.observe_failure("provider-pair", "connection closed: too many connections");
-        limiter.observe_failure("network-only", "connection closed by remote host");
-
-        let state = limiter.state.lock().unwrap();
-        let now = std::time::Instant::now();
-        assert!(state.get("provider-pair").is_some_and(|cooldown| {
-            cooldown.blocked_until.duration_since(now) >= std::time::Duration::from_secs(29)
-        }));
-        assert!(!state.contains_key("network-only"));
-    }
-
-    #[test]
-    fn presentation_tail_cannot_change_provider_cooldown_duration() {
-        let limiter = AdaptiveProviderLimiter::new();
-        limiter.observe_failure(
-            "provider-pair",
-            "too many connections; recent output: HTTP/1.1 429 Too Many Requests",
-        );
-
-        let state = limiter.state.lock().unwrap();
-        let remaining = state
-            .get("provider-pair")
-            .expect("primary capacity signal schedules a cooldown")
-            .blocked_until
-            .duration_since(std::time::Instant::now());
-        assert!(remaining >= std::time::Duration::from_secs(29));
-        assert!(remaining < std::time::Duration::from_secs(60));
     }
 }

@@ -1,7 +1,8 @@
 //! Per-mailbox batch execution worker.
 
 use super::batch::BatchExecutionMode;
-use super::batch_worker::{AdaptiveProviderLimiter, OAuthRefreshLocks, provider_scope_key};
+use super::batch_worker::{OAuthRefreshLocks, rate_domain_path};
+use super::rate_domains::{DomainKey, RateDomainLimiter};
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
@@ -11,7 +12,7 @@ use crate::{
     },
     core,
     credentials::CleanupGuard,
-    imap_probe::fresh_dual_imaps_authentication,
+    imap_probe::{SidedProbeError, fresh_dual_imaps_authentication},
     process::ProcessLaunchLimiter,
     runner::{
         ResolvedImapsyncIdentity, RunContext, TerminalEvidenceSource, message_verification_enabled,
@@ -135,6 +136,16 @@ fn persist_batch_terminal_state(transition: BatchTerminalTransition<'_>) {
     }
 }
 
+/// Tell the operator which rate domains a capacity failure paused.
+fn report_cooldowns(tx: &mpsc::SyncSender<Event>, penalized: Vec<(DomainKey, std::time::Instant)>) {
+    for (domain, until) in penalized {
+        let _ = tx.try_send(Event::ProviderCooldown {
+            domain: domain.label(),
+            until,
+        });
+    }
+}
+
 pub(crate) struct BatchWorkerContext {
     pub(crate) concurrency: usize,
     pub(crate) mode: BatchExecutionMode,
@@ -146,7 +157,7 @@ pub(crate) struct BatchWorkerContext {
     pub(crate) failed: Arc<AtomicBool>,
     pub(crate) terminal_jobs: Arc<Mutex<HashSet<usize>>>,
     pub(crate) launch_limiter: Arc<ProcessLaunchLimiter>,
-    pub(crate) provider_limiter: Arc<AdaptiveProviderLimiter>,
+    pub(crate) provider_limiter: Arc<RateDomainLimiter>,
     pub(crate) batch_project_id: String,
     pub(crate) batch_run_id: String,
     pub(crate) resolved_imapsync: Arc<std::collections::HashMap<String, ResolvedImapsyncIdentity>>,
@@ -561,12 +572,13 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         let mut claimed = false;
         let mut verification_failure: Option<String> = None;
         let mut transfer_attempt_number = 0_u32;
-        let provider_key = provider_scope_key(&form);
+        let rate_path = rate_domain_path(&form);
         for attempt in 0..=retry_count {
-            if !provider_limiter.wait(&provider_key, &cancel) {
+            // Held for this attempt only: every rate domain of the job counts
+            // it as in flight until the attempt ends or backs off.
+            let Some(admission) = provider_limiter.admit(&rate_path, &cancel) else {
                 break;
-            }
-            let provider_admitted_at = std::time::Instant::now();
+            };
             if live {
                 // A queue-level admission must not mint an access token for
                 // every selected mailbox. Refresh immediately before this
@@ -598,14 +610,18 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     break;
                 }
             }
-            if live && let Err(error) = fresh_dual_imaps_authentication(&form) {
+            if live
+                && let Err(SidedProbeError {
+                    side,
+                    message: error,
+                }) = fresh_dual_imaps_authentication(&form)
+            {
                 if should_retry_batch_error(&error, attempt, retry_count) {
-                    if let Some(until) = provider_limiter.observe_failure(&provider_key, &error) {
-                        let _ = tx.try_send(Event::ProviderCooldown {
-                            endpoint: provider_key.replace('|', " → "),
-                            until,
-                        });
-                    }
+                    report_cooldowns(
+                        &tx,
+                        provider_limiter.observe_failure_on(&admission, &error, vec![side]),
+                    );
+                    drop(admission);
                     send_run_line(
                         &tx,
                         &form,
@@ -757,7 +773,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             });
             match result {
                 Ok(outcome) => {
-                    provider_limiter.observe_success(&provider_key, provider_admitted_at);
+                    provider_limiter.observe_success(&admission);
                     if outcome == StreamOutcome::DeltaRequired {
                         send_run_line(
                             &tx,
@@ -775,12 +791,8 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     break;
                 }
                 Err(error) if should_retry_batch_error(&error, attempt, retry_count) => {
-                    if let Some(until) = provider_limiter.observe_failure(&provider_key, &error) {
-                        let _ = tx.try_send(Event::ProviderCooldown {
-                            endpoint: provider_key.replace('|', " → "),
-                            until,
-                        });
-                    }
+                    report_cooldowns(&tx, provider_limiter.observe_failure(&admission, &error));
+                    drop(admission);
                     send_run_line(
                         &tx,
                         &form,
@@ -1015,6 +1027,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn released_provider_cooldown_does_not_burst_process_starts() {
+        use crate::controller::rate_domains::{DomainLevel, Side};
         use std::os::unix::fs::PermissionsExt;
         const WORKERS: usize = 4;
         const STARTS_PER_SECOND: usize = 10;
@@ -1034,7 +1047,9 @@ mod tests {
         form.source_password = String::from("source-secret").into();
         form.destination_password = String::from("destination-secret").into();
         form.dry_run = true;
-        let provider_key = provider_scope_key(&form);
+        let provider = rate_domain_path(&form)
+            .domain(Side::Source, DomainLevel::Provider)
+            .clone();
 
         let (job_tx, job_rx) = crossbeam_channel::unbounded();
         for index in 0..WORKERS {
@@ -1055,11 +1070,11 @@ mod tests {
         drop(job_tx);
 
         let launch_limiter = Arc::new(ProcessLaunchLimiter::new(STARTS_PER_SECOND));
-        let provider_limiter = Arc::new(AdaptiveProviderLimiter::new());
+        let provider_limiter = Arc::new(RateDomainLimiter::new(WORKERS));
         // Longer than the time the workers need to drain any start tokens
         // they could bank while waiting for admission.
         provider_limiter.hold_until(
-            &provider_key,
+            &provider,
             std::time::Instant::now() + Duration::from_millis(800),
         );
         let (tx, rx) = mpsc::sync_channel(64);

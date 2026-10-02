@@ -157,9 +157,10 @@ pub(crate) enum Event {
         delay: std::time::Duration,
         failure_class: &'static str,
     },
-    /// The shared limiter is holding launches for one endpoint pair.
+    /// The rate-domain limiter is holding launches for one domain (a
+    /// mailbox, credential, tenant, provider, or all providers).
     ProviderCooldown {
-        endpoint: String,
+        domain: String,
         until: std::time::Instant,
     },
     Finished(Result<StreamOutcome, String>),

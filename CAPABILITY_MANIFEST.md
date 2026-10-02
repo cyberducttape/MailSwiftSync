@@ -87,7 +87,7 @@ capability in its `manifest_rows` are checked against these fields.
 |------------|------|-------|--------|---------------|-------|
 | **Generic error classification** | yes | yes | integration | generic-lab | src/controller/failure.rs consumes shared provider-intelligence signals and maps them to durable controller classes |
 | **Provider-specific classification** | yes | partial | unit | no | Generic provider-intelligence patterns are now wired into controller retry classification; provider-context-specific rules remain pending |
-| **Automatic retry with backoff** | yes | yes | integration | generic-lab | Transient failures auto-retry with bounded backoff; observed capacity/rate-limit failures also cool down later launches for the same endpoint pair (src/controller/batch_work_item.rs) |
+| **Automatic retry with backoff** | yes | yes | integration | generic-lab | Transient failures auto-retry with bounded backoff; observed capacity/rate-limit failures pause and halve the concurrency of the narrowest rate domain first (mailbox on the reporting side), escalating to credential, tenant, provider, or global only after distinct children of that domain are throttled; no provider quotas are encoded and none is live-qualified (src/controller/rate_domains.rs) |
 | **Rate limit detection** | yes | partial | unit | no | Pattern matching implemented for generic rate limits; provider-specific patterns NOT applied |
 | **Connection exhaustion handling** | yes | partial | unit | no | Configured per provider; generic connection failures retried; provider-specific limits NOT applied |
 

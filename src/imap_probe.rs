@@ -1388,15 +1388,33 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     Ok(caps)
 }
 
-pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), String> {
+/// Which side of a migration an endpoint belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MailSide {
+    Source,
+    Destination,
+}
+
+/// A fresh authentication probe failure and the side that produced it, so
+/// the controller can attribute provider throttling to the right endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SidedProbeError {
+    pub(crate) side: MailSide,
+    pub(crate) message: String,
+}
+
+pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), SidedProbeError> {
     if !fresh_imap_authentication_applies(form) {
         return Ok(());
     }
-    let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)?;
+    let sided = |side| move |message| SidedProbeError { side, message };
+    let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)
+        .map_err(sided(MailSide::Source))?;
     let destination = endpoint_for_probe(
         &form.profile.destination_host,
         &form.profile.destination_port,
-    )?;
+    )
+    .map_err(sided(MailSide::Destination))?;
     probe_tls_authentication_with_transport(
         &source,
         &form.profile.source_user,
@@ -1405,7 +1423,8 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.source_tls,
         &form.profile.source_ca_bundle,
         &form.profile.source_certificate_pin_sha256,
-    )?;
+    )
+    .map_err(sided(MailSide::Source))?;
     probe_tls_authentication_with_transport(
         &destination,
         &form.profile.destination_user,
@@ -1414,7 +1433,8 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.destination_tls,
         &form.profile.destination_ca_bundle,
         &form.profile.destination_certificate_pin_sha256,
-    )?;
+    )
+    .map_err(sided(MailSide::Destination))?;
     Ok(())
 }
 

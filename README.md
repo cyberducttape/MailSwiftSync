@@ -78,6 +78,7 @@ Stable components (implementation status; not a production-support claim):
 The default live imapsync result is labeled `Metadata reconciled — message bodies not compared`; only an explicitly enabled forensic profile can produce `body_hash` evidence.
 
 - `imapsync` fallback for arbitrary IMAP endpoints.
+- Batch admission through hierarchical rate domains (global → provider → tenant → credential → mailbox, per side). A capacity or rate-limit failure pauses the throttled mailbox on the reporting side and halves its concurrency (AIMD); a credential, tenant, provider, or the whole batch is paused only after two distinct children of it are throttled within two minutes, so one customer's throttled tenant does not slow another tenant on the same endpoints. Domains recover additively after later successes. The limiter learns only from observed failures in the current batch; no provider-specific quotas are encoded or live-qualified.
 - CSV/XLSX batch queue with bounded operator-selected concurrency (1–16 workers), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states. Legacy XLS imports are disabled because the parser cannot be bounded safely before worksheet materialization.
 - Explicit imapsync message and byte throttles for provider-friendly single-mailbox runs.
 - Configurable per-process timeout (1–720 hours) so large mailboxes can run longer than the default while hung jobs remain bounded.
