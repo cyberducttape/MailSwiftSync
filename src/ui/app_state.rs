@@ -310,11 +310,6 @@ pub(crate) struct App {
     pub(crate) source_provider: ProviderPreset,
     pub(crate) destination_provider: ProviderPreset,
 }
-impl Default for App {
-    fn default() -> Self {
-        Self::from_state_path(None)
-    }
-}
 
 /// Pre-live readiness and quota checks remain in `imap_probe`; this root module
 /// only wires the shared result into the application controller.

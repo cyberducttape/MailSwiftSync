@@ -10,6 +10,7 @@ mod batch_confirmations;
 mod batch_filter;
 mod batch_queue;
 mod batch_sheet;
+mod bootstrap_failure;
 // Release-mode tests still use the deterministic debug scenes for the
 // accessibility and scale audits. Keep these fixtures out of production
 // binaries while making them available whenever the test harness is built.
@@ -37,6 +38,7 @@ mod workspace;
 pub(crate) use account::password_reveal_allowed;
 pub(crate) use app_state::{App, OAuthAuthorizationMessage};
 pub(crate) use batch_queue::mailbox_import_available;
+pub(crate) use bootstrap_failure::BootstrapFailureScreen;
 pub(crate) use language::UiLanguage;
 pub(crate) use output::{
     contains_case_insensitive, fold_search_text, markdown_escape, push_visible_output,

@@ -1,10 +1,61 @@
 use crate::*;
 
+/// Neither the durable ledger nor the temporary in-memory fallback could be
+/// opened. Startup stops here: without a state store no plan, claim, or
+/// evidence can be recorded, so no migration may start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BootstrapFailure {
+    /// Why durable state was unavailable.
+    pub(crate) durable: String,
+    /// The SQLite error from opening the temporary in-memory store.
+    pub(crate) temporary: String,
+}
+
+impl BootstrapFailure {
+    pub(crate) const SUMMARY: &'static str = "MailSwiftSync could not initialize either durable or temporary state. No migration can be started.";
+}
+
+impl std::fmt::Display for BootstrapFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}\nDurable state: {}\nTemporary state: {}",
+            Self::SUMMARY,
+            self.durable,
+            self.temporary
+        )
+    }
+}
+
+/// Open the non-durable fallback after durable state failed for `reason`.
+fn temporary_state_store(
+    reason: String,
+    open: impl FnOnce() -> rusqlite::Result<core::StateStore>,
+) -> Result<(core::StateStore, Option<String>), BootstrapFailure> {
+    let warning = format!("Persistent SQLite state unavailable: {reason}");
+    match open() {
+        Ok(store) => Ok((store, Some(warning))),
+        Err(error) => Err(BootstrapFailure {
+            durable: warning,
+            temporary: format!("SQLite in-memory store unavailable: {error}"),
+        }),
+    }
+}
+
 impl App {
+    /// Test convenience: tests own their state paths, so a bootstrap
+    /// failure there is a test-environment bug worth a loud panic.
+    #[cfg(test)]
+    pub(crate) fn from_state_path(state_override: Option<&std::path::Path>) -> Self {
+        Self::try_from_state_path(state_override).unwrap_or_else(|failure| panic!("{failure}"))
+    }
+
     /// Construct the application against an explicit ledger path. Headless
     /// callers use this to avoid process-global environment mutation while
     /// retaining the same recovery and durable-state behavior as the GUI.
-    pub(crate) fn from_state_path(state_override: Option<&std::path::Path>) -> Self {
+    pub(crate) fn try_from_state_path(
+        state_override: Option<&std::path::Path>,
+    ) -> Result<Self, BootstrapFailure> {
         let appearance = AppearancePreferences::load();
         let state_path_result = match state_override {
             Some(path) => Ok(path.to_owned()),
@@ -49,31 +100,23 @@ impl App {
         let instance_lock = state_path
             .as_ref()
             .map(|path| acquire_instance_lock(path.as_path()));
-        let (store, mut persistence_warning) = match instance_lock.as_ref() {
-            Some(Ok(_)) => match core::StateStore::open(
-                state_path
-                    .as_ref()
-                    .expect("instance lock cannot exist without a state path"),
-            ) {
+        let (store, mut persistence_warning) = match (state_path.as_ref(), instance_lock.as_ref()) {
+            (Some(path), Some(Ok(_))) => match core::StateStore::open(path) {
                 Ok(store) => (store, None),
-                Err(error) => (
-                    core::StateStore::in_memory().expect("SQLite memory store must be available"),
-                    Some(format!("Persistent SQLite state unavailable: {error}")),
-                ),
+                Err(error) => {
+                    temporary_state_store(error.to_string(), core::StateStore::in_memory)?
+                }
             },
-            Some(Err(error)) => (
-                core::StateStore::in_memory().expect("SQLite memory store must be available"),
-                Some(format!("Persistent SQLite state unavailable: {error}")),
-            ),
-            None => (
-                core::StateStore::in_memory().expect("SQLite memory store must be available"),
-                Some(format!(
-                    "Persistent SQLite state unavailable: {}",
-                    path_error
-                        .as_deref()
-                        .unwrap_or("no durable state path is available")
-                )),
-            ),
+            (_, Some(Err(error))) => {
+                temporary_state_store(error.to_string(), core::StateStore::in_memory)?
+            }
+            _ => temporary_state_store(
+                path_error
+                    .as_deref()
+                    .unwrap_or("no durable state path is available")
+                    .to_owned(),
+                core::StateStore::in_memory,
+            )?,
         };
         if let Some(error) = state_directory_error {
             persistence_warning.get_or_insert(error);
@@ -332,7 +375,7 @@ impl App {
             .enumerate()
             .map(|(index, job_id)| (job_id.clone(), index))
             .collect();
-        Self {
+        Ok(Self {
             form,
             output: initial_output,
             receiver: None,
@@ -524,6 +567,54 @@ impl App {
             verification_cursor_stack: Vec::new(),
             source_provider: ProviderPreset::GenericImap,
             destination_provider: ProviderPreset::GenericImap,
-        }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temporary_store_failure_is_a_structured_bootstrap_failure() {
+        let failure = temporary_state_store("disk I/O error".into(), || {
+            Err(rusqlite::Error::InvalidQuery)
+        })
+        .err()
+        .expect("a failing in-memory store must not produce a session");
+        assert_eq!(
+            failure.durable,
+            "Persistent SQLite state unavailable: disk I/O error"
+        );
+        assert!(
+            failure
+                .temporary
+                .starts_with("SQLite in-memory store unavailable: ")
+        );
+        let rendered = failure.to_string();
+        assert!(
+            rendered.starts_with(BootstrapFailure::SUMMARY),
+            "{rendered}"
+        );
+        assert!(rendered.contains("disk I/O error"), "{rendered}");
+        assert!(rendered.contains(&failure.temporary), "{rendered}");
+    }
+
+    #[test]
+    fn temporary_store_success_keeps_the_non_durable_warning() {
+        let (_, warning) =
+            temporary_state_store("locked".into(), core::StateStore::in_memory).unwrap();
+        assert_eq!(
+            warning.as_deref(),
+            Some("Persistent SQLite state unavailable: locked")
+        );
+    }
+
+    #[test]
+    fn bootstrap_summary_matches_the_localized_english_copy() {
+        assert_eq!(
+            crate::ui::UiLanguage::English.text("ui.bootstrap-failure-summary"),
+            BootstrapFailure::SUMMARY
+        );
     }
 }

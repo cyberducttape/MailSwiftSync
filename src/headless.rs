@@ -571,7 +571,8 @@ pub(crate) fn headless_execute_with_credentials(
 ) -> Result<String, HeadlessFailure> {
     // Use the same startup recovery as the GUI, but pass the ledger path as
     // data instead of mutating process-global environment state.
-    let mut app = App::from_state_path(Some(state_path));
+    let mut app =
+        App::try_from_state_path(Some(state_path)).map_err(|failure| failure.to_string())?;
     if let Some(directory) = diagnostic_log {
         app.diagnostic_logger = Some(std::sync::Arc::new(crate::DiagnosticLogger::create(
             directory,
@@ -761,7 +762,8 @@ pub(crate) fn headless_batch_execute_selected(
     acknowledge_destination_loss: bool,
     diagnostic_log: Option<&std::path::Path>,
 ) -> Result<String, String> {
-    let mut app = App::from_state_path(Some(state_path));
+    let mut app =
+        App::try_from_state_path(Some(state_path)).map_err(|failure| failure.to_string())?;
     if let Some(directory) = diagnostic_log {
         app.diagnostic_logger = Some(std::sync::Arc::new(crate::DiagnosticLogger::create(
             directory,

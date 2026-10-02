@@ -156,7 +156,16 @@ pub(crate) fn run() -> eframe::Result<()> {
                 crate::ui::fonts::install(&creation.egui_ctx);
                 crate::ui::install_style(&creation.egui_ctx);
                 #[allow(unused_mut)]
-                let mut app = App::default();
+                let mut app = match App::try_from_state_path(None) {
+                    Ok(app) => app,
+                    Err(failure) => {
+                        eprintln!("{failure}");
+                        return Ok(Box::new(crate::ui::BootstrapFailureScreen::new(
+                            failure,
+                            crate::ui::AppearancePreferences::load().language,
+                        )));
+                    }
+                };
                 #[cfg(debug_assertions)]
                 crate::ui::debug_scene::apply(&mut app);
                 app.enable_snapshot_worker();
