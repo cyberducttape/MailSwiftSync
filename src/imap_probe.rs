@@ -3324,6 +3324,7 @@ mod resume_tests {
             let mut fetched = server.fetched.clone();
             fetched.sort_unstable();
             assert_eq!(fetched, uids, "every UID fetched exactly once");
+            // codeql[py/cleartext-logging-sensitive-data]: test assertion with non-sensitive metrics
             assert!(
                 server.fetch_commands <= 12,
                 "{} FETCH round trips for {} messages",

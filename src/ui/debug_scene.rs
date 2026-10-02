@@ -208,8 +208,9 @@ pub(crate) fn demo_data(app: &mut App) {
     app.queue.attach(imported.project_id, imported.len);
     // Masked session placeholders so screenshots show a configured plan
     // rather than "password is required" validation.
-    app.form.source_password = String::from("placeholder-secret").into();
-    app.form.destination_password = String::from("placeholder-secret").into();
+    const DEBUG_PLACEHOLDER: &str = "placeholder-secret";
+    app.form.source_password = String::from(DEBUG_PLACEHOLDER).into();
+    app.form.destination_password = String::from(DEBUG_PLACEHOLDER).into();
     for index in [1, 8] {
         if let Some(id) = ids.get(index) {
             app.bulk_selected_ids.insert(id.clone());

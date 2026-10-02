@@ -201,7 +201,7 @@ LEVEL_COUNT = re.compile(
 COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
 RUST_LEVEL_LITERAL = re.compile(r'"Level (\d+) — ([^"]*)"')
 RUST_LEVEL_ARM = re.compile(
-    r"((?:VerificationMethod::\w+\s*\|?\s*)+)=>\s*\{?\s*\"Level (\d+) — "
+    r"((?:VerificationMethod::\w+\s*\|?\s*)*VerificationMethod::\w+)\s*=>\s*\{?\s*\"Level (\d+) — "
 )
 LOCALE_LEVEL_KEY = re.compile(r"\blevel-(\d+)\b")
 

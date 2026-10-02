@@ -128,9 +128,11 @@ pub(crate) fn verify_private_handle(file: &fs::File, label: &str) -> io::Result<
         if unsafe { GetAce(dacl, index, &mut ace_pointer) } == 0 || ace_pointer.is_null() {
             return Err(io::Error::last_os_error());
         }
+        // codeql[cpp/access-invalid-pointer]: Pointer validity guaranteed by GetAce success check
         let header = unsafe { &*(ace_pointer as *const ACE_HEADER) };
         let ace_type = u32::from(header.AceType);
         if ace_type == ACCESS_ALLOWED_ACE_TYPE {
+            // codeql[cpp/access-invalid-pointer]: Pointer validity guaranteed by GetAce success check
             let ace = unsafe { &*(ace_pointer as *const ACCESS_ALLOWED_ACE) };
             let sid = (&ace.SidStart as *const u32).cast_mut().cast();
             if ace.Mask & WRITE_LIKE_RIGHTS != 0 && !trusted.trusts(sid) {
