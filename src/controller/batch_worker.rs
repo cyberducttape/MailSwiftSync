@@ -1,5 +1,6 @@
 use super::batch::BatchExecutionMode;
-use super::batch_work_item::{BatchWorkerContext, process_batch_work_items, send_job_finished};
+use super::batch_scheduler::{JobSource, run_batch_schedule};
+use super::batch_work_item::{BatchAttemptRunner, send_job_finished};
 use super::rate_domains::{RateDomainLimiter, RateDomainPath, SideIdentity};
 use crate::{
     Event, StreamOutcome,
@@ -21,7 +22,6 @@ use std::{
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const MAX_BATCH_PENDING_EVENTS: usize = 4_096;
 
-type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
 pub(crate) type OAuthRefreshLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
 
 fn source_endpoint(form: &crate::Form) -> String {
@@ -152,11 +152,30 @@ pub(crate) fn launch_batch_worker(context: BatchExecutionContext) -> BatchWorker
     BatchWorkerLaunch { cancel, receiver }
 }
 
+/// Admission controls shared by every attempt of one batch.
+pub(crate) struct BatchLimiters {
+    pub(crate) launch: Arc<ProcessLaunchLimiter>,
+    pub(crate) rate: Arc<RateDomainLimiter>,
+}
+
 pub(crate) fn spawn_batch_worker(
     context: BatchExecutionContext,
     tx: mpsc::SyncSender<Event>,
     cancel: Arc<AtomicBool>,
-) {
+) -> thread::JoinHandle<()> {
+    let limiters = BatchLimiters {
+        launch: Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND)),
+        rate: Arc::new(RateDomainLimiter::new(context.concurrency)),
+    };
+    spawn_batch_worker_with(context, tx, cancel, limiters)
+}
+
+pub(crate) fn spawn_batch_worker_with(
+    context: BatchExecutionContext,
+    tx: mpsc::SyncSender<Event>,
+    cancel: Arc<AtomicBool>,
+    limiters: BatchLimiters,
+) -> thread::JoinHandle<()> {
     let BatchExecutionContext {
         concurrency,
         mode,
@@ -171,8 +190,6 @@ pub(crate) fn spawn_batch_worker(
         verification_state_path,
         diagnostic_logger,
     } = context;
-    let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
-    let provider_limiter = Arc::new(RateDomainLimiter::new(concurrency));
     let oauth_refresh_locks: OAuthRefreshLocks = Arc::new(Mutex::new(HashMap::new()));
     thread::spawn(move || {
         let failed = Arc::new(AtomicBool::new(false));
@@ -190,98 +207,40 @@ pub(crate) fn spawn_batch_worker(
                     .or_insert_with(|| resolve_imapsync_identity(&executable));
             }
         }
-        let resolved_imapsync = Arc::new(resolved_imapsync);
-        // Keep only a small number of full job plans in flight.  In
-        // particular, do not eagerly enqueue hundreds of Forms (which
-        // may contain credential material) before workers have even
-        // started.  The producer runs in this coordinator thread, so a
-        // bounded queue applies backpressure without blocking the UI.
-        let queue_capacity = concurrency.saturating_mul(2).max(1);
-        let (job_tx, job_rx): (
-            crossbeam_channel::Sender<BatchWorkItem>,
-            crossbeam_channel::Receiver<BatchWorkItem>,
-        ) = crossbeam_channel::bounded(queue_capacity);
-        let mut workers = Vec::with_capacity(concurrency);
-        for _ in 0..concurrency {
-            let job_rx = job_rx.clone();
-            let failed = Arc::clone(&failed);
-            let terminal_jobs = Arc::clone(&terminal_jobs);
-            let tx = tx.clone();
-            let cancel = Arc::clone(&cancel);
-            let launch_limiter = Arc::clone(&launch_limiter);
-            let provider_limiter = Arc::clone(&provider_limiter);
-            let batch_project_id = batch_project_id.clone();
-            let batch_run_id = batch_run_id.clone();
-            let resolved_imapsync = Arc::clone(&resolved_imapsync);
-            let oauth_refresh_locks = Arc::clone(&oauth_refresh_locks);
-            let verification_state_path = verification_state_path.clone();
-            let diagnostic_logger = diagnostic_logger.clone();
-            workers.push(thread::spawn(move || {
-                process_batch_work_items(BatchWorkerContext {
-                    concurrency,
-                    mode,
-                    retry_count,
-                    job_rx,
-                    tx,
-                    cancel,
-                    failed,
-                    terminal_jobs,
-                    launch_limiter,
-                    provider_limiter,
-                    batch_project_id,
-                    batch_run_id,
-                    resolved_imapsync,
-                    oauth_refresh_locks,
-                    verification_state_path,
-                    diagnostic_logger,
-                });
-            }));
-        }
-        drop(job_rx);
-
-        let mut enqueue_failed = false;
-        for (index, job) in jobs.into_iter().enumerate() {
-            let Some(job_id) = queue_job_ids.get(index).cloned() else {
-                failed.store(true, Ordering::Relaxed);
-                enqueue_failed = true;
-                break;
-            };
-            let Some(child_run_id) = child_run_ids.get(index).cloned() else {
-                failed.store(true, Ordering::Relaxed);
-                enqueue_failed = true;
-                break;
-            };
-            if job_tx
-                .send((
-                    index,
-                    job_id,
-                    child_run_id,
-                    queue_checkpoints.get(index).cloned().unwrap_or_default(),
-                    job,
-                ))
-                .is_err()
-            {
-                failed.store(true, Ordering::Relaxed);
-                enqueue_failed = true;
-                break;
-            }
-        }
-        drop(job_tx);
-
-        let mut worker_panicked = false;
-        for worker in workers {
-            if worker.join().is_err() {
-                worker_panicked = true;
-                failed.store(true, Ordering::Relaxed);
-            }
-        }
-        if enqueue_failed {
+        let runner = Arc::new(BatchAttemptRunner {
+            concurrency,
+            mode,
+            retry_count,
+            tx: tx.clone(),
+            cancel: Arc::clone(&cancel),
+            failed: Arc::clone(&failed),
+            terminal_jobs: Arc::clone(&terminal_jobs),
+            launch_limiter: limiters.launch,
+            provider_limiter: limiters.rate,
+            batch_project_id,
+            batch_run_id,
+            resolved_imapsync: Arc::new(resolved_imapsync),
+            oauth_refresh_locks,
+            verification_state_path,
+            diagnostic_logger,
+        });
+        let schedule = run_batch_schedule(
+            runner,
+            concurrency,
+            JobSource {
+                jobs: jobs.into_iter().enumerate(),
+                job_ids: queue_job_ids.clone(),
+                child_run_ids: child_run_ids.clone(),
+                checkpoints: queue_checkpoints,
+            },
+        );
+        if schedule.enqueue_failed {
             let _ = tx.send(Event::Line(
                     "Batch work queue disconnected before all jobs were admitted; unresolved jobs require review before retrying."
                         .into(),
                 ));
         }
-        if worker_panicked {
+        if schedule.worker_panicked {
             let unresolved = terminal_jobs
                 .lock()
                 .map(|terminal| {
@@ -338,7 +297,7 @@ pub(crate) fn spawn_batch_worker(
         ) {
             eprintln!("reliable batch terminal event delivery failed: {error}");
         }
-    });
+    })
 }
 
 #[cfg(test)]

@@ -23,11 +23,7 @@
 use crate::controller::failure::{FailureClass, classify_failure, control_error_text};
 use std::{
     collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -159,6 +155,12 @@ impl RateDomainPath {
         }
     }
 
+    /// Queue-fairness identity: the source tenant, which is the customer
+    /// whose mailboxes are being moved.
+    pub(crate) fn fairness_key(&self) -> &str {
+        &self.source[1].scope
+    }
+
     fn all(&self) -> impl Iterator<Item = &DomainKey> {
         std::iter::once(&self.global)
             .chain(self.source.iter())
@@ -241,6 +243,17 @@ pub(crate) struct RateDomainLimiter {
     state: Mutex<HashMap<DomainKey, DomainState>>,
 }
 
+/// Why a path cannot be admitted right now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Blocked {
+    /// A domain is cooling down until this instant.
+    Until(Instant),
+    /// A domain is at its concurrency limit; a running attempt must end first.
+    Slot,
+    /// The limiter's state is poisoned; nothing can be admitted safely.
+    Unavailable,
+}
+
 /// A held admission. Dropping it releases the in-flight slot in every domain.
 pub(crate) struct Admission {
     limiter: Arc<RateDomainLimiter>,
@@ -263,45 +276,39 @@ impl RateDomainLimiter {
         }
     }
 
-    /// Wait until every domain in `path` is out of cooldown and below its
-    /// concurrency limit, then hold a slot in all of them atomically.
-    pub(crate) fn admit(
-        self: &Arc<Self>,
-        path: &RateDomainPath,
-        cancel: &AtomicBool,
-    ) -> Option<Admission> {
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return None;
+    /// Hold a slot in every domain of `path` atomically if all of them are
+    /// out of cooldown and below their concurrency limit. Never blocks: the
+    /// scheduler parks a blocked task instead of tying up a worker.
+    pub(crate) fn try_admit(self: &Arc<Self>, path: &RateDomainPath) -> Result<Admission, Blocked> {
+        let mut state = self.state.lock().map_err(|_| Blocked::Unavailable)?;
+        let now = Instant::now();
+        let mut cooling_until = None::<Instant>;
+        let mut slot_limited = false;
+        for domain in path.all().filter_map(|key| state.get(key)) {
+            if domain.blocked_until > now {
+                cooling_until = Some(cooling_until.map_or(domain.blocked_until, |until| {
+                    until.max(domain.blocked_until)
+                }));
+            } else if !domain.admits(now) {
+                slot_limited = true;
             }
-            let wait = {
-                let mut state = self.state.lock().ok()?;
-                let now = Instant::now();
-                let blocked = path
-                    .all()
-                    .filter_map(|key| state.get(key))
-                    .filter(|domain| !domain.admits(now))
-                    .map(|domain| domain.blocked_until.saturating_duration_since(now))
-                    .max();
-                match blocked {
-                    Some(wait) => wait,
-                    None => {
-                        for key in path.all() {
-                            if let Some(domain) = self.entry(&mut state, key, now) {
-                                domain.in_flight += 1;
-                            }
-                        }
-                        return Some(Admission {
-                            limiter: Arc::clone(self),
-                            path: path.clone(),
-                            admitted_at: now,
-                        });
-                    }
-                }
-            };
-            // A concurrency-limited domain reports zero wait; poll briefly.
-            thread::sleep(wait.clamp(Duration::from_millis(10), Duration::from_millis(100)));
         }
+        if let Some(until) = cooling_until {
+            return Err(Blocked::Until(until));
+        }
+        if slot_limited {
+            return Err(Blocked::Slot);
+        }
+        for key in path.all() {
+            if let Some(domain) = self.entry(&mut state, key, now) {
+                domain.in_flight += 1;
+            }
+        }
+        Ok(Admission {
+            limiter: Arc::clone(self),
+            path: path.clone(),
+            admitted_at: now,
+        })
     }
 
     fn entry<'a>(
@@ -523,23 +530,11 @@ mod tests {
     }
 
     fn admit(limiter: &Arc<RateDomainLimiter>, path: &RateDomainPath) -> Admission {
-        limiter.admit(path, &AtomicBool::new(false)).unwrap()
+        limiter.try_admit(path).unwrap()
     }
 
     fn try_admit(limiter: &Arc<RateDomainLimiter>, path: &RateDomainPath) -> Option<Admission> {
-        // Cancel immediately after one admission check.
-        let cancel = AtomicBool::new(false);
-        let state = limiter.state.lock().unwrap();
-        let now = Instant::now();
-        let open = path
-            .all()
-            .filter_map(|key| state.get(key))
-            .all(|domain| domain.admits(now));
-        drop(state);
-        if !open {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        limiter.admit(path, &cancel)
+        limiter.try_admit(path).ok()
     }
 
     #[test]
@@ -713,6 +708,25 @@ mod tests {
     }
 
     #[test]
+    fn blocked_admission_reports_cooldown_end_or_slot_wait() {
+        let limiter = Arc::new(RateDomainLimiter::new(4));
+        let job = path("alice@a.example", "alice@a.example");
+        let mailbox = job.domain(Side::Source, DomainLevel::Mailbox).clone();
+        let admission = admit(&limiter, &job);
+        limiter
+            .state
+            .lock()
+            .unwrap()
+            .get_mut(&mailbox)
+            .unwrap()
+            .limit = 1.0;
+        assert!(matches!(limiter.try_admit(&job), Err(Blocked::Slot)));
+        let penalized = limiter.observe_failure(&admission, "Host1 too many requests");
+        let until = penalized[0].1;
+        assert!(matches!(limiter.try_admit(&job), Err(Blocked::Until(at)) if at == until));
+    }
+
+    #[test]
     fn concurrency_limit_holds_slots_until_admissions_drop() {
         let limiter = Arc::new(RateDomainLimiter::new(4));
         let tenant_one = path("one@a.example", "one@d.example");
@@ -777,7 +791,6 @@ mod tests {
         drop(admission);
         // Idle, unpenalized domains are not retained.
         assert!(limiter.state.lock().unwrap().is_empty());
-        assert!(limiter.admit(&job, &AtomicBool::new(true)).is_none());
     }
 
     fn mailbox_cooldown(error: &str) -> Option<Duration> {

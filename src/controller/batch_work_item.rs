@@ -2,7 +2,7 @@
 
 use super::batch::BatchExecutionMode;
 use super::batch_worker::{OAuthRefreshLocks, rate_domain_path};
-use super::rate_domains::{DomainKey, RateDomainLimiter};
+use super::rate_domains::{Admission, DomainKey, RateDomainLimiter, RateDomainPath};
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
@@ -29,7 +29,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    thread,
     time::Duration,
 };
 
@@ -146,12 +145,11 @@ fn report_cooldowns(tx: &mpsc::SyncSender<Event>, penalized: Vec<(DomainKey, std
     }
 }
 
-pub(crate) struct BatchWorkerContext {
+/// Shared, immutable inputs for running scheduled mailbox attempts.
+pub(crate) struct BatchAttemptRunner {
     pub(crate) concurrency: usize,
     pub(crate) mode: BatchExecutionMode,
     pub(crate) retry_count: usize,
-    pub(crate) job_rx:
-        crossbeam_channel::Receiver<(usize, String, String, Option<String>, BulkJob)>,
     pub(crate) tx: mpsc::SyncSender<Event>,
     pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) failed: Arc<AtomicBool>,
@@ -164,6 +162,67 @@ pub(crate) struct BatchWorkerContext {
     pub(crate) oauth_refresh_locks: OAuthRefreshLocks,
     pub(crate) verification_state_path: Option<std::path::PathBuf>,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
+}
+
+/// One mailbox job and the progress it carries between scheduled attempts.
+/// The scheduler owns it while it waits; a worker owns it only while an
+/// admitted attempt runs.
+pub(crate) struct MailboxTask {
+    pub(crate) index: usize,
+    job_id: String,
+    child_run_id: String,
+    checkpoint: Option<String>,
+    label: String,
+    form: crate::Form,
+    pub(crate) rate_path: RateDomainPath,
+    /// Next attempt number, starting at zero.
+    attempt: usize,
+    /// The job banner and engine identity have been emitted.
+    introduced: bool,
+    imapsync_output_profile: ImapsyncOutputProfile,
+    claimed: bool,
+    transfer_attempt_number: u32,
+    verification_failure: Option<String>,
+}
+
+impl MailboxTask {
+    pub(crate) fn new(
+        index: usize,
+        job_id: String,
+        child_run_id: String,
+        checkpoint: Option<String>,
+        job: &BulkJob,
+    ) -> Self {
+        let form = job.form();
+        let rate_path = rate_domain_path(&form);
+        Self {
+            index,
+            job_id,
+            child_run_id,
+            checkpoint,
+            label: job.label.clone(),
+            form,
+            rate_path,
+            attempt: 0,
+            introduced: false,
+            imapsync_output_profile: ImapsyncOutputProfile::Unknown,
+            claimed: false,
+            transfer_attempt_number: 0,
+            verification_failure: None,
+        }
+    }
+}
+
+/// What one admitted attempt left for the scheduler to do.
+pub(crate) enum AttemptOutcome {
+    /// The job reached a terminal state, or its controller is gone.
+    Finished,
+    /// A transient failure: park the task until `delay` passes, then seek
+    /// admission again. The attempt's rate-domain slots are already released.
+    Retry {
+        task: Box<MailboxTask>,
+        delay: Duration,
+    },
 }
 
 fn refresh_live_credentials(
@@ -476,415 +535,328 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
     }
 }
 
-/// Execute mailbox work items for one batch worker. All output is emitted as
-/// typed controller events; durable state remains owned by the poll reducer.
-pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
-    let BatchWorkerContext {
-        concurrency,
-        mode,
-        retry_count,
-        job_rx,
-        tx,
-        cancel,
-        failed,
-        terminal_jobs,
-        launch_limiter,
-        provider_limiter,
-        batch_project_id,
-        batch_run_id,
-        resolved_imapsync,
-        oauth_refresh_locks,
-        verification_state_path,
-        diagnostic_logger,
-    } = context;
-    let live = mode.is_live();
-    while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
-        let mut form = job.form();
-        if cancel.load(Ordering::Relaxed) {
-            persist_batch_terminal_state(BatchTerminalTransition {
-                tx: &tx,
-                terminal_jobs: &terminal_jobs,
-                index,
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                job_state: "Cancelled",
-                run_state: "cancelled",
-                detail: "cancelled before worker claim".into(),
-                credential_fingerprint: None,
-            });
-            continue;
+impl BatchAttemptRunner {
+    fn line(&self, task: &MailboxTask, text: String) {
+        send_run_line(&self.tx, &task.form, &task.child_run_id, &task.job_id, text);
+    }
+
+    fn terminal(
+        &self,
+        task: &MailboxTask,
+        job_state: &str,
+        run_state: &str,
+        detail: String,
+        credential_fingerprint: Option<String>,
+    ) {
+        persist_batch_terminal_state(BatchTerminalTransition {
+            tx: &self.tx,
+            terminal_jobs: &self.terminal_jobs,
+            index: task.index,
+            job_id: task.job_id.clone(),
+            child_run_id: task.child_run_id.clone(),
+            job_state,
+            run_state,
+            detail,
+            credential_fingerprint,
+        });
+    }
+
+    fn fail(&self, task: &MailboxTask, error: &str) {
+        let cancelled = classify_failure(error) == FailureClass::Cancellation;
+        if !cancelled {
+            self.failed.store(true, Ordering::Relaxed);
         }
-        send_run_line(
-            &tx,
-            &form,
-            &child_run_id,
-            &job_id,
-            format!("══ Job {}: {} ══", index + 1, job.label),
+        self.terminal(
+            task,
+            if cancelled { "Cancelled" } else { "Failed" },
+            if cancelled { "cancelled" } else { "failed" },
+            classified_failure_detail(&redact_child_text(&task.form, error)),
+            None,
         );
-        let imapsync_output_profile = if form.engine() == core::Engine::ImapSync {
-            let identity = resolved_imapsync.get(&form.profile.imapsync_path);
-            let version = identity
-                .map(|identity| identity.version.clone())
-                .unwrap_or_else(|| "unknown".into());
-            let profile = identity
-                .map(|identity| identity.output_profile)
-                .unwrap_or(ImapsyncOutputProfile::Unknown);
-            let identity_persisted = if let Err(error) =
-                persist_engine_identity_before_launch(&tx, &child_run_id, &job_id, &version)
-            {
-                send_run_line(
-                    &tx,
-                    &form,
-                    &child_run_id,
-                    &job_id,
-                    format!(
-                        "[{}] [verification] engine identity is not durable; output evidence disabled: {error}",
-                        index + 1
-                    ),
-                );
-                false
-            } else {
-                true
-            };
-            if identity_persisted && profile == ImapsyncOutputProfile::Unknown {
-                send_run_line(
-                    &tx,
-                    &form,
-                    &child_run_id,
-                    &job_id,
-                    format!(
-                        "[{}] {}",
-                        index + 1,
-                        crate::verification::unqualified_imapsync_message(&version)
-                    ),
-                );
-            }
-            if identity_persisted {
-                profile
-            } else {
-                ImapsyncOutputProfile::Unknown
-            }
+    }
+
+    fn finish_transcript(&self, task: &MailboxTask) {
+        if let Some(logger) = &self.diagnostic_logger
+            && let Err(error) = logger.finish_run(&task.child_run_id)
+        {
+            eprintln!("could not finalize mailbox diagnostic transcript: {error}");
+        }
+    }
+
+    /// Settle a task the scheduler will not run again because the batch was
+    /// cancelled while it waited.
+    pub(crate) fn cancel_waiting(&self, task: MailboxTask) {
+        let detail = if task.introduced {
+            "cancelled by operator"
         } else {
-            ImapsyncOutputProfile::Unknown
+            "cancelled before worker claim"
         };
-        let mut completed = false;
-        let mut delta_required = false;
-        let mut claimed = false;
-        let mut verification_failure: Option<String> = None;
-        let mut transfer_attempt_number = 0_u32;
-        let rate_path = rate_domain_path(&form);
-        for attempt in 0..=retry_count {
-            // Held for this attempt only: every rate domain of the job counts
-            // it as in flight until the attempt ends or backs off.
-            let Some(admission) = provider_limiter.admit(&rate_path, &cancel) else {
-                break;
-            };
-            if live {
-                // A queue-level admission must not mint an access token for
-                // every selected mailbox. Refresh immediately before this
-                // worker authenticates and launches the engine, so waiting in
-                // a large queue cannot consume an expired bearer token.
-                if let Err(error) = refresh_live_credentials(&mut form, &oauth_refresh_locks) {
-                    failed.store(true, Ordering::Relaxed);
-                    send_run_line(
-                        &tx,
-                        &form,
-                        &child_run_id,
-                        &job_id,
-                        format!(
-                            "[{}] OAuth credential refresh failed before launch: {error}",
-                            index + 1
-                        ),
-                    );
-                    persist_batch_terminal_state(BatchTerminalTransition {
-                        tx: &tx,
-                        terminal_jobs: &terminal_jobs,
-                        index,
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        job_state: "Failed",
-                        run_state: "failed",
-                        detail: classified_failure_detail(&redact_child_text(&form, &error)),
-                        credential_fingerprint: None,
-                    });
-                    break;
-                }
-            }
-            if live
-                && let Err(SidedProbeError {
-                    side,
-                    message: error,
-                }) = fresh_dual_imaps_authentication(&form)
+        self.terminal(&task, "Cancelled", "cancelled", detail.into(), None);
+        if task.introduced {
+            self.finish_transcript(&task);
+        }
+    }
+
+    /// Settle a task whose rate domains can no longer be evaluated.
+    pub(crate) fn fail_unschedulable(&self, task: MailboxTask, reason: &str) {
+        self.line(&task, format!("[{}] {reason}", task.index + 1));
+        self.fail(&task, reason);
+        self.finish_transcript(&task);
+    }
+
+    /// Emit the job banner and persist the engine identity once per job.
+    fn introduce(&self, task: &mut MailboxTask) {
+        task.introduced = true;
+        self.line(
+            task,
+            format!("══ Job {}: {} ══", task.index + 1, task.label),
+        );
+        if task.form.engine() != core::Engine::ImapSync {
+            return;
+        }
+        let identity = self.resolved_imapsync.get(&task.form.profile.imapsync_path);
+        let version = identity
+            .map(|identity| identity.version.clone())
+            .unwrap_or_else(|| "unknown".into());
+        let profile = identity
+            .map(|identity| identity.output_profile)
+            .unwrap_or(ImapsyncOutputProfile::Unknown);
+        if let Err(error) = persist_engine_identity_before_launch(
+            &self.tx,
+            &task.child_run_id,
+            &task.job_id,
+            &version,
+        ) {
+            self.line(
+                task,
+                format!(
+                    "[{}] [verification] engine identity is not durable; output evidence disabled: {error}",
+                    task.index + 1
+                ),
+            );
+            return;
+        }
+        if profile == ImapsyncOutputProfile::Unknown {
+            self.line(
+                task,
+                format!(
+                    "[{}] {}",
+                    task.index + 1,
+                    crate::verification::unqualified_imapsync_message(&version)
+                ),
+            );
+        }
+        task.imapsync_output_profile = profile;
+    }
+
+    /// Report a transient failure and hand the task back for a timed retry.
+    /// The caller must already have released the attempt's admission.
+    fn retry_later(&self, mut task: MailboxTask, error: &str, what: &str) -> AttemptOutcome {
+        self.line(
+            &task,
+            format!(
+                "[{}] [{}] {what}; retrying: {error}",
+                task.index + 1,
+                classify_failure(error).label()
+            ),
+        );
+        let _ = send_reliable_event(
+            &self.tx,
+            Event::JobState {
+                job_id: task.job_id.clone(),
+                child_run_id: task.child_run_id.clone(),
+                state: "Retrying".into(),
+            },
+        );
+        let delay = transient_retry_delay(error, task.attempt);
+        let _ = self.tx.try_send(Event::RetryScheduled {
+            job_id: task.job_id.clone(),
+            attempt: u32::try_from(task.attempt + 2).unwrap_or(u32::MAX),
+            delay,
+            failure_class: classify_failure(error).label(),
+        });
+        task.attempt += 1;
+        AttemptOutcome::Retry {
+            task: Box::new(task),
+            delay,
+        }
+    }
+
+    /// Run one admitted attempt of `task`. The admission is held for exactly
+    /// this attempt and is released before the outcome is returned, so the
+    /// scheduler can admit other work the moment this call ends.
+    pub(crate) fn run_attempt(
+        &self,
+        mut task: MailboxTask,
+        admission: Admission,
+    ) -> AttemptOutcome {
+        if self.cancel.load(Ordering::Relaxed) {
+            drop(admission);
+            self.cancel_waiting(task);
+            return AttemptOutcome::Finished;
+        }
+        if !task.introduced {
+            self.introduce(&mut task);
+        }
+        let live = self.mode.is_live();
+        let attempt = task.attempt;
+        if live {
+            // A queue-level admission must not mint an access token for
+            // every selected mailbox. Refresh immediately before this
+            // worker authenticates and launches the engine, so waiting in
+            // a large queue cannot consume an expired bearer token.
+            if let Err(error) = refresh_live_credentials(&mut task.form, &self.oauth_refresh_locks)
             {
-                if should_retry_batch_error(&error, attempt, retry_count) {
+                drop(admission);
+                self.failed.store(true, Ordering::Relaxed);
+                self.line(
+                    &task,
+                    format!(
+                        "[{}] OAuth credential refresh failed before launch: {error}",
+                        task.index + 1
+                    ),
+                );
+                self.terminal(
+                    &task,
+                    "Failed",
+                    "failed",
+                    classified_failure_detail(&redact_child_text(&task.form, &error)),
+                    None,
+                );
+                self.finish_transcript(&task);
+                return AttemptOutcome::Finished;
+            }
+            if let Err(SidedProbeError {
+                side,
+                message: error,
+            }) = fresh_dual_imaps_authentication(&task.form)
+            {
+                if should_retry_batch_error(&error, attempt, self.retry_count) {
                     report_cooldowns(
-                        &tx,
-                        provider_limiter.observe_failure_on(&admission, &error, vec![side]),
+                        &self.tx,
+                        self.provider_limiter
+                            .observe_failure_on(&admission, &error, vec![side]),
                     );
                     drop(admission);
-                    send_run_line(
-                        &tx,
-                        &form,
-                        &child_run_id,
-                        &job_id,
-                        format!(
-                            "[{}] [{}] transient fresh authentication probe failure; retrying: {error}",
-                            index + 1,
-                            classify_failure(&error).label()
-                        ),
+                    return self.retry_later(
+                        task,
+                        &error,
+                        "transient fresh authentication probe failure",
                     );
-                    let _ = send_reliable_event(
-                        &tx,
-                        Event::JobState {
-                            job_id: job_id.clone(),
-                            child_run_id: child_run_id.clone(),
-                            state: "Retrying".into(),
-                        },
-                    );
-                    let delay = transient_retry_delay(&error, attempt);
-                    let _ = tx.try_send(Event::RetryScheduled {
-                        job_id: job_id.clone(),
-                        attempt: u32::try_from(attempt + 2).unwrap_or(u32::MAX),
-                        delay,
-                        failure_class: classify_failure(&error).label(),
-                    });
-                    let started = std::time::Instant::now();
-                    while started.elapsed() < delay {
-                        if cancel.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    continue;
                 }
-                failed.store(true, Ordering::Relaxed);
-                send_run_line(
-                    &tx,
-                    &form,
-                    &child_run_id,
-                    &job_id,
+                drop(admission);
+                self.failed.store(true, Ordering::Relaxed);
+                self.line(
+                    &task,
                     format!(
                         "[{}] fresh live authentication failed before launch: {error}",
-                        index + 1
+                        task.index + 1
                     ),
                 );
                 // Classify the raw probe result. Prefixing it with
                 // "authentication failed" would incorrectly mask a DNS,
                 // TCP, TLS-disconnect, or provider-capacity failure.
-                persist_batch_terminal_state(BatchTerminalTransition {
-                    tx: &tx,
-                    terminal_jobs: &terminal_jobs,
-                    index,
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    job_state: "Failed",
-                    run_state: "failed",
-                    detail: classified_failure_detail(&redact_child_text(&form, &error)),
-                    credential_fingerprint: None,
-                });
-                break;
-            }
-            if !claimed {
-                match claim_batch_job(
-                    &tx,
-                    &batch_project_id,
-                    &job_id,
-                    &batch_run_id,
-                    &child_run_id,
-                    &cancel,
-                ) {
-                    Ok(()) => claimed = true,
-                    Err(BatchClaimError::ControllerUnavailable) => {
-                        failed.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    Err(BatchClaimError::Rejected(error)) => {
-                        let cancelled = classify_failure(&error) == FailureClass::Cancellation;
-                        if !cancelled {
-                            failed.store(true, Ordering::Relaxed);
-                        }
-                        send_run_line(
-                            &tx,
-                            &form,
-                            &child_run_id,
-                            &job_id,
-                            format!("[{}] {}", index + 1, error),
-                        );
-                        persist_batch_terminal_state(BatchTerminalTransition {
-                            tx: &tx,
-                            terminal_jobs: &terminal_jobs,
-                            index,
-                            job_id: job_id.clone(),
-                            child_run_id: child_run_id.clone(),
-                            job_state: if cancelled { "Cancelled" } else { "Failed" },
-                            run_state: if cancelled { "cancelled" } else { "failed" },
-                            detail: classified_failure_detail(&redact_child_text(&form, &error)),
-                            credential_fingerprint: None,
-                        });
-                        break;
-                    }
-                }
-            }
-            let _ = send_reliable_event(
-                &tx,
-                Event::JobState {
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    state: "Running".into(),
-                },
-            );
-            if attempt > 0 {
-                send_run_line(
-                    &tx,
-                    &form,
-                    &child_run_id,
-                    &job_id,
-                    format!("[{}] retry attempt {attempt}/{retry_count}", index + 1),
+                self.terminal(
+                    &task,
+                    "Failed",
+                    "failed",
+                    classified_failure_detail(&redact_child_text(&task.form, &error)),
+                    None,
                 );
-                let _ = send_reliable_event(
-                    &tx,
-                    Event::JobState {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: "Running".into(),
-                    },
-                );
+                self.finish_transcript(&task);
+                return AttemptOutcome::Finished;
             }
-            let result = run_prepared_batch_attempt(BatchAttemptContext {
-                form: &form,
-                checkpoint: checkpoint.clone(),
-                concurrency,
-                live,
-                index,
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                project_id: batch_project_id.clone(),
-                tx: tx.clone(),
-                cancel: cancel.clone(),
-                imapsync_output_profile,
-                verification_state_path: verification_state_path.clone(),
-                diagnostic_logger: diagnostic_logger.clone(),
-                transfer_attempt_number: &mut transfer_attempt_number,
-                verification_failure: &mut verification_failure,
-                launch_limiter: &launch_limiter,
-            });
-            match result {
-                Ok(outcome) => {
-                    provider_limiter.observe_success(&admission);
-                    if outcome == StreamOutcome::DeltaRequired {
-                        send_run_line(
-                            &tx,
-                            &form,
-                            &child_run_id,
-                            &job_id,
-                            format!(
-                                "[{}] Dovecot reports an incomplete synchronization; another delta pass is required",
-                                index + 1
-                            ),
-                        );
-                        delta_required = true;
-                    }
-                    completed = true;
-                    break;
-                }
-                Err(error) if should_retry_batch_error(&error, attempt, retry_count) => {
-                    report_cooldowns(&tx, provider_limiter.observe_failure(&admission, &error));
+        }
+        if !task.claimed {
+            match claim_batch_job(
+                &self.tx,
+                &self.batch_project_id,
+                &task.job_id,
+                &self.batch_run_id,
+                &task.child_run_id,
+                &self.cancel,
+            ) {
+                Ok(()) => task.claimed = true,
+                Err(BatchClaimError::ControllerUnavailable) => {
                     drop(admission);
-                    send_run_line(
-                        &tx,
-                        &form,
-                        &child_run_id,
-                        &job_id,
-                        format!(
-                            "[{}] [{}] transient failure; retrying: {error}",
-                            index + 1,
-                            classify_failure(&error).label()
-                        ),
-                    );
-                    let _ = send_reliable_event(
-                        &tx,
-                        Event::JobState {
-                            job_id: job_id.clone(),
-                            child_run_id: child_run_id.clone(),
-                            state: "Retrying".into(),
-                        },
-                    );
-                    let delay = transient_retry_delay(&error, attempt);
-                    let _ = tx.try_send(Event::RetryScheduled {
-                        job_id: job_id.clone(),
-                        attempt: u32::try_from(attempt + 2).unwrap_or(u32::MAX),
-                        delay,
-                        failure_class: classify_failure(&error).label(),
-                    });
-                    let started = std::time::Instant::now();
-                    while started.elapsed() < delay {
-                        if cancel.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
+                    self.failed.store(true, Ordering::Relaxed);
+                    self.finish_transcript(&task);
+                    return AttemptOutcome::Finished;
                 }
-                Err(error) => {
-                    let cancelled = classify_failure(&error) == FailureClass::Cancellation;
-                    if !cancelled {
-                        failed.store(true, Ordering::Relaxed);
-                    }
-                    send_run_line(
-                        &tx,
-                        &form,
-                        &child_run_id,
-                        &job_id,
-                        format!(
-                            "[{}] [{}] failed: {error}",
-                            index + 1,
-                            classify_failure(&error).label()
-                        ),
-                    );
-                    persist_batch_terminal_state(BatchTerminalTransition {
-                        tx: &tx,
-                        terminal_jobs: &terminal_jobs,
-                        index,
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        job_state: if cancelled { "Cancelled" } else { "Failed" },
-                        run_state: if cancelled { "cancelled" } else { "failed" },
-                        detail: classified_failure_detail(&redact_child_text(&form, &error)),
-                        credential_fingerprint: None,
-                    });
-                    break;
+                Err(BatchClaimError::Rejected(error)) => {
+                    drop(admission);
+                    self.line(&task, format!("[{}] {}", task.index + 1, error));
+                    self.fail(&task, &error);
+                    self.finish_transcript(&task);
+                    return AttemptOutcome::Finished;
                 }
             }
         }
-        if completed {
-            let terminal_state = if form.dry_run {
-                "ready"
-            } else if delta_required {
-                "delta_required"
-            } else {
-                "completed"
-            };
-            persist_batch_terminal_state(BatchTerminalTransition {
-                tx: &tx,
-                terminal_jobs: &terminal_jobs,
-                index,
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                job_state: if delta_required {
-                    "DeltaRequired"
+        let _ = send_reliable_event(
+            &self.tx,
+            Event::JobState {
+                job_id: task.job_id.clone(),
+                child_run_id: task.child_run_id.clone(),
+                state: "Running".into(),
+            },
+        );
+        if attempt > 0 {
+            self.line(
+                &task,
+                format!(
+                    "[{}] retry attempt {attempt}/{}",
+                    task.index + 1,
+                    self.retry_count
+                ),
+            );
+        }
+        let mut transfer_attempt_number = task.transfer_attempt_number;
+        let mut verification_failure = task.verification_failure.take();
+        let result = run_prepared_batch_attempt(BatchAttemptContext {
+            form: &task.form,
+            checkpoint: task.checkpoint.clone(),
+            concurrency: self.concurrency,
+            live,
+            index: task.index,
+            job_id: task.job_id.clone(),
+            child_run_id: task.child_run_id.clone(),
+            project_id: self.batch_project_id.clone(),
+            tx: self.tx.clone(),
+            cancel: self.cancel.clone(),
+            imapsync_output_profile: task.imapsync_output_profile,
+            verification_state_path: self.verification_state_path.clone(),
+            diagnostic_logger: self.diagnostic_logger.clone(),
+            transfer_attempt_number: &mut transfer_attempt_number,
+            verification_failure: &mut verification_failure,
+            launch_limiter: &self.launch_limiter,
+        });
+        task.transfer_attempt_number = transfer_attempt_number;
+        task.verification_failure = verification_failure;
+        match result {
+            Ok(outcome) => {
+                self.provider_limiter.observe_success(&admission);
+                drop(admission);
+                let delta_required = outcome == StreamOutcome::DeltaRequired;
+                if delta_required {
+                    self.line(
+                        &task,
+                        format!(
+                            "[{}] Dovecot reports an incomplete synchronization; another delta pass is required",
+                            task.index + 1
+                        ),
+                    );
+                }
+                let run_state = if task.form.dry_run {
+                    "ready"
+                } else if delta_required {
+                    "delta_required"
                 } else {
-                    "Completed"
-                },
-                run_state: terminal_state,
-                detail: if delta_required {
+                    "completed"
+                };
+                let detail = if delta_required {
                     "Dovecot reports that another delta pass is required".into()
                 } else {
-                    verification_failure.map_or_else(
+                    task.verification_failure.as_ref().map_or_else(
                         || "process completed".into(),
                         |reason| {
                             format!(
@@ -892,30 +864,47 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             )
                         },
                     )
-                },
-                credential_fingerprint: if form.dry_run {
-                    Some(form.credential_binding_fingerprint())
-                } else {
-                    None
-                },
-            });
-        } else if cancel.load(Ordering::Relaxed) {
-            persist_batch_terminal_state(BatchTerminalTransition {
-                tx: &tx,
-                terminal_jobs: &terminal_jobs,
-                index,
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                job_state: "Cancelled",
-                run_state: "cancelled",
-                detail: "cancelled by operator".into(),
-                credential_fingerprint: None,
-            });
-        }
-        if let Some(logger) = &diagnostic_logger
-            && let Err(error) = logger.finish_run(&child_run_id)
-        {
-            eprintln!("could not finalize mailbox diagnostic transcript: {error}");
+                };
+                let fingerprint = task
+                    .form
+                    .dry_run
+                    .then(|| task.form.credential_binding_fingerprint());
+                self.terminal(
+                    &task,
+                    if delta_required {
+                        "DeltaRequired"
+                    } else {
+                        "Completed"
+                    },
+                    run_state,
+                    detail,
+                    fingerprint,
+                );
+                self.finish_transcript(&task);
+                AttemptOutcome::Finished
+            }
+            Err(error) if should_retry_batch_error(&error, attempt, self.retry_count) => {
+                report_cooldowns(
+                    &self.tx,
+                    self.provider_limiter.observe_failure(&admission, &error),
+                );
+                drop(admission);
+                self.retry_later(task, &error, "transient failure")
+            }
+            Err(error) => {
+                drop(admission);
+                self.line(
+                    &task,
+                    format!(
+                        "[{}] [{}] failed: {error}",
+                        task.index + 1,
+                        classify_failure(&error).label()
+                    ),
+                );
+                self.fail(&task, &error);
+                self.finish_transcript(&task);
+                AttemptOutcome::Finished
+            }
         }
     }
 }
@@ -923,6 +912,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
     #[test]
     fn controller_generated_output_is_redacted_before_it_leaves_the_worker() {
@@ -1018,135 +1008,5 @@ mod tests {
         reply.send(Ok(())).unwrap();
         worker.join().unwrap();
         assert!(terminal_jobs.lock().unwrap().contains(&7));
-    }
-
-    /// Compose real batch workers with a provider cooldown that holds every
-    /// worker and then releases them together. Process starts the controller
-    /// records must still respect the shared launch rate: a start token taken
-    /// before admission would let the released workers spawn in one burst.
-    #[cfg(unix)]
-    #[test]
-    fn released_provider_cooldown_does_not_burst_process_starts() {
-        use crate::controller::rate_domains::{DomainLevel, Side};
-        use std::os::unix::fs::PermissionsExt;
-        const WORKERS: usize = 4;
-        const STARTS_PER_SECOND: usize = 10;
-
-        let directory =
-            std::env::temp_dir().join(format!("mailswiftsync-launch-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let engine = directory.join("fake-imapsync");
-        std::fs::write(&engine, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
-
-        let mut form = crate::Form::default();
-        form.profile.engine = core::Engine::ImapSync;
-        form.profile.imapsync_path = engine.to_string_lossy().into_owned();
-        form.profile.source_host = "old.example".into();
-        form.profile.destination_host = "new.example".into();
-        form.source_password = String::from("source-secret").into();
-        form.destination_password = String::from("destination-secret").into();
-        form.dry_run = true;
-        let provider = rate_domain_path(&form)
-            .domain(Side::Source, DomainLevel::Provider)
-            .clone();
-
-        let (job_tx, job_rx) = crossbeam_channel::unbounded();
-        for index in 0..WORKERS {
-            let mut row = form.clone();
-            row.profile.source_user = format!("user{index}");
-            row.profile.destination_user = format!("user{index}");
-            let job = BulkJob::from_form(format!("job {index}"), row, "Ready".into());
-            job_tx
-                .send((
-                    index,
-                    format!("job-{index}"),
-                    format!("run-{index}"),
-                    None,
-                    job,
-                ))
-                .unwrap();
-        }
-        drop(job_tx);
-
-        let launch_limiter = Arc::new(ProcessLaunchLimiter::new(STARTS_PER_SECOND));
-        let provider_limiter = Arc::new(RateDomainLimiter::new(WORKERS));
-        // Longer than the time the workers need to drain any start tokens
-        // they could bank while waiting for admission.
-        provider_limiter.hold_until(
-            &provider,
-            std::time::Instant::now() + Duration::from_millis(800),
-        );
-        let (tx, rx) = mpsc::sync_channel(64);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let failed = Arc::new(AtomicBool::new(false));
-        let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
-        let workers = (0..WORKERS)
-            .map(|_| {
-                let context = BatchWorkerContext {
-                    concurrency: WORKERS,
-                    mode: BatchExecutionMode::Preflight,
-                    retry_count: 0,
-                    job_rx: job_rx.clone(),
-                    tx: tx.clone(),
-                    cancel: Arc::clone(&cancel),
-                    failed: Arc::clone(&failed),
-                    terminal_jobs: Arc::clone(&terminal_jobs),
-                    launch_limiter: Arc::clone(&launch_limiter),
-                    provider_limiter: Arc::clone(&provider_limiter),
-                    batch_project_id: "project".into(),
-                    batch_run_id: "batch".into(),
-                    resolved_imapsync: Arc::new(std::collections::HashMap::new()),
-                    oauth_refresh_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
-                    verification_state_path: None,
-                    diagnostic_logger: None,
-                };
-                thread::spawn(move || process_batch_work_items(context))
-            })
-            .collect::<Vec<_>>();
-        drop((tx, job_rx));
-
-        // Act as the durable reducer: acknowledge every request and record
-        // when each engine process start is reported.
-        let mut starts = Vec::new();
-        let mut finished = Vec::new();
-        while let Ok(event) = rx.recv() {
-            match event {
-                Event::ProcessStarted(_, _, _, _, _, _, _, reply) => {
-                    starts.push(std::time::Instant::now());
-                    let _ = reply.send(Ok(()));
-                }
-                Event::ClaimBatch { reply, .. }
-                | Event::EngineVersion { reply, .. }
-                | Event::TransferAttempt { reply, .. } => {
-                    let _ = reply.send(Ok(()));
-                }
-                Event::JobFinished {
-                    reply,
-                    state,
-                    detail,
-                    ..
-                } => {
-                    finished.push(format!("{state}: {detail}"));
-                    let _ = reply.send(Ok(()));
-                }
-                _ => {}
-            }
-        }
-        for worker in workers {
-            worker.join().unwrap();
-        }
-        let _ = std::fs::remove_dir_all(&directory);
-
-        assert_eq!(starts.len(), WORKERS, "jobs: {finished:?}");
-        let spacing = Duration::from_secs_f64(1.0 / STARTS_PER_SECOND as f64);
-        for pair in starts.windows(2) {
-            let gap = pair[1].duration_since(pair[0]);
-            // Allow scheduler jitter, never a burst.
-            assert!(
-                gap >= spacing.mul_f64(0.7),
-                "process starts {gap:?} apart exceed {STARTS_PER_SECOND}/s: {starts:?}"
-            );
-        }
     }
 }
