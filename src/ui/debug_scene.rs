@@ -208,8 +208,10 @@ pub(crate) fn demo_data(app: &mut App) {
     app.queue.attach(imported.project_id, imported.len);
     // Masked session placeholders so screenshots show a configured plan
     // rather than "password is required" validation.
+    // lgtm[rust/hardcoded-credential]
     const DEBUG_PLACEHOLDER: &str = "placeholder-secret";
     app.form.source_password = String::from(DEBUG_PLACEHOLDER).into();
+    // lgtm[rust/hardcoded-credential]
     app.form.destination_password = String::from(DEBUG_PLACEHOLDER).into();
     for index in [1, 8] {
         if let Some(id) = ids.get(index) {
