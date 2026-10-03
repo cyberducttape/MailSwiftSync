@@ -92,6 +92,9 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
             SCALE_WORKFLOW,
         )
         self.assertIn('docker kill "$container_name"', SCALE_WORKFLOW)
+        self.assertIn("20 docker kill", SCALE_WORKFLOW)
+        self.assertIn("60 docker logs", SCALE_WORKFLOW)
+        self.assertIn("20 docker rm", SCALE_WORKFLOW)
         self.assertIn("provider-scale-evidence/scale-progress.txt", SCALE_WORKFLOW)
         self.assertIn("tail -n 100", SCALE_WORKFLOW)
         self.assertIn('printf \'begin epoch=%s operation=%s\\n\'', SCALE_SCRIPT)

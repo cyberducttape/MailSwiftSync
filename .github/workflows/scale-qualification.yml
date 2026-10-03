@@ -50,16 +50,16 @@ jobs:
               echo "docker wait failed with status $wait_status; stopping the scale container." >&2
               container_status=125
             fi
-            docker kill "$container_name" >/dev/null 2>&1 || true
+            timeout --foreground --kill-after=5s 20 docker kill "$container_name" >/dev/null 2>&1 || true
             timeout --foreground --kill-after=5s 20 docker wait "$container_name" >/dev/null 2>&1 || true
           fi
           finished_at="$(date +%s)"
           kill "$stats_pid" 2>/dev/null || true
           wait "$stats_pid" 2>/dev/null || true
           if [ "$container_status" -eq 124 ] || [ "$container_status" -eq 125 ]; then
-            docker logs "$container_name" 2>&1 | tail -n 100
+            timeout --foreground --kill-after=5s 60 docker logs "$container_name" 2>&1 | tail -n 100 || true
           else
-            docker logs "$container_name"
+            timeout --foreground --kill-after=5s 120 docker logs "$container_name"
           fi
           if [ -f provider-scale-evidence/scale-progress.txt ]; then
             echo 'Scale command progress markers:'
@@ -71,7 +71,7 @@ jobs:
           cat "$summary_file"
           sudo cp "$summary_file" provider-scale-evidence/scale-resource-summary.txt
           sudo chown 10001:10001 provider-scale-evidence/scale-resource-summary.txt
-          docker rm "$container_name" >/dev/null
+          timeout --foreground --kill-after=5s 20 docker rm "$container_name" >/dev/null
           if [ "$container_status" -ne 0 ]; then
             exit "$container_status"
           fi
