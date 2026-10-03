@@ -998,7 +998,7 @@ impl Form {
         &self,
         checkpoint: Option<&str>,
     ) -> Result<String, String> {
-        let canonical_extra_options = engine::canonical_extra_options(&self.profile.extra_options)?;
+        let canonical_extra_options = crate::extra_options::canonical(&self.profile.extra_options)?;
         let digest = Sha256::digest(canonical_extra_options.join("\u{1f}").as_bytes());
         let extra_options_sha256 = digest
             .iter()

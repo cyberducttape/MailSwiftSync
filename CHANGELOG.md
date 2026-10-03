@@ -6,6 +6,12 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- CI now generates an LCOV report and enforces explicit line-coverage floors
+  for batch admission, durable schema/state transitions, verification,
+  recovery/process ownership, provider failure classification, migration-plan
+  validation, and OAuth authorization. This is a safety-critical module gate,
+  not an arbitrary whole-project percentage; the report is retained as a CI
+  artifact.
 - `migrateaudit` now streams snapshot categories into temporary SQLite tables,
   compares duplicate identities with indexed SQL multiplicity joins, and
   computes deterministic digests without materializing both input documents in

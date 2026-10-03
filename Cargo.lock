@@ -2381,6 +2381,7 @@ dependencies = [
  "sha2",
  "skrifa",
  "toml",
+ "url",
  "uuid",
  "webpki-roots",
  "windows-sys 0.61.2",

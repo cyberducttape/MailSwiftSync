@@ -1,4 +1,4 @@
-name: IMAP parser fuzzing
+name: Parser and safety-property fuzzing
 
 on:
   push:
@@ -8,6 +8,10 @@ on:
       - "src/core/capabilities.rs"
       - "src/core/message_extraction.rs"
       - "src/imap_protocol.rs"
+      - "src/core/provider_intelligence.rs"
+      - "src/extra_options.rs"
+      - "src/oauth_redirect.rs"
+      - "src/migrate_audit.rs"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   pull_request:
@@ -17,6 +21,10 @@ on:
       - "src/core/capabilities.rs"
       - "src/core/message_extraction.rs"
       - "src/imap_protocol.rs"
+      - "src/core/provider_intelligence.rs"
+      - "src/extra_options.rs"
+      - "src/oauth_redirect.rs"
+      - "src/migrate_audit.rs"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   schedule:
@@ -42,6 +50,10 @@ jobs:
           - list_response
           - literal_framing
           - namespace_response
+          - provider_error
+          - extra_options
+          - oauth_redirect
+          - migration_snapshot
     env:
       FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '90' || github.event_name == 'push' && '300' || '900' }}
     steps:
@@ -51,10 +63,10 @@ jobs:
         uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: fuzz/corpus/${{ matrix.target }}/
-          key: imap-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: parser-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            imap-corpus-${{ matrix.target }}-${{ github.ref_name }}-
-            imap-corpus-${{ matrix.target }}-main-
+            parser-corpus-${{ matrix.target }}-${{ github.ref_name }}-
+            parser-corpus-${{ matrix.target }}-main-
       - name: Install nightly Rust and cargo-fuzz
         run: |
           rustup toolchain install nightly --profile minimal
@@ -65,7 +77,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: imap-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          name: parser-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           path: fuzz/corpus/${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 14
@@ -74,4 +86,4 @@ jobs:
         uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: fuzz/corpus/${{ matrix.target }}/
-          key: imap-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: parser-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}

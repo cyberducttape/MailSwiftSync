@@ -8,6 +8,7 @@
 //! that live launches already read. The operator still registers their own
 //! OAuth application; MailSwiftSync ships no client ID of its own.
 use crate::credentials::SecretString;
+use crate::oauth_redirect::{RedirectOutcome, parse_redirect_request};
 use crate::oauth_refresh::{OAuthRefreshConfig, RefreshedToken, post_token_request};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -24,7 +25,6 @@ use zeroize::Zeroizing;
 pub(crate) const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(300);
 const REDIRECT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REDIRECT_REQUEST_BYTES: usize = 16 * 1024;
-const MAX_AUTHORIZATION_CODE_BYTES: usize = 4096;
 /// Browsers commonly request `/favicon.ico` next to the redirect. Bound how
 /// many unrelated requests are tolerated before the flow gives up.
 const MAX_UNRELATED_REQUESTS: usize = 8;
@@ -467,12 +467,6 @@ impl RedirectListener {
     }
 }
 
-enum RedirectOutcome {
-    Code(Zeroizing<String>),
-    Rejected(String),
-    Unrelated,
-}
-
 fn handle_redirect(stream: &mut TcpStream, expected_state: &str) -> RedirectOutcome {
     let head = match read_request_head(stream) {
         Ok(head) => head,
@@ -516,96 +510,6 @@ fn read_request_head(stream: &mut TcpStream) -> Result<Zeroizing<String>, String
     String::from_utf8(head.to_vec())
         .map(Zeroizing::new)
         .map_err(|_| "the authorization redirect request is not valid UTF-8".into())
-}
-
-fn parse_redirect_request(head: &str, expected_state: &str) -> RedirectOutcome {
-    // An empty head is a connection that closed or idled without a request
-    // (for example a browser preconnect); keep waiting for the redirect.
-    let Some(request_line) = head.lines().next() else {
-        return RedirectOutcome::Unrelated;
-    };
-    let mut parts = request_line.split(' ');
-    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
-        return RedirectOutcome::Rejected("the authorization redirect request is malformed".into());
-    };
-    let Ok(url) = reqwest::Url::parse(&format!("http://loopback{target}")) else {
-        return RedirectOutcome::Unrelated;
-    };
-    if method != "GET" || url.path() != "/" {
-        return RedirectOutcome::Unrelated;
-    }
-    let mut code = None;
-    let mut state = None;
-    let mut error = None;
-    let mut error_description = None;
-    for (name, value) in url.query_pairs() {
-        let slot = match name.as_ref() {
-            "code" => &mut code,
-            "state" => &mut state,
-            "error" => &mut error,
-            "error_description" => &mut error_description,
-            _ => continue,
-        };
-        if slot.replace(Zeroizing::new(value.into_owned())).is_some() {
-            return RedirectOutcome::Rejected(format!(
-                "the authorization redirect repeated the {name} parameter"
-            ));
-        }
-    }
-    if code.is_none() && state.is_none() && error.is_none() {
-        return RedirectOutcome::Unrelated;
-    }
-    // Check state before anything else: an unauthenticated request to the
-    // loopback port must not be able to report a provider error either.
-    if !state
-        .as_deref()
-        .is_some_and(|state| constant_time_eq(state.as_bytes(), expected_state.as_bytes()))
-    {
-        return RedirectOutcome::Rejected(
-            "the authorization redirect state did not match this request; nothing was stored"
-                .into(),
-        );
-    }
-    if let Some(error) = error {
-        let description = error_description
-            .as_deref()
-            .map(|value| {
-                value
-                    .chars()
-                    .filter(|c| !c.is_control())
-                    .take(512)
-                    .collect::<String>()
-            })
-            .filter(|value| !value.is_empty());
-        return RedirectOutcome::Rejected(match description {
-            Some(description) => format!(
-                "the provider declined authorization ({}): {description}",
-                error.as_str()
-            ),
-            None => format!("the provider declined authorization ({})", error.as_str()),
-        });
-    }
-    match code {
-        Some(code) if !code.is_empty() && code.len() <= MAX_AUTHORIZATION_CODE_BYTES => {
-            RedirectOutcome::Code(code)
-        }
-        _ => RedirectOutcome::Rejected(
-            "the authorization redirect did not carry a usable code".into(),
-        ),
-    }
-}
-
-/// Compare without an early exit on the first differing byte. The expected
-/// state has a fixed public length, so only the contents need protection.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .fold(0_u8, |difference, (left, right)| {
-                difference | (left ^ right)
-            })
-            == 0
 }
 
 fn respond(stream: &mut TcpStream, status: &str, message: &str) {

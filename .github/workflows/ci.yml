@@ -95,6 +95,29 @@ jobs:
           name: linux-test-summary
           path: dist/test-summary.md
           if-no-files-found: error
+
+  critical-coverage:
+    name: Critical-module coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+        with:
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: Generate LCOV report
+        run: cargo llvm-cov --locked --all-targets --all-features --lcov --output-path coverage.lcov
+      - name: Enforce critical-module floors
+        run: python3 scripts/check-critical-coverage.py coverage.lcov
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: critical-coverage-lcov
+          path: coverage.lcov
+          if-no-files-found: error
       - run: cargo build --locked --release --all-features
         env:
           MAILSWIFTSYNC_GIT_SHA: ${{ github.sha }}
