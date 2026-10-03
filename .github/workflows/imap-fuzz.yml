@@ -12,6 +12,7 @@ on:
       - "src/extra_options.rs"
       - "src/oauth_redirect.rs"
       - "src/migrate_audit.rs"
+      - "src/core/state.rs"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   pull_request:
@@ -25,6 +26,7 @@ on:
       - "src/extra_options.rs"
       - "src/oauth_redirect.rs"
       - "src/migrate_audit.rs"
+      - "src/core/state.rs"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   schedule:
@@ -54,6 +56,7 @@ jobs:
           - extra_options
           - oauth_redirect
           - migration_snapshot
+          - recovery_state
     env:
       FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '90' || github.event_name == 'push' && '300' || '900' }}
     steps:

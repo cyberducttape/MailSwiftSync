@@ -72,5 +72,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "recovery_state"
+path = "fuzz_targets/recovery_state.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1

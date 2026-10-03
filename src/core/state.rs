@@ -184,6 +184,75 @@ impl MailboxState {
     }
 }
 
+/// The only legal durable mailbox-state edges. Keeping this policy beside the
+/// wire enum makes the transition invariant independently fuzzable and avoids
+/// callers inventing terminal-state shortcuts.
+pub(crate) fn valid_mailbox_transition(current: &str, next: &str) -> bool {
+    let (Some(current), Some(next)) = (MailboxState::parse(current), MailboxState::parse(next))
+    else {
+        return false;
+    };
+    match current {
+        MailboxState::Queued => matches!(
+            next,
+            MailboxState::Preflight
+                | MailboxState::Ready
+                | MailboxState::Running
+                | MailboxState::Failed
+                | MailboxState::Cancelled
+                | MailboxState::Attention
+        ),
+        MailboxState::Preflight => matches!(
+            next,
+            MailboxState::Ready
+                | MailboxState::Running
+                | MailboxState::Failed
+                | MailboxState::Cancelled
+        ),
+        MailboxState::Ready => matches!(
+            next,
+            MailboxState::Running | MailboxState::Failed | MailboxState::Cancelled
+        ),
+        MailboxState::Running => matches!(
+            next,
+            MailboxState::Ready
+                | MailboxState::Completed
+                | MailboxState::DeltaRequired
+                | MailboxState::VerificationDifference
+                | MailboxState::Failed
+                | MailboxState::Cancelled
+                | MailboxState::Attention
+        ),
+        MailboxState::DeltaRequired | MailboxState::VerificationDifference => matches!(
+            next,
+            MailboxState::Running
+                | MailboxState::Failed
+                | MailboxState::Cancelled
+                | MailboxState::Attention
+                | MailboxState::VerifiedWithExceptions
+        ),
+        MailboxState::Completed => matches!(
+            next,
+            MailboxState::Verified
+                | MailboxState::DeltaRequired
+                | MailboxState::VerificationDifference
+                | MailboxState::Running
+                | MailboxState::Attention
+        ),
+        MailboxState::Failed | MailboxState::Cancelled => {
+            matches!(next, MailboxState::Running | MailboxState::Attention)
+        }
+        MailboxState::Verified | MailboxState::VerifiedWithExceptions => matches!(
+            next,
+            MailboxState::Ready
+                | MailboxState::DeltaRequired
+                | MailboxState::Running
+                | MailboxState::Attention
+        ),
+        MailboxState::Attention => matches!(next, MailboxState::Running),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Phase {
     Discovery,

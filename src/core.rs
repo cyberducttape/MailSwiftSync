@@ -69,6 +69,7 @@ pub use models::{
 pub use policy::destination_identity_from_parts;
 pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts};
 pub use recovery_queue::{RecoveryGroup, RecoveryRow};
+pub(crate) use state::valid_mailbox_transition;
 pub use state::{AttentionReason, MailboxState, Phase};
 pub use transfer_passes::{
     EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
@@ -82,7 +83,7 @@ pub(crate) use policy::{
     MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES, attention_reason_for,
     dovecot_checkpoint_context, dovecot_checkpoint_state, encode_dovecot_checkpoint,
     normalized_destination_identity, normalized_destination_lock_identity,
-    valid_dovecot_checkpoint, valid_mailbox_transition,
+    valid_dovecot_checkpoint,
 };
 
 pub(crate) fn sqlite_i64(value: u64) -> rusqlite::Result<i64> {

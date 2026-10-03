@@ -18,6 +18,8 @@ Targets cover:
 - `oauth_redirect`: loopback method/path/query/state parsing and code bounds;
 - `migration_snapshot`: bounded snapshot JSON parsing, SQLite staging, and
   report generation without provider access.
+- `recovery_state`: the production mailbox-state parser and transition
+  policy, including arbitrary wire values and terminal-state edge attempts.
 
 The checked-in corpora contain representative valid and malformed seeds.
 GitHub Actions runs short campaigns on pull requests, longer campaigns on
@@ -34,7 +36,7 @@ cargo +nightly fuzz run --release fetch_response -- -max_total_time=600 -timeout
 
 Repeat with `list_response`, `literal_framing`, `namespace_response`,
 `provider_error`, `extra_options`, `oauth_redirect`, and
-`migration_snapshot`.
+`migration_snapshot`, and `recovery_state`.
 Crashes are written below `fuzz/artifacts/<target>/`; preserve each minimized
 crashing input as a regression fixture before changing parser behavior.
 

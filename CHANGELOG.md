@@ -17,6 +17,9 @@ operator distribution archives.
   schema validator also verifies the workflow foreign key and stage constraint.
   Cutover plans are now one-shot records: an existing approved or active plan
   cannot be reset by creating another plan.
+- Added a dedicated recovery-state libFuzzer target against the production
+  mailbox transition policy; arbitrary wire values cannot become accepted
+  state edges merely through parsing.
 - Migration simulation now shows separate source and destination capacity
   facts from the latest endpoint readiness probe, including provider-reported
   quota usage/limits, exhausted destination capacity, and an explicit unknown
