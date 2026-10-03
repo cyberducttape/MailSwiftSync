@@ -28,6 +28,8 @@ operator distribution archives.
   into a protocol module, preserving literal-safe completion detection.
 - Isolated certificate-validated IMAP/STARTTLS setup, deadline-aware handshake
   handling, custom CA roots, and SHA-256 pin enforcement in the TLS module.
+- Moved LOGIN/XOAUTH2 exchange and post-auth capability refresh into the IMAP
+  authentication module while keeping the shared probe API unchanged.
 - Corrected the operator-facing rate-limit summary to describe the current
   hierarchical adaptive process-launch policy instead of implying a fixed
   global-only process-start ceiling; documentation validation now checks that
