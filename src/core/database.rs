@@ -1492,7 +1492,8 @@ impl StateStore {
         // version 16 adds narrow per-mailbox queue presentation facts; version
         // 17 stores shared batch policies separately from mailbox deltas; 18
         // adds the credential-free webhook delivery outbox; 19 adds the
-        // transaction-bound lifecycle-event outbox trigger.
+        // transaction-bound lifecycle-event outbox trigger; 20 distinguishes
+        // mailbox failure events from successful completion events.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1572,6 +1573,40 @@ impl StateStore {
         tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_engine_versions_captured ON engine_versions(captured_at DESC)",
             [],
+        )?;
+        // Version 20 replaces the version-19 trigger.  A failed or cancelled
+        // mailbox must never be published as completed, and a project-level
+        // run must not be mislabeled as a mailbox event.
+        tx.execute_batch(
+            "DROP TRIGGER IF EXISTS events_webhook_outbox;
+             CREATE TRIGGER events_webhook_outbox AFTER INSERT ON events
+             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted')
+                 OR (NEW.kind='phase_changed' AND NEW.detail IN ('complete','final_delta'))
+             BEGIN
+                 INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest)
+                 SELECT printf('ledger-event-%lld',NEW.id),NEW.project_id,
+                     CASE
+                         WHEN NEW.kind='run_started' THEN 'migration.started'
+                         WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
+                         WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state IN ('failed','cancelled','attention')) THEN 'mailbox.failed'
+                         WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL) THEN 'mailbox.completed'
+                         WHEN NEW.kind='run_finished' THEN 'migration.completed'
+                         WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
+                         WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
+                         ELSE 'mailbox.verification_accepted'
+                     END,
+                     json_object('format','mailswiftsync-webhook-event','event_id',printf('ledger-event-%lld',NEW.id),'event_type',
+                         CASE
+                             WHEN NEW.kind='run_started' THEN 'migration.started'
+                             WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
+                             WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state IN ('failed','cancelled','attention')) THEN 'mailbox.failed'
+                             WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL) THEN 'mailbox.completed'
+                             WHEN NEW.kind='run_finished' THEN 'migration.completed'
+                             WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
+                             WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
+                             ELSE 'mailbox.verification_accepted'
+                         END,'project_id',NEW.project_id,'run_id',NEW.run_id,'detail',NEW.detail),'';
+             END;",
         )?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = tx

@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Corrected lifecycle webhook classification: failed, cancelled, and
+  attention mailboxes now emit `mailbox.failed`, project-level run completion
+  emits `migration.completed`, and only successful mailbox runs emit
+  `mailbox.completed`. The durable schema is now version 20 so existing
+  ledgers replace the earlier trigger transactionally.
 - Added owner-only organization policy enforcement through
   `organization-policy.toml`: administrators can require encrypted transport,
   prohibit destination mutation, require metadata/body verification, and cap

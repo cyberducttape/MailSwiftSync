@@ -265,4 +265,40 @@ mod tests {
         assert!(deliveries[0].payload.contains("migration.completed"));
         fs::remove_dir_all(directory).unwrap();
     }
+
+    #[test]
+    fn failed_mailbox_runs_never_enter_the_completed_outbox() {
+        let (store, directory) = test_store();
+        store
+            .connection
+            .execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES('job','project','source-user','destination-user','failed')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES('run','project','job','imapsync','failed')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO events(project_id,run_id,kind,detail) VALUES('project','run','run_finished','failed')",
+                [],
+            )
+            .unwrap();
+
+        let delivery = store
+            .due_webhook_deliveries("", 10)
+            .unwrap()
+            .into_iter()
+            .find(|delivery| delivery.event_id == "ledger-event-1")
+            .unwrap();
+        assert_eq!(delivery.event_type, "mailbox.failed");
+        assert!(delivery.payload.contains("mailbox.failed"));
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
