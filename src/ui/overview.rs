@@ -698,25 +698,48 @@ impl App {
                         .text("No preflight assessment has been recorded for the current plan."),
                 );
             } else {
+                let mut open_plan = false;
                 egui::Grid::new("overview_preflight_controls")
                     .striped(true)
                     .show(ui, |ui| {
                         ui.strong(self.language.message("ui.check"));
                         ui.strong(self.language.message("ui.result"));
+                        ui.strong(self.language.text("Action"));
                         ui.end_row();
                         for (name, detail, passed) in &self.preflight {
-                            ui.label(RichText::new(if *passed { "✓" } else { "!" }).color(
+                            let status = ui.label(RichText::new(if *passed { "✓" } else { "!" }).color(
                                 if *passed {
                                     self.theme_colors().success
                                 } else {
                                     self.theme_colors().danger
                                 },
                             ));
+                            if !passed {
+                                status.on_hover_text(self.language.text(
+                                    "This check is not satisfied and may block migration readiness.",
+                                ));
+                            }
                             ui.label(RichText::new(name).strong());
                             ui.label(detail);
+                            if !passed {
+                                if ui
+                                    .add_enabled(
+                                        !self.running() && !self.workspace_read_only,
+                                        egui::Button::new(self.language.text("Fix in Plan")),
+                                    )
+                                    .clicked()
+                                {
+                                    open_plan = true;
+                                }
+                            } else {
+                                ui.label("—");
+                            }
                             ui.end_row();
                         }
                     });
+                if open_plan {
+                    self.active_view = WorkspaceView::Plan;
+                }
             }
         });
         if let Some(project) = self

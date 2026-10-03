@@ -35,6 +35,8 @@ operator distribution archives.
   changes: durable import persistence took 1.647 seconds, the full shell's
   first frame took 45 ms, and the 100k-row CSV parse grew RSS by 43 MiB. The
   Mailboxes first frame was 91 ms against its 100 ms budget.
+- Failed local preflight checks now include a direct “Fix in Plan” action and
+  explain that the unmet check may block readiness.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.
