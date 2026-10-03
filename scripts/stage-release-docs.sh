@@ -43,6 +43,7 @@ distribution_documents=(
   docs/compatibility-matrix.md
   docs/container.md
   docs/provider-facts.md
+  docs/provider-qualification-packs.md
   docs/release-0.1.0-alpha.md
   docs/release-readiness.md
   docs/verification-envelope.md

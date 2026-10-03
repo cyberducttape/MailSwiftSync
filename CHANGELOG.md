@@ -39,6 +39,10 @@ operator distribution archives.
 - Batch admission now evaluates the same organization-policy snapshot against
   every rebuilt durable row, preventing endpoint or tenant overrides from
   bypassing provider-specific safety ceilings.
+- Stable release verification now builds and publishes one provider
+  qualification pack per release-required provider pair after the evidence
+  gate passes; preview releases continue to refuse unsupported qualification
+  claims.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in

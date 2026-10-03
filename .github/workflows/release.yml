@@ -65,6 +65,35 @@ jobs:
           else
             scripts/verify-evidence-gate.sh --release
           fi
+      - name: Build provider qualification packs
+        if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-rc.') }}
+        env:
+          MAILSWIFTSYNC_EVIDENCE_DIR: ${{ runner.temp }}/mailswiftsync-release-evidence
+          MAILSWIFTSYNC_PACK_DIR: ${{ runner.temp }}/mailswiftsync-qualification-packs
+        shell: bash
+        run: |
+          mkdir -p "$MAILSWIFTSYNC_PACK_DIR"
+          python3 - tests/provider-evidence/policy.json <<'PY' > "$RUNNER_TEMP/provider-pairs.tsv"
+          import json
+          import sys
+
+          policy = json.load(open(sys.argv[1], encoding="utf-8"))
+          for entry in policy["providers"]:
+              if entry.get("release_required") is True:
+                  print(f"{entry['source_provider']}\t{entry['destination_provider']}")
+          PY
+          while IFS=$'\t' read -r source_provider destination_provider; do
+            python3 scripts/build-provider-qualification-pack.py \
+              "$MAILSWIFTSYNC_EVIDENCE_DIR" "$source_provider" "$destination_provider" \
+              "$MAILSWIFTSYNC_PACK_DIR/${source_provider}-to-${destination_provider}.json"
+          done < "$RUNNER_TEMP/provider-pairs.tsv"
+      - name: Publish provider qualification packs
+        if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-rc.') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-qualification-packs-${{ github.ref_name }}
+          path: ${{ runner.temp }}/mailswiftsync-qualification-packs
+          if-no-files-found: error
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
       - name: Enforce 100k-row scale budgets
