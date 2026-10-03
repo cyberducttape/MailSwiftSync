@@ -15,6 +15,8 @@ operator distribution archives.
   module; sparse UID ordering and fail-closed coverage tests remain in place.
 - Fixed schema-version documentation drift and broadened the documentation gate
   to recognize parenthesized and labeled SQLite schema-version claims.
+- Removed a stale schema-version reference from the database layout validator's
+  safety documentation; the implementation remains tied to the current schema.
 - Corrected the operator-facing rate-limit summary to describe the current
   hierarchical adaptive process-launch policy instead of implying a fixed
   global-only process-start ceiling; documentation validation now checks that

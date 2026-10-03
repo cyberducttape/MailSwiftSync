@@ -265,7 +265,7 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v19 application schema, rather than treating
+    /// Validate the complete current application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
     /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
