@@ -64,11 +64,13 @@ pub(crate) fn durable_batch_plan_config(profile: &Profile) -> Result<String, Str
 
 /// Serialize each immutable import default once, then share its allocation
 /// across all durable mailbox rows built from those defaults.
-fn durable_batch_plan_configs(jobs: &[BulkJob]) -> Result<HashMap<usize, Arc<str>>, String> {
-    let mut by_defaults = HashMap::<usize, Arc<str>>::new();
+fn durable_batch_plan_configs(
+    jobs: &[BulkJob],
+) -> Result<HashMap<*const crate::bulk_import::BatchPlanDefaults, Arc<str>>, String> {
+    let mut by_defaults = HashMap::new();
     let mut interned = HashMap::<String, Arc<str>>::new();
     for job in jobs {
-        let identity = Arc::as_ptr(&job.defaults) as usize;
+        let identity = Arc::as_ptr(&job.defaults);
         if by_defaults.contains_key(&identity) {
             continue;
         }
@@ -156,7 +158,7 @@ pub(crate) fn persist_imported_queue(
         .iter()
         .map(|job| {
             let profile = job.profile();
-            let defaults_identity = Arc::as_ptr(&job.defaults) as usize;
+            let defaults_identity = Arc::as_ptr(&job.defaults);
             Ok(core::QueueInsert {
                 source_mailbox: profile.source_user.clone(),
                 destination_mailbox: profile.destination_user.clone(),
@@ -518,7 +520,7 @@ mod tests {
 
         let plans = durable_batch_plan_configs(&[first, second]).unwrap();
         assert_eq!(plans.len(), 1);
-        assert!(plans.contains_key(&(Arc::as_ptr(&defaults) as usize)));
+        assert!(plans.contains_key(&Arc::as_ptr(&defaults)));
     }
 
     #[test]

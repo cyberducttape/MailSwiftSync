@@ -385,11 +385,13 @@ screen-reader checklist are recorded in
   queue it measures a SQL filter keystroke, select-all with its selection and
   queue-health accounting, a 1,000-row durable state change, the first
   Mailboxes frame through the real App, and the off-thread write of a parsed
-  import to the ledger. On 2026-10-03, after paging the default Mailboxes rowids,
-  the local release-mode result was 25 ms for filtering, 51 ms for select-all,
-  22 ms for the state change, 94 ms for the Mailboxes first frame, and 2.426 s
-  to write the import; the complete shell's first frame was 46 ms. The same
-  100k-row CSV import benchmark measured 269 ms and 44 MiB RSS. These are
+  import to the ledger. The latest local release-mode result on 2026-10-03 was
+  24 ms for filtering, 49 ms for select-all, 21 ms for the state change, 91 ms
+  for the Mailboxes first frame, and 1.647 s to write the import; the complete
+  shell's first frame was 45 ms, selected-frame update 0 ms, and search-frame
+  update 26 ms. The same 100k-row CSV import benchmark measured 262 ms and 43
+  MiB RSS growth. All scripted budgets passed; the Mailboxes first frame is
+  close to the 100 ms limit. These are
   slower than the earlier in-memory
   baselines (single-digit milliseconds) in exchange for bounded memory and a
   queue that survives restarts unchanged. These are release-mode host

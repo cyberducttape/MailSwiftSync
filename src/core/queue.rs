@@ -171,7 +171,7 @@ impl StateStore {
         if rows.is_empty() || rows.len() > MAX_DURABLE_MAILBOX_ROWS {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let mut shared_configs = std::collections::HashSet::new();
+        let mut shared_configs = std::collections::HashSet::<*const ()>::new();
         let mut shared_bytes = 0usize;
         rows.iter().try_fold(0usize, |total, row| {
             let config = row.batch_plan_config.as_deref().unwrap_or(&row.config);
@@ -179,7 +179,7 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
             if let Some(config) = row.batch_plan_config.as_ref() {
-                let identity = Arc::as_ptr(config) as *const () as usize;
+                let identity = Arc::as_ptr(config) as *const ();
                 if shared_configs.insert(identity) {
                     shared_bytes = shared_bytes
                         .checked_add(config.len())
@@ -239,9 +239,9 @@ impl StateStore {
             params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
         )?;
         let mut ids = Vec::with_capacity(rows.len());
-        let mut plan_ids = std::collections::HashMap::<usize, String>::new();
+        let mut plan_ids = std::collections::HashMap::<*const (), String>::new();
         for config in rows.iter().filter_map(|row| row.batch_plan_config.as_ref()) {
-            let identity = Arc::as_ptr(config) as *const () as usize;
+            let identity = Arc::as_ptr(config) as *const ();
             if plan_ids.contains_key(&identity) {
                 continue;
             }
@@ -272,9 +272,9 @@ impl StateStore {
                     } else {
                         Some(row.config.clone())
                     },
-                    row.batch_plan_config.as_ref().and_then(|config| {
-                        plan_ids.get(&(Arc::as_ptr(config) as *const () as usize))
-                    }),
+                    row.batch_plan_config
+                        .as_ref()
+                        .and_then(|config| { plan_ids.get(&(Arc::as_ptr(config) as *const ())) }),
                     row.row_overrides,
                 ])?;
                 facts.execute(params![

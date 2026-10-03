@@ -31,6 +31,10 @@ operator distribution archives.
   profile allocations during large imports. Applying a shared keyring
   credential now changes only mailbox identity deltas, preserving normalized
   shared-plan storage and invalidating the affected preflight.
+- The release-mode 100k-row desktop benchmark passed after the shared-plan
+  changes: durable import persistence took 1.647 seconds, the full shell's
+  first frame took 45 ms, and the 100k-row CSV parse grew RSS by 43 MiB. The
+  Mailboxes first frame was 91 ms against its 100 ms budget.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.
