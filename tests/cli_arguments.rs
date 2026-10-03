@@ -10,6 +10,54 @@ fn run(arguments: &[&str]) -> Output {
         .expect("mailswiftsync binary must launch")
 }
 
+#[cfg(unix)]
+fn run_with_non_utf8_argument(arguments: &[&str], invalid_argument: Vec<u8>) -> Output {
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"));
+    command
+        .args(arguments)
+        .arg(std::ffi::OsString::from_vec(invalid_argument));
+    command.output().expect("mailswiftsync binary must launch")
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_rejects_non_utf8_trusted_key_without_checksum_only_fallback() {
+    let output = run_with_non_utf8_argument(&["verify", "missing-proof.json"], vec![0xff]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("trusted public key must be valid UTF-8"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("could not open"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn cutover_rejects_non_utf8_maintenance_window_before_opening_ledger() {
+    let state = missing_ledger("non-utf8-cutover-window");
+    let output = run_with_non_utf8_argument(
+        &[
+            "cutover",
+            state.to_str().unwrap(),
+            "create",
+            "project",
+            "2026-10-03T22:00:00Z",
+        ],
+        vec![0xff],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Cutover control argument 4 must be valid UTF-8"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("workflow unavailable"), "{stderr}");
+    assert!(!state.parent().unwrap().exists());
+}
+
 fn missing_ledger(name: &str) -> PathBuf {
     std::env::temp_dir()
         .join(format!(
