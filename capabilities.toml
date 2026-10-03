@@ -83,12 +83,12 @@ evidence = "The certificate command exports only durably completed customer evid
 [[production_features]]
 feature = "Migration simulation"
 status = "partial"
-evidence = "Plan risk assessment and provider checklist are available; complete destination-capacity simulation is not yet guaranteed."
+evidence = "Plan risk assessment now shows observed source/destination quota facts and explicit unknown-capacity states; provider-specific message-size, folder-limit, and complete destination-capacity simulation is not yet guaranteed."
 
 [[production_features]]
 feature = "Automatic destination capacity checks"
 status = "partial"
-evidence = "Quota parsing and plan warnings exist where data is exposed; provider-wide capacity discovery is not qualified."
+evidence = "Quota parsing, explicit unknown-capacity warnings, and destination quota blocking exist where IMAP data is exposed; provider-wide capacity discovery is not qualified."
 
 [[production_features]]
 feature = "Advanced typed folder mapping"

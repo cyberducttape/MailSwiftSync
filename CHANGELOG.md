@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Migration simulation now shows separate source and destination capacity
+  facts from the latest endpoint readiness probe, including provider-reported
+  quota usage/limits, exhausted destination capacity, and an explicit unknown
+  state when quota headroom was not observed. Unknown capacity is never shown
+  as safe headroom.
 - Batch failure details now preserve the provider identity selected at the
   execution boundary, matching the provider-aware retry and rate-domain
   decisions instead of falling back to generic classification in durable

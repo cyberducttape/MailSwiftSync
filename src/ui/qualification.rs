@@ -137,6 +137,10 @@ impl App {
                 .and_then(|capabilities| capabilities.namespace.as_ref()),
             self.language,
         );
+        let source_capacity =
+            format_quota_details(self.source_capabilities.as_ref(), self.language, false);
+        let destination_capacity =
+            format_quota_details(self.destination_capabilities.as_ref(), self.language, true);
         let risks = simulation_risks(
             namespace_assessment != "personal namespaces match"
                 && namespace_assessment != "namespace mapping not yet assessed",
@@ -229,6 +233,12 @@ impl App {
                         ui,
                         self.language.message("ui.destination-27a4be0d"),
                         destination_behavior,
+                    );
+                    simulation_row(ui, self.language.text("Source capacity"), &source_capacity);
+                    simulation_row(
+                        ui,
+                        self.language.text("Destination capacity"),
+                        &destination_capacity,
                     );
                     simulation_row(
                         ui,
@@ -368,6 +378,47 @@ fn simulation_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.end_row();
 }
 
+fn format_quota_details(
+    capabilities: Option<&core::ServerCapabilities>,
+    language: crate::ui::UiLanguage,
+    destination: bool,
+) -> String {
+    let Some(capabilities) = capabilities else {
+        return language
+            .text("Not observed; run endpoint readiness checks")
+            .to_owned();
+    };
+    if capabilities.quota_exceeded {
+        return if destination {
+            language
+                .text("Blocked: provider-reported quota is exhausted")
+                .to_owned()
+        } else {
+            language
+                .text("Observed: source quota is exhausted; source remains read-only")
+                .to_owned()
+        };
+    }
+    if !capabilities.quota_observed {
+        return language
+            .text("Unknown: provider did not report usable quota headroom")
+            .to_owned();
+    }
+    let details = capabilities
+        .quota_resources
+        .iter()
+        .map(|(resource, quota)| format!("{resource} {} / {}", quota.used, quota.limit))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if details.is_empty() {
+        language
+            .text("Observed, but no supported quota resource was returned")
+            .to_owned()
+    } else {
+        format!("{}{}", language.text("Provider units: "), details)
+    }
+}
+
 fn auth_method_label(method: &str) -> &'static str {
     match method {
         "oauth2" => "OAuth 2.0",
@@ -403,7 +454,8 @@ fn simulation_risks(
 
 #[cfg(test)]
 mod tests {
-    use super::{QualificationRoute, qualification_route, simulation_risks};
+    use super::{QualificationRoute, format_quota_details, qualification_route, simulation_risks};
+    use crate::core::ServerCapabilities;
     use crate::provider::ProviderPreset;
 
     #[test]
@@ -451,6 +503,16 @@ mod tests {
         assert_eq!(
             simulation_risks(false, false, true, true),
             ["No risk is established yet; provider-specific review is still required"]
+        );
+    }
+
+    #[test]
+    fn simulation_never_turns_missing_quota_into_capacity_headroom() {
+        let capabilities =
+            ServerCapabilities::from_inventory_summary("* CAPABILITY IMAP4rev1 QUOTA", 1, 0);
+        assert_eq!(
+            format_quota_details(Some(&capabilities), crate::ui::UiLanguage::English, true),
+            "Unknown: provider did not report usable quota headroom"
         );
     }
 }
