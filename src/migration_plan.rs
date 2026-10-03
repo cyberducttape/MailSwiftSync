@@ -982,11 +982,19 @@ impl Form {
         {
             Ok(command) => command,
             Err(_) => {
-                return format!(
-                    "invalid-imapsync-plan\n{}\nextra-options-sha256={}",
-                    self.profile.imapsync_path,
-                    crate::plan_identity::snapshot_sha256(&self.profile.extra_options),
-                );
+                // Keep the rest of the invalid plan identity-sensitive (for
+                // example, changing an endpoint must invalidate an in-flight
+                // capability probe even while expert options remain invalid).
+                // Only the rejected option text is represented by its digest.
+                let mut safe_profile = self.profile.clone();
+                safe_profile.extra_options.clear();
+                let mut args = engine::imapsync_preview_args(&safe_profile, false, 1)
+                    .expect("an empty expert-option field is valid");
+                args.push("--invalid-extra-options-sha256".into());
+                args.push(crate::plan_identity::snapshot_sha256(
+                    &self.profile.extra_options,
+                ));
+                (self.profile.imapsync_path.clone(), args)
             }
         };
         if self.engine() == core::Engine::ImapSync {

@@ -2856,8 +2856,10 @@ destination = "Archive"
         let preview_error = engine::imapsync_preview_args(&form.profile, true, 1).unwrap_err();
         assert!(preview_error.contains("safe imapsync option allowlist"));
         let invalid_fingerprint = form.plan_fingerprint();
-        assert!(invalid_fingerprint.starts_with("invalid-imapsync-plan\n"));
+        assert!(invalid_fingerprint.contains("--invalid-extra-options-sha256"));
         assert!(!invalid_fingerprint.contains("not-an-allowed-imapsync-option"));
+        form.profile.source_host = "other-source.example".into();
+        assert_ne!(invalid_fingerprint, form.plan_fingerprint());
         form.profile.extra_options.clear();
         assert_ne!(invalid_fingerprint, form.plan_fingerprint());
     }
