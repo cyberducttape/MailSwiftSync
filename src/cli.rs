@@ -64,6 +64,44 @@ fn sha256_file(path: &std::path::Path) -> Result<String, String> {
     Ok(hex)
 }
 
+fn canonical_destination(path: &std::path::Path) -> Result<PathBuf, String> {
+    match std::fs::canonicalize(path) {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let parent = std::fs::canonicalize(parent).map_err(|error| {
+                format!("could not safely resolve certificate output directory: {error}")
+            })?;
+            let filename = path.file_name().ok_or_else(|| {
+                "certificate output must name a file inside its output directory".to_owned()
+            })?;
+            Ok(parent.join(filename))
+        }
+        Err(error) => Err(format!(
+            "could not safely resolve certificate path: {error}"
+        )),
+    }
+}
+
+fn ensure_certificate_output_is_distinct(
+    output: &std::path::Path,
+    protected_inputs: &[&std::path::Path],
+) -> Result<(), String> {
+    let output = canonical_destination(output)?;
+    for input in protected_inputs {
+        if output == canonical_destination(input)? {
+            return Err(format!(
+                "certificate output {} must not replace the migration ledger or signing key",
+                output.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]] [--acknowledge-destination-loss]";
 const WEBHOOK_USAGE: &str = "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata] [--watch] [--poll-seconds=N] (N: 1..3600)";
 /// Required for unattended live runs whose plan may remove destination-only
@@ -372,6 +410,13 @@ pub(crate) fn run() -> eframe::Result<()> {
         let state = std::path::PathBuf::from(state);
         let output = std::path::PathBuf::from(output);
         let signing_key = std::path::PathBuf::from(signing_key);
+        if let Err(error) = ensure_certificate_output_is_distinct(
+            &output,
+            &[state.as_path(), signing_key.as_path()],
+        ) {
+            eprintln!("Migration certificate refused: {error}");
+            std::process::exit(2);
+        }
         let store = match core::StateStore::open_readonly(&state) {
             Ok(store) => store,
             Err(error) => {
@@ -1762,7 +1807,10 @@ fn oauth_authorize_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{HeadlessMode, SuperviseArguments, parse_supervise_arguments, sha256_file};
+    use super::{
+        HeadlessMode, SuperviseArguments, ensure_certificate_output_is_distinct,
+        parse_supervise_arguments, sha256_file,
+    };
     use crate::maintenance_window::MaintenanceWindow;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -1777,6 +1825,54 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn certificate_refuses_output_aliases_of_state_and_signing_key() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-certificate-paths-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let state = directory.join("state.db");
+        let key = directory.join("signing-key.pk8");
+        std::fs::write(&state, b"ledger").unwrap();
+        std::fs::write(&key, b"key").unwrap();
+
+        assert!(
+            ensure_certificate_output_is_distinct(
+                &directory.join(".").join("state.db"),
+                &[state.as_path(), key.as_path()]
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_certificate_output_is_distinct(
+                &directory.join("signing-key.pk8"),
+                &[state.as_path(), key.as_path()]
+            )
+            .is_err()
+        );
+        #[cfg(unix)]
+        {
+            let state_alias = directory.join("state-alias.db");
+            std::os::unix::fs::symlink(&state, &state_alias).unwrap();
+            assert!(
+                ensure_certificate_output_is_distinct(
+                    &state_alias,
+                    &[state.as_path(), key.as_path()]
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            ensure_certificate_output_is_distinct(
+                &directory.join("certificate.json"),
+                &[state.as_path(), key.as_path()]
+            )
+            .is_ok()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     fn args(values: &[&str]) -> Vec<OsString> {

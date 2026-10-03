@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- The certificate command now refuses output paths that resolve to the SQLite
+  ledger or signing-key file, preventing accidental destruction of either.
 - Successful signed migration-certificate exports now record a durable
   `migration.proof_ready` event bound to the certificate SHA-256; export reports
   an error if the artifact was written but that ledger event could not commit.
