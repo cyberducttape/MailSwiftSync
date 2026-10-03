@@ -16,7 +16,9 @@ operator distribution archives.
   recomputable proof digests no longer suffice as release provenance.
 - Added a scheduled/manual packaged-engine scale lab that transfers and
   verifies 100,000 RFC822 messages in one disposable generic-IMAP mailbox;
-  this is end-to-end scale evidence, not hosted-provider qualification.
+  scale mode avoids per-message debug noise and has a bounded 15-minute
+  command timeout; this is end-to-end scale evidence, not hosted-provider
+  qualification.
 - Cutover commands reject non-UTF-8 control arguments rather than silently
   dropping an invalid maintenance-window or confirmation value.
 - Production-readiness guidance now distinguishes implemented provider-scoped

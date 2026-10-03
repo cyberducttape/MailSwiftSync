@@ -321,8 +321,9 @@ screen-reader checklist are recorded in
   provides a monthly/manual run that creates 100,000 distinct RFC822 messages
   in one disposable Dovecot mailbox, then exercises the packaged imapsync
   transfer, durable evidence, and metadata verifier. The first result is not
-  yet recorded; this generic-IMAP lab does not qualify Gmail, Microsoft 365, or
-  other hosted providers.
+  yet recorded. Scale mode disables per-message debug output and allows up to
+  15 minutes per CLI command, within a 60-minute workflow limit. This generic-
+  IMAP lab does not qualify Gmail, Microsoft 365, or other hosted providers.
 - Batch scheduling keeps conservative defaults but exposes explicit global
   worker and process-start ceilings for qualified deployments. The adaptive
   global/provider/tenant/credential/mailbox rate-domain limiter remains the

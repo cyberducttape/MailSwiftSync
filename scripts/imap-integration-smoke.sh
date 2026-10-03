@@ -496,6 +496,11 @@ fi
 app_runtime="$XDG_RUNTIME_DIR"
 state="$app_runtime/state.db"
 diagnostic_dir="$app_runtime/diagnostics"
+extra_options="--timeout=30 --debug"
+if (( scale_messages > 0 )); then
+  # Avoid per-message debug output contaminating the measured scale run.
+  extra_options="--timeout=30"
+fi
 export XDG_CONFIG_HOME="$app_runtime/config"
 mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
 chmod 0700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/mailswiftsync"
@@ -538,7 +543,7 @@ fastio1 = false
 fastio2 = false
 allowsizemismatch = false
 delete2 = false
-extra_options = "--timeout=30 --debug"
+extra_options = "$extra_options"
 EOF
 source_secret="$app_runtime/source.secret"
 destination_secret="$app_runtime/destination.secret"
@@ -548,8 +553,13 @@ chmod 0600 "$source_secret" "$destination_secret"
 
 run_product() {
   # A broken engine, fixture, or controller must produce a bounded release
-  # failure rather than consuming an unattended CI runner indefinitely.
-  MAILSWIFTSYNC_DEBUG_PROCESS_WAIT=1 timeout --foreground 180 "$binary" "$@" 2>&1 | LC_ALL=C awk -v path="$product_log" '
+  # failure rather than consuming an unattended CI runner indefinitely. The
+  # explicit large-mailbox path gets a larger, still bounded per-command cap.
+  local command_timeout=180
+  if (( scale_messages > 0 )); then
+    command_timeout=900
+  fi
+  MAILSWIFTSYNC_DEBUG_PROCESS_WAIT=1 timeout --foreground "$command_timeout" "$binary" "$@" 2>&1 | LC_ALL=C awk -v path="$product_log" '
     {
       print
       fflush()

@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "scripts" / "provider-integration-test.sh").read_text(encoding="utf-8")
+SCALE_SCRIPT = (ROOT / "scripts" / "imap-integration-smoke.sh").read_text(encoding="utf-8")
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
@@ -46,6 +47,12 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
             self.assertIn(secret, validation)
         self.assertIn('perms=$(stat -c %a "$secret_file"', validation)
         self.assertIn('exit 1', validation)
+
+    def test_scale_lab_uses_a_bounded_longer_timeout_without_debug_noise(self):
+        self.assertIn('local command_timeout=180', SCALE_SCRIPT)
+        self.assertIn('command_timeout=900', SCALE_SCRIPT)
+        self.assertIn('extra_options="--timeout=30"', SCALE_SCRIPT)
+        self.assertIn('extra_options="--timeout=30 --debug"', SCALE_SCRIPT)
 
 
 if __name__ == "__main__":
