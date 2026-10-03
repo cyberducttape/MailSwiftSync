@@ -5,7 +5,7 @@
 |---|---|
 | Status | Technical Preview |
 | Package version | `0.1.0-alpha.1` |
-| SQLite schema version | `20` |
+| SQLite schema version | `21` |
 | Last reviewed | 2026-10-02 |
 | Qualified engine | `imapsync 2.314` |
 <!-- release-metadata:end -->
@@ -56,7 +56,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Pre/post-migration reports | implemented | Explicit report views and durable snapshot exports are wired; automatic post-run generation is not claimed. |
 | Resume/recovery dashboard | implemented | Recovery workspace and durable recovery guidance are wired; autonomous resume remains operator-controlled. |
 | Provider error classification | implemented | Provider-intelligence signals feed controller failure and adaptive rate-domain handling; live provider qualification remains pending. |
-| Shared durable batch plans | implemented | Schema v20 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas, alongside the durable webhook outbox and transaction-bound lifecycle event trigger. |
+| Shared durable batch plans | implemented | Schema v21 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas and an approval-gated cutover workflow, alongside the durable webhook outbox and transaction-bound lifecycle event trigger. |
 | Run-level batch throttle policy | implemented | Current concurrency and throughput settings are snapshotted, confirmed, and applied when rebuilding durable mailbox rows. |
 | Adaptive launch and worker ceilings | implemented | Global launch and worker ceilings are configurable with conservative bounds; provider and tenant rate domains adapt from observed signals. |
 | Provider qualification packs | planned | Qualification evidence schema and procedures exist, but bundled live provider-pair packs are not present. |
@@ -64,7 +64,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Migration simulation | partial | Plan risk assessment now shows observed source/destination quota facts and explicit unknown-capacity states; provider-specific message-size, folder-limit, and complete destination-capacity simulation is not yet guaranteed. |
 | Automatic destination capacity checks | partial | Quota parsing, explicit unknown-capacity warnings, and destination quota blocking exist where IMAP data is exposed; provider-wide capacity discovery is not qualified. |
 | Advanced typed folder mapping | partial | Engine mapping controls and folder-policy validation exist; a complete typed rule editor is not yet shipped. |
-| Executable cutover orchestration | planned | Seed/delta lifecycle concepts and maintenance windows exist; multi-step external cutover automation is not yet shipped. |
+| Executable cutover orchestration | partial | Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI; external MX/DNS confirmation remains an explicit operator acknowledgement. |
 | Organization policy enforcement | partial | Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, and concurrency at preflight/batch admission; provider-tenant quotas and role-scoped policy administration remain open. |
 | Durable signed webhook delivery | partial | HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; notify-webhook --watch provides continuous operator-managed delivery while fleet-centralized management remains open. |
 <!-- production-features:end -->

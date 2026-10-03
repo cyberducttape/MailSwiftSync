@@ -6,6 +6,12 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added an approval-gated durable cutover workflow with Seed, Catch-up, Final
+  Delta, and Verification stages. Each stage advance requires every mailbox to
+  have durable verification evidence; intermediate advances requeue only
+  verified rows, and final completion requires an explicit external cutover
+  confirmation. A staged workflow now prevents generic polling from silently
+  collapsing a cutover into Complete.
 - Migration simulation now shows separate source and destination capacity
   facts from the latest endpoint readiness probe, including provider-reported
   quota usage/limits, exhausted destination capacity, and an explicit unknown

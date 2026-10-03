@@ -205,7 +205,21 @@ impl App {
                     terminal_write_ok,
                     self.durability_error,
                 ) {
-                    if run_context.dry_run {
+                    // An approved cutover owns lifecycle advancement.  A
+                    // worker completing a seed/catch-up/final-delta pass must
+                    // not silently collapse the staged workflow into the
+                    // generic Verification/Complete path; the operator (or
+                    // an audited cutover command) advances it after reviewing
+                    // the durable evidence and maintenance window.
+                    let staged_cutover = self.store.cutover_stage(project).ok().flatten().is_some();
+                    if staged_cutover {
+                        self.set_status(
+                            self.language.text(
+                                "Cutover pass completed; review durable evidence before advancing the workflow",
+                            ),
+                            StatusSeverity::Info,
+                        );
+                    } else if run_context.dry_run {
                         let result = self.store.transition(project, core::Phase::Preflight);
                         self.report_store_error("advance project phase", result);
                     } else {

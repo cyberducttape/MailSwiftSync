@@ -58,7 +58,7 @@ evidence = "Provider-intelligence signals feed controller failure and adaptive r
 [[production_features]]
 feature = "Shared durable batch plans"
 status = "implemented"
-evidence = "Schema v20 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas, alongside the durable webhook outbox and transaction-bound lifecycle event trigger."
+evidence = "Schema v21 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas and an approval-gated cutover workflow, alongside the durable webhook outbox and transaction-bound lifecycle event trigger."
 
 [[production_features]]
 feature = "Run-level batch throttle policy"
@@ -97,8 +97,8 @@ evidence = "Engine mapping controls and folder-policy validation exist; a comple
 
 [[production_features]]
 feature = "Executable cutover orchestration"
-status = "planned"
-evidence = "Seed/delta lifecycle concepts and maintenance windows exist; multi-step external cutover automation is not yet shipped."
+status = "partial"
+evidence = "Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI; external MX/DNS confirmation remains an explicit operator acknowledgement."
 
 [[production_features]]
 feature = "Organization policy enforcement"

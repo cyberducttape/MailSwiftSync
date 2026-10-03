@@ -1178,6 +1178,68 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("cutover") {
+        let values = arguments.collect::<Vec<_>>();
+        let usage = "Usage: mailswiftsync cutover <state.db> <create|approve|advance|status> <project-id> [...]";
+        if values.len() < 3 {
+            eprintln!("{usage}");
+            std::process::exit(2);
+        }
+        let state = &values[0];
+        let operation = &values[1];
+        let project_id = &values[2];
+        let store = match core::StateStore::open(state) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Cutover workflow unavailable: {error}");
+                std::process::exit(1);
+            }
+        };
+        let result = match operation.to_str() {
+            Some("create") if (4..=5).contains(&values.len()) => store
+                .create_cutover_workflow(
+                    project_id.to_str().unwrap_or_default(),
+                    values[3].to_str().unwrap_or_default(),
+                    values.get(4).and_then(|value| value.to_str()),
+                )
+                .map(|()| {
+                    "Cutover workflow created; explicit approval is required before execution."
+                        .to_owned()
+                }),
+            Some("approve") if values.len() == 4 => store
+                .approve_cutover(
+                    project_id.to_str().unwrap_or_default(),
+                    values[3].to_str().unwrap_or_default(),
+                )
+                .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned()),
+            Some("advance") if (3..=4).contains(&values.len()) => store
+                .advance_cutover(
+                    project_id.to_str().unwrap_or_default(),
+                    values.get(3).and_then(|value| value.to_str()),
+                )
+                .map(|stage| format!("Cutover advanced to {}.", stage.as_str())),
+            Some("status") if values.len() == 3 => store
+                .cutover_workflow(project_id.to_str().unwrap_or_default())
+                .and_then(|workflow| {
+                    serde_json::to_string_pretty(&workflow)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)
+                }),
+            _ => {
+                eprintln!("{usage}");
+                std::process::exit(2);
+            }
+        };
+        match result {
+            Ok(message) => {
+                out!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Cutover operation refused: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("install-engine") {
         let mut confirmed = false;
         for argument in arguments.by_ref() {
@@ -1412,7 +1474,7 @@ fn print_cli_help() {
         "\nReport export:\n  post-report-state <state> <output> [project-id]  Export a durable-snapshot post-migration report"
     );
     out!(
-        "\nAdditional operator workflow command:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON"
+        "\nAdditional operator workflow commands:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON\n  cutover <state> <operation> <project>  Approve and advance staged cutover lifecycle"
     );
     out!(
         "\nWebhook delivery:\n  notify-webhook <state> <url> --watch [--poll-seconds=N]  Continuously drain durable signed deliveries"

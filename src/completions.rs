@@ -23,6 +23,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "customer-proof",
     "notify-webhook",
     "supervise",
+    "cutover",
     "headless",
     "oauth-authorize",
     "recovery-guidance",

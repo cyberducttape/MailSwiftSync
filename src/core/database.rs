@@ -309,6 +309,18 @@ impl StateStore {
                 ],
             ),
             (
+                "cutover_workflows",
+                &[
+                    ("project_id", "TEXT", false, 1),
+                    ("stage", "TEXT", true, 0),
+                    ("scheduled_at", "TEXT", true, 0),
+                    ("maintenance_window", "TEXT", false, 0),
+                    ("approved_by", "TEXT", false, 0),
+                    ("approved_at", "TEXT", false, 0),
+                    ("external_confirmation", "TEXT", false, 0),
+                ],
+            ),
+            (
                 "evidence",
                 &[
                     ("job_id", "TEXT", false, 1),
@@ -1532,6 +1544,7 @@ impl StateStore {
         Self::prepare_legacy_mailbox_jobs(&tx)?;
         tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS cutover_workflows (project_id TEXT PRIMARY KEY REFERENCES projects(id), stage TEXT NOT NULL CHECK(stage IN ('seed','catch_up','final_delta','verification','completed')), scheduled_at TEXT NOT NULL, maintenance_window TEXT, approved_by TEXT, approved_at TEXT, external_confirmation TEXT);
                  CREATE TABLE IF NOT EXISTS batch_plans (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), config TEXT NOT NULL);
                  CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT, batch_plan_id TEXT REFERENCES batch_plans(id), row_overrides TEXT);
                  CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL DEFAULT 0 CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL DEFAULT 0 CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
