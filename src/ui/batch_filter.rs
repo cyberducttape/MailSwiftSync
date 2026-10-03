@@ -57,7 +57,7 @@ pub(crate) mod tests {
 
     fn visible_labels(app: &mut crate::App) -> Vec<String> {
         app.refresh_bulk_filter_cache();
-        let visible = app.queue.visible().to_vec();
+        let visible = app.queue.materialize_visible(&app.store).unwrap();
         app.queue.load(&app.store, &visible).unwrap();
         visible
             .iter()
@@ -305,7 +305,7 @@ pub(crate) mod tests {
         let started = Instant::now();
         app.refresh_bulk_filter_cache();
         let filter_ms = started.elapsed().as_millis();
-        assert_eq!(app.queue.visible().len(), 1);
+        assert_eq!(app.queue.visible_count(), 1);
         app.bulk_search.clear();
 
         let started = Instant::now();
@@ -326,7 +326,7 @@ pub(crate) mod tests {
         app.mark_bulk_jobs_changed();
         app.refresh_bulk_filter_cache();
         let state_update_ms = started.elapsed().as_millis();
-        assert_eq!(app.queue.visible().len(), 1_000);
+        assert_eq!(app.queue.visible_count(), 1_000);
         app.bulk_state_filter = "all".into();
 
         app.active_view = crate::ui::WorkspaceView::Mailboxes;

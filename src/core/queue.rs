@@ -324,6 +324,34 @@ impl StateStore {
             .collect()
     }
 
+    /// Fetch one ordered page of row IDs matching a folded search and
+    /// optional effective state, without materializing the full virtual-row
+    /// index in the GUI.
+    pub fn queue_rowid_page(
+        &self,
+        project_id: &str,
+        folded_search: &str,
+        state: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<i64>> {
+        let mut statement = self.connection.prepare_cached(&format!(
+            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR instr(f.search_key,?2)>0) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3)) ORDER BY f.job_rowid LIMIT ?4 OFFSET ?5"
+        ))?;
+        statement
+            .query_map(
+                params![
+                    project_id,
+                    folded_search,
+                    state,
+                    i64::try_from(limit).unwrap_or(i64::MAX),
+                    i64::try_from(offset).unwrap_or(i64::MAX)
+                ],
+                |row| row.get(0),
+            )?
+            .collect()
+    }
+
     /// Whether one row matches a folded search.
     pub fn queue_row_matches(
         &self,

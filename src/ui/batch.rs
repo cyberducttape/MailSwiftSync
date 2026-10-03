@@ -102,6 +102,7 @@ impl App {
         // Compact select-all keeps no per-row list.
         let compact_all = self.bulk_all_selected && self.bulk_selection_count() > 1;
         if let Some(project_id) = self.queue.project_id() {
+            let all_rows_visible = self.queue.is_unfiltered_paged();
             match self.store.queue_selection_summary(
                 project_id,
                 &self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>(),
@@ -117,7 +118,11 @@ impl App {
                     view.review = summary.review;
                     view.live_eligible = summary.live_eligible;
                     view.delta_eligible = summary.delta_eligible;
-                    view.visible = summary.visible;
+                    view.visible = if all_rows_visible {
+                        summary.selected_loaded
+                    } else {
+                        summary.visible
+                    };
                 }
                 Err(error) => {
                     self.bulk_message = format!("Could not read the mailbox queue: {error}");
@@ -414,17 +419,25 @@ impl App {
                     // Use the same cached filter the table renders, so the
                     // selection is exactly the rows on screen.
                     self.refresh_bulk_filter_cache();
-                    if self.queue.visible().len() == self.queue.len() {
+                    if self.queue.visible_count() == self.queue.len() {
                         self.select_all_bulk_rows();
                     } else {
                         self.bulk_all_selected = false;
                         if let Some(project_id) = self.queue.project_id() {
-                            let selected = self
-                                .store
-                                .queue_rows(project_id, self.queue.visible())
-                                .map(|rows| rows.into_iter().map(|row| row.id).collect())
-                                .unwrap_or_default();
-                            self.bulk_selected_ids = selected;
+                            match self
+                                .queue
+                                .materialize_visible(&self.store)
+                                .and_then(|rowids| {
+                                    self.store.queue_rows(project_id, &rowids).map_err(|error| {
+                                        format!("Could not read visible mailbox rows: {error}")
+                                    })
+                                }) {
+                                Ok(rows) => {
+                                    self.bulk_selected_ids =
+                                        rows.into_iter().map(|row| row.id).collect();
+                                }
+                                Err(error) => self.bulk_message = error,
+                            }
                         } else {
                             self.bulk_selected_ids.clear();
                         }
@@ -465,7 +478,7 @@ impl App {
                 self.refresh_bulk_selection_view();
                 ui.ctx().request_repaint();
             }
-            let visible_rowids = self.queue.visible().to_vec();
+            let visible_count = self.queue.visible_count();
             let visible_and_selected = self.bulk_selection_view.visible;
             // Selected IDs no longer in the queue count as hidden too.
             let hidden_selected = self
@@ -619,20 +632,28 @@ impl App {
             }
             ui.add_space(8.0);
             // Rows are read from the ledger on demand. Prefetch around the
-            // range shown last frame; rows scrolled into view for the first
-            // time are fetched after this frame and drawn on the next.
-            let prefetch = {
+            // range shown last frame; the default unfiltered view pages row
+            // IDs from SQLite instead of materializing all 100k IDs.
+            let (prefetch_start, prefetch_end) = {
                 let (start, end) = self.bulk_rendered_range;
-                let start = start.saturating_sub(64).min(visible_rowids.len());
+                let start = start.saturating_sub(64).min(visible_count);
                 let end = end
                     .saturating_add(64)
-                    .max(start + 64)
-                    .min(visible_rowids.len());
-                visible_rowids[start..end].to_vec()
+                    .max(start.saturating_add(64))
+                    .min(visible_count);
+                (start, end)
             };
+            let prefetch = self
+                .queue
+                .visible_page(&self.store, prefetch_start..prefetch_end)
+                .unwrap_or_else(|error| {
+                    self.bulk_message = error;
+                    Vec::new()
+                });
             if let Err(error) = self.queue.load(&self.store, &prefetch) {
                 self.bulk_message = error;
             }
+            let page_rowids = std::cell::RefCell::new((prefetch_start, prefetch));
             let rendered = std::cell::Cell::new((usize::MAX, 0_usize));
             let missing = std::cell::RefCell::new(Vec::new());
             let table_width = ui.available_width();
@@ -670,11 +691,34 @@ impl App {
                     }
                 })
                 .body(|body| {
-                    body.rows(42.0, visible_rowids.len(), |mut row| {
+                    body.rows(42.0, visible_count, |mut row| {
                         let position = row.index();
                         let (start, end) = rendered.get();
                         rendered.set((start.min(position), end.max(position + 1)));
-                        let rowid = visible_rowids[position];
+                        let rowid = {
+                            let mut page = page_rowids.borrow_mut();
+                            let page_end = page.0.saturating_add(page.1.len());
+                            if position < page.0 || position >= page_end {
+                                let start = position.saturating_sub(16);
+                                let end = start.saturating_add(64).min(visible_count);
+                                match self.queue.visible_page(&self.store, start..end) {
+                                    Ok(rowids) => *page = (start, rowids),
+                                    Err(error) => {
+                                        self.bulk_message = error;
+                                        page.0 = position;
+                                        page.1.clear();
+                                    }
+                                }
+                            }
+                            let Some(rowid) = page.1.get(position.saturating_sub(page.0)).copied()
+                            else {
+                                row.col(|ui| {
+                                    ui.spinner();
+                                });
+                                return;
+                            };
+                            rowid
+                        };
                         let Some(job) = self.queue.cached(rowid) else {
                             missing.borrow_mut().push(rowid);
                             row.col(|ui| {

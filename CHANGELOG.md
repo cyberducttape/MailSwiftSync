@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Paged row IDs for the default large-batch Mailboxes view directly from
+  SQLite, replacing the eager 100k-row virtual-index materialization on first
+  paint; filtered views and explicit select-visible actions retain their
+  existing selection semantics.
 - Raised 21 critical-module line-coverage floors to values supported by the
   current measured suite (76.87–98.17% observed); coverage artifacts are now
   uploaded only when LCOV generation produced a report, avoiding a secondary

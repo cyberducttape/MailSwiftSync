@@ -28,6 +28,10 @@ pub(crate) struct MailboxQueue {
     generation: u64,
     filter: Option<FilterKey>,
     visible: Vec<i64>,
+    visible_count: usize,
+    /// The common unfiltered view is paged directly from SQLite; filtered or
+    /// transient-state views retain their compact matching rowid set.
+    visible_paged: bool,
     rows: HashMap<i64, QueueRow>,
     rowid_by_id: HashMap<String, i64>,
     /// Presentation-only states of rows during a run: a claimed row waiting
@@ -81,6 +85,9 @@ impl MailboxQueue {
         self.filter = None;
         self.rows.clear();
         self.rowid_by_id.clear();
+        self.visible.clear();
+        self.visible_count = 0;
+        self.visible_paged = false;
         self.summary = None;
     }
 
@@ -149,8 +156,10 @@ impl MailboxQueue {
         state_filter: &str,
     ) -> Result<bool, String> {
         let Some(project_id) = self.project_id.clone() else {
-            let changed = !self.visible.is_empty();
+            let changed = !self.visible.is_empty() || self.visible_count != 0;
             self.visible.clear();
+            self.visible_count = 0;
+            self.visible_paged = false;
             return Ok(changed);
         };
         let key = FilterKey {
@@ -163,6 +172,15 @@ impl MailboxQueue {
         };
         if self.filter.as_ref() == Some(&key) {
             return Ok(false);
+        }
+        if key.folded_search.is_empty() && key.state.is_none() && self.transient.is_empty() {
+            self.visible.clear();
+            self.visible_count = store
+                .queue_len(&project_id)
+                .map_err(|error| format!("Could not count the mailbox queue: {error}"))?;
+            self.visible_paged = true;
+            self.filter = Some(key);
+            return Ok(true);
         }
         self.visible = store
             .queue_rowids(&project_id, &key.folded_search, key.state.as_deref())
@@ -194,6 +212,8 @@ impl MailboxQueue {
                 }
             }
         }
+        self.visible_count = self.visible.len();
+        self.visible_paged = false;
         self.filter = Some(key);
         Ok(true)
     }
@@ -203,8 +223,64 @@ impl MailboxQueue {
         &self.visible
     }
 
+    pub(crate) fn visible_count(&self) -> usize {
+        self.visible_count
+    }
+
+    pub(crate) fn is_unfiltered_paged(&self) -> bool {
+        self.visible_paged
+    }
+
+    /// Read a rowid range for virtualization. The default all-mailboxes view
+    /// asks SQLite only for the requested page; filtered modes slice their
+    /// bounded selection index.
+    pub(crate) fn visible_page(
+        &self,
+        store: &StateStore,
+        range: std::ops::Range<usize>,
+    ) -> Result<Vec<i64>, String> {
+        let start = range.start.min(self.visible_count);
+        let end = range.end.min(self.visible_count).max(start);
+        if self.visible_paged {
+            let Some(project_id) = self.project_id.as_deref() else {
+                return Ok(Vec::new());
+            };
+            let Some(filter) = self.filter.as_ref() else {
+                return Ok(Vec::new());
+            };
+            store
+                .queue_rowid_page(
+                    project_id,
+                    &filter.folded_search,
+                    filter.state.as_deref(),
+                    start,
+                    end - start,
+                )
+                .map_err(|error| format!("Could not read mailbox queue page: {error}"))
+        } else {
+            Ok(self.visible[start..end].to_vec())
+        }
+    }
+
+    /// Materialize matching IDs only for an explicit operator action such as
+    /// Select visible. Ordinary rendering always uses `visible_page`.
+    pub(crate) fn materialize_visible(&self, store: &StateStore) -> Result<Vec<i64>, String> {
+        if !self.visible_paged {
+            return Ok(self.visible.clone());
+        }
+        let Some(project_id) = self.project_id.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let Some(filter) = self.filter.as_ref() else {
+            return Ok(Vec::new());
+        };
+        store
+            .queue_rowids(project_id, &filter.folded_search, filter.state.as_deref())
+            .map_err(|error| format!("Could not read visible mailbox rows: {error}"))
+    }
+
     pub(crate) fn is_visible(&self, rowid: i64) -> bool {
-        self.visible.binary_search(&rowid).is_ok()
+        self.visible_paged || self.visible.binary_search(&rowid).is_ok()
     }
 
     /// Make sure `rowids` are cached, fetching any that are not.
@@ -318,7 +394,15 @@ mod tests {
         let store = StateStore::in_memory().unwrap();
         let mut queue = imported(&store, 20);
         assert!(queue.refresh_filter(&store, "", "all").unwrap());
-        assert_eq!(queue.visible().len(), 20);
+        assert_eq!(queue.visible_count(), 20);
+        assert!(queue.is_unfiltered_paged());
+        let first_page = queue.visible_page(&store, 0..5).unwrap();
+        let matching = store
+            .queue_rowids(queue.project_id().unwrap(), "", None)
+            .unwrap();
+        assert_eq!(first_page, matching[..5]);
+        assert_eq!(queue.visible_page(&store, 15..25).unwrap(), matching[15..]);
+        assert_eq!(queue.materialize_visible(&store).unwrap(), matching);
         assert!(!queue.refresh_filter(&store, "", "all").unwrap());
         assert!(queue.refresh_filter(&store, "USER1", "all").unwrap());
         assert_eq!(queue.visible().len(), 11);
@@ -339,6 +423,7 @@ mod tests {
         queue.clear_transient(&row.id);
         assert!(queue.refresh_filter(&store, "", "retrying").unwrap());
         assert!(queue.visible().is_empty());
+        assert_eq!(queue.visible_count(), 0);
         assert_eq!(queue.summary(&store).imported, 20);
     }
 

@@ -303,10 +303,11 @@ screen-reader checklist are recorded in
   durable ledger stores one normalized `batch_plans` record per distinct batch
   policy and compact mailbox identity/credential deltas on `mailbox_jobs`,
   while legacy full-row configs remain readable for compatibility. The
-  Mailboxes view renders virtual rows from a filtered row-ID index plus a
-  bounded row cache, search and state filters run as SQL over a narrow facts
-  table, and admission and the scheduler read rows from the ledger instead of
-  an in-memory job list. Selection summaries and first-selection lookups use
+  Mailboxes view renders virtual rows from SQLite rowid pages in the default
+  unfiltered state, plus a bounded row cache; search and state filters run as
+  SQL over a narrow facts table (their matching rowids are retained for the
+  active filter). Admission and the scheduler read rows from the ledger instead
+  of an in-memory job list. Selection summaries and first-selection lookups use
   SQL aggregates and `LIMIT 1`; full queue scans remain only for operations
   whose identity deliberately includes every selected mailbox, such as live
   confirmation fingerprints. The importer, UI, and reload gates are reproducible
@@ -347,10 +348,12 @@ screen-reader checklist are recorded in
   queue it measures a SQL filter keystroke, select-all with its selection and
   queue-health accounting, a 1,000-row durable state change, the first
   Mailboxes frame through the real App, and the off-thread write of a parsed
-  import to the ledger. The 2026-10-02 local release baseline was 25 ms for
-  filtering, 69 ms for select-all, 22 ms for the state change, 79 ms for the
-  Mailboxes first frame, and 2.6 s to write the import; the complete shell's
-  first frame was 71 ms. These are slower than the earlier in-memory
+  import to the ledger. On 2026-10-03, after paging the default Mailboxes rowids,
+  the local release-mode result was 25 ms for filtering, 51 ms for select-all,
+  22 ms for the state change, 94 ms for the Mailboxes first frame, and 2.426 s
+  to write the import; the complete shell's first frame was 46 ms. The same
+  100k-row CSV import benchmark measured 269 ms and 44 MiB RSS. These are
+  slower than the earlier in-memory
   baselines (single-digit milliseconds) in exchange for bounded memory and a
   queue that survives restarts unchanged. These are release-mode host
   baselines. The script enforces default budgets of 100 ms for filtering, 250
