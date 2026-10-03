@@ -48,10 +48,11 @@ The command prints a one-line result, writes per-category counts and
 source/destination SHA-256 values, and exits 1 when any difference exists.
 Detail records are capped at 1,000 per category; `detail_count`,
 `details_truncated`, and `details_omitted` disclose that cap while aggregate
-counts remain complete. The comparator streams each category into temporary
-SQLite tables and performs indexed multiset matching, so its Rust heap does
-not grow with the complete input pair. It remains bounded supporting tooling,
-not a restartable fleet-reconciliation service: each supplied snapshot is
+counts remain complete. The comparator streams each category into a private
+temporary on-disk SQLite database and performs indexed multiset matching, so
+its Rust heap grows with the largest parsed record rather than the complete
+input pair. It remains bounded supporting tooling, not a restartable
+fleet-reconciliation service: each supplied snapshot is
 capped at 256 MiB, staged data is temporary, and larger or operationally
 critical assurance should use the durable migration verifier.
 The report can be checked with `verify` and signed with `sign`. It proves

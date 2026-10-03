@@ -16,7 +16,7 @@ use std::io::Write;
 use std::{
     fs,
     io::{self, Read},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 const MAX_DETAILS: usize = 1_000;
@@ -49,17 +49,34 @@ impl<R: Read> Read for LimitedReader<R> {
     }
 }
 
-/// Stage a snapshot in SQLite instead of retaining the complete JSON tree,
-/// sorted arrays, grouped values, and repeated serialized copies in Rust
-/// memory. The in-memory compare API remains useful for small callers and
-/// unit tests; file-based migrateaudit uses this streaming path.
-fn create_staging_database() -> Result<Connection, String> {
-    let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+struct StagingDatabase {
+    connection: Connection,
+    _path: PathBuf,
+    _cleanup: crate::credentials::CleanupGuard,
+}
+
+/// Stage snapshots in an owner-only on-disk SQLite database rather than an
+/// in-memory database. The JSON parser retains only one record at a time;
+/// SQLite may spill indexed payloads to the private runtime directory.
+fn create_staging_database() -> Result<StagingDatabase, String> {
+    let directory = crate::credentials::create_secret_directory()?;
+    let path = directory.join("migration-audit.sqlite3");
+    let cleanup = crate::credentials::CleanupGuard::new(vec![directory]);
+    crate::credentials::open_secret_file(&path)
+        .map(drop)
+        .map_err(|error| {
+            format!("could not create private migration-audit staging database: {error}")
+        })?;
+    let connection = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|error| format!("could not open migration-audit staging database: {error}"))?;
     connection
         .execute_batch(
             "PRAGMA temp_store=FILE;
-             PRAGMA journal_mode=MEMORY;
-             CREATE TEMP TABLE records(
+             PRAGMA journal_mode=DELETE;
+             CREATE TABLE records(
                  side INTEGER NOT NULL,
                  category TEXT NOT NULL,
                  identity TEXT NOT NULL,
@@ -68,7 +85,11 @@ fn create_staging_database() -> Result<Connection, String> {
              CREATE INDEX records_lookup ON records(side, category, identity, payload);",
         )
         .map_err(|error| error.to_string())?;
-    Ok(connection)
+    Ok(StagingDatabase {
+        connection,
+        _path: path,
+        _cleanup: cleanup,
+    })
 }
 
 struct SnapshotVisitor<'a> {
@@ -751,17 +772,17 @@ pub(crate) fn compare_files(
         source,
         "source",
         SOURCE_SIDE,
-        &mut connection,
+        &mut connection.connection,
         &mut categories,
     )?;
     stage_snapshot(
         destination,
         "destination",
         DESTINATION_SIDE,
-        &mut connection,
+        &mut connection.connection,
         &mut categories,
     )?;
-    let result = compare_staged(&connection, &categories)?;
+    let result = compare_staged(&connection.connection, &categories)?;
     let text = serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?;
     write_private_atomic(output, &text).map_err(|e| e.to_string())?;
     Ok(result)
@@ -878,5 +899,50 @@ mod tests {
         assert_eq!(result.report["verdict"], "pass");
         assert!(result.report["proof_digest"].as_str().is_some());
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn staging_database_is_private_on_disk_and_removed_on_drop() {
+        let staging = create_staging_database().unwrap();
+        let path = staging._path.clone();
+        let directory = path.parent().unwrap().to_owned();
+        let databases: Vec<(String, String)> = staging
+            .connection
+            .prepare("PRAGMA database_list")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            databases
+                .iter()
+                .any(|(name, file)| name == "main" && Path::new(file) == path)
+        );
+        assert!(
+            staging
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='records'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+                > 0
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        drop(staging);
+        assert!(!directory.exists());
     }
 }
