@@ -88,6 +88,10 @@ impl DomainKey {
             Some(side) => format!("{} {} {}", side_label(side), self.level.label(), self.scope),
         }
     }
+
+    pub(crate) fn level(&self) -> DomainLevel {
+        self.level
+    }
 }
 
 /// The ordered domains one job must be admitted through: global first, then
@@ -165,7 +169,7 @@ impl RateDomainPath {
         &self.source[1].scope
     }
 
-    fn all(&self) -> impl Iterator<Item = &DomainKey> {
+    pub(crate) fn all(&self) -> impl Iterator<Item = &DomainKey> {
         std::iter::once(&self.global)
             .chain(self.source.iter())
             .chain(self.destination.iter())

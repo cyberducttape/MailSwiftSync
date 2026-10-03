@@ -432,7 +432,10 @@ pub(crate) struct RunContext<'a> {
     /// Shared process-start budget. The token is taken immediately before
     /// `spawn`, after every admission, authentication, claim, and preparation
     /// step, so time spent waiting upstream cannot bank tokens into a burst.
-    pub(crate) launch_limiter: Option<&'a crate::process::ProcessLaunchLimiter>,
+    pub(crate) launch_limiter: Option<(
+        &'a crate::process::ProcessLaunchLimiter,
+        &'a crate::controller::rate_domains::RateDomainPath,
+    )>,
 }
 
 pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, String> {
@@ -456,8 +459,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         launch_limiter,
     } = context;
     let mut command = execution_command(executable, args, env)?;
-    if let Some(limiter) = launch_limiter
-        && !limiter.acquire(cancel)
+    if let Some((limiter, path)) = launch_limiter
+        && !limiter.acquire_scoped(path, cancel)
     {
         return Err(if cancel.load(Ordering::Relaxed) {
             format!("{executable} launch cancelled before process start")

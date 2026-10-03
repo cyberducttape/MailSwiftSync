@@ -18,7 +18,7 @@ mod poll_events;
 mod preflight;
 pub(crate) mod probe;
 pub(crate) mod queue;
-mod rate_domains;
+pub(crate) mod rate_domains;
 mod run;
 mod single_admission;
 mod single_start;

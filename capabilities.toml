@@ -68,7 +68,7 @@ evidence = "Current concurrency and throughput settings are snapshotted, confirm
 [[production_features]]
 feature = "Adaptive launch and worker ceilings"
 status = "implemented"
-evidence = "Global launch and worker ceilings are configurable with conservative bounds; observed capacity failures reduce launch pressure and apply AIMD to provider-endpoint, tenant, credential, and mailbox domains. Organization policy may set independent endpoint, tenant, and credential worker ceilings; provider-derived live defaults remain unqualified."
+evidence = "Global launch and worker ceilings are configurable with conservative bounds; observed capacity failures adapt launch token buckets and AIMD worker limits at provider-endpoint, tenant, credential, and mailbox domains, escalating only when broader domains are implicated. Organization policy may set independent endpoint, tenant, and credential worker ceilings; provider-derived live defaults remain unqualified."
 
 [[production_features]]
 feature = "Provider qualification packs"

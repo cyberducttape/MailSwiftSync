@@ -157,6 +157,17 @@ fn report_cooldowns(tx: &mpsc::SyncSender<Event>, penalized: Vec<(DomainKey, std
     }
 }
 
+fn adapt_launch_rate(
+    limiter: &ProcessLaunchLimiter,
+    penalized: &[(DomainKey, std::time::Instant)],
+) {
+    let domains = penalized
+        .iter()
+        .map(|(domain, _)| domain.clone())
+        .collect::<Vec<_>>();
+    limiter.observe_capacity_failure_for(&domains);
+}
+
 /// Shared, immutable inputs for running scheduled mailbox attempts.
 pub(crate) struct BatchAttemptRunner {
     pub(crate) concurrency: usize,
@@ -368,6 +379,7 @@ struct BatchAttemptContext<'a> {
     transfer_attempt_number: &'a mut u32,
     verification_failure: &'a mut Option<String>,
     launch_limiter: &'a ProcessLaunchLimiter,
+    launch_path: &'a RateDomainPath,
 }
 
 /// Prepare and execute a single engine attempt, then collect engine-specific
@@ -391,6 +403,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
         transfer_attempt_number,
         verification_failure,
         launch_limiter,
+        launch_path,
     } = context;
     let prepared = form.validated_plan().and_then(|plan| {
         plan.prepared_command_with_throttle_divisor_and_checkpoint(
@@ -463,7 +476,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     diagnostic_logger: diagnostic_logger.clone(),
                     attempt_number: *transfer_attempt_number,
                     transfer_pass: transfer_pass.as_ref(),
-                    launch_limiter: Some(launch_limiter),
+                    launch_limiter: Some((launch_limiter, launch_path)),
                 })
             })
             .and_then(|stream| {
@@ -843,14 +856,11 @@ impl BatchAttemptRunner {
                     attempt,
                     self.retry_count,
                 ) {
-                    if classify_failure_for_provider(provider, &error) == FailureClass::Capacity {
-                        self.launch_limiter.observe_capacity_failure();
-                    }
-                    report_cooldowns(
-                        &self.tx,
+                    let penalized =
                         self.provider_limiter
-                            .observe_failure_on(&admission, &error, vec![side]),
-                    );
+                            .observe_failure_on(&admission, &error, vec![side]);
+                    adapt_launch_rate(&self.launch_limiter, &penalized);
+                    report_cooldowns(&self.tx, penalized);
                     drop(admission);
                     return self.retry_later(
                         task,
@@ -946,13 +956,14 @@ impl BatchAttemptRunner {
             transfer_attempt_number: &mut transfer_attempt_number,
             verification_failure: &mut verification_failure,
             launch_limiter: &self.launch_limiter,
+            launch_path: &task.rate_path,
         });
         task.transfer_attempt_number = transfer_attempt_number;
         task.verification_failure = verification_failure;
         match result {
             Ok(outcome) => {
                 self.provider_limiter.observe_success(&admission);
-                self.launch_limiter.observe_success();
+                self.launch_limiter.observe_success_for(&task.rate_path);
                 drop(admission);
                 let delta_required = outcome == StreamOutcome::DeltaRequired;
                 if delta_required {
@@ -1009,15 +1020,9 @@ impl BatchAttemptRunner {
                     self.retry_count,
                 ) =>
             {
-                if classify_failure_for_provider(provider_for_error(&task.form, &error), &error)
-                    == FailureClass::Capacity
-                {
-                    self.launch_limiter.observe_capacity_failure();
-                }
-                report_cooldowns(
-                    &self.tx,
-                    self.provider_limiter.observe_failure(&admission, &error),
-                );
+                let penalized = self.provider_limiter.observe_failure(&admission, &error);
+                adapt_launch_rate(&self.launch_limiter, &penalized);
+                report_cooldowns(&self.tx, penalized);
                 drop(admission);
                 self.retry_later(task, &error, "transient failure")
             }

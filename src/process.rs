@@ -16,6 +16,7 @@ use std::os::windows::io::AsRawHandle;
 
 use fs2::FileExt;
 
+use crate::controller::rate_domains::{DomainKey, DomainLevel, RateDomainPath};
 use crate::{core, credentials::SecretString};
 
 const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
@@ -308,6 +309,69 @@ mod tests {
         assert_eq!(limiter.rate_per_second(), 2.0);
     }
 
+    #[test]
+    fn launch_capacity_feedback_is_confined_to_penalized_rate_domains() {
+        use crate::controller::rate_domains::{DomainLevel, RateDomainPath, Side, SideIdentity};
+
+        let source = "one@example.com";
+        let destination = "target@destination.example";
+        let path = RateDomainPath::new(
+            &SideIdentity {
+                endpoint: "imap.gmail.com:993",
+                user: source,
+                principal: "keyring:account-a",
+            },
+            &SideIdentity {
+                endpoint: "imap.example.net:993",
+                user: destination,
+                principal: "keyring:account-b",
+            },
+        );
+        let unrelated_path = RateDomainPath::new(
+            &SideIdentity {
+                endpoint: "imap.gmail.com:993",
+                user: "two@another.example",
+                principal: "keyring:account-c",
+            },
+            &SideIdentity {
+                endpoint: "imap.example.net:993",
+                user: "other@destination.example",
+                principal: "keyring:account-d",
+            },
+        );
+        let source_tenant = path.domain(Side::Source, DomainLevel::Tenant).clone();
+        let unrelated_tenant = unrelated_path
+            .domain(Side::Source, DomainLevel::Tenant)
+            .clone();
+        let destination_tenant = path.domain(Side::Destination, DomainLevel::Tenant).clone();
+        let limiter = ProcessLaunchLimiter::new(8);
+
+        limiter.observe_capacity_failure_for(std::slice::from_ref(&source_tenant));
+        assert_eq!(limiter.rate_per_second(), 8.0);
+        assert_eq!(limiter.scoped_rate_per_second(&source_tenant), 4.0);
+        assert_eq!(limiter.scoped_rate_per_second(&unrelated_tenant), 8.0);
+        assert_eq!(limiter.scoped_rate_per_second(&destination_tenant), 8.0);
+
+        {
+            let mut state = limiter.state.lock().unwrap();
+            let bucket = state.scoped.get_mut(&source_tenant).unwrap();
+            bucket.tokens = 0.0;
+            bucket.last_refill = Instant::now();
+        }
+        assert!(limiter.acquire_scoped(&unrelated_path, &AtomicBool::new(false)));
+        assert_eq!(
+            limiter.state.lock().unwrap().scoped[&source_tenant].tokens,
+            0.0
+        );
+
+        for _ in 0..8 {
+            limiter.observe_success_for(&path);
+        }
+        assert_eq!(limiter.rate_per_second(), 8.0);
+        assert_eq!(limiter.scoped_rate_per_second(&source_tenant), 5.0);
+        assert_eq!(limiter.scoped_rate_per_second(&unrelated_tenant), 8.0);
+    }
+
     struct FailingReader {
         emitted: bool,
     }
@@ -478,12 +542,57 @@ mod tests {
     }
 }
 
+const MAX_SCOPED_LAUNCH_DOMAINS: usize = 16_384;
+
 #[derive(Debug)]
-struct TokenBucketState {
+struct LaunchRateBucket {
     tokens: f64,
     last_refill: Instant,
     rate_per_second: f64,
     successful_launches: usize,
+}
+
+impl LaunchRateBucket {
+    fn new(rate_per_second: f64, now: Instant) -> Self {
+        Self {
+            tokens: 1.0,
+            last_refill: now,
+            rate_per_second,
+            successful_launches: 0,
+        }
+    }
+
+    fn refill(&mut self, now: Instant, ceiling: f64) {
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * self.rate_per_second).min(1.0);
+        self.last_refill = now;
+        self.rate_per_second = self.rate_per_second.min(ceiling);
+    }
+
+    fn wait(&self) -> Option<Duration> {
+        (self.tokens < 1.0)
+            .then(|| Duration::from_secs_f64((1.0 - self.tokens) / self.rate_per_second))
+    }
+
+    fn capacity_failure(&mut self) {
+        self.rate_per_second = (self.rate_per_second / 2.0).max(1.0);
+        self.successful_launches = 0;
+        self.tokens = self.tokens.min(1.0);
+    }
+
+    fn success(&mut self, ceiling: f64) {
+        self.successful_launches = self.successful_launches.saturating_add(1);
+        if self.successful_launches >= 8 {
+            self.successful_launches = 0;
+            self.rate_per_second = (self.rate_per_second + 1.0).min(ceiling);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TokenBucketState {
+    global: LaunchRateBucket,
+    scoped: std::collections::HashMap<DomainKey, LaunchRateBucket>,
 }
 
 /// Shared admission control for batch engine processes.
@@ -518,15 +627,30 @@ impl ProcessLaunchLimiter {
         Self {
             ceiling_per_second,
             state: Mutex::new(TokenBucketState {
-                tokens: 1.0,
-                last_refill: Instant::now(),
-                rate_per_second: ceiling_per_second,
-                successful_launches: 0,
+                global: LaunchRateBucket::new(ceiling_per_second, Instant::now()),
+                scoped: std::collections::HashMap::new(),
             }),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn acquire(&self, cancel: &AtomicBool) -> bool {
+        self.acquire_scoped_inner(None, cancel)
+    }
+
+    /// Take a token from the global bucket and every currently penalized
+    /// domain on this job's path. Unpenalized domains need no state entry.
+    pub(crate) fn acquire_scoped(&self, path: &RateDomainPath, cancel: &AtomicBool) -> bool {
+        self.acquire_scoped_inner(Some(path), cancel)
+    }
+
+    fn acquire_scoped_inner(&self, path: Option<&RateDomainPath>, cancel: &AtomicBool) -> bool {
+        let keys = path.map(|path| {
+            path.all()
+                .filter(|key| key.level() != DomainLevel::Global)
+                .cloned()
+                .collect::<Vec<_>>()
+        });
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return false;
@@ -537,44 +661,112 @@ impl ProcessLaunchLimiter {
                     Err(_) => return false,
                 };
                 let now = Instant::now();
-                let elapsed = now.duration_since(state.last_refill).as_secs_f64();
-                state.tokens = (state.tokens + elapsed * state.rate_per_second).min(1.0);
-                state.last_refill = now;
-                if state.tokens >= 1.0 {
-                    state.tokens -= 1.0;
+                state.global.refill(now, self.ceiling_per_second);
+                let mut wait = state.global.wait();
+                if let Some(keys) = &keys {
+                    for key in keys {
+                        if let Some(bucket) = state.scoped.get_mut(key) {
+                            bucket.refill(now, self.ceiling_per_second);
+                            if let Some(domain_wait) = bucket.wait() {
+                                wait = Some(
+                                    wait.map_or(domain_wait, |current| current.max(domain_wait)),
+                                );
+                            }
+                        }
+                    }
+                }
+                if let Some(wait) = wait {
+                    wait
+                } else {
+                    state.global.tokens -= 1.0;
+                    if let Some(keys) = &keys {
+                        for key in keys {
+                            if let Some(bucket) = state.scoped.get_mut(key) {
+                                bucket.tokens -= 1.0;
+                            }
+                        }
+                    }
                     return true;
                 }
-                Duration::from_secs_f64((1.0 - state.tokens) / state.rate_per_second)
             };
             thread::sleep(wait.min(Duration::from_millis(100)));
         }
     }
 
-    /// Reduce global launch pressure after a provider capacity signal. The
-    /// configured profile value remains a hard ceiling; adaptation can only
-    /// become more conservative than the operator-approved maximum.
+    /// Test seam for reducing global launch pressure. Production feedback
+    /// arrives through `observe_capacity_failure_for` using attributed domains.
+    #[cfg(test)]
     pub(crate) fn observe_capacity_failure(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.rate_per_second = (state.rate_per_second / 2.0).max(1.0);
-            state.successful_launches = 0;
-            state.tokens = state.tokens.min(1.0);
+            state.global.capacity_failure();
+        }
+    }
+
+    /// Penalize only domains that the provider-domain controller attributed
+    /// to this capacity signal. If scoped state is exhausted, fall back to
+    /// the global safety limiter instead of launching outside known policy.
+    pub(crate) fn observe_capacity_failure_for(&self, domains: &[DomainKey]) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let now = Instant::now();
+        for domain in domains {
+            if domain.level() == DomainLevel::Global {
+                state.global.capacity_failure();
+                continue;
+            }
+            if !state.scoped.contains_key(domain) {
+                state.scoped.retain(|_, bucket| {
+                    bucket.refill(now, self.ceiling_per_second);
+                    bucket.rate_per_second < self.ceiling_per_second || bucket.tokens < 1.0
+                });
+                if state.scoped.len() >= MAX_SCOPED_LAUNCH_DOMAINS {
+                    state.global.capacity_failure();
+                    continue;
+                }
+                state.scoped.insert(
+                    domain.clone(),
+                    LaunchRateBucket::new(self.ceiling_per_second, now),
+                );
+            }
+            if let Some(bucket) = state.scoped.get_mut(domain) {
+                bucket.capacity_failure();
+            }
         }
     }
 
     /// Additively recover only after a sustained run of successful launches.
+    #[cfg(test)]
     pub(crate) fn observe_success(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.successful_launches = state.successful_launches.saturating_add(1);
-            if state.successful_launches >= 8 {
-                state.successful_launches = 0;
-                state.rate_per_second = (state.rate_per_second + 1.0).min(self.ceiling_per_second);
+            state.global.success(self.ceiling_per_second);
+        }
+    }
+
+    pub(crate) fn observe_success_for(&self, path: &RateDomainPath) {
+        if let Ok(mut state) = self.state.lock() {
+            state.global.success(self.ceiling_per_second);
+            for key in path.all().filter(|key| key.level() != DomainLevel::Global) {
+                if let Some(bucket) = state.scoped.get_mut(key) {
+                    bucket.success(self.ceiling_per_second);
+                }
             }
         }
     }
 
     #[cfg(test)]
     fn rate_per_second(&self) -> f64 {
-        self.state.lock().unwrap().rate_per_second
+        self.state.lock().unwrap().global.rate_per_second
+    }
+
+    #[cfg(test)]
+    fn scoped_rate_per_second(&self, domain: &DomainKey) -> f64 {
+        self.state
+            .lock()
+            .unwrap()
+            .scoped
+            .get(domain)
+            .map_or(self.ceiling_per_second, |bucket| bucket.rate_per_second)
     }
 }
 
