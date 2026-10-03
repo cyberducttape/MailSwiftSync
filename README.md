@@ -48,12 +48,12 @@ The command prints a one-line result, writes per-category counts and
 source/destination SHA-256 values, and exits 1 when any difference exists.
 Detail records are capped at 1,000 per category; `detail_count`,
 `details_truncated`, and `details_omitted` disclose that cap while aggregate
-counts remain complete. The current comparator materializes and sorts the
-snapshots in memory, so it is intended for bounded inventories, not yet for
-multi-million-message assurance. Large-scale assurance needs an indexed,
-restartable SQLite-backed comparison path before it can be treated as a
-scale-ready capability. Each supplied snapshot is capped at 256 MiB before
-parsing; larger inputs must use that future staged comparison path.
+counts remain complete. The comparator streams each category into temporary
+SQLite tables and performs indexed multiset matching, so its Rust heap does
+not grow with the complete input pair. It remains bounded supporting tooling,
+not a restartable fleet-reconciliation service: each supplied snapshot is
+capped at 256 MiB, staged data is temporary, and larger or operationally
+critical assurance should use the durable migration verifier.
 The report can be checked with `verify` and signed with `sign`. It proves
 equality of the supplied snapshots; snapshot completeness remains the
 responsibility of the collector and is stated in the report.
@@ -80,7 +80,7 @@ The default live imapsync result is labeled `Metadata reconciled — message bod
 - `imapsync` fallback for arbitrary IMAP endpoints.
 - Batch admission through hierarchical rate domains (global → provider → tenant → credential → mailbox, per side). A capacity or rate-limit failure pauses the throttled mailbox on the reporting side and halves its concurrency (AIMD); a credential, tenant, provider, or the whole batch is paused only after two distinct children of it are throttled within two minutes, so one customer's throttled tenant does not slow another tenant on the same endpoints. Domains recover additively after later successes. The limiter learns only from observed failures in the current batch; no provider-specific quotas are encoded or live-qualified.
 - Batch scheduling separates a ready queue (served round-robin across source tenants), a timer queue, and the execution workers. A mailbox whose rate domain is cooling down, or that is waiting out a retry backoff, is parked in the timer queue instead of holding a worker, so other tenants keep running during one tenant's cooldown.
-- CSV/XLSX batch queue with bounded operator-selected concurrency (1–16 workers), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states. Legacy XLS imports are disabled because the parser cannot be bounded safely before worksheet materialization.
+- CSV/XLSX batch queue with bounded operator-selected concurrency (1–256 workers; conservative default 2), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states. Engine workers remain OS-thread/process based; large deployments should qualify provider, tenant, credential, and global ceilings rather than treating the maximum as a universal recommendation. Legacy XLS imports are disabled because the parser cannot be bounded safely before worksheet materialization.
 - Explicit imapsync message and byte throttles for provider-friendly single-mailbox runs.
 - Configurable per-process timeout (1–720 hours) so large mailboxes can run longer than the default while hung jobs remain bounded.
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.

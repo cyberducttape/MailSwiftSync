@@ -1,16 +1,17 @@
 # Scaling large migrations
 
-A single MailSwiftSync batch queue is bounded to 1–16 concurrent workers
-(`batch_concurrency`, both for preflight and live migration). That ceiling is
-deliberate, not arbitrary: it balances migration-window speed against
-provider-side throttling, and most hosted providers rate-limit or temporarily
-block a source or destination account well before 16 simultaneous IMAP
-sessions become the bottleneck. Raising it in code would trade a real safety
-margin for a number, without changing what the destination or source server
-will actually tolerate — so it isn't something to work around inside one
-queue.
+A single MailSwiftSync batch queue is bounded to 1–256 concurrent workers
+(`batch_concurrency`, both for preflight and live migration), with a default of
+2. The upper bound is a qualified-deployment ceiling, not a recommendation:
+most hosted providers rate-limit or temporarily block a source or destination
+account well before hundreds of simultaneous IMAP sessions become useful.
+The scheduler also applies global, provider, tenant, credential, and mailbox
+rate domains, so increasing the worker setting does not bypass those limits.
+Engine work remains thread/process based; cheap probes and reconciliation are
+the likely future candidates for async or pooled I/O if fleet-scale operation
+requires more than a desktop queue should host.
 
-For a migration larger than one 16-worker queue comfortably covers in the
+For a migration larger than one qualified queue comfortably covers in the
 available window, shard across multiple independent MailSwiftSync instances
 instead of trying to widen one queue.
 
@@ -33,8 +34,8 @@ cannot interfere with each other, on the same host or different ones.
    ```
 
    or pass an explicit path to `headless`/`supervise` directly. Each shard is
-   an independent 1–16-worker queue, so N shards give you up to `16N`
-   concurrent transfers — bounded by what the source and destination can
+   an independent qualified worker queue, so N shards multiply the configured
+   worker ceiling — bounded by what the source and destination can
    actually absorb, not by this product.
 3. Keep shards on separate hosts (or at least separate outbound IPs) when the
    destination provider's throttling is per-source-IP rather than

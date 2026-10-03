@@ -6,6 +6,16 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- `migrateaudit` now streams snapshot categories into temporary SQLite tables,
+  compares duplicate identities with indexed SQL multiplicity joins, and
+  computes deterministic digests without materializing both input documents in
+  Rust. The 256 MiB per-file limit remains explicit: this is bounded supporting
+  tooling, not restartable fleet reconciliation.
+- Documented the batch execution boundary accurately: engine transfers remain
+  OS-thread/process based with a conservative default of two workers, a
+  configurable 1–256 ceiling, and hierarchical provider/tenant/credential
+  rate domains. Future fleet scale should prioritize pooled/asynchronous
+  probes and reconciliation rather than multiplying engine processes blindly.
 - imapsync runtime argument construction is now fail-closed: invalid expert
   options return a named plan-construction error before any argv or secret
   files are prepared, instead of silently dropping the invalid tokens. Added a

@@ -253,7 +253,7 @@ screen-reader checklist are recorded in
 - Explicit Dovecot-native and imapsync engine paths.
 - Dry-run default and explicit confirmation before destination changes.
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
-- CSV/XLSX validation queue with bounded 1–16 worker concurrency. Legacy XLS is rejected because Calamine materializes it before application resource checks.
+- CSV/XLSX validation queue with bounded 1–256 worker concurrency and a conservative default of 2. Legacy XLS is rejected because Calamine materializes it before application resource checks.
 - Bounded transient retries for validation; authentication and configuration failures stop without retry loops.
 - Live batch waves with mailbox-specific child runs, claim-before-launch, selective retry scopes, transactional plan checks, and per-mailbox evidence: independent message-level verification for encrypted imapsync children whose plan the verifier can reproduce, aggregate or engine evidence otherwise.
 - Aggregate source/destination folder, message, and virtual-size evidence.

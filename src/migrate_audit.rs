@@ -5,36 +5,189 @@
 //! module provides one deterministic comparison and proof format.
 
 use crate::{atomic_artifact::write_private_atomic, reports::integrity::with_proof_digest};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::io::Write;
 use std::{
-    collections::BTreeMap,
     fs,
-    io::{Read, Write},
+    io::{self, Read},
     path::Path,
 };
 
 const MAX_DETAILS: usize = 1_000;
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 
-fn read_snapshot(path: &Path, label: &str) -> Result<String, String> {
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_SNAPSHOT_BYTES {
-        return Err(format!(
-            "{label} snapshot exceeds the {MAX_SNAPSHOT_BYTES}-byte limit"
-        ));
+const SOURCE_SIDE: i64 = 0;
+const DESTINATION_SIDE: i64 = 1;
+
+struct LimitedReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: Read> Read for LimitedReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            let mut extra = [0u8; 1];
+            return match self.inner.read(&mut extra)? {
+                0 => Ok(0),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "snapshot exceeds the configured byte limit",
+                )),
+            };
+        }
+        let limit = buffer.len().min(self.remaining as usize);
+        let read = self.inner.read(&mut buffer[..limit])?;
+        self.remaining -= read as u64;
+        Ok(read)
     }
-    let mut text = String::new();
-    std::io::Read::by_ref(&mut file)
-        .take(MAX_SNAPSHOT_BYTES + 1)
-        .read_to_string(&mut text)
+}
+
+/// Stage a snapshot in SQLite instead of retaining the complete JSON tree,
+/// sorted arrays, grouped values, and repeated serialized copies in Rust
+/// memory. The in-memory compare API remains useful for small callers and
+/// unit tests; file-based migrateaudit uses this streaming path.
+fn create_staging_database() -> Result<Connection, String> {
+    let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "PRAGMA temp_store=FILE;
+             PRAGMA journal_mode=MEMORY;
+             CREATE TEMP TABLE records(
+                 side INTEGER NOT NULL,
+                 category TEXT NOT NULL,
+                 identity TEXT NOT NULL,
+                 payload TEXT NOT NULL
+             );
+             CREATE INDEX records_lookup ON records(side, category, identity, payload);",
+        )
         .map_err(|error| error.to_string())?;
-    if text.len() as u64 > MAX_SNAPSHOT_BYTES {
+    Ok(connection)
+}
+
+struct SnapshotVisitor<'a> {
+    connection: &'a mut Connection,
+    side: i64,
+    categories: &'a mut std::collections::BTreeSet<String>,
+}
+
+impl<'de> Visitor<'de> for SnapshotVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a migration snapshot JSON object")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        while let Some(category) = map.next_key::<String>()? {
+            if matches!(category.as_str(), "metadata" | "format" | "format_version") {
+                map.next_value::<IgnoredAny>()?;
+                continue;
+            }
+            self.categories.insert(category.clone());
+            map.next_value_seed(CategorySeed {
+                connection: self.connection,
+                side: self.side,
+                category,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+struct CategorySeed<'a> {
+    connection: &'a mut Connection,
+    side: i64,
+    category: String,
+}
+
+impl<'de> Visitor<'de> for CategorySeed<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON array of migration records")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(serde::de::Error::custom)?;
+        let mut insert = transaction
+            .prepare_cached(
+                "INSERT INTO records(side,category,identity,payload) VALUES(?1,?2,?3,?4)",
+            )
+            .map_err(serde::de::Error::custom)?;
+        while let Some(item) = sequence.next_element::<Value>()? {
+            let (identity, _) =
+                identity(&self.category, &item).map_err(serde::de::Error::custom)?;
+            let payload = serde_json::to_string(&item).map_err(serde::de::Error::custom)?;
+            insert
+                .execute(params![self.side, self.category, identity, payload])
+                .map_err(serde::de::Error::custom)?;
+        }
+        drop(insert);
+        transaction.commit().map_err(serde::de::Error::custom)?;
+        Ok(())
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for CategorySeed<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+fn stage_snapshot(
+    path: &Path,
+    label: &str,
+    side: i64,
+    connection: &mut Connection,
+    categories: &mut std::collections::BTreeSet<String>,
+) -> Result<(), String> {
+    let file = fs::File::open(path).map_err(|error| format!("{label} snapshot: {error}"))?;
+    if file
+        .metadata()
+        .map_err(|error| format!("{label} snapshot: {error}"))?
+        .len()
+        > MAX_SNAPSHOT_BYTES
+    {
         return Err(format!(
             "{label} snapshot exceeds the {MAX_SNAPSHOT_BYTES}-byte limit"
         ));
     }
-    Ok(text)
+    let reader = LimitedReader {
+        inner: file,
+        remaining: MAX_SNAPSHOT_BYTES,
+    };
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    deserializer
+        .deserialize_map(SnapshotVisitor {
+            connection,
+            side,
+            categories,
+        })
+        .map_err(|error| format!("invalid {label} snapshot: {error}"))?;
+    deserializer
+        .end()
+        .map_err(|error| format!("invalid {label} snapshot: {error}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +196,7 @@ pub(crate) struct AuditResult {
     pub differences: usize,
 }
 
+#[cfg(test)]
 fn digest(value: &Value) -> String {
     let mut hasher = Sha256::new();
     let mut writer = DigestWriter(&mut hasher);
@@ -54,8 +208,10 @@ fn digest(value: &Value) -> String {
         .collect()
 }
 
+#[cfg(test)]
 struct DigestWriter<'a>(&'a mut Sha256);
 
+#[cfg(test)]
 impl Write for DigestWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.update(bytes);
@@ -191,6 +347,7 @@ fn identity(category: &str, item: &Value) -> Result<(String, &'static str), Stri
     Ok((heuristic_identity(item), "heuristic"))
 }
 
+#[cfg(test)]
 fn canonical_items(category: &str, value: &Value) -> Result<Vec<Value>, String> {
     let items = value
         .as_array()
@@ -207,6 +364,7 @@ fn canonical_items(category: &str, value: &Value) -> Result<Vec<Value>, String> 
     Ok(items)
 }
 
+#[cfg(test)]
 fn grouped(category: &str, items: &[Value]) -> Result<BTreeMap<String, Vec<Value>>, String> {
     let mut result = BTreeMap::new();
     for item in items {
@@ -222,6 +380,7 @@ fn grouped(category: &str, items: &[Value]) -> Result<BTreeMap<String, Vec<Value
     Ok(result)
 }
 
+#[cfg(test)]
 fn compare_category(
     category: &str,
     source: &Value,
@@ -311,6 +470,239 @@ fn compare_category(
     ))
 }
 
+fn staged_digest(connection: &Connection, side: i64, category: &str) -> Result<String, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT payload FROM records
+             WHERE side=?1 AND category=?2
+             ORDER BY identity, payload",
+        )
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement
+        .query(params![side, category])
+        .map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"[");
+    let mut first = true;
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        if !first {
+            hasher.update(b",");
+        }
+        first = false;
+        let payload: String = row.get(0).map_err(|error| error.to_string())?;
+        hasher.update(payload.as_bytes());
+    }
+    hasher.update(b"]");
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn staged_representative(
+    connection: &Connection,
+    side: i64,
+    category: &str,
+    identity: &str,
+) -> Result<Option<String>, String> {
+    connection
+        .query_row(
+            "SELECT payload FROM records
+             WHERE side=?1 AND category=?2 AND identity=?3
+             ORDER BY payload LIMIT 1",
+            params![side, category, identity],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+}
+
+fn compare_staged_category(
+    connection: &Connection,
+    category: &str,
+) -> Result<(Value, usize), String> {
+    let source_count: usize = connection
+        .query_row(
+            "SELECT COUNT(*) FROM records WHERE side=?1 AND category=?2",
+            params![SOURCE_SIDE, category],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .map_err(|_| "source record count exceeds supported range".to_owned())?;
+    let destination_count: usize = connection
+        .query_row(
+            "SELECT COUNT(*) FROM records WHERE side=?1 AND category=?2",
+            params![DESTINATION_SIDE, category],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .map_err(|_| "destination record count exceeds supported range".to_owned())?;
+
+    let mut statement = connection
+        .prepare(
+            "WITH source_groups AS (
+                 SELECT identity, COUNT(*) AS count
+                 FROM records WHERE side=?1 AND category=?2
+                 GROUP BY identity
+             ),
+             destination_groups AS (
+                 SELECT identity, COUNT(*) AS count
+                 FROM records WHERE side=?3 AND category=?2
+                 GROUP BY identity
+             ),
+             identities AS (
+                 SELECT identity FROM source_groups
+                 UNION
+                 SELECT identity FROM destination_groups
+             ),
+             source_payloads AS (
+                 SELECT identity, payload, COUNT(*) AS count
+                 FROM records WHERE side=?1 AND category=?2
+                 GROUP BY identity, payload
+             ),
+             destination_payloads AS (
+                 SELECT identity, payload, COUNT(*) AS count
+                 FROM records WHERE side=?3 AND category=?2
+                 GROUP BY identity, payload
+             ),
+             exact_groups AS (
+                 SELECT source_payloads.identity,
+                        SUM(
+                            CASE WHEN source_payloads.count < destination_payloads.count
+                                 THEN source_payloads.count
+                                 ELSE destination_payloads.count END
+                        ) AS exact
+                 FROM source_payloads
+                 JOIN destination_payloads
+                   ON destination_payloads.identity=source_payloads.identity
+                  AND destination_payloads.payload=source_payloads.payload
+                 GROUP BY source_payloads.identity
+             )
+             SELECT identities.identity,
+                    COALESCE(source_groups.count, 0),
+                    COALESCE(destination_groups.count, 0),
+                    COALESCE(exact_groups.exact, 0)
+             FROM identities
+             LEFT JOIN source_groups ON source_groups.identity=identities.identity
+             LEFT JOIN destination_groups ON destination_groups.identity=identities.identity
+             LEFT JOIN exact_groups ON exact_groups.identity=identities.identity
+             ORDER BY identities.identity",
+        )
+        .map_err(|error| error.to_string())?;
+    let mut rows = statement
+        .query(params![SOURCE_SIDE, category, DESTINATION_SIDE])
+        .map_err(|error| error.to_string())?;
+    let mut details = Vec::new();
+    let mut differences = 0usize;
+    let mut matched = 0usize;
+    let mut missing_total = 0usize;
+    let mut extra_total = 0usize;
+    let mut modified_total = 0usize;
+    let mut detail_groups = 0usize;
+    while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+        let identity: String = row.get(0).map_err(|error| error.to_string())?;
+        let source: usize = row
+            .get::<_, i64>(1)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .map_err(|_| "source identity count exceeds supported range".to_owned())?;
+        let destination: usize = row
+            .get::<_, i64>(2)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .map_err(|_| "destination identity count exceeds supported range".to_owned())?;
+        let exact: usize = row
+            .get::<_, i64>(3)
+            .map_err(|error| error.to_string())?
+            .try_into()
+            .map_err(|_| "exact identity count exceeds supported range".to_owned())?;
+        let modified = (source - exact).min(destination - exact);
+        let missing = source - exact - modified;
+        let extra = destination - exact - modified;
+        matched += exact;
+        differences += missing + extra + modified;
+        missing_total += missing;
+        extra_total += extra;
+        modified_total += modified;
+        if missing > 0 || extra > 0 || modified > 0 {
+            detail_groups += 1;
+            if details.len() < MAX_DETAILS {
+                let source_payload =
+                    staged_representative(connection, SOURCE_SIDE, category, &identity)?;
+                let destination_payload =
+                    staged_representative(connection, DESTINATION_SIDE, category, &identity)?;
+                details.push(serde_json::json!({
+                    "identity": identity,
+                    "status": if missing > 0 && extra == 0 { "missing" } else if extra > 0 && missing == 0 { "extra" } else { "modified" },
+                    "missing": missing,
+                    "extra": extra,
+                    "modified": modified,
+                    "source_sha256": source_payload.as_deref().map(|payload| {
+                        let mut hasher = Sha256::new();
+                        hasher.update(payload.as_bytes());
+                        hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+                    }),
+                    "destination_sha256": destination_payload.as_deref().map(|payload| {
+                        let mut hasher = Sha256::new();
+                        hasher.update(payload.as_bytes());
+                        hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+                    }),
+                }));
+            }
+        }
+    }
+    let detail_count = details.len();
+    let details_omitted = detail_groups.saturating_sub(detail_count);
+    let identity_policy = if identity_schema(category).is_some() {
+        "typed"
+    } else {
+        "heuristic"
+    };
+    Ok((
+        serde_json::json!({
+            "source_count": source_count, "destination_count": destination_count,
+            "matched": matched, "missing": missing_total, "extra": extra_total,
+            "modified": modified_total,
+            "source_sha256": staged_digest(connection, SOURCE_SIDE, category)?,
+            "destination_sha256": staged_digest(connection, DESTINATION_SIDE, category)?,
+            "identity_policy": identity_policy,
+            "details": details,
+            "detail_count": detail_count,
+            "details_truncated": details_omitted > 0,
+            "details_omitted": details_omitted,
+        }),
+        differences,
+    ))
+}
+
+fn compare_staged(
+    connection: &Connection,
+    categories: &std::collections::BTreeSet<String>,
+) -> Result<AuditResult, String> {
+    let mut category_reports = Map::new();
+    let mut differences = 0usize;
+    for category in categories {
+        let (report, count) = compare_staged_category(connection, category)
+            .map_err(|error| format!("category '{category}': {error}"))?;
+        differences += count;
+        category_reports.insert(category.clone(), report);
+    }
+    let report = with_proof_digest(serde_json::json!({
+        "format": "mailswiftsync-migration-assurance", "format_version": 1,
+        "verdict": if differences == 0 { "pass" } else { "fail" },
+        "difference_count": differences, "categories": category_reports,
+        "note": "This report proves equality of the supplied snapshots. It does not claim either snapshot is complete unless the collector documents its scope."
+    }))?;
+    Ok(AuditResult {
+        report,
+        differences,
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn compare(source: &Value, destination: &Value) -> Result<AuditResult, String> {
     let source = source
         .as_object()
@@ -353,11 +745,23 @@ pub(crate) fn compare_files(
     destination: &Path,
     output: &Path,
 ) -> Result<AuditResult, String> {
-    let source: Value = serde_json::from_str(&read_snapshot(source, "source")?)
-        .map_err(|e| format!("invalid source snapshot: {e}"))?;
-    let destination: Value = serde_json::from_str(&read_snapshot(destination, "destination")?)
-        .map_err(|e| format!("invalid destination snapshot: {e}"))?;
-    let result = compare(&source, &destination)?;
+    let mut connection = create_staging_database()?;
+    let mut categories = std::collections::BTreeSet::new();
+    stage_snapshot(
+        source,
+        "source",
+        SOURCE_SIDE,
+        &mut connection,
+        &mut categories,
+    )?;
+    stage_snapshot(
+        destination,
+        "destination",
+        DESTINATION_SIDE,
+        &mut connection,
+        &mut categories,
+    )?;
+    let result = compare_staged(&connection, &categories)?;
     let text = serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?;
     write_private_atomic(output, &text).map_err(|e| e.to_string())?;
     Ok(result)
@@ -440,5 +844,39 @@ mod tests {
         assert_eq!(report["detail_count"], 1_000);
         assert_eq!(report["details_truncated"], true);
         assert_eq!(report["details_omitted"], 1);
+    }
+
+    #[test]
+    fn compare_files_streams_snapshots_through_sqlite_staging() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-migrate-audit-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&directory, permissions).unwrap();
+        }
+        let source = directory.join("source.json");
+        let destination = directory.join("destination.json");
+        let output = directory.join("report.json");
+        std::fs::write(
+            &source,
+            r#"{"messages":[{"account":"a","folder":"INBOX","uidvalidity":1,"uid":1,"value":"same"}],"metadata":{"collector":"source"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &destination,
+            r#"{"metadata":{"collector":"destination"},"messages":[{"account":"a","folder":"INBOX","uidvalidity":1,"uid":1,"value":"same"}]}"#,
+        )
+        .unwrap();
+        let result = compare_files(&source, &destination, &output).unwrap();
+        assert_eq!(result.differences, 0);
+        assert_eq!(result.report["verdict"], "pass");
+        assert!(result.report["proof_digest"].as_str().is_some());
+        let _ = std::fs::remove_dir_all(directory);
     }
 }
