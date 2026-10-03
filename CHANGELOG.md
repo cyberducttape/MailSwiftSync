@@ -11,7 +11,8 @@ operator distribution archives.
   with different extended/8.3 spellings.
 - Added focused batch-worker tests for credential refresh no-op, retry state,
   task preparation, queued cancellation, and durable unschedulable settlement;
-  measured line coverage rose to 65.28%, with a 60% CI floor added.
+  attempt cancellation and preparation failure also prove no durable claim is
+  made, bringing measured line coverage to 68.05% with a 65% CI floor.
 - Added 90% critical-module coverage floors for adaptive rate-domain
   scheduling and provider response classification (95.16% and 95.68% currently
   measured, respectively).

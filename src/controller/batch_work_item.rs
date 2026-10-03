@@ -1102,6 +1102,12 @@ mod tests {
         )
     }
 
+    fn test_admission(runner: &BatchAttemptRunner, task: &MailboxTask) -> Admission {
+        Arc::clone(&runner.provider_limiter)
+            .try_admit(&task.rate_path)
+            .unwrap()
+    }
+
     #[test]
     fn ambiguous_engine_errors_do_not_inherit_the_source_provider() {
         let mut form = crate::Form::default();
@@ -1271,6 +1277,63 @@ mod tests {
         worker.join().unwrap();
         assert!(failed.load(Ordering::Relaxed));
         assert!(terminal_jobs.lock().unwrap().contains(&4));
+    }
+
+    #[test]
+    fn run_attempt_cancellation_settles_without_claiming_or_failing_batch() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let runner = test_runner(tx);
+        let cancelled = Arc::clone(&runner.cancel);
+        cancelled.store(true, Ordering::Relaxed);
+        let failed = Arc::clone(&runner.failed);
+        let task = test_unpreparable_task(7);
+        let admission = test_admission(&runner, &task);
+        let worker = thread::spawn(move || runner.run_attempt(task, admission));
+
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Event::JobState { state, .. } if state == "Cancelled"
+        ));
+        let Event::JobFinished { state, reply, .. } = rx.recv().unwrap() else {
+            panic!("expected durable cancellation before claim");
+        };
+        assert_eq!(state, "cancelled");
+        reply.send(Ok(())).unwrap();
+        assert!(matches!(worker.join().unwrap(), AttemptOutcome::Finished));
+        assert!(!failed.load(Ordering::Relaxed));
+        assert!(rx.try_recv().is_err(), "cancelled work must not be claimed");
+    }
+
+    #[test]
+    fn run_attempt_preparation_failure_is_terminal_without_claiming() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let runner = test_runner(tx);
+        let failed = Arc::clone(&runner.failed);
+        let terminal_jobs = Arc::clone(&runner.terminal_jobs);
+        let task = test_unpreparable_task(8);
+        let admission = test_admission(&runner, &task);
+        let worker = thread::spawn(move || runner.run_attempt(task, admission));
+
+        assert!(
+            matches!(rx.recv().unwrap(), Event::RunLine { text, .. } if text.contains("durable plan could not be loaded"))
+        );
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Event::JobState { state, .. } if state == "Failed"
+        ));
+        let Event::JobFinished { state, reply, .. } = rx.recv().unwrap() else {
+            panic!("expected durable preparation failure");
+        };
+        assert_eq!(state, "failed");
+        assert!(!terminal_jobs.lock().unwrap().contains(&8));
+        reply.send(Ok(())).unwrap();
+        assert!(matches!(worker.join().unwrap(), AttemptOutcome::Finished));
+        assert!(failed.load(Ordering::Relaxed));
+        assert!(terminal_jobs.lock().unwrap().contains(&8));
+        assert!(
+            rx.try_recv().is_err(),
+            "unpreparable work must not be claimed"
+        );
     }
 
     #[test]
