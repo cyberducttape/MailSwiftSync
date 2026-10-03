@@ -102,6 +102,18 @@ fn ensure_certificate_output_is_distinct(
     Ok(())
 }
 
+fn parse_trusted_public_key_argument(
+    value: Option<OsString>,
+) -> Result<Option<String>, &'static str> {
+    value
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| "trusted public key must be valid UTF-8")
+        })
+        .transpose()
+}
+
 const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]] [--acknowledge-destination-loss]";
 const WEBHOOK_USAGE: &str = "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata] [--watch] [--poll-seconds=N] (N: 1..3600)";
 /// Required for unattended live runs whose plan may remove destination-only
@@ -336,16 +348,21 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Usage: mailswiftsync verify <project-report.json> [trusted-public-key-hex]");
             std::process::exit(2);
         };
-        let trusted_public_key = arguments.next();
+        let trusted_public_key = match parse_trusted_public_key_argument(arguments.next()) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Migration proof verification refused: {error}");
+                std::process::exit(2);
+            }
+        };
         if arguments.next().is_some() {
             eprintln!("Usage: mailswiftsync verify <project-report.json> [trusted-public-key-hex]");
             std::process::exit(2);
         }
-        let trusted_public_key = trusted_public_key
-            .as_deref()
-            .and_then(|value| value.to_str());
-        match crate::reports::signing::verify_file(std::path::Path::new(&path), trusted_public_key)
-        {
+        match crate::reports::signing::verify_file(
+            std::path::Path::new(&path),
+            trusted_public_key.as_deref(),
+        ) {
             Ok(message) => {
                 out!("{message}");
                 return Ok(());
@@ -1809,7 +1826,7 @@ fn oauth_authorize_command(
 mod tests {
     use super::{
         HeadlessMode, SuperviseArguments, ensure_certificate_output_is_distinct,
-        parse_supervise_arguments, sha256_file,
+        parse_supervise_arguments, parse_trusted_public_key_argument, sha256_file,
     };
     use crate::maintenance_window::MaintenanceWindow;
     use std::ffi::OsString;
@@ -1873,6 +1890,24 @@ mod tests {
             .is_ok()
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn malformed_trusted_public_key_never_downgrades_to_checksum_only() {
+        assert_eq!(
+            parse_trusted_public_key_argument(Some(OsString::from("trusted-key"))).unwrap(),
+            Some("trusted-key".to_owned())
+        );
+        assert_eq!(parse_trusted_public_key_argument(None).unwrap(), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let invalid_utf8 = OsString::from_vec(vec![0xff]);
+            assert_eq!(
+                parse_trusted_public_key_argument(Some(invalid_utf8)),
+                Err("trusted public key must be valid UTF-8")
+            );
+        }
     }
 
     fn args(values: &[&str]) -> Vec<OsString> {
