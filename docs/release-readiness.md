@@ -158,9 +158,10 @@ screen-reader checklist are recorded in
 - The notifier now persists a credential-free outbox record before attempting
   delivery, retries due records with bounded exponential backoff, and records
   dead-letter state after repeated failure. The outbox stores only an endpoint
-  digest, never the endpoint URL or authentication material; automatic
-  lifecycle event production and a continuously running delivery service are
-  still deployment work.
+  digest, never the endpoint URL or authentication material. Use
+  `notify-webhook --watch` for continuously running operator-managed delivery;
+  fleet-centralized management and service-manager deployment remain separate
+  operational concerns.
 - Ledger transitions now generate lifecycle events transactionally in the
   outbox (`migration.started`, `migration.completed`,
   `migration.cutover_ready`, `mailbox.completed`,

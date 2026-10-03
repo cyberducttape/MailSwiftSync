@@ -396,6 +396,8 @@ status by default (project IDs, phases, aggregate mailbox counts, and durable
 attention-reason counts; no names, endpoints, or process details) to one
 operator-configured `https://` URL.
 Pass `--include-customer-metadata` to explicitly include names and endpoints.
+For continuous durable delivery, add `--watch`; it polls the outbox every 30
+seconds by default, or use `--poll-seconds=N` with a value from 1 to 3,600.
 Treat either representation as sensitive operational data; see
 [PSA and ticketing notifications](docs/wiki/PSA-notifications.md).
 

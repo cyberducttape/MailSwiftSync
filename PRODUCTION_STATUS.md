@@ -66,7 +66,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Advanced typed folder mapping | partial | Engine mapping controls and folder-policy validation exist; a complete typed rule editor is not yet shipped. |
 | Executable cutover orchestration | planned | Seed/delta lifecycle concepts and maintenance windows exist; multi-step external cutover automation is not yet shipped. |
 | Organization policy enforcement | partial | Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, and concurrency at preflight/batch admission; provider-tenant quotas and role-scoped policy administration remain open. |
-| Durable signed webhook delivery | partial | HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; a continuously running centralized delivery service remains open. |
+| Durable signed webhook delivery | partial | HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; notify-webhook --watch provides continuous operator-managed delivery while fleet-centralized management remains open. |
 <!-- production-features:end -->
 
 ## Provider Qualification Matrix

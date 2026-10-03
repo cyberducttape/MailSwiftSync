@@ -29,6 +29,18 @@ MAILSWIFTSYNC_WEBHOOK_URL_FILE=/run/user/1000/mailswiftsync/webhook-url \
   mailswiftsync notify-webhook /path/to/state.db ignored
 ```
 
+For a continuously running worker that drains lifecycle events and durable
+retries, use `--watch`. The default poll interval is 30 seconds; configure a
+bounded interval explicitly when needed:
+
+```bash
+mailswiftsync notify-webhook /path/to/state.db ignored --watch --poll-seconds=15
+```
+
+Run the worker under the host service manager and keep the URL/authentication
+configuration in owner-readable environment files. The SQLite ledger stores
+only the endpoint digest and credential-free event payloads.
+
 - With no project ID, the payload covers every project in the ledger (the
   same shape `status --summary` returns with no project ID).
 - With a project ID, the payload is scoped to that one project:
@@ -69,11 +81,9 @@ tokens. It does not persist the webhook URL or credentials in the ledger.
 
 ## When to call it
 
-`notify-webhook` is a standalone primitive, not something MailSwiftSync
-fires automatically on every state change (that would mean silently making
-outbound network calls as a side effect of ordinary operation, which is not
-this project's default). Call it explicitly from whatever already drives
-your automation:
+`notify-webhook` is an explicit operator action, not something MailSwiftSync
+fires automatically as a side effect of ordinary GUI operation. Call it once
+from a scheduler, or run its explicit `--watch` worker under a service manager:
 
 ```bash
 # After a scripted batch pass:
@@ -82,6 +92,10 @@ mailswiftsync headless /path/to/state.db batch-live && \
 
 # On a timer, independent of any particular run:
 mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc123
+```
+
+```bash
+mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc123 --watch
 ```
 
 For a fleet of shards (see [Scaling large migrations](Scaling-large-migrations.md)),

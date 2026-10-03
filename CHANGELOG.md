@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added `notify-webhook --watch [--poll-seconds=N]`, a continuously running
+  durable outbox worker that drains lifecycle events and bounded retries while
+  keeping endpoint URLs and authentication material outside SQLite. The
+  existing one-shot notifier remains available for scheduled delivery.
 - Corrected lifecycle webhook classification: failed, cancelled, and
   attention mailboxes now emit `mailbox.failed`, project-level run completion
   emits `migration.completed`, and only successful mailbox runs emit

@@ -41,6 +41,7 @@ pub(crate) fn write_stdout(text: &str) {
 }
 
 const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]] [--acknowledge-destination-loss]";
+const WEBHOOK_USAGE: &str = "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata] [--watch] [--poll-seconds=N] (N: 1..3600)";
 /// Required for unattended live runs whose plan may remove destination-only
 /// state (Dovecot backup mirror or imapsync --delete2).
 const ACKNOWLEDGE_DESTINATION_LOSS: &str = "--acknowledge-destination-loss";
@@ -132,6 +133,77 @@ where
         maintenance_window,
         acknowledge_destination_loss,
     })
+}
+
+fn deliver_webhook_once(
+    state: &std::path::Path,
+    url: &str,
+    project_id: Option<&str>,
+    include_customer_metadata: bool,
+) -> Result<(u32, u32), String> {
+    let summary = headless_status_summary(state, project_id)
+        .map_err(|error| format!("could not read migration status: {error}"))?;
+    let payload = serde_json::to_value(summary)
+        .map_err(|error| format!("could not serialize migration status: {error}"))?;
+    let payload = if include_customer_metadata {
+        payload
+    } else {
+        webhook::minimal_status_payload(payload)
+    };
+    let body = serde_json::to_string(&payload)
+        .map_err(|error| format!("could not serialize migration status: {error}"))?;
+    let endpoint_digest =
+        webhook::endpoint_digest(url).map_err(|error| format!("invalid endpoint: {error}"))?;
+    let store = core::StateStore::open(state)
+        .map_err(|error| format!("durable outbox is unavailable: {error}"))?;
+    let current_event_id = webhook::event_id(&body);
+    store
+        .enqueue_webhook_delivery(
+            &current_event_id,
+            project_id.unwrap_or("all-projects"),
+            "migration.status_snapshot",
+            &body,
+            &endpoint_digest,
+        )
+        .map_err(|error| format!("could not queue durable delivery: {error}"))?;
+    store
+        .bind_unbound_webhook_deliveries(&endpoint_digest)
+        .map_err(|error| format!("could not bind lifecycle events to endpoint: {error}"))?;
+    let deliveries = store
+        .due_webhook_deliveries(&endpoint_digest, 100)
+        .map_err(|error| format!("could not read durable delivery queue: {error}"))?;
+    let mut delivered = 0_u32;
+    let mut failed = 0_u32;
+    for delivery in deliveries {
+        match webhook::post_json(url, &delivery.payload) {
+            Ok(status_code) if (200..300).contains(&status_code) => {
+                store
+                    .mark_webhook_delivered(&delivery.event_id)
+                    .map_err(|error| {
+                        format!("durability failed after HTTP {status_code}: {error}")
+                    })?;
+                delivered = delivered.saturating_add(1);
+            }
+            Ok(status_code) => {
+                let error = format!("endpoint rejected delivery with HTTP {status_code}");
+                store
+                    .mark_webhook_failed(&delivery.event_id, &error)
+                    .map_err(|mark_error| {
+                        format!("delivery failure could not be durably recorded: {mark_error}")
+                    })?;
+                failed = failed.saturating_add(1);
+            }
+            Err(error) => {
+                store
+                    .mark_webhook_failed(&delivery.event_id, &error)
+                    .map_err(|mark_error| {
+                        format!("delivery failure could not be durably recorded: {mark_error}")
+                    })?;
+                failed = failed.saturating_add(1);
+            }
+        }
+    }
+    Ok((delivered, failed))
 }
 
 pub(crate) fn run() -> eframe::Result<()> {
@@ -971,26 +1043,62 @@ pub(crate) fn run() -> eframe::Result<()> {
     }
     if command == std::ffi::OsStr::new("notify-webhook") {
         let (Some(state), Some(url)) = (arguments.next(), arguments.next()) else {
-            eprintln!(
-                "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata]"
-            );
+            eprintln!("{WEBHOOK_USAGE}");
             std::process::exit(2);
         };
         let mut project_id = None;
         let mut include_customer_metadata = false;
-        for argument in arguments {
+        let mut watch = false;
+        let mut poll_seconds = 30_u64;
+        let mut arguments = arguments.peekable();
+        while let Some(argument) = arguments.next() {
             if argument == std::ffi::OsStr::new("--include-customer-metadata") {
                 if include_customer_metadata {
                     eprintln!("Webhook notification option was supplied more than once");
                     std::process::exit(2);
                 }
                 include_customer_metadata = true;
+            } else if argument == std::ffi::OsStr::new("--watch") {
+                if watch {
+                    eprintln!("Webhook notification option was supplied more than once");
+                    std::process::exit(2);
+                }
+                watch = true;
+            } else if argument == std::ffi::OsStr::new("--poll-seconds") {
+                let Some(value) = arguments.next() else {
+                    eprintln!("{WEBHOOK_USAGE}");
+                    std::process::exit(2);
+                };
+                if poll_seconds != 30 {
+                    eprintln!("Webhook poll interval was supplied more than once");
+                    std::process::exit(2);
+                }
+                poll_seconds = match value.to_str().and_then(|value| value.parse::<u64>().ok()) {
+                    Some(value) if (1..=3_600).contains(&value) => value,
+                    _ => {
+                        eprintln!("{WEBHOOK_USAGE}");
+                        std::process::exit(2);
+                    }
+                };
+            } else if let Some(value) = argument
+                .to_str()
+                .and_then(|value| value.strip_prefix("--poll-seconds="))
+            {
+                if poll_seconds != 30 {
+                    eprintln!("Webhook poll interval was supplied more than once");
+                    std::process::exit(2);
+                }
+                poll_seconds = match value.parse::<u64>() {
+                    Ok(value) if (1..=3_600).contains(&value) => value,
+                    _ => {
+                        eprintln!("{WEBHOOK_USAGE}");
+                        std::process::exit(2);
+                    }
+                };
             } else if project_id.is_none() {
                 project_id = Some(argument);
             } else {
-                eprintln!(
-                    "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata]"
-                );
+                eprintln!("{WEBHOOK_USAGE}");
                 std::process::exit(2);
             }
         }
@@ -1012,112 +1120,35 @@ pub(crate) fn run() -> eframe::Result<()> {
             },
             None => None,
         };
-        let summary = match headless_status_summary(&state, project_id) {
-            Ok(summary) => summary,
-            Err(error) => {
-                eprintln!("Webhook notification refused: could not read migration status: {error}");
-                std::process::exit(1);
-            }
-        };
-        let payload = match serde_json::to_value(summary) {
-            Ok(payload) if include_customer_metadata => payload,
-            Ok(payload) => webhook::minimal_status_payload(payload),
-            Err(error) => {
-                eprintln!(
-                    "Webhook notification refused: could not serialize migration status: {error}"
-                );
-                std::process::exit(1);
-            }
-        };
-        let body = match serde_json::to_string(&payload) {
-            Ok(body) => body,
-            Err(error) => {
-                eprintln!(
-                    "Webhook notification refused: could not serialize migration status: {error}"
-                );
-                std::process::exit(1);
-            }
-        };
-        let endpoint_digest = match webhook::endpoint_digest(&url) {
-            Ok(digest) => digest,
-            Err(error) => {
-                eprintln!("Webhook notification refused: invalid endpoint: {error}");
-                std::process::exit(1);
-            }
-        };
-        let store = match core::StateStore::open(&state) {
-            Ok(store) => store,
-            Err(error) => {
-                eprintln!("Webhook notification refused: durable outbox is unavailable: {error}");
-                std::process::exit(1);
-            }
-        };
-        let current_event_id = webhook::event_id(&body);
-        if let Err(error) = store.enqueue_webhook_delivery(
-            &current_event_id,
-            project_id.unwrap_or("all-projects"),
-            "migration.status_snapshot",
-            &body,
-            &endpoint_digest,
-        ) {
-            eprintln!("Webhook notification refused: could not queue durable delivery: {error}");
-            std::process::exit(1);
-        }
-        if let Err(error) = store.bind_unbound_webhook_deliveries(&endpoint_digest) {
-            eprintln!(
-                "Webhook notification refused: could not bind lifecycle events to endpoint: {error}"
-            );
-            std::process::exit(1);
-        }
-        let deliveries = match store.due_webhook_deliveries(&endpoint_digest, 100) {
-            Ok(deliveries) => deliveries,
-            Err(error) => {
-                eprintln!(
-                    "Webhook notification refused: could not read durable delivery queue: {error}"
-                );
-                std::process::exit(1);
-            }
-        };
-        let mut delivered = 0_u32;
-        let mut failed = 0_u32;
-        for delivery in deliveries {
-            match webhook::post_json(&url, &delivery.payload) {
-                Ok(status_code) if (200..300).contains(&status_code) => {
-                    if let Err(error) = store.mark_webhook_delivered(&delivery.event_id) {
-                        eprintln!(
-                            "Webhook notification durability failed after HTTP {status_code}: {error}"
-                        );
-                        std::process::exit(1);
+        loop {
+            match deliver_webhook_once(&state, &url, project_id, include_customer_metadata) {
+                Ok((delivered, 0)) => {
+                    if !watch {
+                        out!("Webhook delivery queue processed: {delivered} event(s) delivered.");
+                        return Ok(());
                     }
-                    delivered = delivered.saturating_add(1);
+                    if delivered > 0 {
+                        eprintln!("Webhook worker delivered {delivered} event(s).");
+                    }
                 }
-                Ok(status_code) => {
-                    let error = format!("endpoint rejected delivery with HTTP {status_code}");
-                    if let Err(mark_error) = store.mark_webhook_failed(&delivery.event_id, &error) {
+                Ok((_, failed)) => {
+                    if !watch {
                         eprintln!(
-                            "Webhook delivery failure could not be durably recorded: {mark_error}"
+                            "Webhook delivery failed for {failed} event(s); retry state is durable."
                         );
                         std::process::exit(1);
                     }
-                    failed = failed.saturating_add(1);
+                    eprintln!(
+                        "Webhook worker recorded {failed} failed delivery attempt(s); retry state is durable."
+                    );
                 }
                 Err(error) => {
-                    if let Err(mark_error) = store.mark_webhook_failed(&delivery.event_id, &error) {
-                        eprintln!(
-                            "Webhook delivery failure could not be durably recorded: {mark_error}"
-                        );
-                        std::process::exit(1);
-                    }
-                    failed = failed.saturating_add(1);
+                    eprintln!("Webhook worker stopped: {error}");
+                    std::process::exit(1);
                 }
             }
+            std::thread::sleep(Duration::from_secs(poll_seconds));
         }
-        if failed > 0 {
-            eprintln!("Webhook delivery failed for {failed} event(s); retry state is durable.");
-            std::process::exit(1);
-        }
-        out!("Webhook delivery queue processed: {delivered} event(s) delivered.");
-        return Ok(());
     }
     if command == std::ffi::OsStr::new("supervise") {
         let supervise = match parse_supervise_arguments(arguments) {
@@ -1379,6 +1410,9 @@ fn print_cli_help() {
     );
     out!(
         "\nAdditional operator workflow command:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON"
+    );
+    out!(
+        "\nWebhook delivery:\n  notify-webhook <state> <url> --watch [--poll-seconds=N]  Continuously drain durable signed deliveries"
     );
     out!(
         "\nDoctor:\n  doctor [state.db] [--strict]   Report the local qualification envelope as JSON; --strict sets the exit status\n\nShell integration:\n  completions bash|zsh|fish      Print a shell completion script"

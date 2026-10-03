@@ -108,7 +108,7 @@ evidence = "Owner-only organization-policy.toml enforcement covers TLS, destinat
 [[production_features]]
 feature = "Durable signed webhook delivery"
 status = "partial"
-evidence = "HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; a continuously running centralized delivery service remains open."
+evidence = "HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; notify-webhook --watch provides continuous operator-managed delivery while fleet-centralized management remains open."
 
 [documentation]
 # Terms that must appear only under README's experimental/planned status
