@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Batch execution now carries conservative provider identity from each
+  endpoint into hierarchical rate domains and provider-aware retry/backoff
+  classification; Gmail, Microsoft 365, Dovecot, and unknown endpoints remain
+  distinct without inventing undocumented quota limits.
 - Controller retry, cooldown, lifecycle, and durable failure-detail paths now
   cross a typed `MigrationError` boundary after redacted diagnostic parsing;
   raw provider/engine prose remains context only and cannot override the

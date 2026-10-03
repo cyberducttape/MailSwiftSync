@@ -20,7 +20,7 @@
 //! a provider that throttles broadly is still discovered from observation.
 //! No undocumented provider quota is encoded.
 
-use crate::controller::failure::{FailureClass, classify_failure, control_error_text};
+use crate::controller::failure::{FailureClass, control_error_text};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -77,6 +77,7 @@ pub(crate) struct DomainKey {
     side: Option<Side>,
     level: DomainLevel,
     scope: String,
+    provider: &'static str,
 }
 
 impl DomainKey {
@@ -110,6 +111,7 @@ pub(crate) struct SideIdentity<'a> {
 
 fn side_chain(side: Side, identity: &SideIdentity<'_>) -> [DomainKey; 4] {
     let endpoint = identity.endpoint;
+    let provider = crate::core::provider_intelligence::canonical_provider(endpoint);
     let user = identity.user.trim().to_lowercase();
     // Mail domain of the account; accounts without one share the endpoint's
     // unnamed tenant, which is the server operator's own scope.
@@ -125,6 +127,7 @@ fn side_chain(side: Side, identity: &SideIdentity<'_>) -> [DomainKey; 4] {
         side: Some(side),
         level,
         scope,
+        provider,
     };
     let tenant_scope = if tenant.is_empty() {
         format!("(no domain) @ {endpoint}")
@@ -149,6 +152,7 @@ impl RateDomainPath {
                 side: None,
                 level: DomainLevel::Global,
                 scope: String::new(),
+                provider: "global",
             },
             source: side_chain(Side::Source, source),
             destination: side_chain(Side::Destination, destination),
@@ -385,7 +389,16 @@ impl RateDomainLimiter {
         error: &str,
         sides: Vec<Side>,
     ) -> Vec<(DomainKey, Instant)> {
-        if classify_failure(error) != FailureClass::Capacity {
+        let Some(first_side) = sides.first().copied() else {
+            return Vec::new();
+        };
+        let path = &admission.path;
+        if !sides.iter().any(|side| {
+            crate::controller::failure::classify_failure_for_provider(
+                path.chain(*side)[0].provider,
+                error,
+            ) == FailureClass::Capacity
+        }) {
             return Vec::new();
         }
         let text = control_error_text(error);
@@ -394,7 +407,8 @@ impl RateDomainLimiter {
         let base = server_requested
             .or_else(|| {
                 crate::core::provider_intelligence::ProviderErrorClassifier::classify(
-                    "generic", text,
+                    path.chain(first_side)[0].provider,
+                    text,
                 )
                 .suggested_retry_delay()
             })
@@ -405,7 +419,6 @@ impl RateDomainLimiter {
         };
         let now = Instant::now();
         let mut penalized = Vec::new();
-        let path = &admission.path;
         for side in sides {
             // global, provider, tenant, credential, mailbox — broadest first.
             let lineage: Vec<&DomainKey> = std::iter::once(&path.global)
@@ -431,6 +444,7 @@ impl RateDomainLimiter {
                         side: None,
                         level: DomainLevel::Provider,
                         scope: format!("{} → {}", path.source[0].scope, path.destination[0].scope),
+                        provider: "global",
                     }
                 } else {
                     lineage[index + 1].clone()
@@ -540,6 +554,24 @@ mod tests {
                 principal: "",
             },
         )
+    }
+
+    #[test]
+    fn provider_domains_retain_provider_identity_at_execution_boundary() {
+        let path = path("one@example.com", "two@example.com");
+        assert_eq!(
+            path.domain(Side::Source, DomainLevel::Provider).provider,
+            "gmail"
+        );
+        assert_eq!(
+            path.domain(Side::Destination, DomainLevel::Provider)
+                .provider,
+            "microsoft365"
+        );
+        assert_ne!(
+            path.domain(Side::Source, DomainLevel::Provider),
+            path.domain(Side::Destination, DomainLevel::Provider)
+        );
     }
 
     fn admit(limiter: &Arc<RateDomainLimiter>, path: &RateDomainPath) -> Admission {

@@ -152,7 +152,7 @@ fn controller_failure_class(error: &str) -> Option<FailureClass> {
         .and_then(|(label, _)| FailureClass::parse_label(label))
 }
 
-fn classify_failure_text(error: &str) -> FailureClass {
+fn classify_failure_text(provider: &str, error: &str) -> FailureClass {
     // Controller-generated failures carry a stable machine-readable class.
     // Prefer it over the diagnostic prose: retry and terminal-state policy
     // must not change because an engine happened to mention another keyword.
@@ -179,7 +179,7 @@ fn classify_failure_text(error: &str) -> FailureClass {
     if normalized_error.contains("server busy") {
         return FailureClass::Capacity;
     }
-    match crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error) {
+    match crate::core::provider_intelligence::ProviderErrorClassifier::classify(provider, error) {
         crate::core::provider_intelligence::ProviderErrorType::AuthenticationExpired => {
             return FailureClass::Authentication;
         }
@@ -354,9 +354,9 @@ fn classify_failure_text(error: &str) -> FailureClass {
     }
 }
 
-pub(crate) fn classify_error(error: &str) -> MigrationError {
+pub(crate) fn classify_error_for_provider(provider: &str, error: &str) -> MigrationError {
     let detail = control_error_text(error).to_owned();
-    let class = classify_failure_text(error);
+    let class = classify_failure_text(provider, error);
     let retry_after = crate::core::provider_intelligence::provider_signal(&detail)
         .and_then(|signal| signal.retry_after);
     match class {
@@ -375,13 +375,26 @@ pub(crate) fn classify_error(error: &str) -> MigrationError {
     }
 }
 
+pub(crate) fn classify_error(error: &str) -> MigrationError {
+    classify_error_for_provider("generic", error)
+}
+
 pub(crate) fn classify_failure(error: &str) -> FailureClass {
     classify_error(error).class()
 }
 
+pub(crate) fn classify_failure_for_provider(provider: &str, error: &str) -> FailureClass {
+    classify_error_for_provider(provider, error).class()
+}
+
+#[cfg(test)]
 pub(crate) fn is_transient_batch_error(error: &str) -> bool {
+    is_transient_batch_error_for_provider("generic", error)
+}
+
+pub(crate) fn is_transient_batch_error_for_provider(provider: &str, error: &str) -> bool {
     use crate::core::provider_intelligence::{ProviderErrorClassifier, ProviderErrorType};
-    let typed = classify_error(error);
+    let typed = classify_error_for_provider(provider, error);
     let class = typed.class();
     if class != FailureClass::Transport || controller_failure_class(error).is_some() {
         return class == FailureClass::Capacity || class == FailureClass::Transport;
@@ -393,23 +406,42 @@ pub(crate) fn is_transient_batch_error(error: &str) -> bool {
     // provider classifier itself declares retryable. Its fallback verdict
     // (PermanentProviderFailure) means it recognized nothing, so the
     // controller's own transport heuristics decided the class and stand.
-    match ProviderErrorClassifier::classify("generic", control_error_text(error)) {
+    match ProviderErrorClassifier::classify(provider, control_error_text(error)) {
         ProviderErrorType::PermanentProviderFailure => true,
         provider => provider.is_retryable(),
     }
 }
 
+#[cfg(test)]
 pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count: usize) -> bool {
-    classify_failure(error) != FailureClass::Cancellation
-        && attempt < retry_count
-        && is_transient_batch_error(error)
+    should_retry_batch_error_for_provider("generic", error, attempt, retry_count)
 }
 
+pub(crate) fn should_retry_batch_error_for_provider(
+    provider: &str,
+    error: &str,
+    attempt: usize,
+    retry_count: usize,
+) -> bool {
+    classify_failure_for_provider(provider, error) != FailureClass::Cancellation
+        && attempt < retry_count
+        && is_transient_batch_error_for_provider(provider, error)
+}
+
+#[cfg(test)]
 pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
-    let typed = classify_error(error);
+    transient_retry_delay_for_provider("generic", error, attempt)
+}
+
+pub(crate) fn transient_retry_delay_for_provider(
+    provider: &str,
+    error: &str,
+    attempt: usize,
+) -> Duration {
+    let typed = classify_error_for_provider(provider, error);
     let error = typed.detail();
     let provider_error =
-        crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error);
+        crate::core::provider_intelligence::ProviderErrorClassifier::classify(provider, error);
     // A delay the server itself requested (for example Exchange Online's
     // suggested backoff) is honored as the base, capped by the provider
     // module; otherwise the class default applies.
@@ -418,7 +450,7 @@ pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
         .or(provider_error.suggested_retry_delay())
         .map_or_else(
             || {
-                if classify_failure(error) == FailureClass::Capacity {
+                if classify_failure_for_provider(provider, error) == FailureClass::Capacity {
                     5_000_u64
                 } else {
                     1_000_u64

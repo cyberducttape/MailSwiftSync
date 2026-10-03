@@ -291,6 +291,32 @@ fn suggested_backoff(lower: &str) -> Option<Duration> {
 /// Classify provider errors from error messages.
 pub struct ProviderErrorClassifier;
 
+/// Map an endpoint hostname to the provider vocabulary used by controller
+/// policy. Unknown hosts remain `generic`; this function never invents
+/// undocumented quota behavior.
+pub fn canonical_provider(host: &str) -> &'static str {
+    let host = host
+        .trim()
+        .trim_start_matches('[')
+        .split(']')
+        .next()
+        .unwrap_or(host)
+        .to_ascii_lowercase();
+    if host.contains("gmail") || host.contains("googlemail") {
+        "gmail"
+    } else if host.contains("outlook")
+        || host.contains("office365")
+        || host.contains("microsoft")
+        || host.contains("onmicrosoft")
+    {
+        "microsoft365"
+    } else if host.contains("dovecot") {
+        "dovecot"
+    } else {
+        "generic"
+    }
+}
+
 impl ProviderErrorClassifier {
     /// Classify an error based on message content and provider context.
     pub fn classify(provider: &str, error_msg: &str) -> ProviderErrorType {
@@ -506,6 +532,14 @@ fn take_protocol_token(value: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_provider_identity_is_conservative_and_canonical() {
+        assert_eq!(canonical_provider("imap.gmail.com"), "gmail");
+        assert_eq!(canonical_provider("outlook.office365.com"), "microsoft365");
+        assert_eq!(canonical_provider("[2001:db8::1]:993"), "generic");
+        assert_eq!(canonical_provider("imap.example.test"), "generic");
+    }
 
     #[test]
     fn documented_provider_responses_are_classified_with_their_source() {

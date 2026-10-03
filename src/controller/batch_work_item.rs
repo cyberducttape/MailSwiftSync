@@ -3,13 +3,13 @@
 use super::batch::BatchExecutionMode;
 use super::batch_worker::{OAuthRefreshLocks, rate_domain_path};
 use super::pass_provenance::{record_pass_verification, transfer_pass_intent, verified_folders};
-use super::rate_domains::{Admission, DomainKey, RateDomainLimiter, RateDomainPath};
+use super::rate_domains::{Admission, DomainKey, RateDomainLimiter, RateDomainPath, failure_sides};
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
     controller::failure::{
-        FailureClass, classified_failure_detail, classify_failure, should_retry_batch_error,
-        transient_retry_delay,
+        FailureClass, classified_failure_detail, classify_failure_for_provider,
+        should_retry_batch_error_for_provider, transient_retry_delay_for_provider,
     },
     core,
     credentials::CleanupGuard,
@@ -35,6 +35,16 @@ use std::{
 };
 
 const JOB_FINISHED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn provider_for_error(form: &crate::Form, error: &str) -> &'static str {
+    let side = failure_sides(error);
+    let host = if side.as_slice() == [crate::imap_probe::MailSide::Destination] {
+        &form.profile.destination_host
+    } else {
+        &form.profile.source_host
+    };
+    crate::core::provider_intelligence::canonical_provider(host)
+}
 
 /// Redact one mailbox's secrets from controller-generated text. Errors can
 /// carry upstream content (provider responses, OAuth `error_description`),
@@ -635,7 +645,9 @@ impl BatchAttemptRunner {
     }
 
     fn fail(&self, task: &MailboxTask, error: &str) {
-        let cancelled = classify_failure(error) == FailureClass::Cancellation;
+        let provider = provider_for_error(&task.form, error);
+        let cancelled =
+            classify_failure_for_provider(provider, error) == FailureClass::Cancellation;
         if !cancelled {
             self.failed.store(true, Ordering::Relaxed);
         }
@@ -725,12 +737,13 @@ impl BatchAttemptRunner {
     /// Report a transient failure and hand the task back for a timed retry.
     /// The caller must already have released the attempt's admission.
     fn retry_later(&self, mut task: MailboxTask, error: &str, what: &str) -> AttemptOutcome {
+        let provider = provider_for_error(&task.form, error);
         self.line(
             &task,
             format!(
                 "[{}] [{}] {what}; retrying: {error}",
                 task.index + 1,
-                classify_failure(error).label()
+                classify_failure_for_provider(provider, error).label()
             ),
         );
         let _ = send_reliable_event(
@@ -741,12 +754,12 @@ impl BatchAttemptRunner {
                 state: "Retrying".into(),
             },
         );
-        let delay = transient_retry_delay(error, task.attempt);
+        let delay = transient_retry_delay_for_provider(provider, error, task.attempt);
         let _ = self.tx.try_send(Event::RetryScheduled {
             job_id: task.job_id.clone(),
             attempt: u32::try_from(task.attempt + 2).unwrap_or(u32::MAX),
             delay,
-            failure_class: classify_failure(error).label(),
+            failure_class: classify_failure_for_provider(provider, error).label(),
         });
         task.attempt += 1;
         AttemptOutcome::Retry {
@@ -817,7 +830,13 @@ impl BatchAttemptRunner {
                 message: error,
             }) = fresh_dual_imaps_authentication(&task.form)
             {
-                if should_retry_batch_error(&error, attempt, self.retry_count) {
+                let provider = provider_for_error(&task.form, &error);
+                if should_retry_batch_error_for_provider(
+                    provider,
+                    &error,
+                    attempt,
+                    self.retry_count,
+                ) {
                     report_cooldowns(
                         &self.tx,
                         self.provider_limiter
@@ -969,7 +988,14 @@ impl BatchAttemptRunner {
                 self.finish_transcript(&task);
                 AttemptOutcome::Finished
             }
-            Err(error) if should_retry_batch_error(&error, attempt, self.retry_count) => {
+            Err(error)
+                if should_retry_batch_error_for_provider(
+                    provider_for_error(&task.form, &error),
+                    &error,
+                    attempt,
+                    self.retry_count,
+                ) =>
+            {
                 report_cooldowns(
                     &self.tx,
                     self.provider_limiter.observe_failure(&admission, &error),
@@ -984,7 +1010,11 @@ impl BatchAttemptRunner {
                     format!(
                         "[{}] [{}] failed: {error}",
                         task.index + 1,
-                        classify_failure(&error).label()
+                        classify_failure_for_provider(
+                            provider_for_error(&task.form, &error),
+                            &error,
+                        )
+                        .label()
                     ),
                 );
                 self.fail(&task, &error);
