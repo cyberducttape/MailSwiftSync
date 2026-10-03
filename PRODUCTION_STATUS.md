@@ -5,7 +5,7 @@
 |---|---|
 | Status | Technical Preview |
 | Package version | `0.1.0-alpha.1` |
-| SQLite schema version | `21` |
+| SQLite schema version | `22` |
 | Last reviewed | 2026-10-02 |
 | Qualified engine | `imapsync 2.314` |
 <!-- release-metadata:end -->
@@ -56,7 +56,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Pre/post-migration reports | implemented | Explicit report views and durable snapshot exports are wired; automatic post-run generation is not claimed. |
 | Resume/recovery dashboard | implemented | Recovery workspace and durable recovery guidance are wired; autonomous resume remains operator-controlled. |
 | Provider error classification | implemented | Provider identity is enforced at the execution boundary; documented provider signatures are scoped to the selected provider while RFC IMAP response codes remain universal. Live provider qualification remains pending. |
-| Shared durable batch plans | implemented | Schema v21 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas and an approval-gated cutover workflow, alongside the durable webhook outbox and transaction-bound lifecycle event trigger. |
+| Shared durable batch plans | implemented | Schema v22 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas and an approval-gated cutover workflow, alongside the durable webhook outbox and transaction-bound lifecycle event trigger. |
 | Run-level batch throttle policy | implemented | Current concurrency and throughput settings are snapshotted, confirmed, and applied when rebuilding durable mailbox rows. |
 | Adaptive launch and worker ceilings | implemented | A configurable global process-launch ceiling is supplemented by adaptive mailbox, credential, tenant, provider-endpoint, and global token buckets; attributed capacity failures reduce only implicated domains and escalate when broader scopes are implicated. Worker concurrency adapts across the same hierarchy, while configured imapsync message/byte limits remain run-level policy. No provider quota defaults are encoded or live-qualified. |
 | Provider qualification packs | planned | Qualification evidence schema, strict phase-evidence validation, and a pack builder bound to one provider pair, release commit, engine binary, proof set, and explicit limitations are implemented; bundled live provider-pair packs are not present. |

@@ -336,4 +336,43 @@ mod tests {
         close_test_store(store);
         remove_test_directory(&directory).unwrap();
     }
+
+    #[test]
+    fn failed_preflight_runs_get_a_distinct_webhook_event() {
+        let (store, directory) = test_store();
+        store
+            .connection
+            .pragma_update(None, "user_version", 21)
+            .unwrap();
+        close_test_store(store);
+        let store = StateStore::open(directory.join("state.db")).unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES('job','project','source-user','destination-user','attention')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,status) VALUES('run','project','job','imapsync','preflight','failed')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO events(project_id,run_id,kind,detail) VALUES('project','run','run_finished','failure')",
+                [],
+            )
+            .unwrap();
+
+        let delivery = store.due_webhook_deliveries("", 10).unwrap();
+        assert_eq!(delivery.len(), 1);
+        assert_eq!(delivery[0].event_type, "mailbox.preflight_failed");
+        assert!(delivery[0].payload.contains("mailbox.preflight_failed"));
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
+    }
 }

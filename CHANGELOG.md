@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Durable webhook delivery now distinguishes failed mailbox preflight events as
+  `mailbox.preflight_failed` instead of grouping them with other mailbox
+  failures.
 - The provider smoke harness now applies the owner-only permission check to
   its separate recovery-destination secret as well as the source and live
   destination secrets.
