@@ -38,10 +38,24 @@ const JOB_FINISHED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn provider_for_error(form: &crate::Form, error: &str) -> &'static str {
     let side = failure_sides(error);
-    let host = if side.as_slice() == [crate::imap_probe::MailSide::Destination] {
-        &form.profile.destination_host
-    } else {
-        &form.profile.source_host
+    match side.as_slice() {
+        [crate::imap_probe::MailSide::Source] => {
+            provider_for_side(form, crate::imap_probe::MailSide::Source)
+        }
+        [crate::imap_probe::MailSide::Destination] => {
+            provider_for_side(form, crate::imap_probe::MailSide::Destination)
+        }
+        // Do not guess the source provider when an engine diagnostic does
+        // not identify which endpoint emitted it. Provider-specific
+        // signatures stay disabled until side attribution is explicit.
+        _ => "generic",
+    }
+}
+
+fn provider_for_side(form: &crate::Form, side: crate::imap_probe::MailSide) -> &'static str {
+    let host = match side {
+        crate::imap_probe::MailSide::Source => &form.profile.source_host,
+        crate::imap_probe::MailSide::Destination => &form.profile.destination_host,
     };
     crate::core::provider_intelligence::canonical_provider(host)
 }
@@ -749,8 +763,13 @@ impl BatchAttemptRunner {
 
     /// Report a transient failure and hand the task back for a timed retry.
     /// The caller must already have released the attempt's admission.
-    fn retry_later(&self, mut task: MailboxTask, error: &str, what: &str) -> AttemptOutcome {
-        let provider = provider_for_error(&task.form, error);
+    fn retry_later(
+        &self,
+        mut task: MailboxTask,
+        provider: &str,
+        error: &str,
+        what: &str,
+    ) -> AttemptOutcome {
         self.line(
             &task,
             format!(
@@ -862,8 +881,10 @@ impl BatchAttemptRunner {
                     adapt_launch_rate(&self.launch_limiter, &penalized);
                     report_cooldowns(&self.tx, penalized);
                     drop(admission);
+                    let provider = provider_for_side(&task.form, side);
                     return self.retry_later(
                         task,
+                        provider,
                         &error,
                         "transient fresh authentication probe failure",
                     );
@@ -1023,7 +1044,8 @@ impl BatchAttemptRunner {
                 adapt_launch_rate(&self.launch_limiter, &penalized);
                 report_cooldowns(&self.tx, penalized);
                 drop(admission);
-                self.retry_later(task, &error, "transient failure")
+                let provider = provider_for_error(&task.form, &error);
+                self.retry_later(task, provider, &error, "transient failure")
             }
             Err(error) => {
                 drop(admission);
@@ -1051,6 +1073,20 @@ impl BatchAttemptRunner {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[test]
+    fn ambiguous_engine_errors_do_not_inherit_the_source_provider() {
+        let mut form = crate::Form::default();
+        form.profile.source_host = "imap.gmail.com".into();
+        form.profile.destination_host = "outlook.office365.com".into();
+
+        assert_eq!(provider_for_error(&form, "Host1: rate limited"), "gmail");
+        assert_eq!(
+            provider_for_error(&form, "Host2: rate limited"),
+            "microsoft365"
+        );
+        assert_eq!(provider_for_error(&form, "rate limited"), "generic");
+    }
 
     #[test]
     fn controller_generated_output_is_redacted_before_it_leaves_the_worker() {

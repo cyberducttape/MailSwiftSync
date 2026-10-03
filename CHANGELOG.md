@@ -8,6 +8,9 @@ operator distribution archives.
 
 - Batch confirmations now block with an explicit durable-read error if queue
   selection projection fails, instead of presenting a partial or empty scope.
+- Provider-specific batch error policy now requires explicit endpoint-side
+  attribution; ambiguous engine diagnostics no longer inherit the source
+  provider by default, while sided authentication probes retain their side.
 - Updated the migration-snapshot fuzz target's private-directory shim to match
   the stager's canonical-directory validation after the macOS path fix.
 - Added coverage-increasing migration-snapshot fuzz inputs to the regression
