@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Closed the debug-scene hard-coded cryptographic-value finding by keeping
+  debug credentials empty, and removed detailed UID collections from IMAP
+  probe assertion diagnostics so sensitive mailbox data cannot be emitted in
+  cleartext failure output.
 - Added an approval-gated durable cutover workflow with Seed, Catch-up, Final
   Delta, and Verification stages. Each stage advance requires every mailbox to
   have durable verification evidence; intermediate advances requeue only

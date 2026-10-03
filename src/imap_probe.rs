@@ -3323,7 +3323,7 @@ mod resume_tests {
             assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
             let mut fetched = server.fetched.clone();
             fetched.sort_unstable();
-            assert_eq!(fetched, uids, "every UID fetched exactly once");
+            assert!(fetched == uids, "every UID fetched exactly once");
             assert!(
                 server.fetch_commands <= 12,
                 "adaptive FETCH round-trip bound exceeded"
@@ -3339,11 +3339,7 @@ mod resume_tests {
         let mut stage = interrupted(&before, 1..=PAGE, Some(PAGE));
         let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
         assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
-        assert!(
-            server.fetched.iter().all(|uid| *uid > PAGE),
-            "{:?}",
-            server.fetched
-        );
+        assert!(server.fetched.iter().all(|uid| *uid > PAGE));
         assert_eq!(staged_uids(&stage), uids);
     }
 
@@ -3407,7 +3403,7 @@ mod resume_tests {
         let mut stage = interrupted(&before, 1..=PAGE, None);
         let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
         scan(&mut stage, &mut server);
-        assert_eq!(server.fetched, uids, "every UID fetched exactly once");
+        assert!(server.fetched == uids, "every UID fetched exactly once");
         assert_eq!(staged_uids(&stage), uids);
     }
 
@@ -3418,7 +3414,7 @@ mod resume_tests {
         scan(&mut stage, &mut FolderServer::new(&uids, 9, PAGE + 4));
         let mut server = FolderServer::new(&uids, 9, PAGE + 4);
         assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
-        assert!(server.fetched.is_empty(), "{:?}", server.fetched);
+        assert!(server.fetched.is_empty());
         assert_eq!(staged_uids(&stage), uids);
     }
 

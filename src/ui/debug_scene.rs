@@ -206,12 +206,8 @@ pub(crate) fn demo_data(app: &mut App) {
         }
     }
     app.queue.attach(imported.project_id, imported.len);
-    // Ephemeral session placeholders keep the debug scene configured without
-    // embedding a credential-like value in source or accepting one from the
-    // environment. These values never enter durable state or engine argv.
-    let placeholder = uuid::Uuid::new_v4().to_string();
-    app.form.source_password = placeholder.clone().into();
-    app.form.destination_password = placeholder.into();
+    // Leave credentials empty in the debug scene. The demo must never create
+    // or assign credential-like material, even ephemerally.
     for index in [1, 8] {
         if let Some(id) = ids.get(index) {
             app.bulk_selected_ids.insert(id.clone());
