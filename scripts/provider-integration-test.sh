@@ -115,6 +115,22 @@ if [[ ! -f "$recovery_dest_secret" ]]; then
   exit 1
 fi
 
+# Validate all secret files before invoking any executable or contacting a
+# provider. Recovery uses an independent destination credential and must get
+# the same owner-only protection as the normal source/destination pair.
+for secret_file in "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" \
+  "${MAILSWIFTSYNC_PROVIDER_DEST_SECRET}" "$recovery_dest_secret"; do
+  if [[ ! -f "$secret_file" ]]; then
+    echo "ERROR: secret file $secret_file does not exist" >&2
+    exit 1
+  fi
+  perms=$(stat -c %a "$secret_file" 2>/dev/null || stat -f %OLp "$secret_file" 2>/dev/null || echo "unknown")
+  if [[ "$perms" != "600" && "$perms" != "400" ]]; then
+    echo "ERROR: $secret_file permissions are $perms; provider smoke testing requires 600 or 400 (owner-only)" >&2
+    exit 1
+  fi
+done
+
 binary="${MAILSWIFTSYNC_PROVIDER_BINARY}"
 if [[ ! -x "$binary" ]]; then
   echo "ERROR: $binary is not executable" >&2
@@ -167,19 +183,6 @@ if [[ -z "$imapsync_version" ]]; then
 fi
 imapsync_binary_sha256="$(sha256_file "$imapsync_binary")"
 doveadm_binary="$(command -v doveadm || true)"
-
-# Validate secret files are owner-only
-for secret_file in "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" "${MAILSWIFTSYNC_PROVIDER_DEST_SECRET}"; do
-  if [[ ! -f "$secret_file" ]]; then
-    echo "ERROR: secret file $secret_file does not exist" >&2
-    exit 1
-  fi
-  perms=$(stat -c %a "$secret_file" 2>/dev/null || stat -f %OLp "$secret_file" 2>/dev/null || echo "unknown")
-  if [[ "$perms" != "600" && "$perms" != "400" ]]; then
-    echo "ERROR: $secret_file permissions are $perms; provider smoke testing requires 600 or 400 (owner-only)" >&2
-    exit 1
-  fi
-done
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-provider-test.XXXXXX")"
 cleanup() {

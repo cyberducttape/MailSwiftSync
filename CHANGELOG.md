@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- The provider smoke harness now applies the owner-only permission check to
+  its separate recovery-destination secret as well as the source and live
+  destination secrets.
 - Corrected the Windows migration-audit staging test to verify directory
   canonicalization semantically instead of comparing equivalent Win32 paths
   with different extended/8.3 spellings.

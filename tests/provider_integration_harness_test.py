@@ -34,6 +34,19 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         after_message = SCRIPT.split(message, 1)[1].lstrip().splitlines()
         self.assertEqual(after_message[1].strip(), 'exit 1')
 
+    def test_every_secret_is_checked_before_running_the_binary(self):
+        start = SCRIPT.index("# Validate all secret files before invoking any executable")
+        end = SCRIPT.index('binary="${MAILSWIFTSYNC_PROVIDER_BINARY}"', start)
+        validation = SCRIPT[start:end]
+        for secret in (
+            '"${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}"',
+            '"${MAILSWIFTSYNC_PROVIDER_DEST_SECRET}"',
+            '"$recovery_dest_secret"',
+        ):
+            self.assertIn(secret, validation)
+        self.assertIn('perms=$(stat -c %a "$secret_file"', validation)
+        self.assertIn('exit 1', validation)
+
 
 if __name__ == "__main__":
     unittest.main()
