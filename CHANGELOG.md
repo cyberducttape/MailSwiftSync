@@ -15,6 +15,8 @@ operator distribution archives.
   start before the approved RFC 3339 time or outside the persisted maintenance
   window, and preserves the destructive-destination acknowledgement gate. The
   schema validator also verifies the workflow foreign key and stage constraint.
+  Cutover plans are now one-shot records: an existing approved or active plan
+  cannot be reset by creating another plan.
 - Migration simulation now shows separate source and destination capacity
   facts from the latest endpoint readiness probe, including provider-reported
   quota usage/limits, exhausted destination capacity, and an explicit unknown

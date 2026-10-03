@@ -78,15 +78,11 @@ impl StateStore {
             [project_id],
             |row| row.get(0),
         )?;
-        if !matches!(
-            phase.as_str(),
-            "preflight" | "pilot" | "seed" | "catch_up" | "final_delta"
-        ) {
+        if !matches!(phase.as_str(), "preflight" | "pilot") {
             return Err(rusqlite::Error::InvalidQuery);
         }
         tx.execute(
-            "INSERT INTO cutover_workflows(project_id,stage,scheduled_at,maintenance_window) VALUES(?1,'seed',?2,?3)
-             ON CONFLICT(project_id) DO UPDATE SET stage='seed',scheduled_at=excluded.scheduled_at,maintenance_window=excluded.maintenance_window,approved_by=NULL,approved_at=NULL,external_confirmation=NULL",
+            "INSERT INTO cutover_workflows(project_id,stage,scheduled_at,maintenance_window) VALUES(?1,'seed',?2,?3)",
             params![project_id, scheduled_at, maintenance_window],
         )?;
         tx.execute(
@@ -213,6 +209,11 @@ mod tests {
         store
             .create_cutover_workflow(&project.id, "2026-10-03T22:00:00Z", Some("22:00-01:00"))
             .unwrap();
+        assert!(
+            store
+                .create_cutover_workflow(&project.id, "2026-10-04T22:00:00Z", None)
+                .is_err()
+        );
         assert!(store.approve_cutover(&project.id, "operator").is_ok());
         assert!(store.advance_cutover(&project.id, None).is_err());
         store
