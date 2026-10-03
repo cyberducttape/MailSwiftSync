@@ -164,7 +164,7 @@ particular target.
 
 ⚠️ **Code exists but not fully qualified:**
 - Content-level mismatch detection (bounded body hashing is an explicit encrypted-imapsync forensic mode; provider qualification is outstanding)
-- Provider-context-specific error classification (generic provider-intelligence mapping is now applied; provider-specific context remains pending)
+- Provider-context-specific error classification (provider identity is carried into controller classification, retry policy, durable failure details, and rate-domain cooldowns; live provider qualification remains outstanding)
 - Provider-specific throttling quotas (not implemented; generic profile throttles and observed endpoint cooldowns are enforced)
 - Pre/post-migration reports (available as explicit CLI exports, not automatically generated for every live run)
 - Dedicated recovery dashboard (supported recovery guidance is visible in Activity; a multi-run dashboard remains future work)

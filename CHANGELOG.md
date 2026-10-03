@@ -22,6 +22,9 @@ operator distribution archives.
   be attributed to an unrelated endpoint, while RFC IMAP response codes remain
   provider-neutral. Retry delays, durable failure details, and rate-domain
   cooldowns use the same provider-scoped signal.
+- Reconciled capability and controller documentation with the provider-context
+  classification implementation; live provider qualification remains explicitly
+  separate from code-level provider identity handling.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in

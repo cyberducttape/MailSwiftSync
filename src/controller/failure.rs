@@ -167,11 +167,11 @@ fn classify_failure_text(provider: &str, error: &str) -> FailureClass {
 
     // Keep the controller taxonomy as the durable contract, but delegate
     // provider/IMAP signal recognition to the provider-intelligence module.
-    // This is deliberately provider-neutral here because a failure can be
-    // emitted by either endpoint; the richer provider context remains a
-    // future plan-level input. Previously this classifier duplicated only a
-    // subset of those patterns, leaving quota and connection-capacity signals
-    // on the generic/unknown path.
+    // The caller supplies the execution-boundary provider identity selected
+    // from the endpoint that emitted the failure. RFC IMAP signals remain
+    // provider-neutral, while documented provider signatures are rejected
+    // when they belong to a different provider. This keeps retry, cooldown,
+    // and durable failure policy aligned with the endpoint that failed.
     let normalized_error = error.to_ascii_lowercase();
     // IMAP diagnostics often prefix a server response with a local operation
     // label such as "authentication failed". Preserve the signal from the
