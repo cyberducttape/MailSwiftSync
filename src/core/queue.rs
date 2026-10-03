@@ -475,16 +475,17 @@ impl StateStore {
                 numbered_placeholders(chunk.len())
             );
             let params = std::iter::once(project_id.to_owned()).chain(chunk.iter().cloned());
-            if let Some((rowid, id)) = self
+            let candidate = self
                 .connection
                 .query_row(&sql, params_from_iter(params), |row| {
                     Ok((row.get(0)?, row.get(1)?))
                 })
-                .optional()?
+                .optional()?;
+            if candidate
+                .as_ref()
+                .is_some_and(|(rowid, _)| first.as_ref().is_none_or(|current| *rowid < current.0))
             {
-                if first.as_ref().is_none_or(|current| rowid < current.0) {
-                    first = Some((rowid, id));
-                }
+                first = candidate;
             }
         }
         Ok(first.map(|(_, id)| id))
@@ -658,7 +659,7 @@ impl StateStore {
     }
 
     /// Up to `limit` rows of batch projects whose presentation facts were
-    /// never derived (rows written before schema v16).
+    /// never derived (rows written before queue facts were introduced).
     pub fn queue_rows_missing_facts(&self, limit: u32) -> rusqlite::Result<Vec<QueueFactsRow>> {
         let mut statement = self.connection.prepare_cached(
             "SELECT m.id,m.source_mailbox,m.destination_mailbox,COALESCE(m.config,p.config),m.row_overrides FROM mailbox_jobs m LEFT JOIN batch_plans p ON p.id=m.batch_plan_id WHERE COALESCE(m.config,p.config) IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mailbox_queue_facts f WHERE f.job_rowid=m.rowid) ORDER BY m.rowid LIMIT ?1",

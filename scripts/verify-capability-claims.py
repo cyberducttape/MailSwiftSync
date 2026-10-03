@@ -10,13 +10,21 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "capabilities.toml"
 CORE_RS = ROOT / "src" / "core.rs"
+PACKAGE_MANIFEST = ROOT / "Cargo.toml"
 CAPABILITY_MANIFEST_MD = ROOT / "CAPABILITY_MANIFEST.md"
+PRODUCTION_STATUS_MD = ROOT / "PRODUCTION_STATUS.md"
 README_MD = ROOT / "README.md"
 EVIDENCE_RS = ROOT / "src" / "core" / "evidence.rs"
 TABLE_BEGIN = "<!-- capabilities:begin -->"
 TABLE_END = "<!-- capabilities:end -->"
 LEVELS_BEGIN = "<!-- verification-levels:begin -->"
 LEVELS_END = "<!-- verification-levels:end -->"
+RELEASE_BEGIN = "<!-- release-metadata:begin -->"
+RELEASE_END = "<!-- release-metadata:end -->"
+PROVIDER_BEGIN = "<!-- provider-qualification:begin -->"
+PROVIDER_END = "<!-- provider-qualification:end -->"
+FEATURES_BEGIN = "<!-- production-features:begin -->"
+FEATURES_END = "<!-- production-features:end -->"
 TABLE_FIELDS = (
     "code",
     "controller",
@@ -107,6 +115,63 @@ def render_status_table(manifest: dict) -> str:
         cells = [cell(capability.get(field, "")) for field in TABLE_FIELDS]
         lines.append(f"| `{name}` | " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def render_release_metadata(manifest: dict, schema_version: int, package_version: str) -> str:
+    """Render release facts that must never be hand-copied into status docs."""
+    release = manifest.get("release", {})
+    return "\n".join(
+        [
+            "| Field | Value |",
+            "|---|---|",
+            f"| Status | {release.get('status', '')} |",
+            f"| Package version | `{package_version}` |",
+            f"| SQLite schema version | `{schema_version}` |",
+            f"| Last reviewed | {manifest.get('last_reviewed', '')} |",
+            f"| Qualified engine | `{release.get('qualified_engine', '')} {release.get('qualified_engine_version', '')}` |",
+        ]
+    )
+
+
+def render_provider_qualification_table(manifest: dict) -> str:
+    """Render qualification evidence status, distinct from provider presets."""
+    lines = [
+        "| Provider pair | Status | Last qualified | Tested engine | Limitations |",
+        "|---|---|---|---|---|",
+    ]
+    for qualification in manifest.get("provider_qualifications", []):
+        status = str(qualification.get("status", "")).replace("_", " ")
+        lines.append(
+            "| {pair} | {status} | {last} | `{engine}` | {limitations} |".format(
+                pair=qualification.get("pair", ""),
+                status=status,
+                last=qualification.get("last_qualified", ""),
+                engine=qualification.get("tested_engine", ""),
+                limitations=qualification.get("limitations", ""),
+            )
+        )
+    return "\n".join(lines)
+
+
+def render_production_feature_table(manifest: dict) -> str:
+    """Render the release feature matrix from machine-readable feature rows."""
+    lines = ["| Feature | Status | Evidence |", "|---|---|---|"]
+    for feature in manifest.get("production_features", []):
+        lines.append(
+            "| {name} | {status} | {evidence} |".format(
+                name=feature.get("feature", ""),
+                status=str(feature.get("status", "")).replace("_", " "),
+                evidence=feature.get("evidence", ""),
+            )
+        )
+    return "\n".join(lines)
+
+
+def get_package_version() -> str:
+    """Extract the package version from Cargo's authoritative package table."""
+    with PACKAGE_MANIFEST.open("rb") as stream:
+        package = tomllib.load(stream).get("package", {})
+    return str(package.get("version", ""))
 
 
 def replace_status_table(content: str, manifest: dict) -> str | None:
@@ -367,11 +432,28 @@ def get_schema_version() -> int:
     return int(match.group(1)) if match else 0
 
 
+def generated_document_violations(
+    content: str, begin: str, end: str, body: str, label: str
+) -> list[str]:
+    regenerated = replace_block(content, begin, end, body)
+    if regenerated is None:
+        return [f"{label}: {begin} / {end} must each appear exactly once"]
+    if regenerated != content:
+        return [f"{label}: generated block is stale; run python3 scripts/verify-capability-claims.py --write"]
+    return []
+
+
 def main(argv: list[str]) -> int:
     with MANIFEST.open("rb") as stream:
         manifest = tomllib.load(stream)
 
     manifest_content = CAPABILITY_MANIFEST_MD.read_text(encoding="utf-8")
+    production_content = PRODUCTION_STATUS_MD.read_text(encoding="utf-8")
+    schema_version = get_schema_version()
+    package_version = get_package_version()
+    release_metadata = render_release_metadata(manifest, schema_version, package_version)
+    provider_qualification = render_provider_qualification_table(manifest)
+    production_features = render_production_feature_table(manifest)
     if "--write" in argv:
         regenerated = replace_status_table(manifest_content, manifest)
         if regenerated is None:
@@ -387,8 +469,36 @@ def main(argv: list[str]) -> int:
             print(f"{README_MD.name}: missing {LEVELS_BEGIN} / {LEVELS_END} markers")
             return 1
         README_MD.write_text(regenerated, encoding="utf-8")
+        regenerated = replace_block(
+            manifest_content, PROVIDER_BEGIN, PROVIDER_END, provider_qualification
+        )
+        if regenerated is None:
+            print(f"{CAPABILITY_MANIFEST_MD.name}: missing {PROVIDER_BEGIN} / {PROVIDER_END} markers")
+            return 1
+        CAPABILITY_MANIFEST_MD.write_text(regenerated, encoding="utf-8")
+        manifest_content = regenerated
+        regenerated = replace_block(
+            production_content, RELEASE_BEGIN, RELEASE_END, release_metadata
+        )
+        if regenerated is None:
+            print(f"{PRODUCTION_STATUS_MD.name}: missing {RELEASE_BEGIN} / {RELEASE_END} markers")
+            return 1
+        production_content = regenerated
+        regenerated = replace_block(
+            production_content, FEATURES_BEGIN, FEATURES_END, production_features
+        )
+        if regenerated is None:
+            print(f"{PRODUCTION_STATUS_MD.name}: missing {FEATURES_BEGIN} / {FEATURES_END} markers")
+            return 1
+        production_content = regenerated
+        regenerated = replace_block(
+            production_content, PROVIDER_BEGIN, PROVIDER_END, provider_qualification
+        )
+        if regenerated is None:
+            print(f"{PRODUCTION_STATUS_MD.name}: missing {PROVIDER_BEGIN} / {PROVIDER_END} markers")
+            return 1
+        PRODUCTION_STATUS_MD.write_text(regenerated, encoding="utf-8")
 
-    schema_version = get_schema_version()
     unsupported = [
         name
         for name, capability in manifest.get("capabilities", {}).items()
@@ -400,6 +510,27 @@ def main(argv: list[str]) -> int:
     violations.extend(
         f"{CAPABILITY_MANIFEST_MD.name}: {violation}"
         for violation in find_manifest_drift(manifest_content, manifest)
+    )
+    violations.extend(
+        f"{CAPABILITY_MANIFEST_MD.name}: {violation}"
+        for violation in generated_document_violations(
+            manifest_content,
+            PROVIDER_BEGIN,
+            PROVIDER_END,
+            provider_qualification,
+            CAPABILITY_MANIFEST_MD.name,
+        )
+    )
+    violations.extend(
+        f"{PRODUCTION_STATUS_MD.name}: {violation}"
+        for begin, end, body in (
+            (RELEASE_BEGIN, RELEASE_END, release_metadata),
+            (FEATURES_BEGIN, FEATURES_END, production_features),
+            (PROVIDER_BEGIN, PROVIDER_END, provider_qualification),
+        )
+        for violation in generated_document_violations(
+            production_content, begin, end, body, PRODUCTION_STATUS_MD.name
+        )
     )
 
     if not verification_levels(manifest):

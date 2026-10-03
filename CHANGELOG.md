@@ -6,6 +6,13 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Documentation status is now generated from `capabilities.toml`: release
+  feature and provider-qualification matrices, package version, SQLite schema
+  version, qualified engine, and review metadata are rendered into
+  `CAPABILITY_MANIFEST.md` and `PRODUCTION_STATUS.md`. CI regenerates the
+  documents and fails if the committed output is stale, preventing implemented
+  recovery/report/provider-intelligence work or schema changes from being
+  represented as old roadmap items.
 - Guided Google Workspace and Microsoft 365 OAuth onboarding: the sign-in
   panel shows the one-time application registration (console link, steps,
   and the exact scope, redirect, and permission values with copy buttons,
@@ -33,7 +40,7 @@ operator distribution archives.
   It never starts work itself. Recorded processes whose ownership could not
   be verified are surfaced there as a blocking notice.
 - The batch queue is now durable SQLite state instead of an in-memory job
-  list (schema v16). An import is written to the ledger as a batch project
+  list. An import is written to the ledger as a batch project
   on a worker thread; the Mailboxes view renders virtual rows from a
   filtered row-ID index and a bounded row cache; search and state filters
   run as SQL over a narrow per-mailbox facts table; and admission and the

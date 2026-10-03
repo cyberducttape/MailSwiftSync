@@ -131,6 +131,52 @@ class CapabilityClaimTests(unittest.TestCase):
         content = CHECKER.CAPABILITY_MANIFEST_MD.read_text(encoding="utf-8")
         self.assertEqual(CHECKER.find_manifest_drift(content, manifest), [])
 
+    def test_release_documents_are_generated_from_machine_readable_status(self):
+        import tomllib
+
+        with CHECKER.MANIFEST.open("rb") as stream:
+            manifest = tomllib.load(stream)
+        capability = CHECKER.CAPABILITY_MANIFEST_MD.read_text(encoding="utf-8")
+        production = CHECKER.PRODUCTION_STATUS_MD.read_text(encoding="utf-8")
+        self.assertEqual(
+            CHECKER.replace_block(
+                capability,
+                CHECKER.PROVIDER_BEGIN,
+                CHECKER.PROVIDER_END,
+                CHECKER.render_provider_qualification_table(manifest),
+            ),
+            capability,
+        )
+        self.assertEqual(
+            CHECKER.replace_block(
+                production,
+                CHECKER.RELEASE_BEGIN,
+                CHECKER.RELEASE_END,
+                CHECKER.render_release_metadata(
+                    manifest, CHECKER.get_schema_version(), CHECKER.get_package_version()
+                ),
+            ),
+            production,
+        )
+        self.assertEqual(
+            CHECKER.replace_block(
+                production,
+                CHECKER.FEATURES_BEGIN,
+                CHECKER.FEATURES_END,
+                CHECKER.render_production_feature_table(manifest),
+            ),
+            production,
+        )
+        self.assertEqual(
+            CHECKER.replace_block(
+                production,
+                CHECKER.PROVIDER_BEGIN,
+                CHECKER.PROVIDER_END,
+                CHECKER.render_provider_qualification_table(manifest),
+            ),
+            production,
+        )
+
 
     @staticmethod
     def repository_manifest():

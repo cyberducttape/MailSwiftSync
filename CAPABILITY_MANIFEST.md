@@ -29,6 +29,20 @@ capability in its `manifest_rows` are checked against these fields.
 | `uidvalidity_delta_checkpoints` | implemented | wired | not_claimed | not_run | no | no | no |
 <!-- capabilities:end -->
 
+## Provider Qualification Status
+
+Generated from `capabilities.toml`; this table is evidence status, not a claim
+that a provider preset is a qualified integration.
+
+<!-- provider-qualification:begin -->
+| Provider pair | Status | Last qualified | Tested engine | Limitations |
+|---|---|---|---|---|
+| Google Workspace → Microsoft 365 | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
+| Microsoft 365 → Google Workspace | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
+| Fastmail → Generic IMAP | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
+| Generic IMAP → Generic IMAP | generic lab only | generic lab fixtures | `imapsync 2.314` | Generic fixtures are not live provider qualification. |
+<!-- provider-qualification:end -->
+
 ## Legend
 
 | Column | Meaning |
@@ -236,11 +250,11 @@ To reach GA 1.0, the following work is required:
 
 **Short-term (v0.2):**
 - [ ] Live provider validation (Gmail, O365, Fastmail)
-- [ ] Integrate pre/post-migration reports into UI
+- [x] Integrate pre/post-migration report views and durable exports into the UI/CLI surfaces
 - [x] Show provider runbooks in the GUI (read-only on the Plan page)
 - [ ] Let provider runbook steps sequence the GUI workflow
-- [ ] Implement resume/recovery dashboard
-- [ ] Provider-specific error classification in retry logic
+- [x] Implement the recovery workspace and durable recovery guidance
+- [x] Wire provider-intelligence error classification into controller retry/rate-domain logic
 
 **Medium-term (v1.0 GA):**
 - [x] Implement SQLite-backed streaming reconciliation in the live metadata-verification path

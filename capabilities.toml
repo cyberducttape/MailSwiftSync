@@ -1,6 +1,114 @@
 # Authoritative capability status for documentation and release review.
 schema_version = 1
-last_reviewed = "2026-09-30"
+last_reviewed = "2026-10-02"
+
+[release]
+status = "Technical Preview"
+qualified_engine = "imapsync"
+qualified_engine_version = "2.314"
+
+# Provider-pair qualification is evidence, not a generic product-support
+# assertion. These rows are rendered into both release-facing documents.
+[[provider_qualifications]]
+pair = "Google Workspace → Microsoft 365"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "No live provider-pair evidence is bundled."
+
+[[provider_qualifications]]
+pair = "Microsoft 365 → Google Workspace"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "No live provider-pair evidence is bundled."
+
+[[provider_qualifications]]
+pair = "Fastmail → Generic IMAP"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "No live provider-pair evidence is bundled."
+
+[[provider_qualifications]]
+pair = "Generic IMAP → Generic IMAP"
+status = "generic_lab_only"
+last_qualified = "generic lab fixtures"
+tested_engine = "imapsync 2.314"
+limitations = "Generic fixtures are not live provider qualification."
+
+# Release-facing feature status. Keep implementation state separate from live
+# qualification state so documentation cannot turn a unit test into a support
+# claim.
+[[production_features]]
+feature = "Pre/post-migration reports"
+status = "implemented"
+evidence = "Explicit report views and durable snapshot exports are wired; automatic post-run generation is not claimed."
+
+[[production_features]]
+feature = "Resume/recovery dashboard"
+status = "implemented"
+evidence = "Recovery workspace and durable recovery guidance are wired; autonomous resume remains operator-controlled."
+
+[[production_features]]
+feature = "Provider error classification"
+status = "implemented"
+evidence = "Provider-intelligence signals feed controller failure and adaptive rate-domain handling; live provider qualification remains pending."
+
+[[production_features]]
+feature = "Shared durable batch plans"
+status = "implemented"
+evidence = "Schema v17 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas."
+
+[[production_features]]
+feature = "Run-level batch throttle policy"
+status = "implemented"
+evidence = "Current concurrency and throughput settings are snapshotted, confirmed, and applied when rebuilding durable mailbox rows."
+
+[[production_features]]
+feature = "Adaptive launch and worker ceilings"
+status = "implemented"
+evidence = "Global launch and worker ceilings are configurable with conservative bounds; provider and tenant rate domains adapt from observed signals."
+
+[[production_features]]
+feature = "Provider qualification packs"
+status = "planned"
+evidence = "Qualification evidence schema and procedures exist, but bundled live provider-pair packs are not present."
+
+[[production_features]]
+feature = "Signed migration certificate"
+status = "partial"
+evidence = "Durable evidence and customer-proof exports exist; an Ed25519-signed final certificate is not yet emitted."
+
+[[production_features]]
+feature = "Migration simulation"
+status = "partial"
+evidence = "Plan risk assessment and provider checklist are available; complete destination-capacity simulation is not yet guaranteed."
+
+[[production_features]]
+feature = "Automatic destination capacity checks"
+status = "partial"
+evidence = "Quota parsing and plan warnings exist where data is exposed; provider-wide capacity discovery is not qualified."
+
+[[production_features]]
+feature = "Advanced typed folder mapping"
+status = "partial"
+evidence = "Engine mapping controls and folder-policy validation exist; a complete typed rule editor is not yet shipped."
+
+[[production_features]]
+feature = "Executable cutover orchestration"
+status = "planned"
+evidence = "Seed/delta lifecycle concepts and maintenance windows exist; multi-step external cutover automation is not yet shipped."
+
+[[production_features]]
+feature = "Organization policy enforcement"
+status = "planned"
+evidence = "Plan safety acknowledgements are enforced; organization-wide tenant policy profiles are not yet shipped."
+
+[[production_features]]
+feature = "Durable signed webhook delivery"
+status = "partial"
+evidence = "HTTPS webhook transport exists; durable event IDs, retry queues, dead letters, and signed delivery envelopes remain open."
 
 [documentation]
 # Terms that must appear only under README's experimental/planned status

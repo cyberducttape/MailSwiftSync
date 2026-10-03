@@ -1,6 +1,14 @@
 # MailSwiftSync Production Readiness Status
 
-**Last Updated:** September 30, 2026
+<!-- release-metadata:begin -->
+| Field | Value |
+|---|---|
+| Status | Technical Preview |
+| Package version | `0.1.0-alpha.1` |
+| SQLite schema version | `17` |
+| Last reviewed | 2026-10-02 |
+| Qualified engine | `imapsync 2.314` |
+<!-- release-metadata:end -->
 **Test Coverage:** See the CI-generated test summary artifact for the current
 target-specific test inventory and execution result.
 **Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
@@ -40,6 +48,43 @@ very large accounts.
 
 ## Feature Completeness Matrix
 
+The authoritative release feature matrix is generated from `capabilities.toml`.
+
+<!-- production-features:begin -->
+| Feature | Status | Evidence |
+|---|---|---|
+| Pre/post-migration reports | implemented | Explicit report views and durable snapshot exports are wired; automatic post-run generation is not claimed. |
+| Resume/recovery dashboard | implemented | Recovery workspace and durable recovery guidance are wired; autonomous resume remains operator-controlled. |
+| Provider error classification | implemented | Provider-intelligence signals feed controller failure and adaptive rate-domain handling; live provider qualification remains pending. |
+| Shared durable batch plans | implemented | Schema v17 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas. |
+| Run-level batch throttle policy | implemented | Current concurrency and throughput settings are snapshotted, confirmed, and applied when rebuilding durable mailbox rows. |
+| Adaptive launch and worker ceilings | implemented | Global launch and worker ceilings are configurable with conservative bounds; provider and tenant rate domains adapt from observed signals. |
+| Provider qualification packs | planned | Qualification evidence schema and procedures exist, but bundled live provider-pair packs are not present. |
+| Signed migration certificate | partial | Durable evidence and customer-proof exports exist; an Ed25519-signed final certificate is not yet emitted. |
+| Migration simulation | partial | Plan risk assessment and provider checklist are available; complete destination-capacity simulation is not yet guaranteed. |
+| Automatic destination capacity checks | partial | Quota parsing and plan warnings exist where data is exposed; provider-wide capacity discovery is not qualified. |
+| Advanced typed folder mapping | partial | Engine mapping controls and folder-policy validation exist; a complete typed rule editor is not yet shipped. |
+| Executable cutover orchestration | planned | Seed/delta lifecycle concepts and maintenance windows exist; multi-step external cutover automation is not yet shipped. |
+| Organization policy enforcement | planned | Plan safety acknowledgements are enforced; organization-wide tenant policy profiles are not yet shipped. |
+| Durable signed webhook delivery | partial | HTTPS webhook transport exists; durable event IDs, retry queues, dead letters, and signed delivery envelopes remain open. |
+<!-- production-features:end -->
+
+## Provider Qualification Matrix
+
+Generated from `capabilities.toml`; provider presets and generic lab results do
+not become live qualification without reviewed evidence.
+
+<!-- provider-qualification:begin -->
+| Provider pair | Status | Last qualified | Tested engine | Limitations |
+|---|---|---|---|---|
+| Google Workspace → Microsoft 365 | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
+| Microsoft 365 → Google Workspace | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
+| Fastmail → Generic IMAP | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
+| Generic IMAP → Generic IMAP | generic lab only | generic lab fixtures | `imapsync 2.314` | Generic fixtures are not live provider qualification. |
+<!-- provider-qualification:end -->
+
+## Detailed Evidence Notes
+
 ### Core Verification ⚠️ METADATA-LEVEL BY DEFAULT; OPT-IN BODY PROOF UNQUALIFIED
 | Feature | Status | Evidence |
 |---------|--------|----------|
@@ -47,7 +92,7 @@ very large accounts.
 | Multi-factor matching | ✅ Wired for TLS imapsync | Message-ID plus metadata fallback runs against independently fetched source/destination records |
 | Source/destination message extraction | ✅ Wired for TLS imapsync | Bounded authenticated IMAP LIST/SELECT/UID FETCH path; plain IMAP fails closed |
 | Missing/extra/changed detection | ✅ Wired | Durable mismatch rows commit with terminal evidence and render in the operator verification report; GUI pagination remains limited |
-| Durable aggregate evidence storage | ✅ Wired | SQLite schema v16; aggregate and supplied message counters and per-attempt transfer-pass provenance survive reports |
+| Durable aggregate evidence storage | ✅ Wired | SQLite schema version is generated above; aggregate and supplied message counters and per-attempt transfer-pass provenance survive reports |
 | Plan-aware verification modes | ⚠️ Fail-closed | `automap`, `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse independent exact message evidence; bounded body proof is available only for stable metadata-preserving plans |
 | Bounded body-content proof | ⚠️ Wired, not provider-qualified | Explicit encrypted-imapsync mode hashes bounded RFC822 bodies on both sides, persists only the proof classification/mismatches, and fails closed on coverage or byte-budget violations |
 
@@ -274,11 +319,11 @@ Open an issue with: `[FEATURE REQUEST]` prefix
 
 ## Version Information
 
-- **Product:** MailSwiftSync v0.1.0-alpha.1
-- **Status:** Technical Preview / Early Adoption
-- **Schema Version:** 14
-- **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; the packaged native-Dovecot CI fixture now passes, while live provider and target-storage qualification remain pending
-- **Status snapshot date:** September 30, 2026 (not a build timestamp)
+The generated release metadata at the top of this document is authoritative for
+product version, status, schema version, review date, and qualified engine.
+Other engine versions may transfer, but their output cannot provide trusted
+MailSwiftSync verification evidence; the packaged native-Dovecot CI fixture now
+passes, while live provider and target-storage qualification remain pending.
 
 ---
 
