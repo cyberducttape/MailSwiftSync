@@ -144,6 +144,12 @@ fn imapsync_args_with_extra_options(
             args.push(flag.into());
         }
     }
+    for rule in &profile.folder_mapping_rules {
+        args.extend([
+            "--f1f2".into(),
+            format!("{}={}", rule.source, rule.destination),
+        ]);
+    }
     let divisor = throttle_divisor.max(1);
     if profile.max_messages_per_second > 0 {
         args.extend([

@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added immutable typed exact folder mappings. Each source-to-destination rule
+  is validated, included in the plan snapshot/fingerprint, emitted as
+  imapsync `--f1f2`, editable from the advanced plan controls, and reused by
+  independent message verification; arbitrary regex transforms and exclusions
+  remain unsupported rather than silently diverging between transfer and proof.
 - Provider error classification now enforces execution-boundary provider
   identity: documented Gmail, Microsoft 365, and Dovecot signatures cannot
   be attributed to an unrelated endpoint, while RFC IMAP response codes remain

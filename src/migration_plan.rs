@@ -16,10 +16,11 @@ use crate::{
 };
 use keyring::Entry;
 pub(crate) use profile::{
-    DovecotMigrationStrategy, MAX_BATCH_CONCURRENCY, MAX_BATCH_PROCESS_STARTS_PER_SECOND, Profile,
-    RunPlanSnapshot, RunProfileSnapshot, auth_method_is_oauth, completeness, default_auth_method,
-    default_destination_tls, default_doveadm_path, default_migration_timeout_hours,
-    default_source_tls, effective_batch_concurrency, effective_batch_process_starts_per_second,
+    DovecotMigrationStrategy, FolderMappingRule, MAX_BATCH_CONCURRENCY,
+    MAX_BATCH_PROCESS_STARTS_PER_SECOND, Profile, RunPlanSnapshot, RunProfileSnapshot,
+    auth_method_is_oauth, completeness, default_auth_method, default_destination_tls,
+    default_doveadm_path, default_migration_timeout_hours, default_source_tls,
+    effective_batch_concurrency, effective_batch_process_starts_per_second,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -875,6 +876,7 @@ impl Form {
                 ));
             }
         }
+        self.validate_folder_mapping_rules()?;
         if require_credentials && self.requires_insecure_transport_ack() {
             return Err(
                 "Plain IMAP requires an explicit cleartext-transport acknowledgement before any authenticated operation, including dry preflight.".into(),
@@ -924,6 +926,33 @@ impl Form {
     }
     pub(crate) fn extra_options_valid(&self) -> Result<(), String> {
         engine::validate_extra_options(&self.profile.extra_options)
+    }
+
+    fn validate_folder_mapping_rules(&self) -> Result<(), String> {
+        if self.profile.folder_mapping_rules.len() > 256 {
+            return Err("Folder mapping rules cannot exceed 256 entries.".into());
+        }
+        let mut seen_sources = std::collections::HashSet::new();
+        for rule in &self.profile.folder_mapping_rules {
+            if rule.source.trim().is_empty() || rule.destination.trim().is_empty() {
+                return Err("Folder mapping source and destination are required.".into());
+            }
+            if rule.source.chars().any(char::is_control)
+                || rule.destination.chars().any(char::is_control)
+            {
+                return Err("Folder mapping names cannot contain control characters.".into());
+            }
+            if rule.source.contains('=') || rule.destination.contains('=') {
+                return Err("Folder mapping names cannot contain '='.".into());
+            }
+            if !seen_sources.insert(rule.source.clone()) {
+                return Err(format!(
+                    "Folder mapping source is specified more than once: {}",
+                    rule.source
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Build the exact secret-free command shown by the execution-plan
@@ -1052,6 +1081,7 @@ impl Form {
                 body_hash_max_total_bytes: profile.body_hash_max_total_bytes,
                 migration_timeout_hours: profile.migration_timeout_hours,
                 automap: profile.automap,
+                folder_mapping_rules: profile.folder_mapping_rules.clone(),
                 addheader: profile.addheader,
                 justfolders: profile.justfolders,
                 sync_internaldates: profile.sync_internaldates,

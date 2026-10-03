@@ -106,6 +106,8 @@ use imap_probe::{
     command_endpoint_parts, command_port, endpoint_for_probe, fresh_imap_authentication_applies,
     imap_command_succeeded, imap_quote,
 };
+#[cfg(test)]
+use migration_plan::FolderMappingRule;
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, default_destination_tls, default_imap_port,
     effective_destination_tls,
@@ -716,6 +718,43 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--maxbytespersecond", "1048576"])
         );
+    }
+
+    #[test]
+    fn typed_folder_mapping_is_emitted_and_bound_to_plan_arguments() {
+        let mut form = dovecot_form();
+        form.profile.engine = crate::core::Engine::ImapSync;
+        form.profile.folder_mapping_rules = vec![FolderMappingRule {
+            source: "[Gmail]/Sent Mail".into(),
+            destination: "Sent".into(),
+        }];
+        let args = form.args(true);
+        let mapping = args
+            .windows(2)
+            .find(|window| window[0] == "--f1f2")
+            .expect("typed mapping argument");
+        assert_eq!(mapping[1], "[Gmail]/Sent Mail=Sent");
+        let fingerprint = form.plan_fingerprint();
+        form.profile.folder_mapping_rules[0].destination = "Archive".into();
+        assert_ne!(fingerprint, form.plan_fingerprint());
+    }
+
+    #[test]
+    fn typed_folder_mapping_rejects_ambiguous_or_unsafe_names() {
+        let mut form = dovecot_form();
+        form.profile.folder_mapping_rules = vec![FolderMappingRule {
+            source: "INBOX".into(),
+            destination: "Archive".into(),
+        }];
+        assert!(form.validate_for_import().is_ok());
+        form.profile.folder_mapping_rules.push(FolderMappingRule {
+            source: "INBOX".into(),
+            destination: "Sent".into(),
+        });
+        assert!(form.validate_for_import().is_err());
+        form.profile.folder_mapping_rules.truncate(1);
+        form.profile.folder_mapping_rules[0].source = "bad=folder".into();
+        assert!(form.validate_for_import().is_err());
     }
 
     #[test]

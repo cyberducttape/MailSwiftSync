@@ -13,7 +13,9 @@ use std::{
 };
 
 mod folder_policy;
-pub(crate) use folder_policy::{infer_automap_folder_mapping, validate_destination_folder_policy};
+pub(crate) use folder_policy::{
+    apply_explicit_folder_mapping, infer_automap_folder_mapping, validate_destination_folder_policy,
+};
 
 const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const RELIABLE_EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -253,11 +255,12 @@ pub(crate) fn run_imap_message_verification(
                 .into(),
         );
     }
-    let folder_mapping = infer_automap_folder_mapping(
+    let mut folder_mapping = infer_automap_folder_mapping(
         &source.mailbox_details,
         &destination.mailbox_details,
         form.profile.automap,
     )?;
+    apply_explicit_folder_mapping(&mut folder_mapping, &form.profile.folder_mapping_rules);
     let expected_destination_folders = source
         .mailboxes
         .iter()

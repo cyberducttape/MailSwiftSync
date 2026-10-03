@@ -596,6 +596,59 @@ crate::ui::name_modal(ui, &modal_heading);
                                     .message("ui.add-message-id-header-when-needed"),
                             );
                         });
+                        crate::ui::section_label(
+                            ui,
+                            self.language.message("ui.typed-folder-mappings"),
+                        );
+                        ui.label(self.language.message("ui.typed-folder-mappings-description"));
+                        let mut remove_mapping = None;
+                        for (index, rule) in self.form.profile.folder_mapping_rules.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{} → {}", rule.source, rule.destination));
+                                if ui
+                                    .small_button(self.language.message("ui.remove"))
+                                    .clicked()
+                                {
+                                    remove_mapping = Some(index);
+                                }
+                            });
+                        }
+                        if let Some(index) = remove_mapping {
+                            self.form.profile.folder_mapping_rules.remove(index);
+                        }
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                    egui::TextEdit::singleline(&mut self.folder_mapping_source)
+                                        .hint_text(self.language.message("ui.source-folder")),
+                            );
+                            ui.label("→");
+                            ui.add(
+                                    egui::TextEdit::singleline(&mut self.folder_mapping_destination)
+                                        .hint_text(
+                                            self.language.message("ui.destination-folder"),
+                                        ),
+                            );
+                            let can_add = !self.folder_mapping_source.trim().is_empty()
+                                && !self.folder_mapping_destination.trim().is_empty();
+                            if ui
+                                .add_enabled(
+                                    can_add,
+                                    egui::Button::new(
+                                        self.language.message("ui.add-mapping"),
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                self.form.profile.folder_mapping_rules.push(
+                                    crate::migration_plan::FolderMappingRule {
+                                        source: self.folder_mapping_source.trim().to_owned(),
+                                        destination: self.folder_mapping_destination.trim().to_owned(),
+                                    },
+                                );
+                                self.folder_mapping_source.clear();
+                                self.folder_mapping_destination.clear();
+                            }
+                        });
                         Self::text_field(
                             ui,
                             self.language.message("ui.extra-imapsync-options"),

@@ -13,6 +13,15 @@ pub(crate) struct RunPlanSnapshot {
     pub(crate) profile: RunProfileSnapshot,
 }
 
+/// A deterministic, engine-owned folder mapping. Exact mappings are used by
+/// both imapsync and the independent verifier; regex transforms remain
+/// intentionally outside the typed plan until they can be replayed safely.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FolderMappingRule {
+    pub(crate) source: String,
+    pub(crate) destination: String,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RunProfileSnapshot {
     pub(crate) name: String,
@@ -57,6 +66,8 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) body_hash_max_total_bytes: u64,
     pub(crate) migration_timeout_hours: u64,
     pub(crate) automap: bool,
+    #[serde(default)]
+    pub(crate) folder_mapping_rules: Vec<FolderMappingRule>,
     pub(crate) addheader: bool,
     pub(crate) justfolders: bool,
     #[serde(default = "default_sync_internaldates")]
@@ -300,6 +311,8 @@ pub(crate) struct Profile {
     #[serde(default = "default_migration_timeout_hours")]
     pub(crate) migration_timeout_hours: u64,
     pub(crate) automap: bool,
+    #[serde(default)]
+    pub(crate) folder_mapping_rules: Vec<FolderMappingRule>,
     pub(crate) addheader: bool,
     pub(crate) justfolders: bool,
     #[serde(default = "default_sync_internaldates")]
@@ -375,6 +388,7 @@ impl Default for Profile {
             // verification. imapsync's automapping cannot currently be
             // replayed from an immutable mapping snapshot.
             automap: false,
+            folder_mapping_rules: Vec::new(),
             addheader: false,
             justfolders: false,
             sync_internaldates: default_sync_internaldates(),

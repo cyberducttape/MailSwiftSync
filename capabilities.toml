@@ -93,7 +93,7 @@ evidence = "Quota parsing, explicit unknown-capacity warnings, and destination q
 [[production_features]]
 feature = "Advanced typed folder mapping"
 status = "partial"
-evidence = "Engine mapping controls and folder-policy validation exist; a complete typed rule editor is not yet shipped."
+evidence = "The advanced plan editor now supports bounded exact source-to-destination rules; rules are immutable plan state, emitted as imapsync --f1f2, and reused by independent verification. Regex transforms and typed exclusions remain unsupported."
 
 [[production_features]]
 feature = "Executable cutover orchestration"

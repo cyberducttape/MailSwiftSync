@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::imap_probe::MailboxDescriptor;
+use crate::migration_plan::FolderMappingRule;
 
 pub(crate) fn validate_destination_folder_policy(
     required: &HashSet<String>,
@@ -81,6 +82,15 @@ pub(crate) fn infer_automap_folder_mapping(
         }
     }
     Ok(mapping)
+}
+
+pub(crate) fn apply_explicit_folder_mapping(
+    mapping: &mut HashMap<String, String>,
+    rules: &[FolderMappingRule],
+) {
+    for rule in rules {
+        mapping.insert(rule.source.clone(), rule.destination.clone());
+    }
 }
 
 pub(crate) fn automap_folder_kind(folder: &str) -> Option<&'static str> {
