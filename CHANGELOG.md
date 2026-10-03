@@ -18,6 +18,11 @@ operator distribution archives.
   measured, respectively).
 - Batch confirmations now block with an explicit durable-read error if queue
   selection projection fails, instead of presenting a partial or empty scope.
+- Live OAuth refresh failures now retain their source/destination side; transient
+  provider failures are retried and fed into that endpoint's rate domains,
+  while permanent refresh failures still settle the mailbox before launch.
+- Added a 70% critical-path coverage floor for OAuth refresh handling; the
+  current suite measures 74.49% line coverage there.
 - Provider-specific batch error policy now requires explicit endpoint-side
   attribution; ambiguous engine diagnostics no longer inherit the source
   provider by default, while sided authentication probes retain their side.

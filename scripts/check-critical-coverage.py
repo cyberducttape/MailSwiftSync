@@ -34,6 +34,7 @@ CRITICAL_FILES = {
     "src/migrate_audit.rs": 80.0,
     "src/migration_plan.rs": 75.0,
     "src/oauth_authorize.rs": 85.0,
+    "src/oauth_refresh.rs": 70.0,
     "src/oauth_redirect.rs": 85.0,
     "src/process.rs": 85.0,
     "src/verification.rs": 95.0,

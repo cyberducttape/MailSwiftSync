@@ -60,6 +60,20 @@ fn provider_for_side(form: &crate::Form, side: crate::imap_probe::MailSide) -> &
     crate::core::provider_intelligence::canonical_provider(host)
 }
 
+fn credential_refresh_retryable(
+    form: &crate::Form,
+    failure: &CredentialRefreshFailure,
+    attempt: usize,
+    retry_count: usize,
+) -> bool {
+    should_retry_batch_error_for_provider(
+        provider_for_side(form, failure.side),
+        &failure.message,
+        attempt,
+        retry_count,
+    )
+}
+
 /// Redact one mailbox's secrets from controller-generated text. Errors can
 /// carry upstream content (provider responses, OAuth `error_description`),
 /// so nothing leaves a batch worker for the journal, the ledger, or stderr
@@ -293,40 +307,66 @@ pub(crate) enum AttemptOutcome {
     },
 }
 
+#[derive(Debug)]
+struct CredentialRefreshFailure {
+    side: crate::imap_probe::MailSide,
+    message: String,
+}
+
 fn refresh_live_credentials(
     form: &mut crate::migration_plan::Form,
     locks: &OAuthRefreshLocks,
-) -> Result<(), String> {
-    form.load_static_configured_keyring_credentials()?;
+) -> Result<(), CredentialRefreshFailure> {
+    if form.source_password.is_empty() && !form.profile.source_credential_id.trim().is_empty() {
+        form.load_keyring_password(true)
+            .map_err(|message| CredentialRefreshFailure {
+                side: crate::imap_probe::MailSide::Source,
+                message,
+            })?;
+    }
+    if form.destination_password.is_empty()
+        && !form.profile.destination_credential_id.trim().is_empty()
+    {
+        form.load_keyring_password(false)
+            .map_err(|message| CredentialRefreshFailure {
+                side: crate::imap_probe::MailSide::Destination,
+                message,
+            })?;
+    }
     let refreshes = [
         (
+            crate::imap_probe::MailSide::Source,
             true,
             form.profile.source_auth.clone(),
             form.profile.source_oauth_refresh_credential_id.clone(),
         ),
         (
+            crate::imap_probe::MailSide::Destination,
             false,
             form.profile.destination_auth.clone(),
             form.profile.destination_oauth_refresh_credential_id.clone(),
         ),
     ];
-    for (source, auth, refresh_id) in refreshes {
+    for (side, source, auth, refresh_id) in refreshes {
         if auth != "oauth2" || refresh_id.trim().is_empty() {
             continue;
         }
         let refresh_lock = {
-            let mut lock_map = locks
-                .lock()
-                .map_err(|_| "OAuth refresh lock registry was poisoned".to_owned())?;
+            let mut lock_map = locks.lock().map_err(|_| CredentialRefreshFailure {
+                side,
+                message: "OAuth refresh lock registry was poisoned".to_owned(),
+            })?;
             lock_map
                 .entry(refresh_id.trim().to_owned())
                 .or_insert_with(|| Arc::new(Mutex::new(())))
                 .clone()
         };
-        let _guard = refresh_lock
-            .lock()
-            .map_err(|_| "OAuth refresh lock was poisoned".to_owned())?;
-        form.refresh_oauth_access_token(source)?;
+        let _guard = refresh_lock.lock().map_err(|_| CredentialRefreshFailure {
+            side,
+            message: "OAuth refresh lock was poisoned".to_owned(),
+        })?;
+        form.refresh_oauth_access_token(source)
+            .map_err(|message| CredentialRefreshFailure { side, message })?;
     }
     Ok(())
 }
@@ -841,13 +881,31 @@ impl BatchAttemptRunner {
             // a large queue cannot consume an expired bearer token.
             if let Err(error) = refresh_live_credentials(&mut task.form, &self.oauth_refresh_locks)
             {
+                let provider = provider_for_side(&task.form, error.side);
+                if credential_refresh_retryable(&task.form, &error, attempt, self.retry_count) {
+                    let penalized = self.provider_limiter.observe_failure_on(
+                        &admission,
+                        &error.message,
+                        vec![error.side],
+                    );
+                    adapt_launch_rate(&self.launch_limiter, &penalized);
+                    report_cooldowns(&self.tx, penalized);
+                    drop(admission);
+                    return self.retry_later(
+                        task,
+                        provider,
+                        &error.message,
+                        "transient OAuth credential refresh failure",
+                    );
+                }
                 drop(admission);
                 self.failed.store(true, Ordering::Relaxed);
                 self.line(
                     &task,
                     format!(
-                        "[{}] OAuth credential refresh failed before launch: {error}",
-                        task.index + 1
+                        "[{}] OAuth credential refresh failed before launch: {}",
+                        task.index + 1,
+                        error.message
                     ),
                 );
                 self.terminal(
@@ -855,8 +913,8 @@ impl BatchAttemptRunner {
                     "Failed",
                     "failed",
                     classified_failure_detail_for_provider(
-                        provider_for_error(&task.form, &error),
-                        &redact_child_text(&task.form, &error),
+                        provider,
+                        &redact_child_text(&task.form, &error.message),
                     ),
                     None,
                 );
@@ -1102,6 +1160,23 @@ mod tests {
         )
     }
 
+    fn test_refresh_task(index: usize) -> MailboxTask {
+        let mut form = crate::Form::default();
+        form.profile.engine = core::Engine::Dovecot;
+        form.profile.source_host = "imap.gmail.com".into();
+        form.profile.source_user = "operator@example.test".into();
+        form.profile.source_auth = "oauth2".into();
+        form.profile.source_oauth_refresh_credential_id = "source-refresh".into();
+        let job = BulkJob::from_form(format!("refresh-{index}"), form, "queued".into());
+        MailboxTask::new(
+            index,
+            format!("refresh-job-{index}"),
+            format!("refresh-run-{index}"),
+            None,
+            &job,
+        )
+    }
+
     fn test_admission(runner: &BatchAttemptRunner, task: &MailboxTask) -> Admission {
         Arc::clone(&runner.provider_limiter)
             .try_admit(&task.rate_path)
@@ -1167,6 +1242,100 @@ mod tests {
         let locks = Arc::new(Mutex::new(std::collections::HashMap::new()));
         refresh_live_credentials(&mut form, &locks).unwrap();
         assert!(locks.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn live_credential_refresh_failure_retains_the_endpoint_side() {
+        let locks = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let poisoned = Arc::clone(&locks);
+        assert!(
+            thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison refresh lock registry for test");
+            })
+            .join()
+            .is_err()
+        );
+
+        let mut form = crate::Form::default();
+        form.profile.source_auth = "oauth2".into();
+        form.profile.source_oauth_refresh_credential_id = "source-refresh".into();
+        let error = refresh_live_credentials(&mut form, &locks).unwrap_err();
+        assert_eq!(error.side, crate::imap_probe::MailSide::Source);
+        assert!(error.message.contains("lock registry was poisoned"));
+    }
+
+    #[test]
+    fn live_refresh_failure_is_classified_on_its_side_and_settled_before_claim() {
+        let locks = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let poisoned = Arc::clone(&locks);
+        assert!(
+            thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison refresh lock registry for test");
+            })
+            .join()
+            .is_err()
+        );
+
+        let (tx, rx) = mpsc::sync_channel(5);
+        let mut runner = test_runner(tx);
+        runner.mode = BatchExecutionMode::Live;
+        runner.oauth_refresh_locks = locks;
+        let failed = Arc::clone(&runner.failed);
+        let terminal_jobs = Arc::clone(&runner.terminal_jobs);
+        let task = test_refresh_task(9);
+        let admission = test_admission(&runner, &task);
+        let worker = thread::spawn(move || runner.run_attempt(task, admission));
+
+        assert!(
+            matches!(rx.recv().unwrap(), Event::RunLine { text, .. } if text.contains("Job 10"))
+        );
+        assert!(
+            matches!(rx.recv().unwrap(), Event::RunLine { text, .. } if text.contains("OAuth credential refresh failed before launch"))
+        );
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Event::JobState { state, .. } if state == "Failed"
+        ));
+        let Event::JobFinished {
+            state,
+            reply,
+            detail,
+            ..
+        } = rx.recv().unwrap()
+        else {
+            panic!("expected durable OAuth refresh failure");
+        };
+        assert_eq!(state, "failed");
+        assert!(detail.contains("authentication") || detail.contains("unknown"));
+        assert!(!terminal_jobs.lock().unwrap().contains(&9));
+        reply.send(Ok(())).unwrap();
+        assert!(matches!(worker.join().unwrap(), AttemptOutcome::Finished));
+        assert!(failed.load(Ordering::Relaxed));
+        assert!(terminal_jobs.lock().unwrap().contains(&9));
+        assert!(
+            rx.try_recv().is_err(),
+            "refresh failure must not claim or launch"
+        );
+    }
+
+    #[test]
+    fn transient_refresh_errors_retry_by_provider_but_auth_failures_do_not() {
+        let mut form = crate::Form::default();
+        form.profile.destination_host = "outlook.office365.com".into();
+        let throttled = CredentialRefreshFailure {
+            side: crate::imap_probe::MailSide::Destination,
+            message: "Request is throttled. Suggested Backoff Time: 12000 milliseconds".into(),
+        };
+        assert!(credential_refresh_retryable(&form, &throttled, 0, 2));
+        assert!(!credential_refresh_retryable(&form, &throttled, 2, 2));
+
+        let rejected = CredentialRefreshFailure {
+            side: crate::imap_probe::MailSide::Destination,
+            message: "invalid_grant: refresh token expired".into(),
+        };
+        assert!(!credential_refresh_retryable(&form, &rejected, 0, 2));
     }
 
     #[test]
