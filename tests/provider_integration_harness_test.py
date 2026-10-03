@@ -81,7 +81,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
             check=False,
             timeout=5,
         )
-        self.assertEqual(result.returncode, 137)
+        self.assertIn(result.returncode, (-9, 137))
 
     def test_100k_scale_job_allows_command_timeout_and_diagnostic_upload(self):
         self.assertIn("timeout-minutes: 90", SCALE_WORKFLOW)
