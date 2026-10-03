@@ -22,7 +22,7 @@
 
 use crate::controller::failure::{FailureClass, control_error_text};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -244,6 +244,7 @@ pub(crate) fn failure_sides(error: &str) -> Vec<Side> {
 
 pub(crate) struct RateDomainLimiter {
     ceiling: f64,
+    tenant_ceilings: BTreeMap<String, usize>,
     state: Mutex<HashMap<DomainKey, DomainState>>,
 }
 
@@ -273,11 +274,29 @@ impl Drop for Admission {
 
 impl RateDomainLimiter {
     /// `ceiling` is the batch worker count, the most any domain can admit.
+    #[cfg(test)]
     pub(crate) fn new(ceiling: usize) -> Self {
+        Self::new_with_tenant_ceilings(ceiling, BTreeMap::new())
+    }
+
+    pub(crate) fn new_with_tenant_ceilings(
+        ceiling: usize,
+        tenant_ceilings: BTreeMap<String, usize>,
+    ) -> Self {
         Self {
             ceiling: ceiling.max(1) as f64,
+            tenant_ceilings,
             state: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn domain_ceiling(&self, key: &DomainKey) -> f64 {
+        if key.level == DomainLevel::Tenant
+            && let Some(configured) = self.tenant_ceilings.get(key.provider)
+        {
+            return self.ceiling.min((*configured).max(1) as f64);
+        }
+        self.ceiling
     }
 
     /// Hold a slot in every domain of `path` atomically if all of them are
@@ -323,13 +342,12 @@ impl RateDomainLimiter {
     ) -> Option<&'a mut DomainState> {
         if !state.contains_key(key) {
             if state.len() >= MAX_RATE_DOMAINS {
-                let ceiling = self.ceiling;
-                state.retain(|_, domain| !domain.forgettable(ceiling, now));
+                state.retain(|key, domain| !domain.forgettable(self.domain_ceiling(key), now));
             }
             if state.len() >= MAX_RATE_DOMAINS {
                 return None;
             }
-            state.insert(key.clone(), DomainState::new(self.ceiling, now));
+            state.insert(key.clone(), DomainState::new(self.domain_ceiling(key), now));
         }
         state.get_mut(key)
     }
@@ -342,7 +360,7 @@ impl RateDomainLimiter {
         for key in path.all() {
             if let Some(domain) = state.get_mut(key) {
                 domain.in_flight = domain.in_flight.saturating_sub(1);
-                if domain.forgettable(self.ceiling, now) {
+                if domain.forgettable(self.domain_ceiling(key), now) {
                     state.remove(key);
                 }
             }
@@ -364,7 +382,7 @@ impl RateDomainLimiter {
                     .last_capacity_failure
                     .is_none_or(|failed| admission.admitted_at >= failed)
             {
-                domain.limit = (domain.limit + 1.0).min(self.ceiling);
+                domain.limit = (domain.limit + 1.0).min(self.domain_ceiling(key));
                 if domain.blocked_until <= now {
                     domain.consecutive_capacity_failures = 0;
                 }
@@ -557,6 +575,27 @@ mod tests {
                 principal: "",
             },
         )
+    }
+
+    #[test]
+    fn configured_tenant_ceiling_is_independent_of_other_tenants() {
+        let limiter = Arc::new(RateDomainLimiter::new_with_tenant_ceilings(
+            3,
+            [("gmail".to_owned(), 1)].into_iter().collect(),
+        ));
+        let first = path("one@example.com", "dest@outlook.com");
+        let same_tenant = path("two@example.com", "other@outlook.com");
+        let other_tenant = path("one@another.example", "third@outlook.com");
+
+        let held = limiter.try_admit(&first).unwrap();
+        assert!(matches!(
+            limiter.try_admit(&same_tenant),
+            Err(Blocked::Slot)
+        ));
+        let independent = limiter.try_admit(&other_tenant).unwrap();
+        drop(held);
+        assert!(limiter.try_admit(&same_tenant).is_ok());
+        drop(independent);
     }
 
     #[test]

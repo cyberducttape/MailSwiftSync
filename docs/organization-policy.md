@@ -25,8 +25,10 @@ otherwise invalid policy blocks the operation. Missing policy means the
 backwards-compatible permissive defaults; it does not create an organization
 policy by itself.
 
-Provider entries apply a conservative worker ceiling whenever the plan names
-that provider on either side. `google`, `google_workspace`, and `o365` are
+Provider entries cap concurrent work independently for each mailbox domain
+on that provider, on either source or destination. They do not reduce the
+global batch worker ceiling, so unrelated tenants may use available workers
+while one tenant remains capped. `google`, `google_workspace`, and `o365` are
 accepted aliases for the canonical provider names. This is a local safety
 boundary, not a tenant-management system: provider quota discovery, RBAC, and
 centrally administered policy distribution remain future control-plane work.

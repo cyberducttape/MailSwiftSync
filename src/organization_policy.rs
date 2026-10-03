@@ -139,6 +139,29 @@ impl OrganizationPolicy {
             ));
         }
         for (configured_provider, provider_policy) in &self.providers {
+            canonical_provider_key(configured_provider).ok_or_else(|| {
+                format!(
+                    "Organization policy has unsupported provider {:?}; use gmail, microsoft365, dovecot, or generic.",
+                    configured_provider
+                )
+            })?;
+            if let Some(maximum) = provider_policy.max_concurrency_per_tenant
+                && maximum == 0
+            {
+                return Err(format!(
+                    "Organization policy provider {configured_provider:?} max_concurrency_per_tenant must be at least 1."
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Canonical provider ceilings passed to the runtime hierarchical
+    /// limiter. If aliases configure the same provider more than once, use
+    /// the strictest value so TOML ordering cannot weaken policy.
+    pub(crate) fn tenant_concurrency_ceilings(&self) -> Result<BTreeMap<String, usize>, String> {
+        let mut ceilings = BTreeMap::new();
+        for (configured_provider, provider_policy) in &self.providers {
             let provider = canonical_provider_key(configured_provider).ok_or_else(|| {
                 format!(
                     "Organization policy has unsupported provider {:?}; use gmail, microsoft365, dovecot, or generic.",
@@ -151,22 +174,13 @@ impl OrganizationPolicy {
                         "Organization policy provider {configured_provider:?} max_concurrency_per_tenant must be at least 1."
                     ));
                 }
-                let source_provider =
-                    crate::core::provider_intelligence::canonical_provider(&profile.source_host);
-                let destination_provider = crate::core::provider_intelligence::canonical_provider(
-                    &profile.destination_host,
-                );
-                if (source_provider == provider || destination_provider == provider)
-                    && profile.batch_concurrency > maximum
-                {
-                    return Err(format!(
-                        "Organization policy limits {provider} tenant concurrency to {maximum}; current plan requests {}.",
-                        profile.batch_concurrency
-                    ));
-                }
+                ceilings
+                    .entry(provider.to_owned())
+                    .and_modify(|current: &mut usize| *current = (*current).min(maximum))
+                    .or_insert(maximum);
             }
         }
-        Ok(())
+        Ok(ceilings)
     }
 
     pub(crate) fn check_form(&self, form: &Form) -> Result<(), String> {
@@ -228,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_applies_provider_tenant_concurrency_ceiling() {
+    fn provider_tenant_ceiling_does_not_reduce_independent_global_workers() {
         let mut form = Form::default();
         form.profile.source_host = "imap.gmail.com".into();
         form.profile.batch_concurrency = 8;
@@ -243,8 +257,11 @@ mod tests {
             .collect(),
             ..OrganizationPolicy::default()
         };
-        let error = policy.check_form(&form).unwrap_err();
-        assert!(error.contains("gmail tenant concurrency"), "{error}");
+        policy.check_form(&form).unwrap();
+        assert_eq!(
+            policy.tenant_concurrency_ceilings().unwrap().get("gmail"),
+            Some(&4)
+        );
     }
 
     #[test]
