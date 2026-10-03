@@ -917,7 +917,10 @@ mod tests {
         let staging = create_staging_database().unwrap();
         let path = staging._path.clone();
         let directory = path.parent().unwrap().to_owned();
+        #[cfg(unix)]
         assert_eq!(fs::canonicalize(&directory).unwrap(), directory);
+        #[cfg(not(unix))]
+        assert!(fs::canonicalize(&directory).unwrap().is_dir());
         let databases: Vec<(String, String)> = staging
             .connection
             .prepare("PRAGMA database_list")

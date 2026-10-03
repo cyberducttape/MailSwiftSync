@@ -250,7 +250,8 @@ screen-reader checklist are recorded in
   covering formatting, shell syntax, strict Clippy, the locked test suite, and
   RustSec auditing in addition to cross-platform compilation.
 - Pull-request CI independently collects LCOV and enforces modest line-coverage
-  floors for safety-critical plan admission, batch lifecycle/scheduling,
+  floors for safety-critical plan admission, batch attempt handling and
+  lifecycle/scheduling,
   adaptive provider rate domains, provider response classification, durable
   state, evidence projection, recovery, IMAP authentication, OAuth, process
   supervision, and verification code;

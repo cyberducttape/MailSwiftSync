@@ -868,7 +868,7 @@ impl BatchAttemptRunner {
                 message: error,
             }) = fresh_dual_imaps_authentication(&task.form)
             {
-                let provider = provider_for_error(&task.form, &error);
+                let provider = provider_for_side(&task.form, side);
                 if should_retry_batch_error_for_provider(
                     provider,
                     &error,
@@ -881,7 +881,6 @@ impl BatchAttemptRunner {
                     adapt_launch_rate(&self.launch_limiter, &penalized);
                     report_cooldowns(&self.tx, penalized);
                     drop(admission);
-                    let provider = provider_for_side(&task.form, side);
                     return self.retry_later(
                         task,
                         provider,
@@ -1074,6 +1073,35 @@ mod tests {
     use super::*;
     use std::thread;
 
+    fn test_runner(tx: mpsc::SyncSender<Event>) -> BatchAttemptRunner {
+        BatchAttemptRunner {
+            concurrency: 2,
+            mode: BatchExecutionMode::Preflight,
+            retry_count: 2,
+            tx,
+            cancel: Arc::new(AtomicBool::new(false)),
+            failed: Arc::new(AtomicBool::new(false)),
+            terminal_jobs: Arc::new(Mutex::new(HashSet::new())),
+            launch_limiter: Arc::new(ProcessLaunchLimiter::new(2)),
+            provider_limiter: Arc::new(RateDomainLimiter::new(2)),
+            batch_project_id: "project".into(),
+            batch_run_id: "parent".into(),
+            resolved_imapsync: Arc::new(std::collections::HashMap::new()),
+            oauth_refresh_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            verification_state_path: None,
+            diagnostic_logger: None,
+        }
+    }
+
+    fn test_unpreparable_task(index: usize) -> MailboxTask {
+        MailboxTask::unpreparable(
+            index,
+            format!("job-{index}"),
+            format!("run-{index}"),
+            "durable plan could not be loaded".into(),
+        )
+    }
+
     #[test]
     fn ambiguous_engine_errors_do_not_inherit_the_source_provider() {
         let mut form = crate::Form::default();
@@ -1111,6 +1139,138 @@ mod tests {
             "destination-secret-value was refused",
         ));
         assert!(!detail.contains("destination-secret-value"), "{detail}");
+    }
+
+    #[test]
+    fn unpreparable_task_retains_only_the_failure_needed_for_terminal_reporting() {
+        let task = test_unpreparable_task(3);
+        assert_eq!(task.index, 3);
+        assert_eq!(task.job_id, "job-3");
+        assert_eq!(task.child_run_id, "run-3");
+        assert_eq!(
+            task.preparation_error.as_deref(),
+            Some("durable plan could not be loaded")
+        );
+        assert!(!task.claimed);
+        assert_eq!(task.transfer_attempt_number, 0);
+    }
+
+    #[test]
+    fn refresh_live_credentials_is_a_noop_without_configured_refresh_tokens() {
+        let mut form = crate::Form::default();
+        let locks = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        refresh_live_credentials(&mut form, &locks).unwrap();
+        assert!(locks.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn retry_transition_increments_attempt_and_reports_the_failure_class() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let runner = test_runner(tx);
+        let task = test_unpreparable_task(5);
+        let worker = thread::spawn(move || {
+            runner.retry_later(
+                task,
+                "generic",
+                "Host2: NO [UNAVAILABLE] server busy",
+                "transient failure",
+            )
+        });
+
+        assert!(
+            matches!(rx.recv().unwrap(), Event::RunLine { text, .. } if text.contains("transient failure"))
+        );
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Event::JobState { state, .. } if state == "Retrying"
+        ));
+        let Event::RetryScheduled {
+            attempt,
+            failure_class,
+            delay,
+            ..
+        } = rx.recv().unwrap()
+        else {
+            panic!("expected a durable retry schedule");
+        };
+        assert_eq!(attempt, 2);
+        assert_eq!(failure_class, "capacity");
+        assert!(!delay.is_zero());
+        let AttemptOutcome::Retry { task, .. } = worker.join().unwrap() else {
+            panic!("transient failure must return the task to the scheduler");
+        };
+        assert_eq!(task.attempt, 1);
+    }
+
+    #[test]
+    fn introduction_of_non_imapsync_job_emits_banner_without_external_engine_lookup() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let runner = test_runner(tx);
+        let mut task = test_unpreparable_task(6);
+        task.label = "Dovecot mailbox".into();
+        task.form.profile.engine = core::Engine::Dovecot;
+
+        runner.introduce(&mut task);
+
+        assert!(task.introduced);
+        assert!(
+            matches!(rx.recv().unwrap(), Event::RunLine { text, .. } if text.contains("Dovecot mailbox"))
+        );
+    }
+
+    #[test]
+    fn waiting_cancellation_is_durably_settled_without_marking_batch_failed() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let runner = test_runner(tx);
+        let failed = Arc::clone(&runner.failed);
+        let worker = thread::spawn(move || runner.cancel_waiting(test_unpreparable_task(0)));
+
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Event::JobState { state, .. } if state == "Cancelled"
+        ));
+        let Event::JobFinished { state, reply, .. } = rx.recv().unwrap() else {
+            panic!("expected the durable cancellation transition");
+        };
+        assert_eq!(state, "cancelled");
+        reply.send(Ok(())).unwrap();
+        worker.join().unwrap();
+        assert!(!failed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn unschedulable_task_is_failed_only_after_durable_terminal_ack() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let runner = test_runner(tx);
+        let failed = Arc::clone(&runner.failed);
+        let terminal_jobs = Arc::clone(&runner.terminal_jobs);
+        let worker = thread::spawn(move || {
+            runner.fail_unschedulable(test_unpreparable_task(4), "rate-domain path unavailable")
+        });
+
+        assert!(
+            matches!(rx.recv().unwrap(), Event::RunLine { text, .. } if text.contains("rate-domain path unavailable"))
+        );
+        assert!(matches!(
+            rx.recv().unwrap(),
+            Event::JobState { state, .. } if state == "Failed"
+        ));
+        let Event::JobFinished {
+            state,
+            reply,
+            detail,
+            ..
+        } = rx.recv().unwrap()
+        else {
+            panic!("expected the durable failure transition");
+        };
+        assert_eq!(state, "failed");
+        assert!(detail.contains("rate-domain path unavailable"));
+        assert!(!terminal_jobs.lock().unwrap().contains(&4));
+        reply.send(Ok(())).unwrap();
+        worker.join().unwrap();
+        assert!(failed.load(Ordering::Relaxed));
+        assert!(terminal_jobs.lock().unwrap().contains(&4));
     }
 
     #[test]

@@ -6,6 +6,12 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Corrected the Windows migration-audit staging test to verify directory
+  canonicalization semantically instead of comparing equivalent Win32 paths
+  with different extended/8.3 spellings.
+- Added focused batch-worker tests for credential refresh no-op, retry state,
+  task preparation, queued cancellation, and durable unschedulable settlement;
+  measured line coverage rose to 65.28%, with a 60% CI floor added.
 - Added 90% critical-module coverage floors for adaptive rate-domain
   scheduling and provider response classification (95.16% and 95.68% currently
   measured, respectively).
