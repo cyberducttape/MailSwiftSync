@@ -319,6 +319,12 @@ screen-reader checklist are recorded in
   effective safety boundary; changing these ceilings is recorded in the run
   snapshot and invalidates an open live confirmation.
 
+  The controller scheduler test also settles 1,024 synthetic mailbox jobs
+  across 32 tenant domains at 16 workers and checks per-tenant completion and
+  observed parallelism. This is scheduler/rate-domain component evidence only:
+  it does not launch IMAP engines, model provider latency/throttling, or replace
+  multi-migration load qualification against disposable real servers.
+
   The latest local release-mode baseline on 2026-09-30 (Linux x86_64, the
   cases run sequentially in one process) was:
 

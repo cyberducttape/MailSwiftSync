@@ -786,6 +786,110 @@ mod tests {
         );
     }
 
+    /// Exercise the production scheduler and hierarchical limiter with many
+    /// independent tenant/mailbox domains at once. This is controller-load
+    /// evidence only; the executor deliberately does not start IMAP engines.
+    #[test]
+    fn multi_tenant_scheduler_load_settles_every_mailbox() {
+        use crate::controller::batch_work_item::{AttemptOutcome, MailboxTask};
+        use crate::controller::rate_domains::{Admission, RateDomainLimiter};
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        const JOBS: usize = 1_024;
+        const TENANTS: usize = 32;
+        const WORKERS: usize = 16;
+
+        struct LoadExecutor {
+            limiter: Arc<RateDomainLimiter>,
+            completed: AtomicUsize,
+            active: AtomicUsize,
+            peak_active: AtomicUsize,
+            per_tenant: Mutex<std::collections::HashMap<String, usize>>,
+        }
+
+        impl super::AttemptExecutor for LoadExecutor {
+            fn cancelled(&self) -> bool {
+                false
+            }
+
+            fn mark_failed(&self) {}
+
+            fn rate_limiter(&self) -> &Arc<RateDomainLimiter> {
+                &self.limiter
+            }
+
+            fn run_attempt(&self, task: MailboxTask, admission: Admission) -> AttemptOutcome {
+                let active = self.active.fetch_add(1, Ordering::Relaxed) + 1;
+                self.peak_active.fetch_max(active, Ordering::Relaxed);
+                let tenant = task.rate_path.fairness_key().to_owned();
+                *self.per_tenant.lock().unwrap().entry(tenant).or_default() += 1;
+                self.completed.fetch_add(1, Ordering::Relaxed);
+                std::thread::yield_now();
+                drop(admission);
+                self.active.fetch_sub(1, Ordering::Relaxed);
+                AttemptOutcome::Finished
+            }
+
+            fn cancel_waiting(&self, task: MailboxTask) {
+                panic!("unexpected cancellation of job {}", task.index);
+            }
+
+            fn fail_unschedulable(&self, task: MailboxTask, reason: &str) {
+                panic!("job {} was unschedulable: {reason}", task.index);
+            }
+        }
+
+        let jobs = (0..JOBS)
+            .map(|index| {
+                let tenant = index % TENANTS;
+                let mut form = crate::Form::default();
+                form.profile.source_host = "imap.source.example".into();
+                form.profile.destination_host = "imap.destination.example".into();
+                form.profile.source_user = format!("user{index}@tenant{tenant}.source");
+                form.profile.destination_user = format!("user{index}@tenant{tenant}.destination");
+                crate::bulk_import::BulkJob::from_form(
+                    format!("tenant {tenant} mailbox {index}"),
+                    form,
+                    "Ready".into(),
+                )
+            })
+            .collect();
+        let executor = Arc::new(LoadExecutor {
+            limiter: Arc::new(RateDomainLimiter::new(WORKERS)),
+            completed: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            peak_active: AtomicUsize::new(0),
+            per_tenant: Mutex::new(std::collections::HashMap::new()),
+        });
+        let started = std::time::Instant::now();
+        let result = super::run_batch_schedule(
+            Arc::clone(&executor),
+            WORKERS,
+            super::JobSource::from_jobs(
+                jobs,
+                (0..JOBS).map(|index| format!("job-{index}")).collect(),
+                (0..JOBS).map(|index| format!("run-{index}")).collect(),
+                vec![None; JOBS],
+            ),
+        );
+        let elapsed = started.elapsed();
+
+        assert!(!result.worker_panicked && !result.enqueue_failed);
+        assert_eq!(executor.completed.load(Ordering::Relaxed), JOBS);
+        assert!(executor.peak_active.load(Ordering::Relaxed) > 1);
+        assert!(executor.peak_active.load(Ordering::Relaxed) <= WORKERS);
+        let per_tenant = executor.per_tenant.lock().unwrap();
+        assert_eq!(per_tenant.len(), TENANTS);
+        assert!(per_tenant.values().all(|count| *count == JOBS / TENANTS));
+        eprintln!(
+            "scheduler-load jobs={JOBS} tenants={TENANTS} workers={WORKERS} elapsed_ms={}",
+            elapsed.as_millis()
+        );
+    }
+
     /// Cancels the batch during its first attempt, which asks for a long
     /// backoff; counts the tasks the scheduler settles as cancelled.
     struct CancellingExecutor {

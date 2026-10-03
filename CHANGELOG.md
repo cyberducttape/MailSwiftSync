@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a CI scheduler stress test for 1,024 synthetic jobs across 32 tenant
+  domains at 16 workers; it verifies full settlement, tenant accounting, and
+  parallel execution without claiming real-engine/provider load qualification.
 - Paged row IDs for the default large-batch Mailboxes view directly from
   SQLite, replacing the eager 100k-row virtual-index materialization on first
   paint; filtered views and explicit select-visible actions retain their

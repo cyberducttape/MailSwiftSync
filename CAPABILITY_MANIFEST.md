@@ -263,7 +263,7 @@ To reach GA 1.0, the following work is required:
 - [ ] Performance benchmarks with 100k+ message mailboxes
 - [ ] Provider edge case testing
 - [x] Document MSP customer scoping, change approvals, wave controls, incident handling, and evidence retention in [`docs/msp-operations-runbook.md`](docs/msp-operations-runbook.md); centralized fleet control remains out of scope.
-- [ ] Load testing with multiple concurrent migrations
+- [ ] Load testing with multiple concurrent migrations (the CI scheduler stress test settles 1,024 synthetic mailbox jobs across 32 tenant domains at 16 workers; real IMAP-engine/provider concurrency qualification remains outstanding)
 
 ---
 

@@ -236,6 +236,7 @@ new metadata verifier against real accounts.
 - ⏳ Recovery/interruption testing with production accounts
 - ⏳ Provider-specific edge case validation
 - ⚠️ Synthetic durable SQLite reconciliation benchmark measured 100k messages per endpoint, and the current Linux release host passes the importer/UI/reload scale gates; end-to-end large-mailbox/provider load qualification (100k+ messages) remains outstanding. See [verification envelope](docs/verification-envelope.md).
+- ⚠️ CI scheduler stress coverage settles 1,024 synthetic mailbox jobs across 32 tenant domains at 16 workers; this does not exercise concurrent IMAP engines or qualify provider limits.
 
 ---
 
