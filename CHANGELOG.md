@@ -17,6 +17,11 @@ operator distribution archives.
 - Release-readiness guidance now reflects the 90-minute 100k scale job limit,
   and does not claim a peak-memory result until an instrumented run completes
   with its resource summary retained.
+- Recorded the latest instrumented 100k run accurately: its durable proof
+  confirms exact metadata reconciliation of 100,016 messages, but the separate
+  incremental pass hit the 90-minute job limit, so the run provides no
+  incremental-recovery or peak-memory qualification. The run and proof artifact
+  are linked from the release-readiness guidance.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.

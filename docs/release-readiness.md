@@ -327,6 +327,12 @@ screen-reader checklist are recorded in
   matched 100,016 messages / 28,681,943 bytes across three folders with zero
   missing, extra, failed, or unresolved messages; the subsequent delta left
   100,017 messages on the destination. See the [retained Actions run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37139081988).
+  A later instrumented run also completed and retained an exact 100,016-message
+  metadata-reconciled customer proof, but its separate incremental pass did not
+  finish before the 90-minute job limit. See the [instrumented run and proof
+  artifact](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37154259149).
+  This confirms the base transfer again, not successful incremental recovery
+  or a completed instrumented qualification run.
   This small-message generic-IMAP fixture does not measure peak memory or
   qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.
   Scale mode disables per-message debug output and allows up to 40 minutes per
