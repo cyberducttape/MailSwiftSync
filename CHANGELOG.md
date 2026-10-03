@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Reused the queue model's generation-cached health summary during selection-only
+  refreshes instead of rescanning all durable rows for unchanged state counts.
 - Reconciled production-status maturity wording with the wired provider
   classifier and current release blockers; the docs test now rejects the stale
   “dormant prototype” claim.

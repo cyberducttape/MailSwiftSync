@@ -256,15 +256,6 @@ impl MailboxQueue {
         Some(row)
     }
 
-    /// Install queue health counts computed by a full scan of presented
-    /// states, sparing a separate counting query this generation.
-    pub(crate) fn store_summary(&mut self, counts: &HashMap<String, usize>) {
-        let summary = BulkQueueSummary::from_state_counts(
-            counts.iter().map(|(state, count)| (state.as_str(), *count)),
-        );
-        self.summary = Some((self.generation, summary));
-    }
-
     /// Queue health counts, with claimed rows counted by presented state.
     pub(crate) fn summary(&mut self, store: &StateStore) -> BulkQueueSummary {
         if let Some((generation, summary)) = self.summary

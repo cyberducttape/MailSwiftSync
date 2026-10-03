@@ -118,9 +118,6 @@ impl App {
                     view.live_eligible = summary.live_eligible;
                     view.delta_eligible = summary.delta_eligible;
                     view.visible = summary.visible;
-                    if let Ok(counts) = self.store.queue_state_counts(project_id) {
-                        self.queue.store_summary(&counts.into_iter().collect());
-                    }
                 }
                 Err(error) => {
                     self.bulk_message = format!("Could not read the mailbox queue: {error}");
