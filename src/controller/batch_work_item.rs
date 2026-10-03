@@ -963,7 +963,6 @@ impl BatchAttemptRunner {
         match result {
             Ok(outcome) => {
                 self.provider_limiter.observe_success(&admission);
-                self.launch_limiter.observe_success_for(&task.rate_path);
                 drop(admission);
                 let delta_required = outcome == StreamOutcome::DeltaRequired;
                 if delta_required {

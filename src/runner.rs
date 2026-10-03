@@ -470,6 +470,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     }
     let mut child = spawn_retrying_busy_executable(&mut command)
         .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let launched_at = std::time::Instant::now();
+    if let Some((limiter, path)) = launch_limiter {
+        limiter.observe_success_for(path, launched_at);
+    }
     let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
         Ok(supervisor) => supervisor,

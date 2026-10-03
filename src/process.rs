@@ -346,6 +346,7 @@ mod tests {
         let destination_tenant = path.domain(Side::Destination, DomainLevel::Tenant).clone();
         let limiter = ProcessLaunchLimiter::new(8);
 
+        let launched_before_penalty = Instant::now();
         limiter.observe_capacity_failure_for(std::slice::from_ref(&source_tenant));
         assert_eq!(limiter.rate_per_second(), 8.0);
         assert_eq!(limiter.scoped_rate_per_second(&source_tenant), 4.0);
@@ -365,7 +366,11 @@ mod tests {
         );
 
         for _ in 0..8 {
-            limiter.observe_success_for(&path);
+            limiter.observe_success_for(&path, launched_before_penalty);
+        }
+        assert_eq!(limiter.scoped_rate_per_second(&source_tenant), 4.0);
+        for _ in 0..8 {
+            limiter.observe_success_for(&path, Instant::now());
         }
         assert_eq!(limiter.rate_per_second(), 8.0);
         assert_eq!(limiter.scoped_rate_per_second(&source_tenant), 5.0);
@@ -550,6 +555,7 @@ struct LaunchRateBucket {
     last_refill: Instant,
     rate_per_second: f64,
     successful_launches: usize,
+    last_capacity_failure: Option<Instant>,
 }
 
 impl LaunchRateBucket {
@@ -559,6 +565,7 @@ impl LaunchRateBucket {
             last_refill: now,
             rate_per_second,
             successful_launches: 0,
+            last_capacity_failure: None,
         }
     }
 
@@ -574,13 +581,20 @@ impl LaunchRateBucket {
             .then(|| Duration::from_secs_f64((1.0 - self.tokens) / self.rate_per_second))
     }
 
-    fn capacity_failure(&mut self) {
+    fn capacity_failure(&mut self, observed_at: Instant) {
         self.rate_per_second = (self.rate_per_second / 2.0).max(1.0);
         self.successful_launches = 0;
         self.tokens = self.tokens.min(1.0);
+        self.last_capacity_failure = Some(observed_at);
     }
 
-    fn success(&mut self, ceiling: f64) {
+    fn success(&mut self, ceiling: f64, launched_at: Instant) {
+        if self
+            .last_capacity_failure
+            .is_some_and(|failed_at| launched_at < failed_at)
+        {
+            return;
+        }
         self.successful_launches = self.successful_launches.saturating_add(1);
         if self.successful_launches >= 8 {
             self.successful_launches = 0;
@@ -698,7 +712,7 @@ impl ProcessLaunchLimiter {
     #[cfg(test)]
     pub(crate) fn observe_capacity_failure(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.global.capacity_failure();
+            state.global.capacity_failure(Instant::now());
         }
     }
 
@@ -712,7 +726,7 @@ impl ProcessLaunchLimiter {
         let now = Instant::now();
         for domain in domains {
             if domain.level() == DomainLevel::Global {
-                state.global.capacity_failure();
+                state.global.capacity_failure(now);
                 continue;
             }
             if !state.scoped.contains_key(domain) {
@@ -721,7 +735,7 @@ impl ProcessLaunchLimiter {
                     bucket.rate_per_second < self.ceiling_per_second || bucket.tokens < 1.0
                 });
                 if state.scoped.len() >= MAX_SCOPED_LAUNCH_DOMAINS {
-                    state.global.capacity_failure();
+                    state.global.capacity_failure(now);
                     continue;
                 }
                 state.scoped.insert(
@@ -730,7 +744,7 @@ impl ProcessLaunchLimiter {
                 );
             }
             if let Some(bucket) = state.scoped.get_mut(domain) {
-                bucket.capacity_failure();
+                bucket.capacity_failure(now);
             }
         }
     }
@@ -739,16 +753,18 @@ impl ProcessLaunchLimiter {
     #[cfg(test)]
     pub(crate) fn observe_success(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.global.success(self.ceiling_per_second);
+            state
+                .global
+                .success(self.ceiling_per_second, Instant::now());
         }
     }
 
-    pub(crate) fn observe_success_for(&self, path: &RateDomainPath) {
+    pub(crate) fn observe_success_for(&self, path: &RateDomainPath, launched_at: Instant) {
         if let Ok(mut state) = self.state.lock() {
-            state.global.success(self.ceiling_per_second);
+            state.global.success(self.ceiling_per_second, launched_at);
             for key in path.all().filter(|key| key.level() != DomainLevel::Global) {
                 if let Some(bucket) = state.scoped.get_mut(key) {
-                    bucket.success(self.ceiling_per_second);
+                    bucket.success(self.ceiling_per_second, launched_at);
                 }
             }
         }

@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Adaptive process-launch recovery now counts successful starts at the actual
+  spawn boundary and ignores launches that predate a later capacity penalty,
+  preventing delayed completions from prematurely raising a throttled domain.
 - The extra-options fuzzer exposed valid inline integer options expanding past
   the canonical argv limit; such plans now fail validation before fingerprinting
   or execution, preserving round-trip canonicalization.
