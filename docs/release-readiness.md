@@ -165,7 +165,9 @@ screen-reader checklist are recorded in
 - Ledger transitions now generate lifecycle events transactionally in the
   outbox (`migration.started`, `migration.completed`,
   `migration.cutover_ready`, `mailbox.completed`,
-  `mailbox.verification_difference`, and verification acceptance). Events are
+  `mailbox.preflight_failed`, `mailbox.verification_difference`,
+  `migration.proof_ready`, and verification acceptance). Proof-ready events
+  carry the SHA-256 of the successfully signed certificate. Events are
   endpoint-unbound until delivery configuration is supplied, so credentials
   and URLs remain outside durable state.
 - A foreground `supervise <state.db>` controller can continuously watch and

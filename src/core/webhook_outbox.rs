@@ -375,4 +375,20 @@ mod tests {
         close_test_store(store);
         remove_test_directory(&directory).unwrap();
     }
+
+    #[test]
+    fn proof_ready_events_publish_the_signed_artifact_digest() {
+        let (store, directory) = test_store();
+        let digest = "ab".repeat(32);
+        store
+            .record_event("project", "proof_ready", &format!("sha256={digest}"))
+            .unwrap();
+
+        let delivery = store.due_webhook_deliveries("", 10).unwrap();
+        assert_eq!(delivery.len(), 1);
+        assert_eq!(delivery[0].event_type, "migration.proof_ready");
+        assert!(delivery[0].payload.contains(&format!("sha256={digest}")));
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
+    }
 }

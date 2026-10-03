@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Successful signed migration-certificate exports now record a durable
+  `migration.proof_ready` event bound to the certificate SHA-256; export reports
+  an error if the artifact was written but that ledger event could not commit.
 - Durable webhook delivery now distinguishes failed mailbox preflight events as
   `mailbox.preflight_failed` instead of grouping them with other mailbox
   failures.

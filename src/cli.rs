@@ -7,6 +7,7 @@ use crate::headless::{
 use crate::maintenance_window::MaintenanceWindow;
 use crate::*;
 use eframe::egui;
+use sha2::Digest;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{collections::HashSet, ffi::OsString};
@@ -38,6 +39,29 @@ pub(crate) fn write_stdout(text: &str) {
         eprintln!("could not write to standard output: {error}");
         std::process::exit(1);
     }
+}
+
+fn sha256_file(path: &std::path::Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        format!("could not read signed certificate for its ledger event: {error}")
+    })?;
+    let mut digest = sha2::Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut buffer)
+            .map_err(|error| format!("could not hash signed certificate: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let bytes = digest.finalize();
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{byte:02x}").expect("writing to a String is infallible");
+    }
+    Ok(hex)
 }
 
 const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]] [--acknowledge-destination-loss]";
@@ -390,6 +414,21 @@ pub(crate) fn run() -> eframe::Result<()> {
         let _ = std::fs::remove_file(&temporary);
         match result {
             Ok(message) => {
+                drop(store);
+                let event_result = sha256_file(&output).and_then(|digest| {
+                    let store = core::StateStore::open(&state)
+                        .map_err(|error| format!("could not reopen durable ledger: {error}"))?;
+                    store
+                        .record_event(&project_id, "proof_ready", &format!("sha256={digest}"))
+                        .map_err(|error| format!("could not record proof-ready event: {error}"))
+                });
+                if let Err(error) = event_result {
+                    eprintln!(
+                        "Certificate was created at {} but its durable proof-ready event could not be recorded: {error}",
+                        output.display()
+                    );
+                    std::process::exit(1);
+                }
                 out!("{message}: {}", output.display());
                 return Ok(());
             }
@@ -1723,10 +1762,22 @@ fn oauth_authorize_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{HeadlessMode, SuperviseArguments, parse_supervise_arguments};
+    use super::{HeadlessMode, SuperviseArguments, parse_supervise_arguments, sha256_file};
     use crate::maintenance_window::MaintenanceWindow;
     use std::ffi::OsString;
     use std::path::PathBuf;
+
+    #[test]
+    fn certificate_digest_is_sha256_of_the_exact_artifact_bytes() {
+        let path =
+            std::env::temp_dir().join(format!("mailswiftsync-proof-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"abc").unwrap();
+        assert_eq!(
+            sha256_file(&path).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        std::fs::remove_file(path).unwrap();
+    }
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()

@@ -58,7 +58,7 @@ evidence = "Provider identity is enforced at the execution boundary; documented 
 [[production_features]]
 feature = "Shared durable batch plans"
 status = "implemented"
-evidence = "Schema v22 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas and an approval-gated cutover workflow, alongside the durable webhook outbox and transaction-bound lifecycle event trigger."
+evidence = "Schema v23 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas and an approval-gated cutover workflow, alongside the durable webhook outbox and transaction-bound lifecycle event trigger."
 
 [[production_features]]
 feature = "Run-level batch throttle policy"
