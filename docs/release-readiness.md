@@ -329,7 +329,9 @@ screen-reader checklist are recorded in
   This small-message generic-IMAP fixture does not measure peak memory or
   qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.
   Scale mode disables per-message debug output and allows up to 40 minutes per
-  CLI command within a 60-minute workflow limit.
+  CLI command within a 60-minute workflow limit. Future runs sample aggregate
+  container memory once per second and retain the samples' peak and wall time;
+  the cited run predates that measurement.
 - Batch scheduling keeps conservative defaults but exposes explicit global
   worker and process-start ceilings for qualified deployments. The adaptive
   global/provider/tenant/credential/mailbox rate-domain limiter remains the

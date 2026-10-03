@@ -258,7 +258,7 @@ To reach GA 1.0, the following work is required:
 
 **Medium-term (v1.0 GA):**
 - [x] Implement SQLite-backed streaming reconciliation in the live metadata-verification path
-- [ ] Qualify large-account performance and memory behavior with 100k+ message load tests (one 100,016-message / 28.7 MB generic-IMAP run completed with exact metadata reconciliation; peak-memory, 20 GiB, repeatability, and hosted-provider qualification remain pending)
+- [ ] Qualify large-account performance and memory behavior with 100k+ message load tests (one 100,016-message / 28.7 MB generic-IMAP run completed with exact metadata reconciliation; future runs sample container memory, but peak-memory, 20 GiB, repeatability, and hosted-provider qualification remain pending)
 - [ ] Implement durable per-message transfer checkpoints (run-level Dovecot restart binding and snapshot-bound restartable verification staging are implemented)
 - [ ] Performance benchmarks with 100k+ message mailboxes (first run recorded: 14m10s live pass on a GitHub-hosted Linux runner; this is a single observed baseline, not a qualified performance envelope)
 - [ ] Provider edge case testing

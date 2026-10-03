@@ -19,7 +19,8 @@ operator distribution archives.
   its first successful run reconciled 100,016 messages (28.7 MB) with zero differences
   and took 14m10s for the live pass. Scale mode avoids per-message debug noise
   and has a bounded 40-minute command timeout; this is end-to-end scale
-  evidence, not hosted-provider qualification.
+  evidence, not hosted-provider qualification. Future runs sample peak
+  container memory once per second and retain a wall-clock summary.
 - Cutover commands reject non-UTF-8 control arguments rather than silently
   dropping an invalid maintenance-window or confirmation value.
 - Production-readiness guidance now distinguishes implemented provider-scoped
