@@ -127,9 +127,11 @@ operator distribution archives.
   durable-ledger scope explicitly and does not overclaim independent
   message-level attestation.
 - Live transfer attempts now emit bounded, content-free durable progress
-  checkpoints (separate from lossy UI telemetry); Recovery shows the latest
-  observed attempt/message/byte position while continuing to make clear that
-  external-engine progress is not per-message verification proof.
+  checkpoints (separate from lossy UI telemetry); checkpoint events use
+  reliable bounded delivery, and an undeliverable checkpoint prevents a clean
+  attempt result. Recovery shows the latest observed attempt/message/byte
+  position while continuing to make clear that external-engine progress is
+  not per-message verification proof.
 - Recovery and batch workflow views now explain blocker consequence and expose
   remediation routes (reconnect accounts, review policy, inspect evidence, or
   review affected mailbox actions) instead of presenting unresolved counts as

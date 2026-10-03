@@ -527,6 +527,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let out_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let progress = Arc::new(Mutex::new(crate::progress::TransferProgress::default()));
     let out_progress = Arc::clone(&progress);
+    let failed_transfer_checkpoints = Arc::new(AtomicBool::new(false));
+    let out_failed_transfer_checkpoints = Arc::clone(&failed_transfer_checkpoints);
     let durable_progress = transfer_pass.is_some();
     let mut last_progress_event: Option<std::time::Instant> = None;
     let mut last_durable_progress_event: Option<std::time::Instant> = None;
@@ -547,8 +549,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             if let Ok(mut evidence) = out_evidence.lock() {
                 evidence.observe(&safe);
             }
-            // Counters advance on this lossless reader; only the throttled
-            // snapshot uses the best-effort presentation channel.
+            // Counters advance on this lossless reader. UI snapshots may be
+            // dropped under pressure; durable checkpoints use bounded
+            // reliable delivery and make the attempt fail closed on loss.
             let snapshot = out_progress.lock().ok().and_then(|mut progress| {
                 (progress.observe(&safe)
                     && last_progress_event
@@ -567,12 +570,19 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                         .is_none_or(|sent| sent.elapsed() >= DURABLE_PROGRESS_EVENT_INTERVAL)
                 {
                     last_durable_progress_event = Some(std::time::Instant::now());
-                    let _ = out_tx.try_send(Event::TransferProgressCheckpoint {
-                        run_id: out_run_id.clone(),
-                        job_id: out_job_id.clone(),
-                        attempt: attempt_number,
-                        progress: snapshot,
-                    });
+                    if send_reliable_event(
+                        &out_tx,
+                        Event::TransferProgressCheckpoint {
+                            run_id: out_run_id.clone(),
+                            job_id: out_job_id.clone(),
+                            attempt: attempt_number,
+                            progress: snapshot,
+                        },
+                    )
+                    .is_err()
+                    {
+                        out_failed_transfer_checkpoints.store(true, Ordering::Relaxed);
+                    }
                 }
             }
             if dovecot_exit_two_is_delta
@@ -761,7 +771,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] stderr reader joined");
     }
-    let reader_error = stdout_reader
+    let mut reader_error = stdout_reader
         .as_ref()
         .err()
         .cloned()
@@ -792,8 +802,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 progress: final_progress,
             },
         );
-        if durable_progress {
-            let _ = send_reliable_event(
+        if durable_progress
+            && send_reliable_event(
                 tx,
                 Event::TransferProgressCheckpoint {
                     run_id: run_id.to_owned(),
@@ -801,8 +811,18 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                     attempt: attempt_number,
                     progress: final_progress,
                 },
-            );
+            )
+            .is_err()
+        {
+            failed_transfer_checkpoints.store(true, Ordering::Relaxed);
         }
+    }
+    if failed_transfer_checkpoints.load(Ordering::Relaxed) {
+        let checkpoint_error = "durable transfer-progress checkpoint could not be persisted";
+        reader_error = Some(reader_error.map_or_else(
+            || checkpoint_error.to_owned(),
+            |prior| format!("{prior}; {checkpoint_error}"),
+        ));
     }
     let dropped = dropped_diagnostics.load(Ordering::Relaxed);
     if dropped > 0 {
