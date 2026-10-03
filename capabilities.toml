@@ -58,7 +58,7 @@ evidence = "Provider-intelligence signals feed controller failure and adaptive r
 [[production_features]]
 feature = "Shared durable batch plans"
 status = "implemented"
-evidence = "Schema v17 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas."
+evidence = "Schema v18 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas, alongside the durable webhook outbox."
 
 [[production_features]]
 feature = "Run-level batch throttle policy"
@@ -108,7 +108,7 @@ evidence = "Owner-only organization-policy.toml enforcement covers TLS, destinat
 [[production_features]]
 feature = "Durable signed webhook delivery"
 status = "partial"
-evidence = "HTTPS webhook transport exists; durable event IDs, retry queues, dead letters, and signed delivery envelopes remain open."
+evidence = "HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, and a SQLite outbox with bounded retry/backoff/dead-letter state; automatic lifecycle event production and centralized service delivery remain open."
 
 [documentation]
 # Terms that must appear only under README's experimental/planned status

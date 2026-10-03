@@ -1038,20 +1038,80 @@ pub(crate) fn run() -> eframe::Result<()> {
                 std::process::exit(1);
             }
         };
-        match webhook::post_json(&url, &body) {
-            Ok(status_code) if (200..300).contains(&status_code) => {
-                out!("Webhook notification delivered (HTTP {status_code}).");
-                return Ok(());
-            }
-            Ok(status_code) => {
-                eprintln!("Webhook endpoint rejected the notification (HTTP {status_code}).");
-                std::process::exit(1);
-            }
+        let endpoint_digest = match webhook::endpoint_digest(&url) {
+            Ok(digest) => digest,
             Err(error) => {
-                eprintln!("Webhook notification failed: {error}");
+                eprintln!("Webhook notification refused: invalid endpoint: {error}");
                 std::process::exit(1);
+            }
+        };
+        let store = match core::StateStore::open(&state) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Webhook notification refused: durable outbox is unavailable: {error}");
+                std::process::exit(1);
+            }
+        };
+        let current_event_id = webhook::event_id(&body);
+        if let Err(error) = store.enqueue_webhook_delivery(
+            &current_event_id,
+            project_id.unwrap_or("all-projects"),
+            "migration.status_snapshot",
+            &body,
+            &endpoint_digest,
+        ) {
+            eprintln!("Webhook notification refused: could not queue durable delivery: {error}");
+            std::process::exit(1);
+        }
+        let deliveries = match store.due_webhook_deliveries(&endpoint_digest, 100) {
+            Ok(deliveries) => deliveries,
+            Err(error) => {
+                eprintln!(
+                    "Webhook notification refused: could not read durable delivery queue: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let mut delivered = 0_u32;
+        let mut failed = 0_u32;
+        for delivery in deliveries {
+            match webhook::post_json(&url, &delivery.payload) {
+                Ok(status_code) if (200..300).contains(&status_code) => {
+                    if let Err(error) = store.mark_webhook_delivered(&delivery.event_id) {
+                        eprintln!(
+                            "Webhook notification durability failed after HTTP {status_code}: {error}"
+                        );
+                        std::process::exit(1);
+                    }
+                    delivered = delivered.saturating_add(1);
+                }
+                Ok(status_code) => {
+                    let error = format!("endpoint rejected delivery with HTTP {status_code}");
+                    if let Err(mark_error) = store.mark_webhook_failed(&delivery.event_id, &error) {
+                        eprintln!(
+                            "Webhook delivery failure could not be durably recorded: {mark_error}"
+                        );
+                        std::process::exit(1);
+                    }
+                    failed = failed.saturating_add(1);
+                }
+                Err(error) => {
+                    if let Err(mark_error) = store.mark_webhook_failed(&delivery.event_id, &error) {
+                        eprintln!(
+                            "Webhook delivery failure could not be durably recorded: {mark_error}"
+                        );
+                        std::process::exit(1);
+                    }
+                    failed = failed.saturating_add(1);
+                }
             }
         }
+        if failed > 0 {
+            eprintln!("Webhook delivery failed for {failed} event(s); retry state is durable.");
+            std::process::exit(1);
+        }
+        out!("Webhook delivery queue processed: {delivered} event(s) delivered.");
+        return Ok(());
     }
     if command == std::ffi::OsStr::new("supervise") {
         let supervise = match parse_supervise_arguments(arguments) {

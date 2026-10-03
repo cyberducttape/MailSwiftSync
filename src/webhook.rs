@@ -134,11 +134,23 @@ pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
     Ok(response.status().as_u16())
 }
 
-fn event_id(body: &str) -> String {
+pub(crate) fn endpoint_digest(url: &str) -> Result<String, String> {
+    let resolved = load_webhook_url(url)?;
+    Ok(hash_hex(resolved.as_bytes()))
+}
+
+pub(crate) fn event_id(body: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     digest.update(b"mailswiftsync:webhook:migration.status_snapshot:v1\n");
     digest.update(body.as_bytes());
+    hex_encode(&digest.finalize())
+}
+
+fn hash_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(bytes);
     hex_encode(&digest.finalize())
 }
 

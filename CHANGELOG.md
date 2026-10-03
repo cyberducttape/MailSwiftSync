@@ -15,6 +15,11 @@ operator distribution archives.
   type, and an idempotency key. Operators may configure a separate HMAC
   signing secret so receivers can authenticate the JSON envelope; durable
   retry/dead-letter delivery remains a separate outbox feature.
+- Webhook notifications now queue credential-free payloads in the durable
+  SQLite ledger before delivery. Retries use bounded exponential backoff and
+  transition to durable dead-letter state after the attempt limit; endpoint
+  URLs and authentication secrets are never stored, and endpoint digests bind
+  retries to the operator-selected destination.
 - Added a dedicated `certificate` command that refuses incomplete projects and
   atomically emits an Ed25519-signed migration certificate from the completed,
   redacted customer-proof artifact. The certificate records its authenticated

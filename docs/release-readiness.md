@@ -155,6 +155,12 @@ screen-reader checklist are recorded in
   idempotency key. `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or its owner-only
   file form adds an HMAC-SHA256 envelope signature; this notifier still does
   not claim durable retry/dead-letter delivery.
+- The notifier now persists a credential-free outbox record before attempting
+  delivery, retries due records with bounded exponential backoff, and records
+  dead-letter state after repeated failure. The outbox stores only an endpoint
+  digest, never the endpoint URL or authentication material; automatic
+  lifecycle event production and a continuously running delivery service are
+  still deployment work.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy

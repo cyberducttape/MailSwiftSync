@@ -265,7 +265,7 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v17 application schema, rather than treating
+    /// Validate the complete v18 application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
     /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
@@ -393,6 +393,22 @@ impl StateStore {
                     ("kind", "TEXT", true, 0),
                     ("detail", "TEXT", true, 0),
                     ("created_at", "TEXT", true, 0),
+                ],
+            ),
+            (
+                "webhook_deliveries",
+                &[
+                    ("event_id", "TEXT", false, 1),
+                    ("project_id", "TEXT", true, 0),
+                    ("event_type", "TEXT", true, 0),
+                    ("payload", "TEXT", true, 0),
+                    ("endpoint_digest", "TEXT", true, 0),
+                    ("attempts", "INTEGER", true, 0),
+                    ("status", "TEXT", true, 0),
+                    ("last_error", "TEXT", false, 0),
+                    ("next_attempt_at", "TEXT", true, 0),
+                    ("created_at", "TEXT", true, 0),
+                    ("delivered_at", "TEXT", false, 0),
                 ],
             ),
             (
@@ -1044,6 +1060,7 @@ impl StateStore {
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE mismatch_type NOT IN ('message_id_only','message_present_wrong_folder','missing','extra','duplicated'))",
             "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE attention_reason IS NOT NULL AND attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))",
+            "SELECT EXISTS(SELECT 1 FROM webhook_deliveries WHERE status NOT IN ('queued','delivered','dead_letter'))",
         ];
         for sql in ENUM_CHECKS {
             let has_unknown: bool = connection.query_row(sql, [], |row| row.get(0))?;
@@ -1168,6 +1185,13 @@ impl StateStore {
                 ],
             ),
             ("mailbox_queue_facts", &["destructivein(0,1)"]),
+            (
+                "webhook_deliveries",
+                &[
+                    "attempts>=0",
+                    "statusin('queued','delivered','dead_letter')",
+                ],
+            ),
             (
                 "transfer_pass_folders",
                 &[
@@ -1452,7 +1476,8 @@ impl StateStore {
         // current evidence projection directly to its run for report reads;
         // version 15 adds durable per-attempt transfer-pass provenance;
         // version 16 adds narrow per-mailbox queue presentation facts; version
-        // 17 stores shared batch policies separately from mailbox deltas.
+        // 17 stores shared batch policies separately from mailbox deltas; 18
+        // adds the credential-free webhook delivery outbox.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1498,6 +1523,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
                  CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL CHECK(pid >= 0), start_ticks INTEGER CHECK(start_ticks IS NULL OR start_ticks >= 0), process_group INTEGER CHECK(process_group IS NULL OR process_group >= 0), session_id INTEGER CHECK(session_id IS NULL OR session_id >= 0), executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
                  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS webhook_deliveries (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, endpoint_digest TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivered','dead_letter')), last_error TEXT, next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TEXT);
                  CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -1515,6 +1541,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
+                 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_due ON webhook_deliveries(endpoint_digest, status, next_attempt_at, created_at);
                  CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);",
             )?;
