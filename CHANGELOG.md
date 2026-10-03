@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Corrected the operator-facing rate-limit summary to describe the current
+  hierarchical adaptive process-launch policy instead of implying a fixed
+  global-only process-start ceiling; documentation validation now checks that
+  scenario against the canonical capability evidence.
 - Added a scheduled libFuzzer target for XLSX worksheet-dimension and cell
   reference parsing, exercising the same bounded parser used before workbook
   materialization.

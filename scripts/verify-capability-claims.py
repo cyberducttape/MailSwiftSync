@@ -167,6 +167,29 @@ def render_production_feature_table(manifest: dict) -> str:
     return "\n".join(lines)
 
 
+def find_rate_limiting_scenario_violations(content: str, manifest: dict) -> list[str]:
+    """Keep the operator error table aligned with canonical adaptive-rate evidence."""
+    feature = next(
+        (
+            item
+            for item in manifest.get("production_features", [])
+            if item.get("feature") == "Adaptive launch and worker ceilings"
+        ),
+        None,
+    )
+    if feature is None:
+        return ["capabilities.toml: missing Adaptive launch and worker ceilings feature"]
+    rows = [line for line in content.splitlines() if line.startswith("| Rate limiting |")]
+    if len(rows) != 1:
+        return ["PRODUCTION_STATUS.md: expected exactly one Rate limiting scenario row"]
+    if feature.get("evidence", "") not in rows[0]:
+        return [
+            "PRODUCTION_STATUS.md: Rate limiting scenario contradicts the canonical "
+            "Adaptive launch and worker ceilings evidence"
+        ]
+    return []
+
+
 def get_package_version() -> str:
     """Extract the package version from Cargo's authoritative package table."""
     with PACKAGE_MANIFEST.open("rb") as stream:
@@ -531,6 +554,9 @@ def main(argv: list[str]) -> int:
         for violation in generated_document_violations(
             production_content, begin, end, body, PRODUCTION_STATUS_MD.name
         )
+    )
+    violations.extend(
+        find_rate_limiting_scenario_violations(production_content, manifest)
     )
 
     if not verification_levels(manifest):

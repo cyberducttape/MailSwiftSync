@@ -176,6 +176,20 @@ class CapabilityClaimTests(unittest.TestCase):
             ),
             production,
         )
+        self.assertEqual(
+            CHECKER.find_rate_limiting_scenario_violations(production, manifest), []
+        )
+
+    def test_rate_limiting_scenario_cannot_drift_from_adaptive_rate_evidence(self):
+        import tomllib
+
+        with CHECKER.MANIFEST.open("rb") as stream:
+            manifest = tomllib.load(stream)
+        production = CHECKER.PRODUCTION_STATUS_MD.read_text(encoding="utf-8")
+        stale = production.replace("global process-launch ceiling", "fixed global-only launch limit")
+        violations = CHECKER.find_rate_limiting_scenario_violations(stale, manifest)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("contradicts", violations[0])
 
 
     @staticmethod
