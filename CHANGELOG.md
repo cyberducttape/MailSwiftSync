@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Capability reporting now marks provider qualification packs as partial rather
+  than planned: schemas, strict evidence validation, and pack construction are
+  implemented, but real automated provider-pair qualification evidence and
+  bundled live packs remain outstanding.
 - Migration Assurance mismatch details now hash payloads left unmatched by the
   multiset reconciliation, rather than arbitrary representatives that may be
   identical on both sides. A streamed-SQLite/reference-comparator differential

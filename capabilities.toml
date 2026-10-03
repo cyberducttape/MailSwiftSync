@@ -1,6 +1,6 @@
 # Authoritative capability status for documentation and release review.
 schema_version = 1
-last_reviewed = "2026-10-02"
+last_reviewed = "2026-10-03"
 
 [release]
 status = "Technical Preview"
@@ -72,8 +72,8 @@ evidence = "A configurable global process-launch ceiling is supplemented by adap
 
 [[production_features]]
 feature = "Provider qualification packs"
-status = "planned"
-evidence = "Qualification evidence schema, strict phase-evidence validation, and a pack builder bound to one provider pair, release commit, engine binary, proof set, and explicit limitations are implemented; bundled live provider-pair packs are not present."
+status = "partial"
+evidence = "Qualification evidence schema, strict phase-evidence validation, and a pack builder bound to one provider pair, release commit, engine binary, proof set, and explicit limitations are implemented. Real automated provider-pair qualification jobs have not yet produced signed evidence, so no live qualification pack is bundled."
 
 [[production_features]]
 feature = "Signed migration certificate"
