@@ -159,6 +159,26 @@ pub(crate) fn job_from_plan(
     ))
 }
 
+/// Rebuild a durable row with the operator's current batch scheduling policy.
+/// Mailbox identity remains durable, while concurrency and throughput are
+/// run-level settings and must not be taken from the imported row.
+pub(crate) fn job_from_plan_with_batch_policy(
+    row: &core::QueuePlanRow,
+    batch_profile: &Profile,
+    secrets: Option<&(SecretString, SecretString)>,
+    dry_run: bool,
+) -> Result<BulkJob, String> {
+    let mut form = job_from_plan(row, &batch_profile.extra_options, secrets, dry_run)?.form();
+    form.profile.batch_concurrency = batch_profile.batch_concurrency.clamp(1, 16);
+    form.profile.max_messages_per_second = batch_profile.max_messages_per_second;
+    form.profile.max_bytes_per_second = batch_profile.max_bytes_per_second;
+    Ok(BulkJob::from_form(
+        row.label.clone(),
+        form,
+        row.state.clone(),
+    ))
+}
+
 /// Give every row that has neither a session password nor a credential
 /// reference on one side the keyring credential `credential_id`. Changing a
 /// plan clears its preflight, so affected rows must be validated again.
@@ -214,12 +234,17 @@ pub(crate) fn ledger_job_loader(
     store: &core::StateStore,
     state_path: Option<std::path::PathBuf>,
     project_id: &str,
-    extra_options: String,
+    batch_profile: Profile,
     session_secrets: SessionSecrets,
     dry_run: bool,
 ) -> Result<super::batch_scheduler::JobLoader, String> {
     let prepare = move |row: &core::QueuePlanRow| -> Result<BulkJob, String> {
-        let job = job_from_plan(row, &extra_options, session_secrets.get(&row.id), dry_run)?;
+        let job = job_from_plan_with_batch_policy(
+            row,
+            &batch_profile,
+            session_secrets.get(&row.id),
+            dry_run,
+        )?;
         if !dry_run {
             return Ok(job);
         }
@@ -361,6 +386,38 @@ mod tests {
         assert_eq!(rebuilt.profile().extra_options, "--nofoldersizes");
         assert_eq!(rebuilt.profile().source_credential_id, "kr");
         assert!(rebuilt.form().dry_run);
+    }
+
+    #[test]
+    fn batch_policy_overrides_imported_throttle_settings() {
+        let store = core::StateStore::in_memory().unwrap();
+        let mut imported_form = job(0, "").form();
+        imported_form.profile.max_messages_per_second = 1_000;
+        imported_form.profile.max_bytes_per_second = 10_000;
+        imported_form.profile.batch_concurrency = 4;
+        let imported_job = BulkJob::from_form(
+            imported_form.profile.source_user.clone(),
+            imported_form,
+            "imported".into(),
+        );
+        let imported =
+            persist_imported_queue(&store, vec![imported_job], &Profile::default()).unwrap();
+        let id = store.mailbox_ids(&imported.project_id).unwrap().remove(0);
+        let row = store
+            .queue_plans(&imported.project_id, std::slice::from_ref(&id))
+            .unwrap()
+            .remove(0);
+
+        let mut current_profile = Profile::default();
+        current_profile.batch_concurrency = 2;
+        current_profile.max_messages_per_second = 200;
+        current_profile.max_bytes_per_second = 2_000;
+        current_profile.extra_options = "--nofoldersizes".into();
+        let rebuilt = job_from_plan_with_batch_policy(&row, &current_profile, None, true).unwrap();
+        assert_eq!(rebuilt.profile().batch_concurrency, 2);
+        assert_eq!(rebuilt.profile().max_messages_per_second, 200);
+        assert_eq!(rebuilt.profile().max_bytes_per_second, 2_000);
+        assert_eq!(rebuilt.profile().extra_options, "--nofoldersizes");
     }
 
     #[test]

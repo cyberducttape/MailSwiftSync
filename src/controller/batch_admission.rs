@@ -145,9 +145,9 @@ pub(crate) fn admit_batch_launch(
         }
         for row in plans {
             let label = row.label.clone();
-            let mut form = crate::controller::queue::job_from_plan(
+            let mut form = crate::controller::queue::job_from_plan_with_batch_policy(
                 &row,
-                &fallback_profile.extra_options,
+                fallback_profile,
                 session_secrets.get(&row.id),
                 mode.is_preflight(),
             )?

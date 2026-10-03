@@ -859,6 +859,10 @@ pub(crate) struct BatchConfirmationIdentity {
     pub(crate) execution_mode: BatchExecutionMode,
     /// Worker concurrency
     pub(crate) concurrency: usize,
+    /// Run-level message throughput policy shown to the operator.
+    pub(crate) max_messages_per_second: u32,
+    /// Run-level byte throughput policy shown to the operator.
+    pub(crate) max_bytes_per_second: u64,
     /// Whether deletion is enabled on any selected job
     pub(crate) deletion_enabled: bool,
     /// Hash of the complete action plan shown at confirmation time.

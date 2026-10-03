@@ -60,7 +60,7 @@ impl App {
                 .clone()
                 .filter(|_| self.persistence_available),
             &project_id,
-            self.form.profile.extra_options.clone(),
+            self.form.profile.clone(),
             self.queue.session_secrets.clone(),
             mode.is_preflight(),
         ) {
