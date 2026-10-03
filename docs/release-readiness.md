@@ -151,6 +151,10 @@ screen-reader checklist are recorded in
   batch concurrency. The same policy is shown during preflight and rechecked at
   batch admission; provider-tenant rate quotas and role-scoped policy
   administration remain outside this local policy file.
+- `notify-webhook` includes a deterministic event ID, event type, and
+  idempotency key. `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or its owner-only
+  file form adds an HMAC-SHA256 envelope signature; this notifier still does
+  not claim durable retry/dead-letter delivery.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy

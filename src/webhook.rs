@@ -16,6 +16,8 @@
 //! - `MAILSWIFTSYNC_WEBHOOK_HEADER_NAME` and `MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE` environment variables (for custom headers)
 //! - `MAILSWIFTSYNC_WEBHOOK_HEADER_FILE` environment variable (path to file containing custom header as "Header-Name: value")
 //! - `MAILSWIFTSYNC_WEBHOOK_URL_FILE` environment variable (path to file containing the HTTPS URL)
+//! - `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or
+//!   `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE` (optional HMAC-SHA256 envelope signing)
 //!
 //! If no authentication variable is configured, the webhook is anonymous. If
 //! any authentication variable is configured, the complete selected
@@ -31,6 +33,7 @@
 use crate::credentials::{SecretString, read_secret_file};
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderName, HeaderValue};
+use ring::hmac;
 use std::{io::Read, time::Duration};
 use zeroize::Zeroizing;
 
@@ -77,7 +80,9 @@ pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
     let url = load_webhook_url(url)?;
     let bearer_token = load_webhook_bearer_token()?;
     let custom_header = load_webhook_custom_header()?;
+    let signing_secret = load_webhook_signing_secret()?;
     let parsed_url = parse_https_url(&url)?;
+    let event_id = event_id(body);
 
     let client = reqwest::blocking::Client::builder()
         .use_rustls_tls()
@@ -92,7 +97,18 @@ pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(reqwest::header::ACCEPT, "application/json")
         .header(reqwest::header::USER_AGENT, "mailswiftsync-notify-webhook")
+        .header("X-MailSwiftSync-Event-Id", &event_id)
+        .header("X-MailSwiftSync-Event-Type", "migration.status_snapshot")
+        .header("Idempotency-Key", &event_id)
         .body(body.to_owned());
+    if let Some(secret) = signing_secret {
+        let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+        let signature = hmac::sign(&key, body.as_bytes());
+        request = request.header(
+            "X-MailSwiftSync-Signature",
+            format!("sha256={}", hex_encode(signature.as_ref())),
+        );
+    }
     if let Some(token) = bearer_token {
         let authorization = Zeroizing::new(format!("Bearer {}", token.as_str()));
         let mut value = HeaderValue::from_str(&authorization)
@@ -116,6 +132,18 @@ pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
         .map_err(|error| format!("webhook request failed: {}", error.without_url()))?;
     read_bounded_response(&mut response)?;
     Ok(response.status().as_u16())
+}
+
+fn event_id(body: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"mailswiftsync:webhook:migration.status_snapshot:v1\n");
+    digest.update(body.as_bytes());
+    hex_encode(&digest.finalize())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn read_bounded_response(response: &mut Response) -> Result<(), String> {
@@ -212,6 +240,37 @@ fn load_webhook_custom_header() -> Result<Option<(String, SecretString)>, String
         None
     };
     resolve_custom_header(name, value, file_header)
+}
+
+/// Load the optional HMAC signing secret from an environment value or an
+/// owner-only file. It is deliberately independent from endpoint auth so an
+/// operator can use a bearer token and still give the receiver an integrity
+/// signature with a different secret.
+fn load_webhook_signing_secret() -> Result<Option<SecretString>, String> {
+    let direct = configured_env("MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET")?;
+    let file_path = configured_env("MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE")?;
+    let file_secret = if let Some(path) = file_path {
+        Some(
+            read_secret_file(std::path::Path::new(&path))
+                .map_err(|error| format!("Failed to read webhook signing secret file: {error}"))?
+                .as_str()
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    match (direct, file_secret) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err(
+            "configure only one of MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET and MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE".into(),
+        ),
+        (Some(secret), None) | (None, Some(secret)) => {
+            if secret.is_empty() {
+                return Err("webhook signing secret is configured but empty".into());
+            }
+            Ok(Some(SecretString::from(secret)))
+        }
+    }
 }
 
 fn configured_env(name: &str) -> Result<Option<String>, String> {
@@ -317,6 +376,13 @@ fn validate_header_value(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_id_is_stable_for_idempotent_delivery_and_changes_with_body() {
+        assert_eq!(event_id("{}"), event_id("{}"));
+        assert_ne!(event_id("{}"), event_id("{\"phase\":\"complete\"}"));
+        assert_eq!(event_id("{}").len(), 64);
+    }
 
     #[test]
     fn default_status_projection_omits_customer_and_process_metadata() {

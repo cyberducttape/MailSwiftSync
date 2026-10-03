@@ -11,6 +11,10 @@ operator distribution archives.
   prohibit destination mutation, require metadata/body verification, and cap
   batch concurrency. The policy is displayed in preflight and rechecked at
   batch admission; malformed or unsafe policy files fail closed.
+- Webhook status notifications now carry deterministic event IDs, an event
+  type, and an idempotency key. Operators may configure a separate HMAC
+  signing secret so receivers can authenticate the JSON envelope; durable
+  retry/dead-letter delivery remains a separate outbox feature.
 - Added a dedicated `certificate` command that refuses incomplete projects and
   atomically emits an Ed25519-signed migration certificate from the completed,
   redacted customer-proof artifact. The certificate records its authenticated
