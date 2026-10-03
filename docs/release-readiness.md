@@ -144,8 +144,10 @@ screen-reader checklist are recorded in
   completed customer-proof export and Ed25519 signing. It refuses incomplete
   projects and publishes the signed output atomically, so an operator cannot
   accidentally deliver the unsigned intermediate as the final artifact. The
-  certificate authenticates the durable ledger evidence and signer; it does
-  not claim independent per-message attestation.
+  signed evidence explicitly includes each mailbox's immutable run-plan
+  SHA-256 and, when the plan snapshot resolved it, the engine-binary
+  SHA-256. The certificate authenticates the durable ledger evidence and
+  signer; it does not claim independent per-message attestation.
 - An owner-only `organization-policy.toml` may require TLS, prohibit
   destination mutation, require metadata or bounded body verification, and cap
   batch concurrency. The same policy is shown during preflight and rechecked at

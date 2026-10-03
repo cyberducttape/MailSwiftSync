@@ -6,6 +6,17 @@ use crate::{
 };
 use std::path::Path;
 
+fn execution_executable_sha256(plan_snapshot: &str) -> Option<String> {
+    let snapshot: toml::Value = toml::from_str(plan_snapshot).ok()?;
+    let identity = snapshot
+        .get("profile")?
+        .get("execution_executable_sha256")?
+        .as_str()?;
+    let digest = identity.strip_prefix("sha256:")?;
+    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| digest.to_ascii_lowercase())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProviderIdentity {
     pub(crate) source_provider: String,
@@ -121,6 +132,8 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         .ok_or("The customer proof refers to a missing evidence run.")?;
                     Some(serde_json::json!({
                         "run_id": run_id,
+                        "migration_plan_sha256": crate::plan_identity::snapshot_sha256(&plan_snapshot),
+                        "engine_binary_sha256": execution_executable_sha256(&plan_snapshot),
                         "scope": value.evidence_scope().label(),
                         "verification_method": value.verification_method().as_str(),
                         "verification_outcome": value.verification_outcome().as_str(),
@@ -282,6 +295,119 @@ fn is_durably_complete(snapshot: &core::ProjectReportSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_binary_hash_is_extracted_only_from_a_valid_run_snapshot() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let cleanup = crate::credentials::CleanupGuard::new(vec![directory.clone()]);
+        let executable = directory.join("mock-engine");
+        std::fs::write(&executable, b"mock engine binary").unwrap();
+        let mut form = crate::Form::default();
+        form.profile.imapsync_path = executable.to_string_lossy().into_owned();
+        let snapshot = form.plan_snapshot();
+        let expected =
+            crate::plan_identity::executable_content_identity(&executable.to_string_lossy());
+        assert_eq!(
+            execution_executable_sha256(&snapshot),
+            expected.strip_prefix("sha256:").map(str::to_owned)
+        );
+        drop(cleanup);
+        assert_eq!(execution_executable_sha256("not a run snapshot"), None);
+        assert_eq!(
+            execution_executable_sha256(
+                "dry_run = false\n\n[profile]\nexecution_executable_sha256 = \"unresolved\"\n"
+            ),
+            None
+        );
+        assert_eq!(
+            execution_executable_sha256(
+                "dry_run = false\n\n[profile]\nexecution_executable_sha256 = \"sha256:abcd\"\n"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn customer_proof_exposes_plan_and_engine_hashes_without_exporting_plan() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let cleanup = crate::credentials::CleanupGuard::new(vec![directory.clone()]);
+        let executable = directory.join("mock-engine");
+        std::fs::write(&executable, b"mock engine binary").unwrap();
+        let mut form = crate::Form::default();
+        form.profile.imapsync_path = executable.to_string_lossy().into_owned();
+        let plan_snapshot = form.plan_snapshot();
+
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("proof", "source", "destination")
+            .unwrap();
+        let job = store
+            .add_mailbox(&project.id, "source@example.com", "destination@example.com")
+            .unwrap();
+        store
+            .begin_run_with_snapshot(&project.id, &job, "run-proof", "imapsync", &plan_snapshot)
+            .unwrap();
+        store
+            .record_engine_version("run-proof", "imapsync 2.314")
+            .unwrap();
+        store
+            .finish_run_for_mailbox_with_evidence(
+                &project.id,
+                &job,
+                "run-proof",
+                "completed",
+                "verified",
+                "verified",
+                &core::MailboxEvidence {
+                    verification_method: core::VerificationMethod::AggregateEngine,
+                    verification_outcome: None,
+                    source_messages: 1,
+                    destination_messages: 1,
+                    source_bytes: 100,
+                    destination_bytes: 100,
+                    unmatched_messages: Some(0),
+                    failed_messages: 0,
+                    source_folders: 1,
+                    destination_folders: 1,
+                    authoritative: true,
+                    missing_messages: 0,
+                    extra_messages: 0,
+                    modified_messages: 0,
+                    probable_messages: 0,
+                },
+            )
+            .unwrap();
+
+        let output = directory.join("customer-proof.json");
+        export_from_store_with_options(
+            &store,
+            &project.id,
+            &output,
+            true,
+            &OperatorBranding::default(),
+        )
+        .unwrap();
+        let proof: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        let evidence = &proof["mailboxes"][0]["evidence"];
+        assert_eq!(
+            evidence["migration_plan_sha256"],
+            crate::plan_identity::snapshot_sha256(&plan_snapshot)
+        );
+        let binary_identity =
+            crate::plan_identity::executable_content_identity(&executable.to_string_lossy());
+        assert_eq!(
+            evidence["engine_binary_sha256"],
+            binary_identity.strip_prefix("sha256:").unwrap()
+        );
+        assert!(!proof.to_string().contains(&plan_snapshot));
+        assert!(
+            !proof
+                .to_string()
+                .contains(&executable.to_string_lossy().to_string())
+        );
+        drop(cleanup);
+    }
 
     fn snapshot(phase: core::Phase, state: &str, evidence: bool) -> core::ProjectReportSnapshot {
         core::ProjectReportSnapshot {

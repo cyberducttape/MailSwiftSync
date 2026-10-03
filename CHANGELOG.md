@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Signed customer evidence now exposes the immutable migration-plan SHA-256
+  and the execution-engine binary SHA-256 when resolved in the plan snapshot;
+  the underlying plan and its endpoint or credential-reference details remain
+  private.
 - Capability reporting now marks provider qualification packs as partial rather
   than planned: schemas, strict evidence validation, and pack construction are
   implemented, but real automated provider-pair qualification evidence and
