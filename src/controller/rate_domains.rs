@@ -402,8 +402,11 @@ impl RateDomainLimiter {
             return Vec::new();
         }
         let text = control_error_text(error);
-        let server_requested = crate::core::provider_intelligence::provider_signal(text)
-            .and_then(|signal| signal.retry_after);
+        let server_requested = crate::core::provider_intelligence::provider_signal_for_provider(
+            path.chain(first_side)[0].provider,
+            text,
+        )
+        .and_then(|signal| signal.retry_after);
         let base = server_requested
             .or_else(|| {
                 crate::core::provider_intelligence::ProviderErrorClassifier::classify(

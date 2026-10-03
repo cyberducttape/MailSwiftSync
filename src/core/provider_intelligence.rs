@@ -249,10 +249,23 @@ const IMAP_RESPONSE_CODES: &[(&str, &str, ProviderErrorType, &str)] = &[
 /// Recognize a documented provider response or an RFC 5530 response code in
 /// a diagnostic. Provider signatures take precedence: Dovecot reports its
 /// connection limit inside an `[UNAVAILABLE]` response.
+#[allow(dead_code)]
 pub fn provider_signal(error_msg: &str) -> Option<ProviderSignal> {
+    provider_signal_for_provider("generic", error_msg)
+}
+
+/// Recognize a diagnostic using the provider identity at the execution
+/// boundary. Provider-specific signatures are not portable between providers;
+/// RFC 5530 response codes remain valid for every IMAP server. A generic
+/// caller intentionally retains cross-provider discovery for unscoped input.
+pub fn provider_signal_for_provider(provider: &str, error_msg: &str) -> Option<ProviderSignal> {
     let lower = error_msg.to_lowercase();
     for (source, name, pattern, error, remediation) in PROVIDER_SIGNATURES {
-        if lower.contains(pattern) {
+        let provider_matches = provider.eq_ignore_ascii_case("generic")
+            || provider.eq_ignore_ascii_case(source)
+            || (provider.eq_ignore_ascii_case("o365")
+                && source.eq_ignore_ascii_case("microsoft365"));
+        if provider_matches && lower.contains(pattern) {
             return Some(ProviderSignal {
                 source,
                 name,
@@ -358,7 +371,7 @@ impl ProviderErrorClassifier {
 
         // Documented provider responses and RFC 5530 response codes are
         // more specific than the wording heuristics below.
-        if let Some(signal) = provider_signal(error_msg) {
+        if let Some(signal) = provider_signal_for_provider(provider, error_msg) {
             return signal.error;
         }
 
@@ -589,6 +602,27 @@ mod tests {
         assert_eq!(
             (dovecot.source, dovecot.error),
             ("dovecot", ProviderErrorType::ConnectionCapacity)
+        );
+    }
+
+    #[test]
+    fn provider_specific_signals_require_matching_execution_context() {
+        let response = "BAD User is authenticated but not connected.";
+        assert_eq!(
+            ProviderErrorClassifier::classify("microsoft365", response),
+            ProviderErrorType::Authentication
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("gmail", response),
+            ProviderErrorType::PermanentProviderFailure
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", response),
+            ProviderErrorType::Authentication
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("gmail", "NO [AUTHENTICATIONFAILED] denied"),
+            ProviderErrorType::Authentication
         );
     }
 

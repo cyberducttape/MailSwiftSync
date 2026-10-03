@@ -53,7 +53,7 @@ evidence = "Recovery workspace and durable recovery guidance are wired; autonomo
 [[production_features]]
 feature = "Provider error classification"
 status = "implemented"
-evidence = "Provider-intelligence signals feed controller failure and adaptive rate-domain handling; live provider qualification remains pending."
+evidence = "Provider identity is enforced at the execution boundary; documented provider signatures are scoped to the selected provider while RFC IMAP response codes remain universal. Live provider qualification remains pending."
 
 [[production_features]]
 feature = "Shared durable batch plans"

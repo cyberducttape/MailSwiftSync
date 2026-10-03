@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Provider error classification now enforces execution-boundary provider
+  identity: documented Gmail, Microsoft 365, and Dovecot signatures cannot
+  be attributed to an unrelated endpoint, while RFC IMAP response codes remain
+  provider-neutral. Retry delays, durable failure details, and rate-domain
+  cooldowns use the same provider-scoped signal.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in

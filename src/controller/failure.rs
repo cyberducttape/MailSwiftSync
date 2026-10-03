@@ -357,8 +357,9 @@ fn classify_failure_text(provider: &str, error: &str) -> FailureClass {
 pub(crate) fn classify_error_for_provider(provider: &str, error: &str) -> MigrationError {
     let detail = control_error_text(error).to_owned();
     let class = classify_failure_text(provider, error);
-    let retry_after = crate::core::provider_intelligence::provider_signal(&detail)
-        .and_then(|signal| signal.retry_after);
+    let retry_after =
+        crate::core::provider_intelligence::provider_signal_for_provider(provider, &detail)
+            .and_then(|signal| signal.retry_after);
     match class {
         FailureClass::Cancellation => MigrationError::Cancellation { detail },
         FailureClass::Authentication => MigrationError::Authentication { detail },
@@ -495,19 +496,22 @@ fn classified_failure_detail_internal(
     // A recognized documented response names its source and, when the
     // failure needs a person, what to check. The tag follows the class so
     // the durable prefix parse is unchanged.
-    let signal = crate::core::provider_intelligence::provider_signal(control_error_text(error))
-        .map(|signal| {
-            let remediation = if signal.remediation.is_empty() {
-                String::new()
-            } else {
-                format!(" Next step: {}.", signal.remediation)
-            };
-            (
-                format!("[signal={}:{}] ", signal.source, signal.name),
-                remediation,
-            )
-        })
-        .unwrap_or_default();
+    let signal = crate::core::provider_intelligence::provider_signal_for_provider(
+        provider,
+        control_error_text(error),
+    )
+    .map(|signal| {
+        let remediation = if signal.remediation.is_empty() {
+            String::new()
+        } else {
+            format!(" Next step: {}.", signal.remediation)
+        };
+        (
+            format!("[signal={}:{}] ", signal.source, signal.name),
+            remediation,
+        )
+    })
+    .unwrap_or_default();
     let provider_context = if include_provider_context {
         format!("[provider={provider}] ")
     } else {

@@ -55,7 +55,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 |---|---|---|
 | Pre/post-migration reports | implemented | Explicit report views and durable snapshot exports are wired; automatic post-run generation is not claimed. |
 | Resume/recovery dashboard | implemented | Recovery workspace and durable recovery guidance are wired; autonomous resume remains operator-controlled. |
-| Provider error classification | implemented | Provider-intelligence signals feed controller failure and adaptive rate-domain handling; live provider qualification remains pending. |
+| Provider error classification | implemented | Provider identity is enforced at the execution boundary; documented provider signatures are scoped to the selected provider while RFC IMAP response codes remain universal. Live provider qualification remains pending. |
 | Shared durable batch plans | implemented | Schema v21 stores one normalized batch plan per distinct policy plus mailbox identity/credential deltas and an approval-gated cutover workflow, alongside the durable webhook outbox and transaction-bound lifecycle event trigger. |
 | Run-level batch throttle policy | implemented | Current concurrency and throughput settings are snapshotted, confirmed, and applied when rebuilding durable mailbox rows. |
 | Adaptive launch and worker ceilings | implemented | Global launch and worker ceilings are configurable with conservative bounds; launch pressure halves on observed capacity failures and recovers additively under the configured ceiling, while provider and tenant rate domains adapt from observed signals. |
