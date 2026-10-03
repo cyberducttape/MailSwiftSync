@@ -11,6 +11,7 @@ use crate::controller::{
 };
 use crate::ui::WorkspaceView;
 use crate::ui::job_state_badge;
+use crate::ui::status::recommended_workspace_action;
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 
@@ -357,7 +358,14 @@ impl App {
                 ui.label(RichText::new(self.language.message("ui.use-the-state-filter-and-select-visible-to-act-on-a-focused-set-live-execut-0cd48b4754")).small().color(colors.text_secondary));
             });
             ui.add_space(12.0);
-            self.queue_settings_card(ui);
+            self.batch_workflow_card(ui, &summary);
+            ui.add_space(12.0);
+            egui::CollapsingHeader::new(self.language.text("Operator tools"))
+                .id_salt("mailbox_operator_tools")
+                .default_open(false)
+                .show(ui, |ui| {
+                    self.queue_settings_card(ui);
+                });
             ui.add_space(12.0);
             let mut selection_changed = false;
             ui.horizontal_wrapped(|ui| {
@@ -772,6 +780,76 @@ impl App {
                     .color(self.theme_colors().text_secondary),
             );
         }
+    }
+
+    fn batch_workflow_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        summary: &crate::controller::BulkQueueSummary,
+    ) {
+        let colors = self.theme_colors();
+        let phase = self
+            .ui_snapshot
+            .project
+            .as_ref()
+            .map_or(crate::core::Phase::Discovery, |project| project.phase);
+        let next = recommended_workspace_action(
+            phase,
+            !self.preflight.is_empty(),
+            summary.attention,
+            self.running(),
+            summary.total > 0,
+            false,
+        );
+        let workflow_index = match phase {
+            crate::core::Phase::Discovery => 0,
+            crate::core::Phase::Preflight => 2,
+            crate::core::Phase::Pilot | crate::core::Phase::Seed => 3,
+            crate::core::Phase::CatchUp => 4,
+            crate::core::Phase::FinalDelta => 5,
+            crate::core::Phase::Verification => 6,
+            crate::core::Phase::Complete => 7,
+            crate::core::Phase::Attention => 1,
+        };
+        crate::ui::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                crate::ui::section_label(ui, self.language.text("Migration workflow"));
+                crate::ui::pill(
+                    ui,
+                    self.language
+                        .text(crate::ui::status::format_phase_name(phase)),
+                    colors.info,
+                );
+            });
+            ui.label(RichText::new(self.language.text(next.text)).color(colors.text_secondary));
+            ui.horizontal_wrapped(|ui| {
+                for (index, label) in [
+                    "1 Import",
+                    "2 Resolve blockers",
+                    "3 Preflight",
+                    "4 Pilot / seed",
+                    "5 Catch-up",
+                    "6 Final delta",
+                    "7 Verify",
+                    "8 Deliver proof",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let active = index == workflow_index;
+                    ui.label(RichText::new(self.language.text(label)).color(if active {
+                        colors.info
+                    } else if index < workflow_index {
+                        colors.success
+                    } else {
+                        colors.text_secondary
+                    }));
+                }
+            });
+            if !self.running() && ui.button(self.language.text(next.button_label)).clicked() {
+                self.active_view = next.destination;
+            }
+        });
     }
 
     /// Worker pool, transient retries, and OS-keyring references for rows

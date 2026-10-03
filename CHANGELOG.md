@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Mailboxes now foreground the migration lifecycle and recommended next action;
+  queue policy controls are grouped under collapsed Operator tools so large
+  batch review stays workflow-oriented without removing expert controls.
 - Batch execution now carries conservative provider identity from each
   endpoint into hierarchical rate domains and provider-aware retry/backoff
   classification; Gmail, Microsoft 365, Dovecot, and unknown endpoints remain
