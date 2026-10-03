@@ -184,11 +184,6 @@ fn canonical_provider_key(value: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn load_and_check(form: &Form) -> Result<(), String> {
-    let policy = OrganizationPolicy::load()?;
-    policy.check_form(form)
-}
-
 #[cfg(test)]
 mod tests {
     use super::OrganizationPolicy;

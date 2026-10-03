@@ -85,6 +85,11 @@ pub(crate) fn admit_batch_launch(
     } = request;
     let concurrency =
         crate::migration_plan::effective_batch_concurrency(fallback_profile.batch_concurrency);
+    let organization_policy = crate::organization_policy::OrganizationPolicy::load()
+        .map_err(|error| format!("Batch admission blocked by organization policy: {error}"))?;
+    organization_policy
+        .check(fallback_profile)
+        .map_err(|error| format!("Batch admission blocked by organization policy: {error}"))?;
     let mut plan = build_plan_builder(retry_scope, fallback_profile, mode);
     let mut selected_ids = Vec::new();
     store
@@ -207,6 +212,9 @@ pub(crate) fn admit_batch_launch(
             }
             form.validate()
                 .map_err(|error| format!("Mailbox {label} is not ready for validation: {error}"))?;
+            organization_policy.check(&form.profile).map_err(|error| {
+                format!("Mailbox {label} is blocked by organization policy: {error}")
+            })?;
             if mode.is_live() && form.requires_insecure_transport_ack() {
                 return Err("Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into());
             }
@@ -236,7 +244,7 @@ pub(crate) fn admit_batch_launch(
         acknowledge_ambiguous_destination_case,
         concurrency,
     )?;
-    validate_batch_throttle(fallback_profile, concurrency)?;
+    validate_batch_throttle_with_policy(fallback_profile, concurrency, &organization_policy)?;
     let prepared = preparation.finish()?;
     let active_run = admit_batch_run(store, project_id, run_id, mode, prepared.clone())?;
     Ok(BatchLaunchAdmission {
@@ -335,8 +343,18 @@ pub(crate) fn canonical_destination_identity(profile: &Profile) -> Result<String
 /// Validate shared batch throughput constraints before any durable run is
 /// created. This policy belongs to admission rather than the egui dispatcher
 /// so GUI and headless callers cannot diverge.
+#[allow(dead_code)]
 pub(crate) fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), String> {
-    crate::organization_policy::load_and_check(&crate::Form {
+    let organization_policy = crate::organization_policy::OrganizationPolicy::load()?;
+    validate_batch_throttle_with_policy(profile, concurrency, &organization_policy)
+}
+
+fn validate_batch_throttle_with_policy(
+    profile: &Profile,
+    concurrency: usize,
+    organization_policy: &crate::organization_policy::OrganizationPolicy,
+) -> Result<(), String> {
+    organization_policy.check_form(&crate::Form {
         profile: profile.clone(),
         source_password: crate::credentials::SecretString::default(),
         destination_password: crate::credentials::SecretString::default(),

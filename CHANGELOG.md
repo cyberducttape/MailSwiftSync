@@ -36,6 +36,9 @@ operator distribution archives.
 - Organization policy now supports provider-scoped tenant concurrency ceilings
   with canonical provider aliases and fail-closed key/value validation; global
   concurrency policy remains supported for existing configurations.
+- Batch admission now evaluates the same organization-policy snapshot against
+  every rebuilt durable row, preventing endpoint or tenant overrides from
+  bypassing provider-specific safety ceilings.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in
