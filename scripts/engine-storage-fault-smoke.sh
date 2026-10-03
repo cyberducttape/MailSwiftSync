@@ -324,9 +324,9 @@ chmod 0600 "$source_secret" "$destination_secret"
 run_product() {
   # A broken engine, fixture, or controller must produce a bounded release
   # failure rather than consuming an unattended CI runner indefinitely.
-  # Use timeout's process-group handling so a surviving engine child cannot
-  # hold the command's output descriptors open after the controller exits.
-  timeout 300 "$binary" "$@"
+  # Use timeout's process-group handling and a kill-after grace period so a
+  # surviving engine child cannot keep descriptors open or ignore TERM forever.
+  timeout --kill-after=15s 300 "$binary" "$@"
 }
 
 run_product headless "$state" preflight \

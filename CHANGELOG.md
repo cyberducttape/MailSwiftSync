@@ -30,6 +30,11 @@ operator distribution archives.
   rerun confirmed exact reconciliation of 100,016 messages but reached the
   job limit during its subsequent incremental pass, before memory diagnostics
   could be summarized. That cancelled run also provides no memory measurement.
+- Made smoke-command deadlines hard bounds with GNU `timeout --kill-after`.
+  A second 90-minute scale run again verified the initial 100,016-message
+  transfer exactly, but showed that an incremental engine command can ignore
+  TERM past the nominal 40-minute timeout. That run was cancelled before
+  resource diagnostics; it provides no memory measurement.
 - Cutover commands reject non-UTF-8 control arguments rather than silently
   dropping an invalid maintenance-window or confirmation value.
 - Production-readiness guidance now distinguishes implemented provider-scoped

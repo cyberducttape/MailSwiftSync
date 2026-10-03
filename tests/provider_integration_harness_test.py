@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Guard the distinction between provider smoke runs and release evidence."""
 
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -53,14 +55,33 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_scale_lab_uses_a_bounded_longer_timeout_without_debug_noise(self):
         self.assertIn('local command_timeout=180', SCALE_SCRIPT)
         self.assertIn('command_timeout=2400', SCALE_SCRIPT)
-        self.assertIn('timeout "$command_timeout" "$binary" "$@"', SCALE_SCRIPT)
+        self.assertIn('timeout --kill-after=15s "$command_timeout" "$binary" "$@"', SCALE_SCRIPT)
         self.assertNotIn('timeout --foreground', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30"', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30 --debug"', SCALE_SCRIPT)
 
     def test_smoke_timeouts_manage_engine_process_groups(self):
-        self.assertIn('timeout 300 "$binary" "$@"', STORAGE_FAULT_SCRIPT)
+        self.assertIn('timeout --kill-after=15s 300 "$binary" "$@"', STORAGE_FAULT_SCRIPT)
         self.assertNotIn('timeout --foreground', STORAGE_FAULT_SCRIPT)
+
+    def test_timeout_force_kills_a_process_group_that_ignores_term(self):
+        if shutil.which("timeout") is None or shutil.which("bash") is None:
+            self.skipTest("GNU timeout and bash are required for this process-group test")
+        result = subprocess.run(
+            [
+                "timeout",
+                "--kill-after=1s",
+                "1s",
+                "bash",
+                "-c",
+                "trap '' TERM; while :; do sleep 1; done",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 137)
 
     def test_100k_scale_job_allows_command_timeout_and_diagnostic_upload(self):
         self.assertIn("timeout-minutes: 90", SCALE_WORKFLOW)
