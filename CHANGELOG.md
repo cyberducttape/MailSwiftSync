@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Extracted bounded IMAP LIST parsing, mailbox descriptor construction, and
+  folder metadata handling into a dedicated folder-inventory module. Existing
+  response-size, literal-size, mailbox-count, retained-inventory, timeout, and
+  cancellation bounds remain enforced.
 - Corrected the operator-facing rate-limit summary to describe the current
   hierarchical adaptive process-launch policy instead of implying a fixed
   global-only process-start ceiling; documentation validation now checks that
