@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "scripts" / "provider-integration-test.sh").read_text(encoding="utf-8")
 SCALE_SCRIPT = (ROOT / "scripts" / "imap-integration-smoke.sh").read_text(encoding="utf-8")
+STORAGE_FAULT_SCRIPT = (ROOT / "scripts" / "engine-storage-fault-smoke.sh").read_text(encoding="utf-8")
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
@@ -51,8 +52,14 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_scale_lab_uses_a_bounded_longer_timeout_without_debug_noise(self):
         self.assertIn('local command_timeout=180', SCALE_SCRIPT)
         self.assertIn('command_timeout=2400', SCALE_SCRIPT)
+        self.assertIn('timeout "$command_timeout" "$binary" "$@"', SCALE_SCRIPT)
+        self.assertNotIn('timeout --foreground', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30"', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30 --debug"', SCALE_SCRIPT)
+
+    def test_smoke_timeouts_manage_engine_process_groups(self):
+        self.assertIn('timeout 300 "$binary" "$@"', STORAGE_FAULT_SCRIPT)
+        self.assertNotIn('timeout --foreground', STORAGE_FAULT_SCRIPT)
 
 
 if __name__ == "__main__":

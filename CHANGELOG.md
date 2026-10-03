@@ -21,6 +21,11 @@ operator distribution archives.
   and has a bounded 40-minute command timeout; this is end-to-end scale
   evidence, not hosted-provider qualification. Future runs sample peak
   container memory once per second and retain a wall-clock summary.
+- Fixed timeout supervision in packaged-engine smoke labs: GNU `timeout` now
+  terminates the full process group, so a surviving engine child cannot keep
+  the output pipe open and stall the harness until the CI job timeout. The
+  first memory-sampling run exposed this issue and was cancelled before its
+  transfer completed; it provides no new scale or memory measurement.
 - Cutover commands reject non-UTF-8 control arguments rather than silently
   dropping an invalid maintenance-window or confirmation value.
 - Production-readiness guidance now distinguishes implemented provider-scoped
