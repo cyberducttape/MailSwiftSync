@@ -23,9 +23,9 @@ operator distribution archives.
   incremental-recovery or peak-memory qualification. The run and proof artifact
   are linked from the release-readiness guidance.
 - Bounded the scale lab's host-side container wait independently of individual
-  command deadlines and added non-sensitive phase/timing markers to retained
-  evidence, so stalled runs can be diagnosed without losing the full workflow
-  window.
+  command deadlines and added non-sensitive phase/timing markers plus process
+  state snapshots to retained evidence, so stalled runs can be diagnosed
+  without losing the full workflow window.
 - Durable batch imports now serialize each shared immutable plan once and
   reference it from mailbox rows, avoiding 100,000 transient duplicate TOML
   profile allocations during large imports. Applying a shared keyring

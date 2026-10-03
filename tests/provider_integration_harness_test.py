@@ -99,6 +99,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn("tail -n 100", SCALE_WORKFLOW)
         self.assertIn('printf \'begin epoch=%s operation=%s\\n\'', SCALE_SCRIPT)
         self.assertIn('printf \'end epoch=%s operation=%s status=%s\\n\'', SCALE_SCRIPT)
+        self.assertIn("process_snapshot epoch=", SCALE_SCRIPT)
 
 
 if __name__ == "__main__":
