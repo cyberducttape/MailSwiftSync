@@ -251,8 +251,9 @@ screen-reader checklist are recorded in
   RustSec auditing in addition to cross-platform compilation.
 - Pull-request CI independently collects LCOV and enforces modest line-coverage
   floors for safety-critical plan admission, batch lifecycle/scheduling,
-  durable state, evidence projection, recovery, IMAP authentication, OAuth,
-  process supervision, and verification code;
+  adaptive provider rate domains, provider response classification, durable
+  state, evidence projection, recovery, IMAP authentication, OAuth, process
+  supervision, and verification code;
   the report is uploaded as an artifact for review rather than reduced to one
   repository-wide percentage.
 - The publish job emits a deterministic SHA-256 manifest covering every

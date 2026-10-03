@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added 90% critical-module coverage floors for adaptive rate-domain
+  scheduling and provider response classification (95.16% and 95.68% currently
+  measured, respectively).
 - Batch confirmations now block with an explicit durable-read error if queue
   selection projection fails, instead of presenting a partial or empty scope.
 - Provider-specific batch error policy now requires explicit endpoint-side
