@@ -8,7 +8,8 @@ operator distribution archives.
 
 - Migration Assurance now marks every mailbox unresolved until verification is
   accepted, including completed transfers awaiting a delta, and no longer calls
-  equal aggregate folder counts a reconciled inventory.
+  equal aggregate folder counts a reconciled inventory. Difference totals now
+  saturate instead of wrapping on extreme durable counters.
 - Updated the migration-snapshot fuzz harness for private disk-backed staging;
   the target previously failed to compile after the staging security change.
   Its input files now stay in a private temporary directory, and the

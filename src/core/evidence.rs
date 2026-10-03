@@ -193,7 +193,10 @@ impl ReportMailboxSnapshot {
             .map(|(run_id, evidence, plan)| (Some(run_id.clone()), Some(evidence), plan.clone()))
             .unwrap_or((None, None, None));
         let differences_found = evidence.map_or(0, |value| {
-            value.missing_messages + value.extra_messages + value.modified_messages
+            value
+                .missing_messages
+                .saturating_add(value.extra_messages)
+                .saturating_add(value.modified_messages)
         });
         MailboxAssurance {
             transfer_completed,
@@ -637,5 +640,43 @@ mod tests {
             assurance.unresolved,
             "a mailbox awaiting its delta is not safe to close"
         );
+    }
+
+    #[test]
+    fn assurance_saturates_difference_totals_instead_of_wrapping() {
+        let mailbox = ReportMailboxSnapshot {
+            job: MailboxJob {
+                id: "job".into(),
+                source_mailbox: "source".into(),
+                destination_mailbox: "destination".into(),
+                state: "verification_difference".into(),
+                config: None,
+            },
+            attention_reason: None,
+            acceptance: None,
+            evidence: Some((
+                "run".into(),
+                MailboxEvidence {
+                    verification_method: VerificationMethod::MetadataReconciliation,
+                    verification_outcome: Some(VerificationOutcome::Missing),
+                    source_messages: 0,
+                    destination_messages: 0,
+                    source_bytes: 0,
+                    destination_bytes: 0,
+                    unmatched_messages: Some(u64::MAX),
+                    failed_messages: 0,
+                    source_folders: 0,
+                    destination_folders: 0,
+                    authoritative: false,
+                    missing_messages: u64::MAX,
+                    extra_messages: u64::MAX,
+                    modified_messages: u64::MAX,
+                    probable_messages: 0,
+                },
+                None,
+            )),
+        };
+
+        assert_eq!(mailbox.assurance().differences_found, u64::MAX);
     }
 }
