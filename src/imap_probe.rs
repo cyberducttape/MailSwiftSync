@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod fetch_pages;
 #[path = "imap_probe/fetch_parser.rs"]
 mod fetch_parser;
 mod folders;
@@ -22,6 +23,9 @@ mod literal_framing;
 #[path = "imap_probe/namespace.rs"]
 mod namespace_parser;
 mod resolver;
+use fetch_pages::{
+    FetchPagePlanner, encode_uid_page, parse_uid_search_response, validate_fetch_page_coverage,
+};
 use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
 use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 #[cfg(test)]
@@ -1594,148 +1598,6 @@ where
         window_start = window_end.saturating_add(1);
     }
     Ok(searched_uid_count)
-}
-
-/// Adaptive UID FETCH page sizing.
-///
-/// A fixed small page turns a large mailbox into thousands of round trips,
-/// which dominates on providers tens of milliseconds away. Pages are instead
-/// sized from the observed response bytes per message so each response lands
-/// near a byte budget: growth is at most 2x per page, contraction is
-/// immediate, and both stay within fixed bounds. Body pages use a separate,
-/// smaller envelope because one message may approach the per-message bound.
-#[derive(Debug, Clone)]
-struct FetchPagePlanner {
-    size: usize,
-    min: usize,
-    max: usize,
-    target_response_bytes: usize,
-}
-
-impl FetchPagePlanner {
-    fn metadata() -> Self {
-        Self {
-            size: MESSAGE_FETCH_PAGE_SIZE as usize,
-            min: 32,
-            max: 1024,
-            target_response_bytes: 1024 * 1024,
-        }
-    }
-
-    fn body() -> Self {
-        Self {
-            size: 8,
-            min: 1,
-            max: 64,
-            target_response_bytes: MAX_MESSAGE_FETCH_RESPONSE_BYTES / 4,
-        }
-    }
-
-    fn size(&self) -> usize {
-        self.size
-    }
-
-    fn observe(&mut self, messages: usize, response_bytes: usize) {
-        if messages == 0 {
-            return;
-        }
-        let per_message = (response_bytes / messages).max(1);
-        let ideal = self.target_response_bytes / per_message;
-        self.size = ideal
-            .min(self.size.saturating_mul(2))
-            .clamp(self.min, self.max);
-    }
-}
-
-/// Encode the longest prefix of sorted, unique `uids` (up to `max_count`) as
-/// an IMAP sequence set, compressing consecutive runs (`1:500,502,504:900`).
-/// The set is kept under `MAX_UID_SET_BYTES` so the command line stays within
-/// the 8192-octet client limit RFC 7162 recommends; at least one UID is
-/// always taken.
-fn encode_uid_page(uids: &[u64], max_count: usize) -> (usize, String) {
-    use std::fmt::Write as _;
-    let mut set = String::new();
-    let mut count = 0;
-    while count < uids.len().min(max_count.max(1)) {
-        let start = uids[count];
-        let mut end_index = count;
-        while end_index + 1 < uids.len().min(max_count.max(1))
-            && uids[end_index + 1] == uids[end_index] + 1
-        {
-            end_index += 1;
-        }
-        let mut item = String::new();
-        if end_index == count {
-            let _ = write!(item, "{start}");
-        } else {
-            let _ = write!(item, "{start}:{}", uids[end_index]);
-        }
-        let separator = usize::from(!set.is_empty());
-        if count > 0 && set.len() + separator + item.len() > MAX_UID_SET_BYTES {
-            break;
-        }
-        if separator == 1 {
-            set.push(',');
-        }
-        set.push_str(&item);
-        count = end_index + 1;
-    }
-    (count, set)
-}
-
-fn parse_uid_search_response(
-    response: &str,
-    host: &str,
-    mailbox: &str,
-) -> Result<Vec<u64>, String> {
-    let line = response
-        .lines()
-        .find(|line| is_untagged_response(line, "SEARCH"))
-        .ok_or_else(|| format!("{host}: SEARCH {mailbox} did not return a UID list"))?;
-    let mut uids = line
-        .split_whitespace()
-        .skip(2)
-        .map(|uid| {
-            uid.parse::<u64>()
-                .map_err(|_| format!("{host}: SEARCH {mailbox} returned invalid UID {uid}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    uids.sort_unstable();
-    Ok(uids)
-}
-
-fn validate_fetch_page_coverage(
-    messages: &crate::core::ExtractedMessages,
-    requested_uids: &[u64],
-    host: &str,
-    mailbox: &str,
-) -> Result<(), String> {
-    let parsed_uids = messages
-        .keys()
-        .map(|key| {
-            if key.mailbox.as_ref() != mailbox {
-                return Err(format!(
-                    "{host}: folder {mailbox}: FETCH returned a record for mailbox {}",
-                    key.mailbox
-                ));
-            }
-            key.uid.parse::<u64>().map_err(|_| {
-                format!(
-                    "{host}: folder {mailbox}: FETCH returned invalid UID {}",
-                    key.uid
-                )
-            })
-        })
-        .collect::<Result<HashSet<_>, _>>()?;
-    let requested_uids = requested_uids.iter().copied().collect::<HashSet<_>>();
-    if parsed_uids != requested_uids {
-        return Err(format!(
-            "{host}: folder {mailbox}: FETCH coverage mismatch (requested {}, parsed {})",
-            requested_uids.len(),
-            parsed_uids.len()
-        ));
-    }
-    Ok(())
 }
 
 /// Reconcile an entire IMAP account by enumerating selectable folders first.
