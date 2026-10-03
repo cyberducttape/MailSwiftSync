@@ -66,6 +66,14 @@ fn production_readiness_surfaces_have_one_conservative_source() {
         status.contains("controlled technical-preview deployments"),
         "active status must retain the technical-preview boundary"
     );
+    assert!(
+        !status.contains("dormant prototype")
+            && status.contains(
+                "observed-signal classification wired; live provider qualification pending"
+            )
+            && status.contains("per-message transfer checkpoints remain outstanding"),
+        "active status must distinguish wired provider intelligence from outstanding live qualification and checkpoint work"
+    );
 
     let release_readiness = fs::read_to_string("docs/release-readiness.md")
         .expect("release-readiness criteria should exist");

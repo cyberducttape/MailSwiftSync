@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Reconciled production-status maturity wording with the wired provider
+  classifier and current release blockers; the docs test now rejects the stale
+  “dormant prototype” claim.
 - Migration Assurance now marks every mailbox unresolved until verification is
   accepted, including completed transfers awaiting a delta, and no longer calls
   equal aggregate folder counts a reconciled inventory. Difference totals now
