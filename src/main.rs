@@ -727,6 +727,7 @@ mod tests {
         form.profile.folder_mapping_rules = vec![FolderMappingRule {
             source: "[Gmail]/Sent Mail".into(),
             destination: "Sent".into(),
+            exclude: false,
         }];
         let args = form.args(true);
         let mapping = args
@@ -735,7 +736,11 @@ mod tests {
             .expect("typed mapping argument");
         assert_eq!(mapping[1], "[Gmail]/Sent Mail=Sent");
         let fingerprint = form.plan_fingerprint();
-        form.profile.folder_mapping_rules[0].destination = "Archive".into();
+        form.profile.folder_mapping_rules[0] = FolderMappingRule {
+            source: "[Gmail]/Sent Mail".into(),
+            destination: "Archive".into(),
+            exclude: false,
+        };
         assert_ne!(fingerprint, form.plan_fingerprint());
     }
 
@@ -745,16 +750,53 @@ mod tests {
         form.profile.folder_mapping_rules = vec![FolderMappingRule {
             source: "INBOX".into(),
             destination: "Archive".into(),
+            exclude: false,
         }];
         assert!(form.validate_for_import().is_ok());
         form.profile.folder_mapping_rules.push(FolderMappingRule {
             source: "INBOX".into(),
             destination: "Sent".into(),
+            exclude: false,
         });
         assert!(form.validate_for_import().is_err());
         form.profile.folder_mapping_rules.truncate(1);
-        form.profile.folder_mapping_rules[0].source = "bad=folder".into();
+        form.profile.folder_mapping_rules[0] = FolderMappingRule {
+            source: "bad=folder".into(),
+            destination: String::new(),
+            exclude: true,
+        };
         assert!(form.validate_for_import().is_err());
+    }
+
+    #[test]
+    fn typed_folder_exclusion_is_anchored_in_engine_arguments() {
+        let mut form = dovecot_form();
+        form.profile.engine = crate::core::Engine::ImapSync;
+        form.profile.folder_mapping_rules = vec![FolderMappingRule {
+            source: "[Gmail]/Spam.*".into(),
+            destination: String::new(),
+            exclude: true,
+        }];
+        let args = form.args(true);
+        let exclusion = args
+            .windows(2)
+            .find(|window| window[0] == "--exclude")
+            .expect("typed exclusion argument");
+        assert_eq!(exclusion[1], r"^(?:\[Gmail\]/Spam\.\*)$");
+    }
+
+    #[test]
+    fn typed_folder_rules_remain_compatible_with_legacy_profiles() {
+        let rule: FolderMappingRule = toml::from_str(
+            r#"
+source = "INBOX"
+destination = "Archive"
+"#,
+        )
+        .expect("legacy folder mapping rule");
+        assert_eq!(rule.source, "INBOX");
+        assert_eq!(rule.destination, "Archive");
+        assert!(!rule.exclude);
     }
 
     #[test]

@@ -2023,6 +2023,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
     body_hash: Option<&BodyHashOptions<'_>>,
+    excluded_mailboxes: &HashSet<String>,
     sink: &mut C,
 ) -> Result<FetchedAccountSummary, String> {
     budget.check()?;
@@ -2073,6 +2074,14 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
         let _ = stream.write_all(b"a999 LOGOUT\r\n");
         return Err(format!(
             "{host}: folder inventory included literal or otherwise unparseable mailbox names"
+        ));
+    }
+    mailbox_details.retain(|mailbox| !excluded_mailboxes.contains(&mailbox.wire_name));
+    mailboxes.retain(|mailbox| !excluded_mailboxes.contains(mailbox));
+    if mailboxes.is_empty() {
+        let _ = stream.write_all(b"a999 LOGOUT\r\n");
+        return Err(format!(
+            "{host}: folder mapping excludes every selectable mailbox; independent verification has no source scope"
         ));
     }
     mailboxes.sort();
@@ -2163,6 +2172,39 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes(
     stage: &mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
 ) -> Result<FetchedAccountSummary, String> {
+    fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
+        host,
+        user,
+        credential,
+        auth_method,
+        transport,
+        ca_bundle,
+        certificate_pin_sha256,
+        budget,
+        state_budget,
+        body_hash,
+        &HashSet::new(),
+        stage,
+        side,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+    budget: &MessageFetchBudget<'_>,
+    state_budget: &MessageStateBudget,
+    body_hash: Option<&BodyHashOptions<'_>>,
+    excluded_mailboxes: &HashSet<String>,
+    stage: &mut crate::core::MessageMetadataStage,
+    side: crate::core::StagedMessageSide,
+) -> Result<FetchedAccountSummary, String> {
     let count = stage.count(side).map_err(|error| error.to_string())? as usize;
     if body_hash.is_some() && count > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT {
         return Err(format!(
@@ -2181,6 +2223,7 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes(
         budget,
         state_budget,
         body_hash,
+        excluded_mailboxes,
         &mut sink,
     )
 }

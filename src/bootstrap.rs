@@ -394,6 +394,7 @@ impl App {
             advanced_open: false,
             folder_mapping_source: String::new(),
             folder_mapping_destination: String::new(),
+            folder_mapping_exclude: false,
             // Do not interrupt first launch with a configuration dialog. The
             // conservative Auto engine is already selected and can be
             // changed from the migration plan when the endpoints are known.

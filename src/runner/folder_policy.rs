@@ -86,10 +86,15 @@ pub(crate) fn infer_automap_folder_mapping(
 
 pub(crate) fn apply_explicit_folder_mapping(
     mapping: &mut HashMap<String, String>,
+    excluded: &mut HashSet<String>,
     rules: &[FolderMappingRule],
 ) {
     for rule in rules {
-        mapping.insert(rule.source.clone(), rule.destination.clone());
+        if rule.exclude {
+            excluded.insert(rule.source.clone());
+        } else {
+            mapping.insert(rule.source.clone(), rule.destination.clone());
+        }
     }
 }
 

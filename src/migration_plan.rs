@@ -934,21 +934,24 @@ impl Form {
         }
         let mut seen_sources = std::collections::HashSet::new();
         for rule in &self.profile.folder_mapping_rules {
-            if rule.source.trim().is_empty() || rule.destination.trim().is_empty() {
+            let source = &rule.source;
+            let destination = (!rule.exclude).then_some(&rule.destination);
+            if source.trim().is_empty() || destination.is_some_and(|value| value.trim().is_empty())
+            {
                 return Err("Folder mapping source and destination are required.".into());
             }
-            if rule.source.chars().any(char::is_control)
-                || rule.destination.chars().any(char::is_control)
+            if source.chars().any(char::is_control)
+                || destination.is_some_and(|value| value.chars().any(char::is_control))
             {
                 return Err("Folder mapping names cannot contain control characters.".into());
             }
-            if rule.source.contains('=') || rule.destination.contains('=') {
+            if source.contains('=') || destination.is_some_and(|value| value.contains('=')) {
                 return Err("Folder mapping names cannot contain '='.".into());
             }
-            if !seen_sources.insert(rule.source.clone()) {
+            if !seen_sources.insert(source.clone()) {
                 return Err(format!(
                     "Folder mapping source is specified more than once: {}",
-                    rule.source
+                    source
                 ));
             }
         }

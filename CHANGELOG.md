@@ -9,11 +9,14 @@ operator distribution archives.
 - Destination readiness now retains RFC 7889 `APPENDLIMIT` capability data and
   shows the observed maximum message size in the simulation/capacity view.
   Unsupported provider-specific limits remain explicitly unknown.
+- Typed folder rules now also support exact source-folder exclusions. The
+  exclusion is emitted as an anchored imapsync regex and the independent
+  verifier omits the same source folders before reconciliation.
 - Added immutable typed exact folder mappings. Each source-to-destination rule
   is validated, included in the plan snapshot/fingerprint, emitted as
   imapsync `--f1f2`, editable from the advanced plan controls, and reused by
-  independent message verification; arbitrary regex transforms and exclusions
-  remain unsupported rather than silently diverging between transfer and proof.
+  independent message verification; arbitrary regex transforms remain
+  unsupported rather than silently diverging between transfer and proof.
 - Provider error classification now enforces execution-boundary provider
   identity: documented Gmail, Microsoft 365, and Dovecot signatures cannot
   be attributed to an unrelated endpoint, while RFC IMAP response codes remain

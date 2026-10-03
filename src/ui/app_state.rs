@@ -94,6 +94,7 @@ pub(crate) struct App {
     /// Draft fields for the typed exact folder-mapping editor.
     pub(crate) folder_mapping_source: String,
     pub(crate) folder_mapping_destination: String,
+    pub(crate) folder_mapping_exclude: bool,
     pub(crate) engine_open: bool,
     pub(crate) store: core::StateStore,
     /// Persistent ledger path used to place interrupted verification stages

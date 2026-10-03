@@ -145,10 +145,17 @@ fn imapsync_args_with_extra_options(
         }
     }
     for rule in &profile.folder_mapping_rules {
-        args.extend([
-            "--f1f2".into(),
-            format!("{}={}", rule.source, rule.destination),
-        ]);
+        if rule.exclude {
+            args.extend([
+                "--exclude".into(),
+                format!("^(?:{})$", regex_escape(&rule.source)),
+            ])
+        } else {
+            args.extend([
+                "--f1f2".into(),
+                format!("{}={}", rule.source, rule.destination),
+            ])
+        }
     }
     let divisor = throttle_divisor.max(1);
     if profile.max_messages_per_second > 0 {
@@ -174,6 +181,22 @@ fn imapsync_args_with_extra_options(
     args.push("--nolog".into());
     args.extend(extra_options);
     args
+}
+
+fn regex_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|character| {
+            if matches!(
+                character,
+                '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+            ) {
+                vec!['\\', character]
+            } else {
+                vec![character]
+            }
+        })
+        .collect()
 }
 
 fn append_auth_args(args: &mut Vec<String>, side: u8, method: &str, placeholder: Option<&str>) {

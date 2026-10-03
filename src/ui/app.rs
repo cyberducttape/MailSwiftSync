@@ -604,7 +604,16 @@ crate::ui::name_modal(ui, &modal_heading);
                         let mut remove_mapping = None;
                         for (index, rule) in self.form.profile.folder_mapping_rules.iter().enumerate() {
                             ui.horizontal(|ui| {
-                                ui.label(format!("{} → {}", rule.source, rule.destination));
+                                let label = if rule.exclude {
+                                    format!(
+                                        "{}: {}",
+                                        self.language.message("ui.exclude"),
+                                        rule.source
+                                    )
+                                } else {
+                                    format!("{} → {}", rule.source, rule.destination)
+                                };
+                                ui.label(label);
                                 if ui
                                     .small_button(self.language.message("ui.remove"))
                                     .clicked()
@@ -618,18 +627,21 @@ crate::ui::name_modal(ui, &modal_heading);
                         }
                         ui.horizontal(|ui| {
                             ui.add(
-                                    egui::TextEdit::singleline(&mut self.folder_mapping_source)
-                                        .hint_text(self.language.message("ui.source-folder")),
+                                egui::TextEdit::singleline(&mut self.folder_mapping_source)
+                                    .hint_text(self.language.message("ui.source-folder")),
                             );
                             ui.label("→");
                             ui.add(
-                                    egui::TextEdit::singleline(&mut self.folder_mapping_destination)
-                                        .hint_text(
-                                            self.language.message("ui.destination-folder"),
-                                        ),
+                                egui::TextEdit::singleline(&mut self.folder_mapping_destination)
+                                    .hint_text(self.language.message("ui.destination-folder")),
+                            );
+                            ui.checkbox(
+                                &mut self.folder_mapping_exclude,
+                                self.language.message("ui.exclude-source-folder"),
                             );
                             let can_add = !self.folder_mapping_source.trim().is_empty()
-                                && !self.folder_mapping_destination.trim().is_empty();
+                                && (self.folder_mapping_exclude
+                                    || !self.folder_mapping_destination.trim().is_empty());
                             if ui
                                 .add_enabled(
                                     can_add,
@@ -643,10 +655,12 @@ crate::ui::name_modal(ui, &modal_heading);
                                     crate::migration_plan::FolderMappingRule {
                                         source: self.folder_mapping_source.trim().to_owned(),
                                         destination: self.folder_mapping_destination.trim().to_owned(),
+                                        exclude: self.folder_mapping_exclude,
                                     },
                                 );
                                 self.folder_mapping_source.clear();
                                 self.folder_mapping_destination.clear();
+                                self.folder_mapping_exclude = false;
                             }
                         });
                         Self::text_field(

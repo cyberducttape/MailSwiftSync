@@ -205,13 +205,20 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_host,
         &form.profile.destination_port,
     )?;
+    let mut excluded_source_folders = form
+        .profile
+        .folder_mapping_rules
+        .iter()
+        .filter(|rule| rule.exclude)
+        .map(|rule| rule.source.clone())
+        .collect::<HashSet<_>>();
     let mut stage = if let Some(path) = durable_stage_path {
         let identity = crate::plan_identity::fingerprint_digest(&form.plan_fingerprint());
         core::MessageMetadataStage::open_durable(path.to_owned(), &identity)?
     } else {
         core::MessageMetadataStage::open_ephemeral()?
     };
-    let source = crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes(
+    let source = crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
         &source_host,
         &form.profile.source_user,
         form.source_password.as_str(),
@@ -222,6 +229,7 @@ pub(crate) fn run_imap_message_verification(
         &budget,
         &state_budget,
         body_hash.as_ref(),
+        &excluded_source_folders,
         &mut stage,
         core::StagedMessageSide::Source,
     )?;
@@ -260,10 +268,15 @@ pub(crate) fn run_imap_message_verification(
         &destination.mailbox_details,
         form.profile.automap,
     )?;
-    apply_explicit_folder_mapping(&mut folder_mapping, &form.profile.folder_mapping_rules);
+    apply_explicit_folder_mapping(
+        &mut folder_mapping,
+        &mut excluded_source_folders,
+        &form.profile.folder_mapping_rules,
+    );
     let expected_destination_folders = source
         .mailboxes
         .iter()
+        .filter(|folder| !excluded_source_folders.contains(*folder))
         .map(|folder| {
             folder_mapping
                 .get(folder)

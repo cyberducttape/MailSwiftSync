@@ -13,13 +13,16 @@ pub(crate) struct RunPlanSnapshot {
     pub(crate) profile: RunProfileSnapshot,
 }
 
-/// A deterministic, engine-owned folder mapping. Exact mappings are used by
-/// both imapsync and the independent verifier; regex transforms remain
-/// intentionally outside the typed plan until they can be replayed safely.
+/// A deterministic, engine-owned folder rule. Exact mappings and exclusions
+/// are used by both imapsync and the independent verifier; arbitrary regex
+/// transforms remain intentionally outside the typed plan.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FolderMappingRule {
     pub(crate) source: String,
+    #[serde(default)]
     pub(crate) destination: String,
+    #[serde(default)]
+    pub(crate) exclude: bool,
 }
 
 #[derive(Serialize, Deserialize)]
