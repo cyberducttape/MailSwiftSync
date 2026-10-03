@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Raised 21 critical-module line-coverage floors to values supported by the
+  current measured suite (76.87–98.17% observed); coverage artifacts are now
+  uploaded only when LCOV generation produced a report, avoiding a secondary
+  missing-artifact failure after cancellation.
 - Added an MSP operations procedure for customer scoping, change approvals,
   migration-wave controls, incident recovery, and evidence retention, with the
   current lack of centralized fleet/tenant isolation stated explicitly.

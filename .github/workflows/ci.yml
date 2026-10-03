@@ -112,7 +112,7 @@ jobs:
       - name: Enforce critical-module floors
         run: python3 scripts/check-critical-coverage.py coverage.lcov
       - name: Upload coverage report
-        if: always()
+        if: always() && hashFiles('coverage.lcov') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: critical-coverage-lcov
