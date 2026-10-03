@@ -20,6 +20,8 @@ operator distribution archives.
 - Added a dedicated recovery-state libFuzzer target against the production
   mailbox transition policy; arbitrary wire values cannot become accepted
   state edges merely through parsing.
+- Added migration-plan TOML round-trip fuzzing against the production profile
+  serializer used by durable plans and plan identity.
 - Migration simulation now shows separate source and destination capacity
   facts from the latest endpoint readiness probe, including provider-reported
   quota usage/limits, exhausted destination capacity, and an explicit unknown
