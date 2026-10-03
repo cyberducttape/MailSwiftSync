@@ -51,7 +51,9 @@ AFFIRMATIVE_CLAIMS = (
 )
 
 # Schema version checks
-SCHEMA_VERSION_PATTERN = re.compile(r"(?:SQLite\s+)?schema\s+v?(\d+)", re.I)
+SCHEMA_VERSION_PATTERN = re.compile(
+    r"(?:SQLite\s+)?schema(?:\s+version)?\s*(?:[:=(]\s*)?v?(\d+)", re.I
+)
 
 # UI capability pairing checks: if TOML says ui = "not_wired", docs shouldn't claim GUI support
 UI_CAPABILITY_CLAIMS = {

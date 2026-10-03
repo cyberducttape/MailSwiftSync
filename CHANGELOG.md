@@ -13,6 +13,8 @@ operator distribution archives.
 - Extracted adaptive UID FETCH page sizing, compact UID-set encoding, and exact
   requested-versus-parsed page coverage checks into a dedicated fetch-pages
   module; sparse UID ordering and fail-closed coverage tests remain in place.
+- Fixed schema-version documentation drift and broadened the documentation gate
+  to recognize parenthesized and labeled SQLite schema-version claims.
 - Corrected the operator-facing rate-limit summary to describe the current
   hierarchical adaptive process-launch policy instead of implying a fixed
   global-only process-start ceiling; documentation validation now checks that

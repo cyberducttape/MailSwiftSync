@@ -16,6 +16,18 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class CapabilityClaimTests(unittest.TestCase):
+    def test_schema_version_detector_catches_parenthesized_and_labeled_versions(self):
+        fixtures = {
+            "current SQLite schema (v21)": 21,
+            "SQLite schema v21": 21,
+            "schema version: 21": 21,
+        }
+        for line, expected in fixtures.items():
+            with self.subTest(line=line):
+                match = CHECKER.SCHEMA_VERSION_PATTERN.search(line)
+                self.assertIsNotNone(match)
+                self.assertEqual(int(match.group(1)), expected)
+
     def test_markdown_and_html_formatting_cannot_hide_claims(self):
         fixtures = [
             "**Status:** ✅ PRODUCTION-READY",
