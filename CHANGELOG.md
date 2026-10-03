@@ -9,6 +9,10 @@ operator distribution archives.
 - Migration Assurance now marks every mailbox unresolved until verification is
   accepted, including completed transfers awaiting a delta, and no longer calls
   equal aggregate folder counts a reconciled inventory.
+- Updated the migration-snapshot fuzz harness for private disk-backed staging;
+  the target previously failed to compile after the staging security change.
+  Its input files now stay in a private temporary directory, and the
+  coverage-increasing local inputs were added to its seed corpus.
 - Extracted bounded IMAP LIST parsing, mailbox descriptor construction, and
   folder metadata handling into a dedicated folder-inventory module. Existing
   response-size, literal-size, mailbox-count, retained-inventory, timeout, and

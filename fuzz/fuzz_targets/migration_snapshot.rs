@@ -1,5 +1,60 @@
 #![no_main]
 
+mod credentials {
+    use std::{
+        fs::{self, File, OpenOptions},
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    pub(crate) struct CleanupGuard(Vec<PathBuf>);
+
+    impl CleanupGuard {
+        pub(crate) fn new(paths: Vec<PathBuf>) -> Self {
+            Self(paths)
+        }
+    }
+
+    impl Drop for CleanupGuard {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                let _ = fs::remove_dir_all(path);
+            }
+        }
+    }
+
+    pub(crate) fn create_secret_directory() -> Result<PathBuf, String> {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-migration-snapshot-fuzz-{}-{}",
+            std::process::id(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&path)
+            .map_err(|error| format!("could not create fuzz staging directory: {error}"))?;
+        Ok(path)
+    }
+
+    pub(crate) fn open_secret_file(path: &std::path::Path) -> std::io::Result<File> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(path)
+    }
+}
+
 mod atomic_artifact {
     use std::{io, path::Path};
 
@@ -16,7 +71,10 @@ mod reports {
             value
                 .as_object_mut()
                 .ok_or("report must be an object")?
-                .insert("proof_digest".into(), serde_json::Value::String("fuzz".into()));
+                .insert(
+                    "proof_digest".into(),
+                    serde_json::Value::String("fuzz".into()),
+                );
             Ok(value)
         }
     }
@@ -26,14 +84,14 @@ mod reports {
 mod migrate_audit;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
-    let base = std::env::temp_dir().join(format!("mailswiftsync-fuzz-{}", std::process::id()));
-    let source = base.with_extension("source.json");
-    let destination = base.with_extension("destination.json");
-    let report = base.with_extension("report.json");
+    let Ok(base) = credentials::create_secret_directory() else {
+        return;
+    };
+    let _cleanup = credentials::CleanupGuard::new(vec![base.clone()]);
+    let source = base.join("source.json");
+    let destination = base.join("destination.json");
+    let report = base.join("report.json");
     let _ = std::fs::write(&source, data);
     let _ = std::fs::write(&destination, data);
     let _ = migrate_audit::compare_files(&source, &destination, &report);
-    let _ = std::fs::remove_file(source);
-    let _ = std::fs::remove_file(destination);
-    let _ = std::fs::remove_file(report);
 });
