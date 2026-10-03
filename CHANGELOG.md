@@ -24,6 +24,8 @@ operator distribution archives.
   and insert one record at a time under the existing input-size bounds.
 - Expanded the CI line-coverage gate to include observed floors for batch
   scheduling/start, event ownership, queue handling, polling, and recovery.
+- Extracted bounded tagged-response parsing and budget-aware IMAP command I/O
+  into a protocol module, preserving literal-safe completion detection.
 - Corrected the operator-facing rate-limit summary to describe the current
   hierarchical adaptive process-launch policy instead of implying a fixed
   global-only process-start ceiling; documentation validation now checks that

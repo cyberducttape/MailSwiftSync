@@ -22,6 +22,7 @@ mod list_parser;
 mod literal_framing;
 #[path = "imap_probe/namespace.rs"]
 mod namespace_parser;
+mod protocol;
 mod resolver;
 use fetch_pages::{
     FetchPagePlanner, encode_uid_page, parse_uid_search_response, validate_fetch_page_coverage,
@@ -40,7 +41,12 @@ use folders::{
 use list_parser::tokens as parse_list_tokens;
 #[cfg(test)]
 use list_parser::{delimiter as parse_list_delimiter, mailbox_name as parse_list_mailbox_name};
-use literal_framing::TaggedResponseScanner;
+#[cfg(test)]
+use protocol::{TaggedResponseScanner, tagged_response_outside_literals};
+use protocol::{
+    read_imap_tagged, read_imap_tagged_bytes_with_budget, read_imap_tagged_with_budget,
+    read_imap_tagged_with_optional_budget, write_imap_command,
+};
 use resolver::{connect_racing, resolve_dns_with_deadline};
 
 pub(crate) fn internal_dns_resolver_main(arguments: &[std::ffi::OsString]) -> i32 {
@@ -92,185 +98,6 @@ pub(crate) fn imap_quote(value: &str) -> Result<String, String> {
         "\"{}\"",
         value.replace('\\', "\\\\").replace('"', "\\\"")
     ))
-}
-
-fn read_imap_tagged<S: Read>(
-    stream: &mut S,
-    tag: &str,
-    response: &mut String,
-    buffer: &mut [u8; 4096],
-) -> Result<(), String> {
-    read_imap_tagged_with_limit(stream, tag, response, buffer, 1_048_576)
-}
-
-fn write_imap_command<S: Write>(
-    stream: &mut S,
-    bytes: &[u8],
-    budget: Option<&MessageFetchBudget<'_>>,
-    operation: &str,
-) -> Result<(), String> {
-    let Some(budget) = budget else {
-        return stream
-            .write_all(bytes)
-            .map_err(|error| format!("{operation}: {error}"));
-    };
-    let mut offset = 0;
-    while offset < bytes.len() {
-        budget.check()?;
-        match stream.write(&bytes[offset..]) {
-            Ok(0) => return Err(format!("{operation}: IMAP connection closed while writing")),
-            Ok(written) => offset = offset.saturating_add(written),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return Err(format!("{operation}: {error}")),
-        }
-    }
-    Ok(())
-}
-
-fn read_imap_tagged_with_limit<S: Read>(
-    stream: &mut S,
-    tag: &str,
-    response: &mut String,
-    buffer: &mut [u8; 4096],
-    max_bytes: usize,
-) -> Result<(), String> {
-    let mut raw_response = Vec::new();
-    let mut scanner = TaggedResponseScanner::new(tag);
-    let deadline = Instant::now() + MAX_IMAP_COMMAND_DURATION;
-    loop {
-        let count = read_with_deadline(stream, buffer, deadline, None)?;
-        if count == 0 {
-            return Err(format!("IMAP connection closed before {tag} completed"));
-        }
-        raw_response.extend_from_slice(&buffer[..count]);
-        if raw_response.len() > max_bytes {
-            return Err(format!(
-                "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
-            ));
-        }
-        if scanner.scan(&raw_response) {
-            response.clear();
-            response.push_str(&String::from_utf8_lossy(&raw_response));
-            return Ok(());
-        }
-    }
-}
-
-fn read_imap_tagged_with_budget<S: Read>(
-    stream: &mut S,
-    tag: &str,
-    response: &mut String,
-    buffer: &mut [u8; 4096],
-    max_bytes: usize,
-    budget: &MessageFetchBudget<'_>,
-) -> Result<(), String> {
-    let mut raw_response = Vec::new();
-    let mut scanner = TaggedResponseScanner::new(tag);
-    let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        budget.check()?;
-        if Instant::now() >= no_progress_deadline {
-            return Err(format!("IMAP response for {tag} stalled for 15 seconds"));
-        }
-        match stream.read(buffer) {
-            Ok(0) => return Err(format!("IMAP connection closed before {tag} completed")),
-            Ok(count) => {
-                no_progress_deadline = Instant::now() + Duration::from_secs(15);
-                raw_response.extend_from_slice(&buffer[..count]);
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error.to_string()),
-        }
-        if raw_response.len() > max_bytes {
-            return Err(format!(
-                "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
-            ));
-        }
-        if scanner.scan(&raw_response) {
-            response.clear();
-            response.push_str(&String::from_utf8_lossy(&raw_response));
-            return Ok(());
-        }
-    }
-}
-
-fn read_imap_tagged_with_optional_budget<S: Read>(
-    stream: &mut S,
-    tag: &str,
-    response: &mut String,
-    buffer: &mut [u8; 4096],
-    budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<(), String> {
-    match budget {
-        Some(budget) => {
-            read_imap_tagged_with_budget(stream, tag, response, buffer, 1_048_576, budget)
-        }
-        None => read_imap_tagged(stream, tag, response, buffer),
-    }
-}
-
-fn read_imap_tagged_bytes_with_budget<S: Read>(
-    stream: &mut S,
-    tag: &str,
-    buffer: &mut [u8; 4096],
-    max_bytes: usize,
-    budget: &MessageFetchBudget<'_>,
-) -> Result<Vec<u8>, String> {
-    let mut response = Vec::new();
-    let mut scanner = TaggedResponseScanner::new(tag);
-    let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        budget.check()?;
-        if Instant::now() >= no_progress_deadline {
-            return Err(format!("IMAP response for {tag} stalled for 15 seconds"));
-        }
-        match stream.read(buffer) {
-            Ok(0) => return Err(format!("IMAP connection closed before {tag} completed")),
-            Ok(count) => {
-                no_progress_deadline = Instant::now() + Duration::from_secs(15);
-                response.extend_from_slice(&buffer[..count]);
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error.to_string()),
-        }
-        if response.len() > max_bytes {
-            return Err(format!(
-                "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
-            ));
-        }
-        if scanner.scan(&response) {
-            return Ok(response);
-        }
-    }
-}
-
-/// Locate a tagged completion line without interpreting bytes inside IMAP
-/// literals as protocol framing. Literal payloads are arbitrary octets and
-/// may contain lines that look exactly like the command tag.
-#[cfg(test)]
-fn tagged_response_outside_literals(response: &[u8], tag: &str) -> bool {
-    TaggedResponseScanner::new(tag).scan(response)
 }
 
 const MAX_IMAP_LIST_INVENTORY_BYTES: usize = 32 * 1024 * 1024;
