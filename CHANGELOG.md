@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Batch failure details now preserve the provider identity selected at the
+  execution boundary, matching the provider-aware retry and rate-domain
+  decisions instead of falling back to generic classification in durable
+  operator evidence.
 - Added `notify-webhook --watch [--poll-seconds=N]`, a continuously running
   durable outbox worker that drains lifecycle events and bounded retries while
   keeping endpoint URLs and authentication material outside SQLite. The

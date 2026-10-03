@@ -486,8 +486,12 @@ pub(crate) fn control_error_text(error: &str) -> &str {
         .map_or(error, |(primary, _)| primary)
 }
 
-pub(crate) fn classified_failure_detail(error: &str) -> String {
-    let class = classify_failure(error);
+fn classified_failure_detail_internal(
+    provider: &str,
+    error: &str,
+    include_provider_context: bool,
+) -> String {
+    let class = classify_failure_text(provider, error);
     // A recognized documented response names its source and, when the
     // failure needs a person, what to check. The tag follows the class so
     // the durable prefix parse is unchanged.
@@ -504,13 +508,29 @@ pub(crate) fn classified_failure_detail(error: &str) -> String {
             )
         })
         .unwrap_or_default();
+    let provider_context = if include_provider_context {
+        format!("[provider={provider}] ")
+    } else {
+        String::new()
+    };
     format!(
-        "[attention_reason={}] [class={}] {}{error}{}",
+        "[attention_reason={}] [class={}] {provider_context}{}{error}{}",
         class.attention_reason().as_str(),
         class.label(),
         signal.0,
         signal.1
     )
+}
+
+/// Classify a failure with the provider selected at the execution boundary.
+/// The provider marker is durable operator context; policy still consumes the
+/// typed class and never parses the marker or raw diagnostic prose.
+pub(crate) fn classified_failure_detail_for_provider(provider: &str, error: &str) -> String {
+    classified_failure_detail_internal(provider, error, true)
+}
+
+pub(crate) fn classified_failure_detail(error: &str) -> String {
+    classified_failure_detail_internal("generic", error, false)
 }
 
 #[cfg(test)]
@@ -553,6 +573,24 @@ mod tests {
         let error = super::classify_error("message too large; recent output: rate limit");
         assert_eq!(error.class(), super::FailureClass::Message);
         assert_eq!(error.retry_after(), None);
+    }
+
+    #[test]
+    fn provider_context_is_preserved_in_durable_batch_failure_detail() {
+        let detail = super::classified_failure_detail_for_provider(
+            "gmail",
+            "Too many simultaneous connections",
+        );
+        assert!(
+            detail.starts_with(
+                "[attention_reason=capacity_limited] [class=capacity] [provider=gmail]"
+            ),
+            "{detail}"
+        );
+        assert_eq!(
+            super::classify_failure(&detail),
+            super::FailureClass::Capacity
+        );
     }
 
     #[test]

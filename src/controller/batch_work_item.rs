@@ -8,7 +8,7 @@ use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
     controller::failure::{
-        FailureClass, classified_failure_detail, classify_failure_for_provider,
+        FailureClass, classified_failure_detail_for_provider, classify_failure_for_provider,
         should_retry_batch_error_for_provider, transient_retry_delay_for_provider,
     },
     core,
@@ -655,7 +655,7 @@ impl BatchAttemptRunner {
             task,
             if cancelled { "Cancelled" } else { "Failed" },
             if cancelled { "cancelled" } else { "failed" },
-            classified_failure_detail(&redact_child_text(&task.form, error)),
+            classified_failure_detail_for_provider(provider, &redact_child_text(&task.form, error)),
             None,
         );
     }
@@ -789,7 +789,10 @@ impl BatchAttemptRunner {
                 &task,
                 "Failed",
                 "failed",
-                classified_failure_detail(&redact_child_text(&task.form, &error)),
+                classified_failure_detail_for_provider(
+                    provider_for_error(&task.form, &error),
+                    &redact_child_text(&task.form, &error),
+                ),
                 None,
             );
             return AttemptOutcome::Finished;
@@ -819,7 +822,10 @@ impl BatchAttemptRunner {
                     &task,
                     "Failed",
                     "failed",
-                    classified_failure_detail(&redact_child_text(&task.form, &error)),
+                    classified_failure_detail_for_provider(
+                        provider_for_error(&task.form, &error),
+                        &redact_child_text(&task.form, &error),
+                    ),
                     None,
                 );
                 self.finish_transcript(&task);
@@ -865,7 +871,10 @@ impl BatchAttemptRunner {
                     &task,
                     "Failed",
                     "failed",
-                    classified_failure_detail(&redact_child_text(&task.form, &error)),
+                    classified_failure_detail_for_provider(
+                        provider,
+                        &redact_child_text(&task.form, &error),
+                    ),
                     None,
                 );
                 self.finish_transcript(&task);
@@ -1048,7 +1057,7 @@ mod tests {
         assert!(!text.contains("source-secret-value"), "{text}");
         assert!(text.contains("[REDACTED]"), "{text}");
 
-        let detail = classified_failure_detail(&redact_child_text(
+        let detail = crate::controller::failure::classified_failure_detail(&redact_child_text(
             &form,
             "destination-secret-value was refused",
         ));

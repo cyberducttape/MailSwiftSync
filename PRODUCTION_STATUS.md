@@ -119,7 +119,7 @@ not become live qualification without reviewed evidence.
 | Network timeouts | ✅ | Process and webhook timeout paths are wired |
 | Authentication failures | ✅ | Clear error with remediation steps |
 | Connection exhaustion | ⚠️ Partial | Generic bounded concurrency and failure handling; no provider-specific connection-pool controller |
-| Provider unavailability | ⚠️ Partial | Generic failure classification wired in controller; provider-specific intelligence not yet integrated |
+| Provider unavailability | ⚠️ Partial | Provider-aware classification and bounded adaptive cooldowns are wired at batch execution; live provider qualification and provider-specific connection-pool guarantees remain open |
 
 ### Recovery & Durability ✅ DURABLE CORE; QUALIFICATION OUTSTANDING
 | Feature | Status | Implementation |

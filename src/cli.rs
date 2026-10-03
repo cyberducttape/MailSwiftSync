@@ -1049,7 +1049,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         let mut project_id = None;
         let mut include_customer_metadata = false;
         let mut watch = false;
-        let mut poll_seconds = 30_u64;
+        let mut poll_seconds = None;
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             if argument == std::ffi::OsStr::new("--include-customer-metadata") {
@@ -1069,32 +1069,34 @@ pub(crate) fn run() -> eframe::Result<()> {
                     eprintln!("{WEBHOOK_USAGE}");
                     std::process::exit(2);
                 };
-                if poll_seconds != 30 {
+                if poll_seconds.is_some() {
                     eprintln!("Webhook poll interval was supplied more than once");
                     std::process::exit(2);
                 }
-                poll_seconds = match value.to_str().and_then(|value| value.parse::<u64>().ok()) {
-                    Some(value) if (1..=3_600).contains(&value) => value,
-                    _ => {
-                        eprintln!("{WEBHOOK_USAGE}");
-                        std::process::exit(2);
-                    }
-                };
+                poll_seconds = Some(
+                    match value.to_str().and_then(|value| value.parse::<u64>().ok()) {
+                        Some(value) if (1..=3_600).contains(&value) => value,
+                        _ => {
+                            eprintln!("{WEBHOOK_USAGE}");
+                            std::process::exit(2);
+                        }
+                    },
+                );
             } else if let Some(value) = argument
                 .to_str()
                 .and_then(|value| value.strip_prefix("--poll-seconds="))
             {
-                if poll_seconds != 30 {
+                if poll_seconds.is_some() {
                     eprintln!("Webhook poll interval was supplied more than once");
                     std::process::exit(2);
                 }
-                poll_seconds = match value.parse::<u64>() {
+                poll_seconds = Some(match value.parse::<u64>() {
                     Ok(value) if (1..=3_600).contains(&value) => value,
                     _ => {
                         eprintln!("{WEBHOOK_USAGE}");
                         std::process::exit(2);
                     }
-                };
+                });
             } else if project_id.is_none() {
                 project_id = Some(argument);
             } else {
@@ -1120,6 +1122,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             },
             None => None,
         };
+        let poll_seconds = poll_seconds.unwrap_or(30);
         loop {
             match deliver_webhook_once(&state, &url, project_id, include_customer_metadata) {
                 Ok((delivered, 0)) => {
