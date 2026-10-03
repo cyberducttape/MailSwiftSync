@@ -161,6 +161,12 @@ screen-reader checklist are recorded in
   digest, never the endpoint URL or authentication material; automatic
   lifecycle event production and a continuously running delivery service are
   still deployment work.
+- Ledger transitions now generate lifecycle events transactionally in the
+  outbox (`migration.started`, `migration.completed`,
+  `migration.cutover_ready`, `mailbox.completed`,
+  `mailbox.verification_difference`, and verification acceptance). Events are
+  endpoint-unbound until delivery configuration is supplied, so credentials
+  and URLs remain outside durable state.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy

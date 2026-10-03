@@ -265,7 +265,7 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v18 application schema, rather than treating
+    /// Validate the complete v19 application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
     /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
@@ -776,6 +776,20 @@ impl StateStore {
                 && sql.contains(
                     "UPDATE mailbox_queue_facts SET state=NEW.state WHERE job_rowid=NEW.rowid",
                 )
+        }) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let webhook_trigger: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_webhook_outbox' AND tbl_name='events'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if !webhook_trigger.is_some_and(|sql| {
+            let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+            sql.contains("AFTER INSERT ON events")
+                && sql.contains("INSERT OR IGNORE INTO webhook_deliveries")
         }) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -1477,7 +1491,8 @@ impl StateStore {
         // version 15 adds durable per-attempt transfer-pass provenance;
         // version 16 adds narrow per-mailbox queue presentation facts; version
         // 17 stores shared batch policies separately from mailbox deltas; 18
-        // adds the credential-free webhook delivery outbox.
+        // adds the credential-free webhook delivery outbox; 19 adds the
+        // transaction-bound lifecycle-event outbox trigger.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1524,6 +1539,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL CHECK(pid >= 0), start_ticks INTEGER CHECK(start_ticks IS NULL OR start_ticks >= 0), process_group INTEGER CHECK(process_group IS NULL OR process_group >= 0), session_id INTEGER CHECK(session_id IS NULL OR session_id >= 0), executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
                  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS webhook_deliveries (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, endpoint_digest TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivered','dead_letter')), last_error TEXT, next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TEXT);
+                 CREATE TRIGGER IF NOT EXISTS events_webhook_outbox AFTER INSERT ON events WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted') OR (NEW.kind='phase_changed' AND NEW.detail IN ('complete','final_delta')) BEGIN INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest) SELECT printf('ledger-event-%lld',NEW.id),NEW.project_id,CASE WHEN NEW.kind='run_started' THEN 'migration.started' WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference' WHEN NEW.kind='run_finished' THEN 'mailbox.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready' ELSE 'mailbox.verification_accepted' END,json_object('format','mailswiftsync-webhook-event','event_id',printf('ledger-event-%lld',NEW.id),'event_type',CASE WHEN NEW.kind='run_started' THEN 'migration.started' WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference' WHEN NEW.kind='run_finished' THEN 'mailbox.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready' ELSE 'mailbox.verification_accepted' END,'project_id',NEW.project_id,'run_id',NEW.run_id,'detail',NEW.detail),''; END;
                  CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);

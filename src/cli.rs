@@ -1063,6 +1063,12 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Webhook notification refused: could not queue durable delivery: {error}");
             std::process::exit(1);
         }
+        if let Err(error) = store.bind_unbound_webhook_deliveries(&endpoint_digest) {
+            eprintln!(
+                "Webhook notification refused: could not bind lifecycle events to endpoint: {error}"
+            );
+            std::process::exit(1);
+        }
         let deliveries = match store.due_webhook_deliveries(&endpoint_digest, 100) {
             Ok(deliveries) => deliveries,
             Err(error) => {

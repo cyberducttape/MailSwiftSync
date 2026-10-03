@@ -38,7 +38,7 @@ impl StateStore {
         if event_id.is_empty()
             || project_id.is_empty()
             || event_type.is_empty()
-            || endpoint_digest.len() != 64
+            || (!endpoint_digest.is_empty() && endpoint_digest.len() != 64)
             || payload.len() > MAX_WEBHOOK_PAYLOAD_BYTES
         {
             return Err(rusqlite::Error::InvalidQuery);
@@ -92,6 +92,20 @@ impl StateStore {
                 })
             })?
             .collect()
+    }
+
+    pub(crate) fn bind_unbound_webhook_deliveries(
+        &self,
+        endpoint_digest: &str,
+    ) -> rusqlite::Result<()> {
+        if endpoint_digest.len() != 64 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        self.connection.execute(
+            "UPDATE webhook_deliveries SET endpoint_digest=?1 WHERE endpoint_digest='' AND status='queued'",
+            [endpoint_digest],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn mark_webhook_delivered(&self, event_id: &str) -> rusqlite::Result<()> {
@@ -236,6 +250,19 @@ mod tests {
             row,
             ("dead_letter".to_owned(), i64::from(MAX_WEBHOOK_ATTEMPTS))
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn committed_lifecycle_events_enter_the_unbound_outbox() {
+        let (store, directory) = test_store();
+        store
+            .record_event("project", "phase_changed", "complete")
+            .unwrap();
+        let deliveries = store.due_webhook_deliveries("", 10).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].event_type, "migration.completed");
+        assert!(deliveries[0].payload.contains("migration.completed"));
         fs::remove_dir_all(directory).unwrap();
     }
 }

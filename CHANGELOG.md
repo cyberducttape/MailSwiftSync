@@ -20,6 +20,11 @@ operator distribution archives.
   transition to durable dead-letter state after the attempt limit; endpoint
   URLs and authentication secrets are never stored, and endpoint digests bind
   retries to the operator-selected destination.
+- Durable ledger transitions now enqueue lifecycle webhook events in the same
+  SQLite transaction: migration started/completed, cutover-ready, mailbox
+  completion, verification differences, and accepted verification exceptions.
+  Events remain endpoint-unbound until an operator supplies the delivery
+  endpoint, avoiding persisted URLs while preventing transition/publish races.
 - Added a dedicated `certificate` command that refuses incomplete projects and
   atomically emits an Ed25519-signed migration certificate from the completed,
   redacted customer-proof artifact. The certificate records its authenticated
