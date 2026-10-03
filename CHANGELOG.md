@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Migration Assurance mismatch details now hash payloads left unmatched by the
+  multiset reconciliation, rather than arbitrary representatives that may be
+  identical on both sides. A streamed-SQLite/reference-comparator differential
+  regression test covers duplicate, missing, extra, modified, and normalized
+  path identities.
 - imapsync command previews now return validation errors for malformed expert
   options, and invalid plans receive distinct secret-safe fingerprints rather
   than hashes of silently shortened argument lists.

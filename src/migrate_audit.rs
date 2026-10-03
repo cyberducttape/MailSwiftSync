@@ -444,6 +444,7 @@ fn compare_category(
                 .or_default() += 1;
         }
         let mut exact = 0;
+        let mut source_value = None;
         for item in &left {
             let key = serde_json::to_string(item).unwrap_or_default();
             if let Some(count) = right_counts.get_mut(&key)
@@ -451,8 +452,15 @@ fn compare_category(
             {
                 *count -= 1;
                 exact += 1;
+            } else if source_value.is_none() {
+                source_value = Some(item);
             }
         }
+        let destination_value = right.iter().find(|item| {
+            right_counts
+                .get(&serde_json::to_string(item).unwrap_or_default())
+                .is_some_and(|count| *count > 0)
+        });
         let modified = (left.len() - exact).min(right.len() - exact);
         let missing = left.len() - exact - modified;
         let extra = right.len() - exact - modified;
@@ -465,8 +473,6 @@ fn compare_category(
             detail_groups += 1;
         }
         if details.len() < MAX_DETAILS && (missing > 0 || extra > 0 || modified > 0) {
-            let source_value = left.iter().find(|item| !right.contains(item));
-            let destination_value = right.iter().find(|item| !left.contains(item));
             details.push(serde_json::json!({
                 "identity": key,
                 "status": if missing > 0 && extra == 0 { "missing" } else if extra > 0 && missing == 0 { "extra" } else { "modified" },
@@ -532,18 +538,28 @@ fn staged_digest(connection: &Connection, side: i64, category: &str) -> Result<S
         .collect())
 }
 
-fn staged_representative(
+fn staged_unmatched_representative(
     connection: &Connection,
     side: i64,
+    other_side: i64,
     category: &str,
     identity: &str,
 ) -> Result<Option<String>, String> {
     connection
         .query_row(
-            "SELECT payload FROM records
-             WHERE side=?1 AND category=?2 AND identity=?3
-             ORDER BY payload LIMIT 1",
-            params![side, category, identity],
+            "SELECT own.payload
+             FROM records AS own
+             LEFT JOIN (
+                 SELECT payload, COUNT(*) AS count
+                 FROM records
+                 WHERE side=?4 AND category=?2 AND identity=?3
+                 GROUP BY payload
+             ) AS other ON other.payload=own.payload
+             WHERE own.side=?1 AND own.category=?2 AND own.identity=?3
+             GROUP BY own.payload, other.count
+             HAVING COUNT(*) > COALESCE(other.count, 0)
+             ORDER BY own.payload LIMIT 1",
+            params![side, category, identity, other_side],
             |row| row.get(0),
         )
         .optional()
@@ -662,10 +678,20 @@ fn compare_staged_category(
         if missing > 0 || extra > 0 || modified > 0 {
             detail_groups += 1;
             if details.len() < MAX_DETAILS {
-                let source_payload =
-                    staged_representative(connection, SOURCE_SIDE, category, &identity)?;
-                let destination_payload =
-                    staged_representative(connection, DESTINATION_SIDE, category, &identity)?;
+                let source_payload = staged_unmatched_representative(
+                    connection,
+                    SOURCE_SIDE,
+                    DESTINATION_SIDE,
+                    category,
+                    &identity,
+                )?;
+                let destination_payload = staged_unmatched_representative(
+                    connection,
+                    DESTINATION_SIDE,
+                    SOURCE_SIDE,
+                    category,
+                    &identity,
+                )?;
                 details.push(serde_json::json!({
                     "identity": identity,
                     "status": if missing > 0 && extra == 0 { "missing" } else if extra > 0 && missing == 0 { "extra" } else { "modified" },
@@ -909,6 +935,70 @@ mod tests {
         assert_eq!(result.differences, 0);
         assert_eq!(result.report["verdict"], "pass");
         assert!(result.report["proof_digest"].as_str().is_some());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn streamed_comparison_matches_reference_for_duplicate_and_modified_records() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-migrate-audit-differential-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&directory, permissions).unwrap();
+        }
+
+        let cases = [
+            (
+                serde_json::json!({
+                    "messages": [
+                        {"account":"a","folder":"INBOX","uidvalidity":1,"uid":1,"body":"same"},
+                        {"account":"a","folder":"INBOX","uidvalidity":1,"uid":1,"body":"source-only"},
+                        {"account":"a","folder":"INBOX","uidvalidity":1,"uid":2,"body":"missing"}
+                    ],
+                    "widgets": [{"id":"duplicate","value":1},{"id":"duplicate","value":2}]
+                }),
+                serde_json::json!({
+                    "widgets": [{"id":"duplicate","value":1},{"id":"duplicate","value":3}],
+                    "messages": [
+                        {"account":"a","folder":"INBOX","uidvalidity":1,"uid":1,"body":"same"},
+                        {"account":"a","folder":"INBOX","uidvalidity":1,"uid":1,"body":"destination-only"},
+                        {"account":"a","folder":"INBOX","uidvalidity":1,"uid":3,"body":"extra"}
+                    ]
+                }),
+            ),
+            (
+                serde_json::json!({"files":[{"path":"a/../b","sha256":"one"},{"path":"x","sha256":"two"}]}),
+                serde_json::json!({"files":[{"path":"b","sha256":"changed"},{"path":"y","sha256":"three"}]}),
+            ),
+            (
+                serde_json::json!({"widgets":[{"id":"same","value":7},{"id":"same","value":7}]}),
+                serde_json::json!({"widgets":[{"id":"same","value":7}]}),
+            ),
+        ];
+
+        for (index, (source_value, destination_value)) in cases.into_iter().enumerate() {
+            let source = directory.join(format!("source-{index}.json"));
+            let destination = directory.join(format!("destination-{index}.json"));
+            let output = directory.join(format!("report-{index}.json"));
+            std::fs::write(&source, serde_json::to_vec(&source_value).unwrap()).unwrap();
+            std::fs::write(
+                &destination,
+                serde_json::to_vec(&destination_value).unwrap(),
+            )
+            .unwrap();
+
+            let expected = compare(&source_value, &destination_value).unwrap();
+            let streamed = compare_files(&source, &destination, &output).unwrap();
+            assert_eq!(streamed.differences, expected.differences, "case {index}");
+            assert_eq!(streamed.report, expected.report, "case {index}");
+        }
+
         let _ = std::fs::remove_dir_all(directory);
     }
 
