@@ -14,6 +14,7 @@ on:
       - "src/migrate_audit.rs"
       - "src/core/state.rs"
       - "src/migration_plan/profile.rs"
+      - "src/bulk_import/**"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   pull_request:
@@ -29,6 +30,7 @@ on:
       - "src/migrate_audit.rs"
       - "src/core/state.rs"
       - "src/migration_plan/profile.rs"
+      - "src/bulk_import/**"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   schedule:
@@ -60,6 +62,7 @@ jobs:
           - migration_snapshot
           - recovery_state
           - migration_plan
+          - xlsx_dimension
     env:
       FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '90' || github.event_name == 'push' && '300' || '900' }}
     steps:

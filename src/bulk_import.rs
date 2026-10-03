@@ -18,6 +18,8 @@ use std::sync::{
 };
 use std::thread;
 
+mod xlsx_reference;
+
 fn plaintext_secrets_allowed(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
 }
@@ -631,59 +633,11 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
 }
 
 fn validate_xlsx_dimension_reference(reference: &str) -> Result<(), String> {
-    let mut endpoints = reference.split(':');
-    let (start_columns, start_rows) = parse_xlsx_cell_reference(
-        endpoints
-            .next()
-            .ok_or_else(|| "The worksheet dimension has no starting cell.".to_owned())?,
-    )?;
-    let (columns, rows) = if let Some(end) = endpoints.next() {
-        if endpoints.next().is_some() {
-            return Err("The worksheet dimension contains too many range endpoints.".into());
-        }
-        let (end_columns, end_rows) = parse_xlsx_cell_reference(end)?;
-        (start_columns.max(end_columns), start_rows.max(end_rows))
-    } else {
-        (start_columns, start_rows)
-    };
-    if columns > crate::MAX_BULK_IMPORT_COLUMNS {
-        return Err(format!(
-            "The worksheet declares {columns} columns; the limit is {}.",
-            crate::MAX_BULK_IMPORT_COLUMNS
-        ));
-    }
-    if rows > crate::MAX_BULK_IMPORT_ROWS as u32 + 1 {
-        return Err(format!(
-            "The worksheet declares {rows} rows; the limit is {}.",
-            crate::MAX_BULK_IMPORT_ROWS
-        ));
-    }
-    Ok(())
-}
-
-fn parse_xlsx_cell_reference(reference: &str) -> Result<(usize, u32), String> {
-    let split = reference
-        .find(|character: char| character.is_ascii_digit())
-        .ok_or_else(|| "The worksheet dimension has no row number.".to_owned())?;
-    let (letters, digits) = reference.split_at(split);
-    let mut columns = 0_usize;
-    for character in letters.chars() {
-        if !character.is_ascii_alphabetic() {
-            return Err("The worksheet dimension has an invalid column.".into());
-        }
-        let value = character.to_ascii_uppercase() as usize - 'A' as usize + 1;
-        columns = columns
-            .checked_mul(26)
-            .and_then(|columns| columns.checked_add(value))
-            .ok_or_else(|| "The worksheet dimension column is too large.".to_owned())?;
-    }
-    let rows = digits
-        .parse::<u32>()
-        .map_err(|_| "The worksheet dimension has an invalid row.".to_owned())?;
-    if rows == 0 || columns == 0 {
-        return Err("The worksheet dimension cell coordinates must be positive.".into());
-    }
-    Ok((columns, rows))
+    xlsx_reference::validate_dimension_reference(
+        reference,
+        crate::MAX_BULK_IMPORT_COLUMNS,
+        crate::MAX_BULK_IMPORT_ROWS as u32 + 1,
+    )
 }
 
 fn record_values<I>(
@@ -941,9 +895,10 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
 
 #[cfg(test)]
 mod tests {
+    use super::xlsx_reference::parse_cell_reference as parse_xlsx_cell_reference;
     use super::{
-        BulkJob, job_from_values, open_import_workbook, parse_xlsx_cell_reference,
-        plaintext_import_allowed, plaintext_secrets_allowed, validate_xlsx_shared_strings,
+        BulkJob, job_from_values, open_import_workbook, plaintext_import_allowed,
+        plaintext_secrets_allowed, validate_xlsx_shared_strings,
         validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;

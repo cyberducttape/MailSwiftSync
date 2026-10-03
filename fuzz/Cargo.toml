@@ -87,5 +87,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "xlsx_dimension"
+path = "fuzz_targets/xlsx_dimension.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1
