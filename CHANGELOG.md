@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Corrected provider-status wording to distinguish the wired Gmail/Microsoft
+  failure classifier from still-absent quota defaults and live qualification.
 - Fixed macOS migration-audit staging database opens; the database is
   pre-created exclusively with owner-only permissions inside a private
   per-run directory, then opened using the SQLite flags supported consistently

@@ -99,8 +99,8 @@ not become live qualification without reviewed evidence.
 ### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
 | Provider | Status | Coverage |
 |----------|--------|----------|
-| Gmail/Workspace | ⚠️ Endpoint preset | GUI/CLI delegated OAuth with PKCE is wired using an operator-registered app; no provider-specific execution intelligence or live qualification evidence |
-| Microsoft 365 | ⚠️ Endpoint preset | GUI/CLI delegated OAuth with PKCE is wired using an operator-registered app; no provider-specific execution intelligence or live qualification evidence |
+| Gmail/Workspace | ⚠️ Endpoint preset | GUI/CLI delegated OAuth with PKCE and provider-scoped failure classification are wired; provider quota defaults and live qualification evidence are absent |
+| Microsoft 365 | ⚠️ Endpoint preset | GUI/CLI delegated OAuth with PKCE and provider-scoped failure classification are wired; provider quota defaults and live qualification evidence are absent |
 | Fastmail | ⚠️ Endpoint preset | No provider-specific intelligence is wired into execution |
 | Generic IMAP | ✅ Generic path | Uses typed plan controls and controller retry behavior |
 
