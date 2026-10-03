@@ -7,7 +7,14 @@
 
 use crate::{Form, Profile};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub(crate) struct OrganizationProviderPolicy {
+    /// Maximum worker concurrency allowed for a tenant on this provider.
+    pub(crate) max_concurrency_per_tenant: Option<usize>,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -23,6 +30,10 @@ pub(crate) struct OrganizationPolicy {
     pub(crate) minimum_verification: String,
     /// Optional organization-wide upper bound for concurrent workers.
     pub(crate) max_concurrency: Option<usize>,
+    /// Provider-specific tenant ceilings. Keys accept the canonical provider
+    /// names (`gmail`, `microsoft365`, `dovecot`, `generic`) plus documented
+    /// aliases such as `google` and `o365`.
+    pub(crate) providers: BTreeMap<String, OrganizationProviderPolicy>,
 }
 
 impl Default for OrganizationPolicy {
@@ -33,6 +44,7 @@ impl Default for OrganizationPolicy {
             allow_destination_deletion: true,
             minimum_verification: "aggregate".into(),
             max_concurrency: None,
+            providers: BTreeMap::new(),
         }
     }
 }
@@ -126,11 +138,49 @@ impl OrganizationPolicy {
                 profile.batch_concurrency
             ));
         }
+        for (configured_provider, provider_policy) in &self.providers {
+            let provider = canonical_provider_key(configured_provider).ok_or_else(|| {
+                format!(
+                    "Organization policy has unsupported provider {:?}; use gmail, microsoft365, dovecot, or generic.",
+                    configured_provider
+                )
+            })?;
+            if let Some(maximum) = provider_policy.max_concurrency_per_tenant {
+                if maximum == 0 {
+                    return Err(format!(
+                        "Organization policy provider {configured_provider:?} max_concurrency_per_tenant must be at least 1."
+                    ));
+                }
+                let source_provider =
+                    crate::core::provider_intelligence::canonical_provider(&profile.source_host);
+                let destination_provider = crate::core::provider_intelligence::canonical_provider(
+                    &profile.destination_host,
+                );
+                if (source_provider == provider || destination_provider == provider)
+                    && profile.batch_concurrency > maximum
+                {
+                    return Err(format!(
+                        "Organization policy limits {provider} tenant concurrency to {maximum}; current plan requests {}.",
+                        profile.batch_concurrency
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
     pub(crate) fn check_form(&self, form: &Form) -> Result<(), String> {
         self.check(&form.profile)
+    }
+}
+
+fn canonical_provider_key(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "gmail" | "google" | "google_workspace" | "google-workspace" => Some("gmail"),
+        "microsoft365" | "microsoft_365" | "microsoft" | "o365" => Some("microsoft365"),
+        "dovecot" => Some("dovecot"),
+        "generic" | "generic_imap" | "generic-imap" => Some("generic"),
+        _ => None,
     }
 }
 
@@ -180,5 +230,40 @@ mod tests {
             ..OrganizationPolicy::default()
         };
         assert!(policy.check_form(&form).unwrap_err().contains("at least 1"));
+    }
+
+    #[test]
+    fn policy_applies_provider_tenant_concurrency_ceiling() {
+        let mut form = Form::default();
+        form.profile.source_host = "imap.gmail.com".into();
+        form.profile.batch_concurrency = 8;
+        let policy = OrganizationPolicy {
+            providers: [(
+                "google".into(),
+                super::OrganizationProviderPolicy {
+                    max_concurrency_per_tenant: Some(4),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..OrganizationPolicy::default()
+        };
+        let error = policy.check_form(&form).unwrap_err();
+        assert!(error.contains("gmail tenant concurrency"), "{error}");
+    }
+
+    #[test]
+    fn policy_rejects_unknown_provider_policy_keys() {
+        let policy = OrganizationPolicy {
+            providers: [(
+                "typo-provider".into(),
+                super::OrganizationProviderPolicy::default(),
+            )]
+            .into_iter()
+            .collect(),
+            ..OrganizationPolicy::default()
+        };
+        let error = policy.check_form(&Form::default()).unwrap_err();
+        assert!(error.contains("unsupported provider"), "{error}");
     }
 }

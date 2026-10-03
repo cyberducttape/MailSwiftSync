@@ -33,6 +33,9 @@ operator distribution archives.
   live, and recovery evidence record, bound to one bundle, release commit,
   engine binary, proof set, and explicit limitations. Pack generation remains
   separate from and cannot weaken the release evidence gate.
+- Organization policy now supports provider-scoped tenant concurrency ceilings
+  with canonical provider aliases and fail-closed key/value validation; global
+  concurrency policy remains supported for existing configurations.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in

@@ -103,7 +103,7 @@ evidence = "Durable approval-gated Seed, Catch-up, Final Delta, and Verification
 [[production_features]]
 feature = "Organization policy enforcement"
 status = "partial"
-evidence = "Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, and concurrency at preflight/batch admission; provider-tenant quotas and role-scoped policy administration remain open."
+evidence = "Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, global concurrency, and provider-scoped tenant concurrency at preflight/batch admission; provider quota discovery and role-scoped policy administration remain open."
 
 [[production_features]]
 feature = "Durable signed webhook delivery"
