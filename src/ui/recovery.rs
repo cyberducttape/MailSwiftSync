@@ -55,6 +55,53 @@ fn reviews_evidence(group: &RecoveryGroup) -> bool {
         )
 }
 
+fn remediation(group: &RecoveryGroup) -> (&'static str, &'static str, WorkspaceView) {
+    match group.reason {
+        Some(AttentionReason::AuthenticationFailed) => (
+            "Credentials need reconnecting; live migration remains blocked until a fresh preflight.",
+            "Reconnect accounts in Plan",
+            WorkspaceView::Plan,
+        ),
+        Some(AttentionReason::CapacityLimited) => (
+            "Provider capacity or rate policy was reached; adjust policy or wait before retrying.",
+            "Review queue policy",
+            WorkspaceView::Mailboxes,
+        ),
+        Some(AttentionReason::VerificationDifference | AttentionReason::VerificationIncomplete) => {
+            (
+                "Verification evidence is incomplete or differs; review evidence before retrying.",
+                "Review verification",
+                WorkspaceView::Verification,
+            )
+        }
+        Some(AttentionReason::ConfigurationInvalid | AttentionReason::PolicyBlocked) => (
+            "The migration plan or organization safety policy blocks execution; correct it before preflight.",
+            "Review migration plan",
+            WorkspaceView::Plan,
+        ),
+        Some(AttentionReason::TransportFailed) => (
+            "The endpoint or network failed; retry only after confirming endpoint health.",
+            "Review mailbox actions",
+            WorkspaceView::Mailboxes,
+        ),
+        Some(AttentionReason::Interrupted | AttentionReason::ProcessIdentityUnverified) => (
+            "The previous process ended without enough ownership evidence; confirm recovery before retrying.",
+            "Review recovery mailboxes",
+            WorkspaceView::Mailboxes,
+        ),
+        Some(AttentionReason::MessageRejected) => (
+            "The destination rejected one or more messages; inspect the affected mailbox before retrying.",
+            "Review mailbox actions",
+            WorkspaceView::Mailboxes,
+        ),
+        Some(AttentionReason::Unknown) | None => (
+            "The mailbox needs operator review before another migration attempt.",
+            "Review mailbox actions",
+            WorkspaceView::Mailboxes,
+        ),
+    }
+}
+
 impl App {
     fn refresh_recovery(&mut self, project_id: &str) {
         let fresh =
@@ -173,6 +220,7 @@ impl App {
         let mut toggle = None;
         let mut select = None;
         let mut review = None;
+        let mut remediate = None;
         for group in &groups {
             let key: GroupKey = (group.state.clone(), group.reason);
             let expanded = self.recovery.expanded.as_ref() == Some(&key);
@@ -198,6 +246,12 @@ impl App {
                 if let Some(reason) = group.reason {
                     ui.label(self.language.text(reason.recommended_action()));
                 }
+                let (consequence, remediation_label, remediation_view) = remediation(group);
+                ui.label(
+                    RichText::new(self.language.text(consequence))
+                        .small()
+                        .color(colors.text_secondary),
+                );
                 let extra = recommended_action(group);
                 if !extra.is_empty() {
                     ui.label(self.language.message(extra));
@@ -234,6 +288,9 @@ impl App {
                     if select_button.clicked() {
                         select = Some(group.clone());
                     }
+                    if ui.button(self.language.text(remediation_label)).clicked() {
+                        remediate = Some(remediation_view);
+                    }
                     if reviews_evidence(group)
                         && ui
                             .button(self.language.message("ui.recovery-review-evidence"))
@@ -269,6 +326,9 @@ impl App {
             self.verification_cursor_stack.clear();
             self.active_view = WorkspaceView::Verification;
             self.refresh_ui_snapshot_now();
+        }
+        if let Some(view) = remediate {
+            self.active_view = view;
         }
     }
 
@@ -327,6 +387,26 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remediation_routes_common_blockers_to_safe_follow_up() {
+        let auth = RecoveryGroup {
+            state: "attention".into(),
+            reason: Some(AttentionReason::AuthenticationFailed),
+            count: 2,
+        };
+        let (consequence, label, view) = remediation(&auth);
+        assert!(consequence.contains("fresh preflight"));
+        assert_eq!(label, "Reconnect accounts in Plan");
+        assert!(matches!(view, WorkspaceView::Plan));
+
+        let quota = RecoveryGroup {
+            state: "attention".into(),
+            reason: Some(AttentionReason::CapacityLimited),
+            count: 1,
+        };
+        assert!(matches!(remediation(&quota).2, WorkspaceView::Mailboxes));
+    }
 
     #[test]
     fn recovery_groups_the_queue_and_hands_a_group_to_mailboxes() {

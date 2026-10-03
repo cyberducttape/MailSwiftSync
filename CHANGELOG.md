@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Recovery and batch workflow views now explain blocker consequence and expose
+  remediation routes (reconnect accounts, review policy, inspect evidence, or
+  review affected mailbox actions) instead of presenting unresolved counts as
+  descriptive-only warnings.
 - Mailboxes now foreground the migration lifecycle and recommended next action;
   queue policy controls are grouped under collapsed Operator tools so large
   batch review stays workflow-oriented without removing expert controls.

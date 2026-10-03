@@ -849,6 +849,24 @@ impl App {
             if !self.running() && ui.button(self.language.text(next.button_label)).clicked() {
                 self.active_view = next.destination;
             }
+            if summary.unresolved() > 0 {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(
+                            self.language
+                                .text("{} mailbox(es) block the next migration step.")
+                                .replace("{}", &summary.unresolved().to_string()),
+                        )
+                        .color(colors.warning),
+                    );
+                    if ui
+                        .button(self.language.text("Open actionable blockers"))
+                        .clicked()
+                    {
+                        self.active_view = WorkspaceView::Recovery;
+                    }
+                });
+            }
         });
     }
 
