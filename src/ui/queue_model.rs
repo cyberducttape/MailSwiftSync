@@ -130,15 +130,6 @@ impl MailboxQueue {
             .unwrap_or(row.state.as_str())
     }
 
-    /// The state to present for a job whose durable/imported state is
-    /// `state`.
-    pub(crate) fn presented_state_of<'a>(&'a self, job_id: &str, state: &'a str) -> &'a str {
-        self.transient
-            .get(job_id)
-            .map(String::as_str)
-            .unwrap_or(state)
-    }
-
     pub(crate) fn transient_state(&self, job_id: &str) -> Option<&str> {
         self.transient.get(job_id).map(String::as_str)
     }

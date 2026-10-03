@@ -657,18 +657,6 @@ pub(crate) enum BulkStateSet {
     Unresolved,
 }
 
-impl BulkStateSet {
-    pub(crate) fn matches(self, state: &str) -> bool {
-        match self {
-            Self::Attention => state == "attention",
-            Self::Unresolved => matches!(
-                state,
-                "failed" | "attention" | "cancelled" | "delta_required" | "verification_difference"
-            ),
-        }
-    }
-}
-
 // Some narrowly targeted scopes remain available to headless policy/tests even
 // though the single Mailboxes cockpit currently exposes only the safe default,
 // delta, automation, and explicit-all paths.

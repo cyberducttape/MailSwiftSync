@@ -25,6 +25,8 @@ operator distribution archives.
 - Reconciled capability and controller documentation with the provider-context
   classification implementation; live provider qualification remains explicitly
   separate from code-level provider identity handling.
+- Batch state-set selection now uses a durable SQL effective-state projection
+  instead of scanning every mailbox row in the UI thread.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in

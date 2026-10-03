@@ -3,7 +3,6 @@
 use crate::App;
 use crate::bulk_import::{BulkImportResult, PendingSheetImport};
 use crate::controller::{BulkRetryScope, BulkStateSet};
-use crate::ui::display_state_key;
 
 pub(crate) fn mailbox_import_available(running: bool, import_in_progress: bool) -> bool {
     !running && !import_in_progress
@@ -21,21 +20,33 @@ impl App {
 
     pub(crate) fn select_bulk_state_set(&mut self, set: BulkStateSet) {
         self.bulk_all_selected = false;
-        let mut selected = std::collections::HashSet::new();
+        let selected = std::collections::HashSet::new();
         if let Some(project_id) = self.queue.project_id().map(str::to_owned) {
-            let queue = &self.queue;
-            let result = self.store.queue_scan(&project_id, |row| {
-                let presented = queue.presented_state_of(&row.id, &row.state);
-                if set.matches(&display_state_key(presented)) {
-                    selected.insert(row.id);
+            let states = match set {
+                BulkStateSet::Attention => ["attention"].as_slice(),
+                BulkStateSet::Unresolved => [
+                    "failed",
+                    "attention",
+                    "cancelled",
+                    "delta_required",
+                    "verification_difference",
+                ]
+                .as_slice(),
+            };
+            let selected = match self
+                .store
+                .queue_ids_by_effective_states(&project_id, states)
+            {
+                Ok(ids) => ids.into_iter().collect(),
+                Err(error) => {
+                    self.bulk_message = format!("Could not read the mailbox queue: {error}");
+                    return;
                 }
-            });
-            if let Err(error) = result {
-                self.bulk_message = format!("Could not read the mailbox queue: {error}");
-                return;
-            }
+            };
+            self.bulk_selected_ids = selected;
+        } else {
+            self.bulk_selected_ids = selected;
         }
-        self.bulk_selected_ids = selected;
         self.bulk_selection_view_dirty = true;
         self.bulk_state_filter = "all".into();
         self.bulk_message = self

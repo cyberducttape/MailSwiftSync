@@ -437,6 +437,31 @@ impl StateStore {
             .collect()
     }
 
+    /// Return queue IDs whose effective state is one of the requested values.
+    /// The effective-state expression keeps imported and admitted queued rows
+    /// consistent with the presentation projection used by the UI, while the
+    /// database performs the filtering instead of materializing every queue
+    /// row in Rust.
+    pub fn queue_ids_by_effective_states(
+        &self,
+        project_id: &str,
+        states: &[&str],
+    ) -> rusqlite::Result<Vec<String>> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = numbered_placeholders(states.len());
+        let sql = format!(
+            "SELECT m.id FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN ({placeholders}) ORDER BY m.rowid"
+        );
+        let params = std::iter::once(project_id.to_owned())
+            .chain(states.iter().map(|state| (*state).to_owned()));
+        self.connection
+            .prepare_cached(&sql)?
+            .query_map(params_from_iter(params), |row| row.get(0))?
+            .collect()
+    }
+
     /// Return the first queue row not excluded by a compact select-all set.
     pub fn first_queue_job_excluding(
         &self,
