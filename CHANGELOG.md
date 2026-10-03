@@ -22,6 +22,8 @@ operator distribution archives.
 - Changed file-based `migrateaudit` staging from SQLite's in-memory database to
   a private, auto-cleaned on-disk database; the JSON reader continues to parse
   and insert one record at a time under the existing input-size bounds.
+- Expanded the CI line-coverage gate to include observed floors for batch
+  scheduling/start, event ownership, queue handling, polling, and recovery.
 - Corrected the operator-facing rate-limit summary to describe the current
   hierarchical adaptive process-launch policy instead of implying a fixed
   global-only process-start ceiling; documentation validation now checks that

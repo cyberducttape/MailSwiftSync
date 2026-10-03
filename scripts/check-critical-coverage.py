@@ -14,9 +14,16 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 CRITICAL_FILES = {
     "src/controller/batch_admission.rs": 70.0,
+    "src/controller/batch_scheduler.rs": 80.0,
+    "src/controller/batch_start.rs": 75.0,
+    "src/controller/events.rs": 70.0,
     "src/controller/failure.rs": 80.0,
+    "src/controller/poll.rs": 70.0,
+    "src/controller/queue.rs": 80.0,
     "src/core/database.rs": 65.0,
     "src/core/message_verification.rs": 70.0,
+    "src/core/recovery.rs": 80.0,
+    "src/core/recovery_queue.rs": 85.0,
     "src/core/state.rs": 80.0,
     "src/extra_options.rs": 80.0,
     "src/migrate_audit.rs": 70.0,
