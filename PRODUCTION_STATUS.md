@@ -177,7 +177,7 @@ new metadata verifier against real accounts.
 ### Documentation [OPERATIONAL IMPROVEMENT]
 - [ ] Compatibility matrix with live test results
 - [ ] Provider-specific troubleshooting guides
-- [ ] MSP operational runbooks
+- [x] MSP operations procedure for customer scoping, change approvals, wave controls, incident handling, and evidence retention; centralized fleet control remains unavailable.
 
 **Status:** Foundation in place, can be extended from real-world usage
 
@@ -255,7 +255,7 @@ new metadata verifier against real accounts.
 ### Recommended (Next Release)
 - 🔲 Live provider validation (Gmail, O365, Fastmail)
 - 🔲 Real-world performance benchmarks
-- 🔲 MSP operational runbooks
+- ✅ MSP single-customer operational procedure ([runbook](docs/msp-operations-runbook.md)); centralized fleet controls and tenant isolation remain future work.
 - 🔲 Advanced folder mapping rules
 
 ### Future (Post-1.0)

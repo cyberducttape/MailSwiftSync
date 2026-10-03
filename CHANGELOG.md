@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added an MSP operations procedure for customer scoping, change approvals,
+  migration-wave controls, incident recovery, and evidence retention, with the
+  current lack of centralized fleet/tenant isolation stated explicitly.
 - Corrected provider-status wording to distinguish the wired Gmail/Microsoft
   failure classifier from still-absent quota defaults and live qualification.
 - Fixed macOS migration-audit staging database opens; the database is

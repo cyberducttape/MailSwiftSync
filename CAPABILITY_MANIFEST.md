@@ -262,7 +262,7 @@ To reach GA 1.0, the following work is required:
 - [ ] Implement durable per-message transfer checkpoints (run-level Dovecot restart binding and snapshot-bound restartable verification staging are implemented)
 - [ ] Performance benchmarks with 100k+ message mailboxes
 - [ ] Provider edge case testing
-- [ ] Production support runbooks
+- [x] Document MSP customer scoping, change approvals, wave controls, incident handling, and evidence retention in [`docs/msp-operations-runbook.md`](docs/msp-operations-runbook.md); centralized fleet control remains out of scope.
 - [ ] Load testing with multiple concurrent migrations
 
 ---

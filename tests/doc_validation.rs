@@ -15,6 +15,7 @@ fn doc_files_exist() {
         "verification-envelope.md",
         "history/message-level-verification-design.md",
         "history/scheduler-design.md",
+        "msp-operations-runbook.md",
         "provider-testing-guide.md",
     ];
 
