@@ -22,6 +22,10 @@ operator distribution archives.
   incremental pass hit the 90-minute job limit, so the run provides no
   incremental-recovery or peak-memory qualification. The run and proof artifact
   are linked from the release-readiness guidance.
+- Bounded the scale lab's host-side container wait independently of individual
+  command deadlines and added non-sensitive phase/timing markers to retained
+  evidence, so stalled runs can be diagnosed without losing the full workflow
+  window.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.

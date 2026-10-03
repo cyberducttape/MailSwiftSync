@@ -13,8 +13,8 @@ jobs:
     name: Packaged imapsync with 100k-message mailbox
     runs-on: ubuntu-24.04
     # The real 100k fixture runs both a full migration and a later incremental
-    # pass. Leave enough room for the harness's 40-minute per-command timeout,
-    # container shutdown, memory summary, and artifact upload.
+    # pass. The host watchdog bounds the entire container wait independently
+    # of the harness's per-command timeout, leaving time to collect diagnostics.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,12 +39,32 @@ jobs:
           docker stats --format '{{.MemUsage}}' "$container_name" > "$stats_file" &
           stats_pid=$!
           set +e
-          container_status="$(docker wait "$container_name")"
+          container_status="$(timeout --foreground --kill-after=15s 3600 docker wait "$container_name")"
+          wait_status=$?
           set -e
+          if [ "$wait_status" -ne 0 ]; then
+            if [ "$wait_status" -eq 124 ] || [ "$wait_status" -eq 137 ]; then
+              echo "Scale container exceeded the 60-minute host watchdog; stopping it to preserve diagnostics." >&2
+              container_status=124
+            else
+              echo "docker wait failed with status $wait_status; stopping the scale container." >&2
+              container_status=125
+            fi
+            docker kill "$container_name" >/dev/null 2>&1 || true
+            timeout --foreground --kill-after=5s 20 docker wait "$container_name" >/dev/null 2>&1 || true
+          fi
           finished_at="$(date +%s)"
           kill "$stats_pid" 2>/dev/null || true
           wait "$stats_pid" 2>/dev/null || true
-          docker logs "$container_name"
+          if [ "$container_status" -eq 124 ] || [ "$container_status" -eq 125 ]; then
+            docker logs "$container_name" 2>&1 | tail -n 100
+          else
+            docker logs "$container_name"
+          fi
+          if [ -f provider-scale-evidence/scale-progress.txt ]; then
+            echo 'Scale command progress markers:'
+            cat provider-scale-evidence/scale-progress.txt
+          fi
           python3 scripts/docker_memory.py "$stats_file" > "$summary_file"
           printf 'wall_clock_seconds=%s\ncontainer_exit_status=%s\n' \
             "$((finished_at - started_at))" "$container_status" >> "$summary_file"

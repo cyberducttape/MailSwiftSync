@@ -86,6 +86,17 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_100k_scale_job_allows_command_timeout_and_diagnostic_upload(self):
         self.assertIn("timeout-minutes: 90", SCALE_WORKFLOW)
 
+    def test_100k_scale_job_bounds_container_wait_and_preserves_stall_evidence(self):
+        self.assertIn(
+            'timeout --foreground --kill-after=15s 3600 docker wait "$container_name"',
+            SCALE_WORKFLOW,
+        )
+        self.assertIn('docker kill "$container_name"', SCALE_WORKFLOW)
+        self.assertIn("provider-scale-evidence/scale-progress.txt", SCALE_WORKFLOW)
+        self.assertIn("tail -n 100", SCALE_WORKFLOW)
+        self.assertIn('printf \'begin epoch=%s operation=%s\\n\'', SCALE_SCRIPT)
+        self.assertIn('printf \'end epoch=%s operation=%s status=%s\\n\'', SCALE_SCRIPT)
+
 
 if __name__ == "__main__":
     unittest.main()

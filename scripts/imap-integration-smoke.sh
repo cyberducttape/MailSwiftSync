@@ -559,6 +559,15 @@ run_product() {
   # the group after a short grace period if a command ignores TERM. The explicit
   # large-mailbox path gets a larger, still bounded per-command cap.
   local command_timeout=180
+  local operation="$1"
+  if [[ "$operation" == "headless" ]]; then
+    operation+="/${3:-unknown}"
+  fi
+  local progress_file=""
+  if (( scale_messages > 0 )) && [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+    progress_file="$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
+    printf 'begin epoch=%s operation=%s\n' "$(date +%s)" "$operation" >> "$progress_file"
+  fi
   if (( scale_messages > 0 )); then
     command_timeout=2400
   fi
@@ -599,6 +608,10 @@ run_product() {
   wait "$pipeline_pid" || pipeline_status=$?
   kill "$monitor_pid" 2>/dev/null || true
   wait "$monitor_pid" 2>/dev/null || true
+  if [[ -n "$progress_file" ]]; then
+    printf 'end epoch=%s operation=%s status=%s\n' \
+      "$(date +%s)" "$operation" "$pipeline_status" >> "$progress_file"
+  fi
   return "$pipeline_status"
 }
 
