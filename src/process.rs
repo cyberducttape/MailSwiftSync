@@ -346,7 +346,9 @@ mod tests {
         let destination_tenant = path.domain(Side::Destination, DomainLevel::Tenant).clone();
         let limiter = ProcessLaunchLimiter::new(8);
 
-        let launched_before_penalty = Instant::now();
+        let launched_before_penalty = limiter
+            .acquire_scoped_at(&path, &AtomicBool::new(false))
+            .expect("initial launch admission is available");
         limiter.observe_capacity_failure_for(std::slice::from_ref(&source_tenant));
         assert_eq!(limiter.rate_per_second(), 8.0);
         assert_eq!(limiter.scoped_rate_per_second(&source_tenant), 4.0);
@@ -649,16 +651,32 @@ impl ProcessLaunchLimiter {
 
     #[cfg(test)]
     pub(crate) fn acquire(&self, cancel: &AtomicBool) -> bool {
-        self.acquire_scoped_inner(None, cancel)
+        self.acquire_scoped_inner(None, cancel).is_some()
     }
 
     /// Take a token from the global bucket and every currently penalized
     /// domain on this job's path. Unpenalized domains need no state entry.
+    #[cfg(test)]
     pub(crate) fn acquire_scoped(&self, path: &RateDomainPath, cancel: &AtomicBool) -> bool {
+        self.acquire_scoped_at(path, cancel).is_some()
+    }
+
+    /// Take launch tokens and return the exact admission instant. Feedback
+    /// uses this timestamp so a slow OS spawn cannot make a pre-penalty permit
+    /// appear to be a successful post-penalty launch.
+    pub(crate) fn acquire_scoped_at(
+        &self,
+        path: &RateDomainPath,
+        cancel: &AtomicBool,
+    ) -> Option<Instant> {
         self.acquire_scoped_inner(Some(path), cancel)
     }
 
-    fn acquire_scoped_inner(&self, path: Option<&RateDomainPath>, cancel: &AtomicBool) -> bool {
+    fn acquire_scoped_inner(
+        &self,
+        path: Option<&RateDomainPath>,
+        cancel: &AtomicBool,
+    ) -> Option<Instant> {
         let keys = path.map(|path| {
             path.all()
                 .filter(|key| key.level() != DomainLevel::Global)
@@ -667,12 +685,12 @@ impl ProcessLaunchLimiter {
         });
         loop {
             if cancel.load(Ordering::Relaxed) {
-                return false;
+                return None;
             }
             let wait = {
                 let mut state = match self.state.lock() {
                     Ok(state) => state,
-                    Err(_) => return false,
+                    Err(_) => return None,
                 };
                 let now = Instant::now();
                 state.global.refill(now, self.ceiling_per_second);
@@ -700,7 +718,7 @@ impl ProcessLaunchLimiter {
                             }
                         }
                     }
-                    return true;
+                    return Some(now);
                 }
             };
             thread::sleep(wait.min(Duration::from_millis(100)));

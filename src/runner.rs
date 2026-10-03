@@ -459,20 +459,21 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         launch_limiter,
     } = context;
     let mut command = execution_command(executable, args, env)?;
-    if let Some((limiter, path)) = launch_limiter
-        && !limiter.acquire_scoped(path, cancel)
-    {
-        return Err(if cancel.load(Ordering::Relaxed) {
-            format!("{executable} launch cancelled before process start")
-        } else {
-            format!("{executable} launch refused: process-start limiter unavailable")
-        });
-    }
+    let launch_admitted_at = if let Some((limiter, path)) = launch_limiter {
+        Some(limiter.acquire_scoped_at(path, cancel).ok_or_else(|| {
+            if cancel.load(Ordering::Relaxed) {
+                format!("{executable} launch cancelled before process start")
+            } else {
+                format!("{executable} launch refused: process-start limiter unavailable")
+            }
+        })?)
+    } else {
+        None
+    };
     let mut child = spawn_retrying_busy_executable(&mut command)
         .map_err(|error| format!("could not start {executable}: {error}"))?;
-    let launched_at = std::time::Instant::now();
-    if let Some((limiter, path)) = launch_limiter {
-        limiter.observe_success_for(path, launched_at);
+    if let (Some((limiter, path)), Some(admitted_at)) = (launch_limiter, launch_admitted_at) {
+        limiter.observe_success_for(path, admitted_at);
     }
     let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
