@@ -301,10 +301,10 @@ pub(crate) fn batch_row_admitted(
 #[cfg(test)]
 mod tests {
     use super::{
-        BatchActionRow, BatchExecutionMode, BatchStartBlock, BatchStartContext, BatchStartDecision,
-        BulkJob, BulkQueueSummary, BulkRetryScope, SelectionScope, batch_mailbox_state,
-        batch_row_admitted, batch_run_status, batch_start_decision, build_batch_action_plan,
-        suggested_batch_project_name,
+        BatchActionPlanBuilder, BatchActionRow, BatchExecutionMode, BatchStartBlock,
+        BatchStartContext, BatchStartDecision, BulkJob, BulkQueueSummary, BulkRetryScope,
+        SelectionScope, batch_mailbox_state, batch_row_admitted, batch_run_status,
+        batch_start_decision, build_batch_action_plan, suggested_batch_project_name,
     };
     use crate::core::{MailboxEvidence, VerificationMethod};
     use crate::migration_plan::Form;
@@ -578,6 +578,24 @@ mod tests {
     }
 
     #[test]
+    fn action_plan_fails_closed_when_durable_projection_is_unavailable() {
+        let mut builder =
+            BatchActionPlanBuilder::new(BulkRetryScope::All, 4, BatchExecutionMode::Preflight);
+        builder.fail_closed(17, "durable selection read failed".to_owned());
+        let plan = builder.finish();
+
+        assert_eq!(plan.explicit_selection_count, 17);
+        assert_eq!(plan.eligible_count, 0);
+        assert_eq!(plan.blocked_count, 17);
+        assert_eq!(plan.destructive_count, 0);
+        assert!(
+            plan.blocked_reasons
+                .iter()
+                .any(|reason| reason == "durable selection read failed")
+        );
+    }
+
+    #[test]
     fn batch_project_name_prefers_configured_name_and_derives_safe_fallback() {
         let mut form = Form::default();
         form.profile.source_host = "old.example".into();
@@ -727,6 +745,7 @@ pub(crate) struct BatchActionPlanBuilder {
     destructive_count: usize,
     missing_durable_state: bool,
     outside_retry_scope: bool,
+    projection_failure: Option<String>,
     // Order-independent multiset digest: action review can stream arbitrarily
     // large selections without materializing selected-row or sorted-ID vecs.
     digest_xor: [u8; 32],
@@ -749,6 +768,7 @@ impl BatchActionPlanBuilder {
             destructive_count: 0,
             missing_durable_state: false,
             outside_retry_scope: false,
+            projection_failure: None,
             digest_xor: [0; 32],
             digest_sum: [0; 32],
         }
@@ -788,6 +808,17 @@ impl BatchActionPlanBuilder {
         }
     }
 
+    /// Make a partial/failed UI projection impossible to approve. Preserve
+    /// the operator's known selection size, but report zero eligible rows
+    /// until the durable projection can be read successfully.
+    pub(crate) fn fail_closed(&mut self, selection_count: usize, reason: String) {
+        self.explicit_selection_count = selection_count;
+        self.eligible_count = 0;
+        self.destructive_count = 0;
+        self.missing_durable_state = true;
+        self.projection_failure = Some(reason);
+    }
+
     pub(crate) fn finish(self) -> BatchActionPlan {
         let Self {
             retry_scope,
@@ -799,11 +830,15 @@ impl BatchActionPlanBuilder {
             destructive_count,
             missing_durable_state,
             outside_retry_scope,
+            projection_failure,
             digest_xor,
             digest_sum,
         } = self;
         let blocked_count = explicit_selection_count.saturating_sub(eligible_count);
         let mut blocked_reasons = Vec::new();
+        if let Some(reason) = projection_failure {
+            blocked_reasons.push(reason);
+        }
         if execution_mode == BatchExecutionMode::Live && missing_durable_state {
             blocked_reasons.push(
                 "Durable mailbox state is unavailable for one or more selected rows".to_owned(),

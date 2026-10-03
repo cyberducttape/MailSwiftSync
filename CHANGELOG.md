@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Batch confirmations now block with an explicit durable-read error if queue
+  selection projection fails, instead of presenting a partial or empty scope.
 - Updated the migration-snapshot fuzz target's private-directory shim to match
   the stager's canonical-directory validation after the macOS path fix.
 - Added coverage-increasing migration-snapshot fuzz inputs to the regression

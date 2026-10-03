@@ -33,7 +33,7 @@ impl App {
         );
         if let Some(project_id) = self.queue.project_id() {
             if self.bulk_all_selected {
-                let _ = self.store.queue_scan(project_id, |row| {
+                if let Err(error) = self.store.queue_scan(project_id, |row| {
                     if !self.bulk_is_selected(&row.id) {
                         return;
                     }
@@ -44,41 +44,56 @@ impl App {
                         durable_state: Some(&row.durable_state),
                         destructive: row.destructive,
                     });
-                });
-            } else if let Ok(rows) = self.store.queue_plans(
-                project_id,
-                &self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>(),
-            ) {
-                let found = rows
-                    .iter()
-                    .map(|row| row.id.clone())
-                    .collect::<std::collections::HashSet<_>>();
-                for row in rows {
-                    builder.add(BatchActionRow {
-                        id: &row.id,
-                        selected: true,
-                        visible: self.queue.is_visible(row.rowid),
-                        durable_state: Some(&row.state),
-                        destructive: row.destructive,
-                    });
+                }) {
+                    builder.fail_closed(
+                        self.bulk_selection_count(),
+                        format!("Could not read the durable selection; batch confirmation is blocked: {error}"),
+                    );
                 }
-                for id in self
-                    .bulk_selected_ids
-                    .iter()
-                    .filter(|id| !found.contains(*id))
-                {
-                    builder.add(BatchActionRow {
-                        id,
-                        selected: true,
-                        visible: false,
-                        durable_state: None,
-                        destructive: false,
-                    });
-                }
-                return builder.finish();
             } else {
-                return builder.finish();
+                match self.store.queue_plans(
+                    project_id,
+                    &self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>(),
+                ) {
+                    Ok(rows) => {
+                        let found = rows
+                            .iter()
+                            .map(|row| row.id.clone())
+                            .collect::<std::collections::HashSet<_>>();
+                        for row in rows {
+                            builder.add(BatchActionRow {
+                                id: &row.id,
+                                selected: true,
+                                visible: self.queue.is_visible(row.rowid),
+                                durable_state: Some(&row.state),
+                                destructive: row.destructive,
+                            });
+                        }
+                        for id in self
+                            .bulk_selected_ids
+                            .iter()
+                            .filter(|id| !found.contains(*id))
+                        {
+                            builder.add(BatchActionRow {
+                                id,
+                                selected: true,
+                                visible: false,
+                                durable_state: None,
+                                destructive: false,
+                            });
+                        }
+                    }
+                    Err(error) => builder.fail_closed(
+                        self.bulk_selection_count(),
+                        format!("Could not read the durable selection; batch confirmation is blocked: {error}"),
+                    ),
+                }
             }
+        } else if self.bulk_selection_count() > 0 {
+            builder.fail_closed(
+                self.bulk_selection_count(),
+                "Could not identify the durable queue; batch confirmation is blocked.".to_owned(),
+            );
         }
         builder.finish()
     }
