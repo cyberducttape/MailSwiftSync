@@ -493,11 +493,13 @@ mod tests {
             .unwrap()
             .remove(0);
 
-        let mut current_profile = Profile::default();
-        current_profile.batch_concurrency = 2;
-        current_profile.max_messages_per_second = 200;
-        current_profile.max_bytes_per_second = 2_000;
-        current_profile.extra_options = "--nofoldersizes".into();
+        let current_profile = Profile {
+            batch_concurrency: 2,
+            max_messages_per_second: 200,
+            max_bytes_per_second: 2_000,
+            extra_options: "--nofoldersizes".into(),
+            ..Profile::default()
+        };
         let rebuilt = job_from_plan_with_batch_policy(&row, &current_profile, None, true).unwrap();
         assert_eq!(rebuilt.profile().batch_concurrency, 2);
         assert_eq!(rebuilt.profile().max_messages_per_second, 200);
