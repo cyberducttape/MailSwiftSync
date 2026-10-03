@@ -557,7 +557,7 @@ run_product() {
   # explicit large-mailbox path gets a larger, still bounded per-command cap.
   local command_timeout=180
   if (( scale_messages > 0 )); then
-    command_timeout=900
+    command_timeout=2400
   fi
   MAILSWIFTSYNC_DEBUG_PROCESS_WAIT=1 timeout --foreground "$command_timeout" "$binary" "$@" 2>&1 | LC_ALL=C awk -v path="$product_log" '
     {

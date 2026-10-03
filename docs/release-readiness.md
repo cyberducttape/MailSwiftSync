@@ -320,10 +320,16 @@ screen-reader checklist are recorded in
 - **100k-message end-to-end scale gate:** `.github/workflows/scale-qualification.yml`
   provides a monthly/manual run that creates 100,000 distinct RFC822 messages
   in one disposable Dovecot mailbox, then exercises the packaged imapsync
-  transfer, durable evidence, and metadata verifier. The first result is not
-  yet recorded. Scale mode disables per-message debug output and allows up to
-  15 minutes per CLI command, within a 60-minute workflow limit. This generic-
-  IMAP lab does not qualify Gmail, Microsoft 365, or other hosted providers.
+  transfer, durable evidence, and metadata verifier. The first successful run
+  on 2026-10-03 used imapsync 2.314 and Dovecot 2.3.19.1: the live pass took
+  14m10s, and the complete workflow step took 16m57s. Metadata reconciliation
+  matched 100,016 messages / 28,681,943 bytes across three folders with zero
+  missing, extra, failed, or unresolved messages; the subsequent delta left
+  100,017 messages on the destination. See the [retained Actions run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37139081988).
+  This small-message generic-IMAP fixture does not measure peak memory or
+  qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.
+  Scale mode disables per-message debug output and allows up to 40 minutes per
+  CLI command within a 60-minute workflow limit.
 - Batch scheduling keeps conservative defaults but exposes explicit global
   worker and process-start ceilings for qualified deployments. The adaptive
   global/provider/tenant/credential/mailbox rate-domain limiter remains the

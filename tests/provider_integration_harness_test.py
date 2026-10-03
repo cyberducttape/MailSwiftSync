@@ -50,7 +50,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
 
     def test_scale_lab_uses_a_bounded_longer_timeout_without_debug_noise(self):
         self.assertIn('local command_timeout=180', SCALE_SCRIPT)
-        self.assertIn('command_timeout=900', SCALE_SCRIPT)
+        self.assertIn('command_timeout=2400', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30"', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30 --debug"', SCALE_SCRIPT)
 

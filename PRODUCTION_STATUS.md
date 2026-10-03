@@ -235,7 +235,7 @@ new metadata verifier against real accounts.
 - ⏳ Successful live pilots with real data
 - ⏳ Recovery/interruption testing with production accounts
 - ⏳ Provider-specific edge case validation
-- ⚠️ Synthetic durable SQLite reconciliation benchmark measured 100k messages per endpoint, and the current Linux release host passes the importer/UI/reload scale gates. A scheduled/manual packaged-engine lab now transfers and verifies 100k RFC822 messages in one disposable generic-IMAP mailbox; its first successful run and hosted-provider load qualification remain outstanding. See [verification envelope](docs/verification-envelope.md).
+- ⚠️ A scheduled/manual packaged-engine lab completed one 100k-message run against disposable generic IMAP (100,016 messages / 28.7 MB, exact metadata reconciliation, zero unresolved differences; live pass 14m10s). This is not a 20 GiB, peak-memory, multi-migration, or hosted-provider qualification; repeatable baselines and Gmail/Microsoft 365 qualification remain outstanding. See [verification envelope](docs/verification-envelope.md) and the [scale run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37139081988).
 - ⚠️ CI scheduler stress coverage settles 1,024 synthetic mailbox jobs across 32 tenant domains at 16 workers; this does not exercise concurrent IMAP engines or qualify provider limits.
 
 ---
