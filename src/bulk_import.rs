@@ -9,7 +9,7 @@ use crate::{Form, SecretString};
 use calamine::{Reader, Sheets, Xlsx, open_workbook_from_rs};
 use quick_xml::Reader as XmlReader;
 use quick_xml::events::Event as XmlEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -18,7 +18,10 @@ use std::sync::{
 };
 use std::thread;
 
+mod rows;
 mod xlsx_reference;
+pub(crate) use rows::validate_headers;
+use rows::{normalize_headers, record_values};
 
 fn plaintext_secrets_allowed(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
@@ -220,21 +223,14 @@ fn read_csv_with_ack(
     let file = open_import_file(path)?;
     let mut reader = csv::ReaderBuilder::new()
         .from_reader(file.take(crate::MAX_BULK_IMPORT_BYTES.saturating_add(1)));
-    let headers = reader
-        .headers()
-        .map_err(|error| error.to_string())?
-        .iter()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .collect::<Vec<_>>();
+    let headers = normalize_headers(
+        reader.headers().map_err(|error| error.to_string())?.iter(),
+        crate::MAX_BULK_IMPORT_COLUMNS,
+        "file",
+    )?;
     let allow_plaintext_secrets =
         plaintext_import_allowed(plaintext_secret_import_enabled(), plaintext_acknowledged);
     validate_headers(&headers, allow_plaintext_secrets)?;
-    if headers.len() > crate::MAX_BULK_IMPORT_COLUMNS {
-        return Err(format!(
-            "The file has too many columns; the limit is {}.",
-            crate::MAX_BULK_IMPORT_COLUMNS
-        ));
-    }
     let defaults = BulkJob::defaults_from_form(base);
     let mut jobs = Vec::new();
     for (index, record) in reader.records().enumerate() {
@@ -246,7 +242,12 @@ fn read_csv_with_ack(
         }
         let record = record.map_err(|error| error.to_string())?;
         let row_number = index + 2;
-        let values = record_values(&headers, record.iter(), row_number)?;
+        let values = record_values(
+            &headers,
+            record.iter(),
+            row_number,
+            crate::MAX_BULK_IMPORT_CELL_BYTES,
+        )?;
         jobs.push(job_from_values_with_defaults(
             values,
             base,
@@ -302,18 +303,14 @@ fn read_sheet_with_ack(
     // numbers relative to that row rather than assuming headers are on row 1.
     let header_row_number = range.start().map_or(1, |(row, _)| row as usize + 1);
     let mut rows = range.rows();
-    let headers = rows
-        .next()
-        .ok_or("The worksheet is empty.")?
-        .iter()
-        .map(|value| value.to_string().trim().to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    if headers.len() > crate::MAX_BULK_IMPORT_COLUMNS {
-        return Err(format!(
-            "The worksheet has too many columns; the limit is {}.",
-            crate::MAX_BULK_IMPORT_COLUMNS
-        ));
-    }
+    let headers = normalize_headers(
+        rows.next()
+            .ok_or("The worksheet is empty.")?
+            .iter()
+            .map(ToString::to_string),
+        crate::MAX_BULK_IMPORT_COLUMNS,
+        "worksheet",
+    )?;
     let allow_plaintext_secrets =
         plaintext_import_allowed(plaintext_secret_import_enabled(), plaintext_acknowledged);
     validate_headers(&headers, allow_plaintext_secrets)?;
@@ -334,6 +331,7 @@ fn read_sheet_with_ack(
             &headers,
             row.iter().map(|value| value.to_string()),
             row_number,
+            crate::MAX_BULK_IMPORT_CELL_BYTES,
         )?;
         jobs.push(job_from_values_with_defaults(
             values,
@@ -640,38 +638,6 @@ fn validate_xlsx_dimension_reference(reference: &str) -> Result<(), String> {
     )
 }
 
-fn record_values<I>(
-    headers: &[String],
-    values: I,
-    row: usize,
-) -> Result<HashMap<String, String>, String>
-where
-    I: IntoIterator,
-    I::Item: Into<String>,
-{
-    let values = values.into_iter().map(Into::into).collect::<Vec<String>>();
-    if values.len() != headers.len() {
-        return Err(format!(
-            "Row {row} has {} values but the header has {} columns.",
-            values.len(),
-            headers.len()
-        ));
-    }
-    headers
-        .iter()
-        .zip(values)
-        .map(|(header, value)| {
-            if value.len() > crate::MAX_BULK_IMPORT_CELL_BYTES {
-                return Err(format!(
-                    "Row {row} contains a cell larger than {} bytes.",
-                    crate::MAX_BULK_IMPORT_CELL_BYTES
-                ));
-            }
-            Ok((header.clone(), value))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 pub(crate) fn job_from_values(
     values: HashMap<String, String>,
@@ -753,47 +719,6 @@ fn job_from_values_with_defaults(
         "imported".into(),
         defaults,
     ))
-}
-
-pub(crate) fn validate_headers(
-    headers: &[String],
-    allow_plaintext_secrets: bool,
-) -> Result<(), String> {
-    let mut seen = HashSet::new();
-    for header in headers {
-        if header.is_empty() || !seen.insert(header.clone()) {
-            return Err("The migration file contains an empty or duplicate column header.".into());
-        }
-    }
-    if seen.contains("extra_options") {
-        return Err("The migration file cannot contain extra_options; configure trusted engine options in the application instead of importing executable command settings.".into());
-    }
-
-    let has_plaintext_passwords =
-        seen.contains("source_password") || seen.contains("destination_password");
-    if has_plaintext_passwords && !allow_plaintext_secrets {
-        return Err(
-            "Plaintext credential columns detected. Remove source_password and destination_password or use credential IDs instead. To import passwords, set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 and confirm the warning for this import in the GUI.".into()
-        );
-    }
-
-    let missing = [
-        "source_host",
-        "source_user",
-        "destination_host",
-        "destination_user",
-    ]
-    .into_iter()
-    .filter(|header| !seen.contains(*header))
-    .collect::<Vec<_>>();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Missing required column(s): {}.",
-            missing.join(", ")
-        ))
-    }
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+csv = "1.3"
 libfuzzer-sys = "0.4"
 sha2 = "0.11"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -90,6 +91,13 @@ bench = false
 [[bin]]
 name = "xlsx_dimension"
 path = "fuzz_targets/xlsx_dimension.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_rows"
+path = "fuzz_targets/import_rows.rs"
 test = false
 doc = false
 bench = false

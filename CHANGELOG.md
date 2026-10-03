@@ -13,6 +13,9 @@ operator distribution archives.
 - Added a scheduled libFuzzer target for XLSX worksheet-dimension and cell
   reference parsing, exercising the same bounded parser used before workbook
   materialization.
+- Extracted shared CSV/XLSX row normalization and added a scheduled fuzzer for
+  CSV parsing, normalized headers, required-column policy, row widths, and cell
+  byte limits.
 - Adaptive process-launch recovery counts successful starts at the spawn
   boundary but orders them by the exact token-admission instant. A slow OS
   spawn therefore cannot make a pre-penalty permit look like a fresh recovery

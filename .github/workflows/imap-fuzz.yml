@@ -63,6 +63,7 @@ jobs:
           - recovery_state
           - migration_plan
           - xlsx_dimension
+          - import_rows
     env:
       FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '90' || github.event_name == 'push' && '300' || '900' }}
     steps:
