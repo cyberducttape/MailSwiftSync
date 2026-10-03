@@ -71,6 +71,79 @@ impl FailureClass {
     }
 }
 
+/// Typed controller error used after the untrusted diagnostic edge has been
+/// classified. Raw provider/engine text is retained only as bounded context;
+/// retry, lifecycle, telemetry, and durable attention policy consume this
+/// enum instead of reparsing prose.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MigrationError {
+    Cancellation {
+        detail: String,
+    },
+    Authentication {
+        detail: String,
+    },
+    Quota {
+        detail: String,
+    },
+    Capacity {
+        detail: String,
+        retry_after: Option<Duration>,
+    },
+    Transport {
+        detail: String,
+    },
+    Configuration {
+        detail: String,
+    },
+    Message {
+        detail: String,
+    },
+    Verification {
+        detail: String,
+    },
+    Unknown {
+        detail: String,
+    },
+}
+
+impl MigrationError {
+    pub(crate) fn class(&self) -> FailureClass {
+        match self {
+            Self::Cancellation { .. } => FailureClass::Cancellation,
+            Self::Authentication { .. } => FailureClass::Authentication,
+            Self::Quota { .. } => FailureClass::Quota,
+            Self::Capacity { .. } => FailureClass::Capacity,
+            Self::Transport { .. } => FailureClass::Transport,
+            Self::Configuration { .. } => FailureClass::Configuration,
+            Self::Message { .. } => FailureClass::Message,
+            Self::Verification { .. } => FailureClass::Verification,
+            Self::Unknown { .. } => FailureClass::Unknown,
+        }
+    }
+
+    pub(crate) fn detail(&self) -> &str {
+        match self {
+            Self::Cancellation { detail }
+            | Self::Authentication { detail }
+            | Self::Quota { detail }
+            | Self::Capacity { detail, .. }
+            | Self::Transport { detail }
+            | Self::Configuration { detail }
+            | Self::Message { detail }
+            | Self::Verification { detail }
+            | Self::Unknown { detail } => detail,
+        }
+    }
+
+    pub(crate) fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Capacity { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
+}
+
 fn controller_failure_class(error: &str) -> Option<FailureClass> {
     error
         .strip_prefix("[attention_reason=")
@@ -79,7 +152,7 @@ fn controller_failure_class(error: &str) -> Option<FailureClass> {
         .and_then(|(label, _)| FailureClass::parse_label(label))
 }
 
-pub(crate) fn classify_failure(error: &str) -> FailureClass {
+fn classify_failure_text(error: &str) -> FailureClass {
     // Controller-generated failures carry a stable machine-readable class.
     // Prefer it over the diagnostic prose: retry and terminal-state policy
     // must not change because an engine happened to mention another keyword.
@@ -281,9 +354,35 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
     }
 }
 
+pub(crate) fn classify_error(error: &str) -> MigrationError {
+    let detail = control_error_text(error).to_owned();
+    let class = classify_failure_text(error);
+    let retry_after = crate::core::provider_intelligence::provider_signal(&detail)
+        .and_then(|signal| signal.retry_after);
+    match class {
+        FailureClass::Cancellation => MigrationError::Cancellation { detail },
+        FailureClass::Authentication => MigrationError::Authentication { detail },
+        FailureClass::Quota => MigrationError::Quota { detail },
+        FailureClass::Capacity => MigrationError::Capacity {
+            detail,
+            retry_after,
+        },
+        FailureClass::Transport => MigrationError::Transport { detail },
+        FailureClass::Configuration => MigrationError::Configuration { detail },
+        FailureClass::Message => MigrationError::Message { detail },
+        FailureClass::Verification => MigrationError::Verification { detail },
+        FailureClass::Unknown => MigrationError::Unknown { detail },
+    }
+}
+
+pub(crate) fn classify_failure(error: &str) -> FailureClass {
+    classify_error(error).class()
+}
+
 pub(crate) fn is_transient_batch_error(error: &str) -> bool {
     use crate::core::provider_intelligence::{ProviderErrorClassifier, ProviderErrorType};
-    let class = classify_failure(error);
+    let typed = classify_error(error);
+    let class = typed.class();
     if class != FailureClass::Transport || controller_failure_class(error).is_some() {
         return class == FailureClass::Capacity || class == FailureClass::Transport;
     }
@@ -307,14 +406,14 @@ pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count:
 }
 
 pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
-    let error = control_error_text(error);
+    let typed = classify_error(error);
+    let error = typed.detail();
     let provider_error =
         crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error);
     // A delay the server itself requested (for example Exchange Online's
     // suggested backoff) is honored as the base, capped by the provider
     // module; otherwise the class default applies.
-    let server_requested = crate::core::provider_intelligence::provider_signal(error)
-        .and_then(|signal| signal.retry_after);
+    let server_requested = typed.retry_after();
     let base_millis = server_requested
         .or(provider_error.suggested_retry_delay())
         .map_or_else(
@@ -402,6 +501,26 @@ mod tests {
             super::classified_failure_detail("too many requests"),
             "[attention_reason=capacity_limited] [class=capacity] too many requests"
         );
+    }
+
+    #[test]
+    fn typed_migration_error_keeps_policy_out_of_diagnostic_prose() {
+        let error = super::classify_error(
+            "BAD Request is throttled. Suggested Backoff Time: 30000 milliseconds; recent output: quota",
+        );
+        assert_eq!(error.class(), super::FailureClass::Capacity);
+        assert_eq!(
+            error.retry_after(),
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(
+            error.detail(),
+            "BAD Request is throttled. Suggested Backoff Time: 30000 milliseconds"
+        );
+
+        let error = super::classify_error("message too large; recent output: rate limit");
+        assert_eq!(error.class(), super::FailureClass::Message);
+        assert_eq!(error.retry_after(), None);
     }
 
     #[test]

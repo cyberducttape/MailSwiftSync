@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Controller retry, cooldown, lifecycle, and durable failure-detail paths now
+  cross a typed `MigrationError` boundary after redacted diagnostic parsing;
+  raw provider/engine prose remains context only and cannot override the
+  resulting policy class. Added coverage for server-requested backoff and
+  diagnostic-tail isolation.
 - CI now generates an LCOV report and enforces explicit line-coverage floors
   for batch admission, durable schema/state transitions, verification,
   recovery/process ownership, provider failure classification, migration-plan
