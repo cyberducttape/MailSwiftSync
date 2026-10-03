@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MailSwiftSync Provider Qualification Pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "provider_pair",
+    "status",
+    "qualification_bundle_id",
+    "tested",
+    "qualification_window",
+    "phases",
+    "known_limitations",
+    "evidence_digest",
+    "generated_at"
+  ],
+  "properties": {
+    "format": {"const": "mailswiftsync-provider-qualification-pack"},
+    "schema_version": {"const": 1},
+    "provider_pair": {"type": "string", "pattern": "^[a-z0-9_]+->[a-z0-9_]+$"},
+    "status": {"const": "qualified"},
+    "qualification_bundle_id": {"type": "string", "minLength": 1},
+    "tested": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_provider",
+        "destination_provider",
+        "source_auth_method",
+        "destination_auth_method",
+        "engine",
+        "engine_version",
+        "mailswiftsync_version",
+        "mailswiftsync_commit",
+        "mailswiftsync_binary_sha256",
+        "imapsync_binary_sha256"
+      ],
+      "properties": {
+        "source_provider": {"type": "string"},
+        "destination_provider": {"type": "string"},
+        "source_auth_method": {"type": "string"},
+        "destination_auth_method": {"type": "string"},
+        "engine": {"type": "string"},
+        "engine_version": {"type": "string"},
+        "mailswiftsync_version": {"type": "string"},
+        "mailswiftsync_commit": {"type": "string"},
+        "mailswiftsync_binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "imapsync_binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "qualification_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["started_at", "finished_at"],
+      "properties": {"started_at": {"type": "string"}, "finished_at": {"type": "string"}}
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "evidence_file",
+          "tested_at",
+          "run_id",
+          "proof_digest",
+          "test_dataset_digest",
+          "scenario_ids",
+          "test_summary",
+          "results"
+        ],
+        "properties": {
+          "phase": {"enum": ["dry_pilot", "live_pilot", "recovery_test"]},
+          "evidence_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
+          "tested_at": {"type": "string"},
+          "run_id": {"type": "string"},
+          "proof_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "test_dataset_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "scenario_ids": {"type": "array", "items": {"type": "string"}},
+          "test_summary": {"type": "object"},
+          "results": {"type": "object"}
+        }
+      }
+    },
+    "known_limitations": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "evidence_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generated_at": {"type": "string"}
+  }
+}

@@ -29,6 +29,10 @@ operator distribution archives.
   instead of scanning every mailbox row in the UI thread.
 - Added a regression assertion covering SQL state-set selection across multiple
   effective mailbox states.
+- Added strict provider qualification-pack generation from one passing dry,
+  live, and recovery evidence record, bound to one bundle, release commit,
+  engine binary, proof set, and explicit limitations. Pack generation remains
+  separate from and cannot weaken the release evidence gate.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in

@@ -73,7 +73,7 @@ evidence = "Global launch and worker ceilings are configurable with conservative
 [[production_features]]
 feature = "Provider qualification packs"
 status = "planned"
-evidence = "Qualification evidence schema and procedures exist, but bundled live provider-pair packs are not present."
+evidence = "Qualification evidence schema, strict phase-evidence validation, and a pack builder bound to one provider pair, release commit, engine binary, proof set, and explicit limitations are implemented; bundled live provider-pair packs are not present."
 
 [[production_features]]
 feature = "Signed migration certificate"
