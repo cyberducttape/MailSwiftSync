@@ -150,6 +150,14 @@ pub(crate) enum Event {
         job_id: String,
         progress: crate::progress::TransferProgress,
     },
+    /// Content-free progress checkpoint retained in the durable event log.
+    /// This is a bounded observation of engine output, not per-message proof.
+    TransferProgressCheckpoint {
+        run_id: String,
+        job_id: String,
+        attempt: u32,
+        progress: crate::progress::TransferProgress,
+    },
     /// A batch mailbox will be retried after `delay`.
     RetryScheduled {
         job_id: String,

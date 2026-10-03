@@ -11,7 +11,7 @@
 //! best-effort presentation line stream, so dropped UI lines cannot make the
 //! counters under-report.
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TransferProgress {
     pub(crate) messages_copied: u64,
     pub(crate) bytes_copied: u64,

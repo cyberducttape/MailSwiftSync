@@ -102,6 +102,28 @@ fn remediation(group: &RecoveryGroup) -> (&'static str, &'static str, WorkspaceV
     }
 }
 
+fn progress_checkpoint_label(detail: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(detail) else {
+        return "Last durable transfer checkpoint is available".to_owned();
+    };
+    let attempt = value.get("attempt").and_then(serde_json::Value::as_u64);
+    let progress = value.get("progress");
+    let messages = progress
+        .and_then(|value| value.get("messages_copied"))
+        .and_then(serde_json::Value::as_u64);
+    let bytes = progress
+        .and_then(|value| value.get("bytes_copied"))
+        .and_then(serde_json::Value::as_u64);
+    match (attempt, messages, bytes) {
+        (Some(attempt), Some(messages), Some(bytes)) => {
+            format!(
+                "Last durable transfer checkpoint: attempt {attempt}, {messages} messages, {bytes} bytes"
+            )
+        }
+        _ => "Last durable transfer checkpoint is available".to_owned(),
+    }
+}
+
 impl App {
     fn refresh_recovery(&mut self, project_id: &str) {
         let fresh =
@@ -355,6 +377,13 @@ impl App {
                         .truncate(),
                 )
                 .on_hover_text(detail);
+            }
+            if let Some(checkpoint) = &row.last_progress_checkpoint {
+                ui.label(
+                    RichText::new(progress_checkpoint_label(checkpoint))
+                        .small()
+                        .color(colors.info),
+                );
             }
             ui.add_space(4.0);
         }

@@ -19,6 +19,9 @@ const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const RELIABLE_EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// Minimum spacing of throttled progress snapshots per engine process.
 const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(500);
+/// Durable progress is less frequent than presentation telemetry so a large
+/// mailbox cannot turn the SQLite event log into a per-message transcript.
+const DURABLE_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Reliable lifecycle events must not wait forever behind lossy diagnostic
@@ -500,7 +503,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let out_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let progress = Arc::new(Mutex::new(crate::progress::TransferProgress::default()));
     let out_progress = Arc::clone(&progress);
+    let durable_progress = transfer_pass.is_some();
     let mut last_progress_event: Option<std::time::Instant> = None;
+    let mut last_durable_progress_event: Option<std::time::Instant> = None;
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
             let safe = crate::process::redact_known_secrets(
@@ -533,6 +538,18 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                     job_id: out_job_id.clone(),
                     progress: snapshot,
                 });
+                if durable_progress
+                    && last_durable_progress_event
+                        .is_none_or(|sent| sent.elapsed() >= DURABLE_PROGRESS_EVENT_INTERVAL)
+                {
+                    last_durable_progress_event = Some(std::time::Instant::now());
+                    let _ = out_tx.try_send(Event::TransferProgressCheckpoint {
+                        run_id: out_run_id.clone(),
+                        job_id: out_job_id.clone(),
+                        attempt: attempt_number,
+                        progress: snapshot,
+                    });
+                }
             }
             if dovecot_exit_two_is_delta
                 && let Some(candidate) = dovecot_state_candidate(&safe)
@@ -751,6 +768,17 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 progress: final_progress,
             },
         );
+        if durable_progress {
+            let _ = send_reliable_event(
+                tx,
+                Event::TransferProgressCheckpoint {
+                    run_id: run_id.to_owned(),
+                    job_id: job_id.to_owned(),
+                    attempt: attempt_number,
+                    progress: final_progress,
+                },
+            );
+        }
     }
     let dropped = dropped_diagnostics.load(Ordering::Relaxed);
     if dropped > 0 {

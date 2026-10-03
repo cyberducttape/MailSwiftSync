@@ -26,6 +26,8 @@ pub struct RecoveryRow {
     pub last_run_finished_at: Option<String>,
     /// Outcome of the latest recorded transfer attempt, if any.
     pub last_attempt_outcome: Option<String>,
+    /// Latest bounded engine-progress checkpoint, if one was durably seen.
+    pub last_progress_checkpoint: Option<String>,
 }
 
 fn reason_value(reason: Option<AttentionReason>) -> Option<&'static str> {
@@ -67,6 +69,7 @@ impl StateStore {
                     (SELECT r.detail FROM runs r WHERE r.job_id=m.id ORDER BY r.started_at DESC,r.rowid DESC LIMIT 1),
                     (SELECT r.finished_at FROM runs r WHERE r.job_id=m.id ORDER BY r.started_at DESC,r.rowid DESC LIMIT 1),
                     (SELECT tp.outcome FROM transfer_passes tp JOIN runs r ON r.id=tp.run_id WHERE r.job_id=m.id ORDER BY tp.started_at DESC,tp.rowid DESC LIMIT 1)
+                    ,(SELECT e.detail FROM events e WHERE e.kind='transfer_progress_checkpoint' AND e.run_id IN (SELECT r.id FROM runs r WHERE r.job_id=m.id) ORDER BY e.created_at DESC,e.id DESC LIMIT 1)
              FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid
              WHERE m.project_id=?1 AND m.state=?2 AND m.attention_reason IS ?3 AND m.rowid>?4
              ORDER BY m.rowid LIMIT ?5",
@@ -92,6 +95,7 @@ impl StateStore {
                             .filter(|detail| !detail.is_empty()),
                         last_run_finished_at: row.get(6)?,
                         last_attempt_outcome: row.get(7)?,
+                        last_progress_checkpoint: row.get(8)?,
                     })
                 },
             )?
@@ -160,6 +164,13 @@ mod tests {
                 [],
             )
             .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,'run-0','transfer_progress_checkpoint','{\"attempt\":1,\"progress\":{\"messages_copied\":42}}')",
+                [&project.id],
+            )
+            .unwrap();
 
         let groups = store.recovery_groups(&project.id).unwrap();
         assert_eq!(groups.len(), 4);
@@ -183,6 +194,10 @@ mod tests {
         assert_eq!(
             page[0].last_run_detail.as_deref(),
             Some("[class=transport] timed out")
+        );
+        assert_eq!(
+            page[0].last_progress_checkpoint.as_deref(),
+            Some("{\"attempt\":1,\"progress\":{\"messages_copied\":42}}")
         );
         assert_eq!(page[0].label, "s0 → d0");
         let next = store

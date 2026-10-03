@@ -610,6 +610,36 @@ impl App {
                             );
                         }
                     }
+                    Event::TransferProgressCheckpoint {
+                        run_id,
+                        job_id,
+                        attempt,
+                        progress,
+                    } => {
+                        if attempt == 0
+                            || !process_event_is_current(active_run.as_ref(), &run_id, &job_id)
+                        {
+                            durability_errors.push(format!(
+                                "ignored transfer-progress checkpoint for unknown process {run_id}"
+                            ));
+                        } else if let Ok(detail) = serde_json::to_string(&serde_json::json!({
+                            "attempt": attempt,
+                            "progress": progress,
+                        })) {
+                            // The checkpoint is content-free and bounded by
+                            // the fixed progress schema. It is persisted with
+                            // the same retryable event batch as other audit
+                            // facts, never as raw engine output.
+                            pending_db_events.push(PendingDbEvent::new(
+                                run_id,
+                                "transfer_progress_checkpoint".into(),
+                                detail,
+                            ));
+                        } else {
+                            durability_errors
+                                .push("could not encode transfer-progress checkpoint".into());
+                        }
+                    }
                     Event::RetryScheduled {
                         job_id,
                         attempt,
