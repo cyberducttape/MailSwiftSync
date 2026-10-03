@@ -279,6 +279,35 @@ mod tests {
         };
     }
 
+    #[test]
+    fn launch_rate_adapts_below_the_operator_ceiling_and_recovers_slowly() {
+        let limiter = ProcessLaunchLimiter::new(8);
+        assert_eq!(limiter.rate_per_second(), 8.0);
+        limiter.observe_capacity_failure();
+        assert_eq!(limiter.rate_per_second(), 4.0);
+        for _ in 0..7 {
+            limiter.observe_success();
+        }
+        assert_eq!(limiter.rate_per_second(), 4.0);
+        limiter.observe_success();
+        assert_eq!(limiter.rate_per_second(), 5.0);
+        limiter.observe_capacity_failure();
+        assert_eq!(limiter.rate_per_second(), 2.5);
+    }
+
+    #[test]
+    fn launch_rate_never_falls_below_one_or_exceeds_ceiling() {
+        let limiter = ProcessLaunchLimiter::new(2);
+        for _ in 0..8 {
+            limiter.observe_capacity_failure();
+        }
+        assert_eq!(limiter.rate_per_second(), 1.0);
+        for _ in 0..32 {
+            limiter.observe_success();
+        }
+        assert_eq!(limiter.rate_per_second(), 2.0);
+    }
+
     struct FailingReader {
         emitted: bool,
     }
@@ -453,6 +482,8 @@ mod tests {
 struct TokenBucketState {
     tokens: f64,
     last_refill: Instant,
+    rate_per_second: f64,
+    successful_launches: usize,
 }
 
 /// Shared admission control for batch engine processes.
@@ -467,7 +498,7 @@ struct TokenBucketState {
 /// authentication probe, or the durable claim) would let workers that waited
 /// upstream spawn together in a burst once they were released.
 pub(crate) struct ProcessLaunchLimiter {
-    rate_per_second: f64,
+    ceiling_per_second: f64,
     state: Mutex<TokenBucketState>,
 }
 
@@ -483,12 +514,14 @@ pub(crate) struct ProcessOutcome {
 
 impl ProcessLaunchLimiter {
     pub(crate) fn new(starts_per_second: usize) -> Self {
-        let rate_per_second = starts_per_second.max(1) as f64;
+        let ceiling_per_second = starts_per_second.max(1) as f64;
         Self {
-            rate_per_second,
+            ceiling_per_second,
             state: Mutex::new(TokenBucketState {
                 tokens: 1.0,
                 last_refill: Instant::now(),
+                rate_per_second: ceiling_per_second,
+                successful_launches: 0,
             }),
         }
     }
@@ -505,16 +538,43 @@ impl ProcessLaunchLimiter {
                 };
                 let now = Instant::now();
                 let elapsed = now.duration_since(state.last_refill).as_secs_f64();
-                state.tokens = (state.tokens + elapsed * self.rate_per_second).min(1.0);
+                state.tokens = (state.tokens + elapsed * state.rate_per_second).min(1.0);
                 state.last_refill = now;
                 if state.tokens >= 1.0 {
                     state.tokens -= 1.0;
                     return true;
                 }
-                Duration::from_secs_f64((1.0 - state.tokens) / self.rate_per_second)
+                Duration::from_secs_f64((1.0 - state.tokens) / state.rate_per_second)
             };
             thread::sleep(wait.min(Duration::from_millis(100)));
         }
+    }
+
+    /// Reduce global launch pressure after a provider capacity signal. The
+    /// configured profile value remains a hard ceiling; adaptation can only
+    /// become more conservative than the operator-approved maximum.
+    pub(crate) fn observe_capacity_failure(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.rate_per_second = (state.rate_per_second / 2.0).max(1.0);
+            state.successful_launches = 0;
+            state.tokens = state.tokens.min(1.0);
+        }
+    }
+
+    /// Additively recover only after a sustained run of successful launches.
+    pub(crate) fn observe_success(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.successful_launches = state.successful_launches.saturating_add(1);
+            if state.successful_launches >= 8 {
+                state.successful_launches = 0;
+                state.rate_per_second = (state.rate_per_second + 1.0).min(self.ceiling_per_second);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn rate_per_second(&self) -> f64 {
+        self.state.lock().unwrap().rate_per_second
     }
 }
 

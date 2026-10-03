@@ -843,6 +843,9 @@ impl BatchAttemptRunner {
                     attempt,
                     self.retry_count,
                 ) {
+                    if classify_failure_for_provider(provider, &error) == FailureClass::Capacity {
+                        self.launch_limiter.observe_capacity_failure();
+                    }
                     report_cooldowns(
                         &self.tx,
                         self.provider_limiter
@@ -949,6 +952,7 @@ impl BatchAttemptRunner {
         match result {
             Ok(outcome) => {
                 self.provider_limiter.observe_success(&admission);
+                self.launch_limiter.observe_success();
                 drop(admission);
                 let delta_required = outcome == StreamOutcome::DeltaRequired;
                 if delta_required {
@@ -1005,6 +1009,11 @@ impl BatchAttemptRunner {
                     self.retry_count,
                 ) =>
             {
+                if classify_failure_for_provider(provider_for_error(&task.form, &error), &error)
+                    == FailureClass::Capacity
+                {
+                    self.launch_limiter.observe_capacity_failure();
+                }
                 report_cooldowns(
                     &self.tx,
                     self.provider_limiter.observe_failure(&admission, &error),

@@ -22,6 +22,9 @@ operator distribution archives.
   state edges merely through parsing.
 - Added migration-plan TOML round-trip fuzzing against the production profile
   serializer used by durable plans and plan identity.
+- Process launch admission now adapts conservatively to observed provider
+  capacity failures: it halves launch pressure down to one start per second
+  and recovers additively, never exceeding the operator-configured ceiling.
 - Migration simulation now shows separate source and destination capacity
   facts from the latest endpoint readiness probe, including provider-reported
   quota usage/limits, exhausted destination capacity, and an explicit unknown

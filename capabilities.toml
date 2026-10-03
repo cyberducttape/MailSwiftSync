@@ -68,7 +68,7 @@ evidence = "Current concurrency and throughput settings are snapshotted, confirm
 [[production_features]]
 feature = "Adaptive launch and worker ceilings"
 status = "implemented"
-evidence = "Global launch and worker ceilings are configurable with conservative bounds; provider and tenant rate domains adapt from observed signals."
+evidence = "Global launch and worker ceilings are configurable with conservative bounds; launch pressure halves on observed capacity failures and recovers additively under the configured ceiling, while provider and tenant rate domains adapt from observed signals."
 
 [[production_features]]
 feature = "Provider qualification packs"
