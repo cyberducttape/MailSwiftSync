@@ -16,7 +16,9 @@ minimum_verification = "metadata" # aggregate, metadata, or body
 max_concurrency = 10
 
 [providers.google]
+max_concurrency = 8
 max_concurrency_per_tenant = 4
+max_concurrency_per_credential = 2
 ```
 
 The policy is read when preflight is assessed and is rechecked immediately
@@ -25,10 +27,12 @@ otherwise invalid policy blocks the operation. Missing policy means the
 backwards-compatible permissive defaults; it does not create an organization
 policy by itself.
 
-Provider entries cap concurrent work independently for each mailbox domain
-on that provider, on either source or destination. They do not reduce the
-global batch worker ceiling, so unrelated tenants may use available workers
-while one tenant remains capped. `google`, `google_workspace`, and `o365` are
-accepted aliases for the canonical provider names. This is a local safety
-boundary, not a tenant-management system: provider quota discovery, RBAC, and
-centrally administered policy distribution remain future control-plane work.
+Provider entries may cap provider-endpoint, per-tenant, and per-credential
+concurrency independently on either source or destination. They do not reduce
+the global batch worker ceiling, so unrelated domains may use available workers
+while a narrower domain remains capped. If aliases configure the same provider
+at multiple limits, the strictest value wins. `google`, `google_workspace`,
+and `o365` are accepted aliases for canonical provider names. These local
+safety ceilings are not provider quota discovery: live provider limits,
+credential semantics, RBAC, and centrally administered policy distribution
+still require qualification or future control-plane work.

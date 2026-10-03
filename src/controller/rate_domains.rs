@@ -22,7 +22,7 @@
 
 use crate::controller::failure::{FailureClass, control_error_text};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -244,7 +244,7 @@ pub(crate) fn failure_sides(error: &str) -> Vec<Side> {
 
 pub(crate) struct RateDomainLimiter {
     ceiling: f64,
-    tenant_ceilings: BTreeMap<String, usize>,
+    provider_ceilings: crate::organization_policy::ProviderRateCeilings,
     state: Mutex<HashMap<DomainKey, DomainState>>,
 }
 
@@ -276,27 +276,33 @@ impl RateDomainLimiter {
     /// `ceiling` is the batch worker count, the most any domain can admit.
     #[cfg(test)]
     pub(crate) fn new(ceiling: usize) -> Self {
-        Self::new_with_tenant_ceilings(ceiling, BTreeMap::new())
+        Self::new_with_provider_ceilings(
+            ceiling,
+            crate::organization_policy::ProviderRateCeilings::default(),
+        )
     }
 
-    pub(crate) fn new_with_tenant_ceilings(
+    pub(crate) fn new_with_provider_ceilings(
         ceiling: usize,
-        tenant_ceilings: BTreeMap<String, usize>,
+        provider_ceilings: crate::organization_policy::ProviderRateCeilings,
     ) -> Self {
         Self {
             ceiling: ceiling.max(1) as f64,
-            tenant_ceilings,
+            provider_ceilings,
             state: Mutex::new(HashMap::new()),
         }
     }
 
     fn domain_ceiling(&self, key: &DomainKey) -> f64 {
-        if key.level == DomainLevel::Tenant
-            && let Some(configured) = self.tenant_ceilings.get(key.provider)
-        {
-            return self.ceiling.min((*configured).max(1) as f64);
-        }
-        self.ceiling
+        let configured = match key.level {
+            DomainLevel::Provider => self.provider_ceilings.provider.get(key.provider),
+            DomainLevel::Tenant => self.provider_ceilings.tenant.get(key.provider),
+            DomainLevel::Credential => self.provider_ceilings.credential.get(key.provider),
+            DomainLevel::Global | DomainLevel::Mailbox => None,
+        };
+        configured.map_or(self.ceiling, |limit| {
+            self.ceiling.min((*limit).max(1) as f64)
+        })
     }
 
     /// Hold a slot in every domain of `path` atomically if all of them are
@@ -579,9 +585,12 @@ mod tests {
 
     #[test]
     fn configured_tenant_ceiling_is_independent_of_other_tenants() {
-        let limiter = Arc::new(RateDomainLimiter::new_with_tenant_ceilings(
+        let limiter = Arc::new(RateDomainLimiter::new_with_provider_ceilings(
             3,
-            [("gmail".to_owned(), 1)].into_iter().collect(),
+            crate::organization_policy::ProviderRateCeilings {
+                tenant: [("gmail".to_owned(), 1)].into_iter().collect(),
+                ..Default::default()
+            },
         ));
         let first = path("one@example.com", "dest@outlook.com");
         let same_tenant = path("two@example.com", "other@outlook.com");
@@ -595,6 +604,61 @@ mod tests {
         let independent = limiter.try_admit(&other_tenant).unwrap();
         drop(held);
         assert!(limiter.try_admit(&same_tenant).is_ok());
+        drop(independent);
+    }
+
+    #[test]
+    fn provider_and_credential_ceilings_apply_at_their_own_scope() {
+        let provider_limiter = Arc::new(RateDomainLimiter::new_with_provider_ceilings(
+            3,
+            crate::organization_policy::ProviderRateCeilings {
+                provider: [("gmail".to_owned(), 1)].into_iter().collect(),
+                ..Default::default()
+            },
+        ));
+        let first_tenant = path("one@example.com", "dest@outlook.com");
+        let second_tenant = path("two@another.example", "dest@outlook.com");
+        let held = provider_limiter.try_admit(&first_tenant).unwrap();
+        assert!(matches!(
+            provider_limiter.try_admit(&second_tenant),
+            Err(Blocked::Slot)
+        ));
+        drop(held);
+
+        let credential_limiter = Arc::new(RateDomainLimiter::new_with_provider_ceilings(
+            3,
+            crate::organization_policy::ProviderRateCeilings {
+                credential: [("gmail".to_owned(), 1)].into_iter().collect(),
+                ..Default::default()
+            },
+        ));
+        let source = |user: &str, principal: &str| {
+            RateDomainPath::new(
+                &SideIdentity {
+                    endpoint: "imap.gmail.com:993",
+                    user,
+                    principal,
+                },
+                &SideIdentity {
+                    endpoint: "outlook.office365.com:993",
+                    user: "dest@outlook.com",
+                    principal: "",
+                },
+            )
+        };
+        let credential_a = source("one@example.com", "keyring:account-a");
+        let same_credential = source("two@example.com", "keyring:account-a");
+        let independent_credential = source("one@example.com", "keyring:account-b");
+        let held = credential_limiter.try_admit(&credential_a).unwrap();
+        assert!(matches!(
+            credential_limiter.try_admit(&same_credential),
+            Err(Blocked::Slot)
+        ));
+        let independent = credential_limiter
+            .try_admit(&independent_credential)
+            .unwrap();
+        drop(held);
+        assert!(credential_limiter.try_admit(&same_credential).is_ok());
         drop(independent);
     }
 

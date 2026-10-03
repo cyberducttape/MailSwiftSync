@@ -12,8 +12,19 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub(crate) struct OrganizationProviderPolicy {
+    /// Maximum worker concurrency allowed for one endpoint on this provider.
+    pub(crate) max_concurrency: Option<usize>,
     /// Maximum worker concurrency allowed for a tenant on this provider.
     pub(crate) max_concurrency_per_tenant: Option<usize>,
+    /// Maximum worker concurrency allowed for one credential on this provider.
+    pub(crate) max_concurrency_per_credential: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProviderRateCeilings {
+    pub(crate) provider: BTreeMap<String, usize>,
+    pub(crate) tenant: BTreeMap<String, usize>,
+    pub(crate) credential: BTreeMap<String, usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -145,22 +156,32 @@ impl OrganizationPolicy {
                     configured_provider
                 )
             })?;
-            if let Some(maximum) = provider_policy.max_concurrency_per_tenant
-                && maximum == 0
-            {
-                return Err(format!(
-                    "Organization policy provider {configured_provider:?} max_concurrency_per_tenant must be at least 1."
-                ));
+            for (field, maximum) in [
+                ("max_concurrency", provider_policy.max_concurrency),
+                (
+                    "max_concurrency_per_tenant",
+                    provider_policy.max_concurrency_per_tenant,
+                ),
+                (
+                    "max_concurrency_per_credential",
+                    provider_policy.max_concurrency_per_credential,
+                ),
+            ] {
+                if maximum == Some(0) {
+                    return Err(format!(
+                        "Organization policy provider {configured_provider:?} {field} must be at least 1."
+                    ));
+                }
             }
         }
         Ok(())
     }
 
-    /// Canonical provider ceilings passed to the runtime hierarchical
-    /// limiter. If aliases configure the same provider more than once, use
-    /// the strictest value so TOML ordering cannot weaken policy.
-    pub(crate) fn tenant_concurrency_ceilings(&self) -> Result<BTreeMap<String, usize>, String> {
-        let mut ceilings = BTreeMap::new();
+    /// Canonical ceilings passed to the runtime hierarchical limiter. If
+    /// aliases configure the same provider more than once, use the strictest
+    /// value so TOML ordering cannot weaken policy.
+    pub(crate) fn provider_rate_ceilings(&self) -> Result<ProviderRateCeilings, String> {
+        let mut ceilings = ProviderRateCeilings::default();
         for (configured_provider, provider_policy) in &self.providers {
             let provider = canonical_provider_key(configured_provider).ok_or_else(|| {
                 format!(
@@ -168,16 +189,34 @@ impl OrganizationPolicy {
                     configured_provider
                 )
             })?;
-            if let Some(maximum) = provider_policy.max_concurrency_per_tenant {
-                if maximum == 0 {
-                    return Err(format!(
-                        "Organization policy provider {configured_provider:?} max_concurrency_per_tenant must be at least 1."
-                    ));
+            for (field, target, maximum) in [
+                (
+                    "max_concurrency",
+                    &mut ceilings.provider,
+                    provider_policy.max_concurrency,
+                ),
+                (
+                    "max_concurrency_per_tenant",
+                    &mut ceilings.tenant,
+                    provider_policy.max_concurrency_per_tenant,
+                ),
+                (
+                    "max_concurrency_per_credential",
+                    &mut ceilings.credential,
+                    provider_policy.max_concurrency_per_credential,
+                ),
+            ] {
+                if let Some(maximum) = maximum {
+                    if maximum == 0 {
+                        return Err(format!(
+                            "Organization policy provider {configured_provider:?} {field} must be at least 1."
+                        ));
+                    }
+                    target
+                        .entry(provider.to_owned())
+                        .and_modify(|current: &mut usize| *current = (*current).min(maximum))
+                        .or_insert(maximum);
                 }
-                ceilings
-                    .entry(provider.to_owned())
-                    .and_modify(|current: &mut usize| *current = (*current).min(maximum))
-                    .or_insert(maximum);
             }
         }
         Ok(ceilings)
@@ -242,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_tenant_ceiling_does_not_reduce_independent_global_workers() {
+    fn provider_domain_ceilings_do_not_reduce_independent_global_workers() {
         let mut form = Form::default();
         form.profile.source_host = "imap.gmail.com".into();
         form.profile.batch_concurrency = 8;
@@ -250,7 +289,9 @@ mod tests {
             providers: [(
                 "google".into(),
                 super::OrganizationProviderPolicy {
+                    max_concurrency: Some(6),
                     max_concurrency_per_tenant: Some(4),
+                    max_concurrency_per_credential: Some(2),
                 },
             )]
             .into_iter()
@@ -258,10 +299,41 @@ mod tests {
             ..OrganizationPolicy::default()
         };
         policy.check_form(&form).unwrap();
-        assert_eq!(
-            policy.tenant_concurrency_ceilings().unwrap().get("gmail"),
-            Some(&4)
-        );
+        let ceilings = policy.provider_rate_ceilings().unwrap();
+        assert_eq!(ceilings.provider.get("gmail"), Some(&6));
+        assert_eq!(ceilings.tenant.get("gmail"), Some(&4));
+        assert_eq!(ceilings.credential.get("gmail"), Some(&2));
+    }
+
+    #[test]
+    fn provider_policy_aliases_merge_to_the_strictest_ceiling() {
+        let policy = OrganizationPolicy {
+            providers: [
+                (
+                    "gmail".into(),
+                    super::OrganizationProviderPolicy {
+                        max_concurrency: Some(8),
+                        max_concurrency_per_tenant: Some(5),
+                        max_concurrency_per_credential: Some(4),
+                    },
+                ),
+                (
+                    "google".into(),
+                    super::OrganizationProviderPolicy {
+                        max_concurrency: Some(3),
+                        max_concurrency_per_tenant: Some(2),
+                        max_concurrency_per_credential: Some(1),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..OrganizationPolicy::default()
+        };
+        let ceilings = policy.provider_rate_ceilings().unwrap();
+        assert_eq!(ceilings.provider.get("gmail"), Some(&3));
+        assert_eq!(ceilings.tenant.get("gmail"), Some(&2));
+        assert_eq!(ceilings.credential.get("gmail"), Some(&1));
     }
 
     #[test]

@@ -125,7 +125,7 @@ pub(crate) struct BatchWorkerLaunch {
 /// the controller and worker coordinator.
 pub(crate) struct BatchExecutionContext {
     pub(crate) concurrency: usize,
-    pub(crate) tenant_concurrency_ceilings: std::collections::BTreeMap<String, usize>,
+    pub(crate) provider_rate_ceilings: crate::organization_policy::ProviderRateCeilings,
     pub(crate) launch_starts_per_second: usize,
     pub(crate) mode: BatchExecutionMode,
     pub(crate) retry_count: usize,
@@ -166,9 +166,9 @@ pub(crate) fn spawn_batch_worker(
 ) -> thread::JoinHandle<()> {
     let limiters = BatchLimiters {
         launch: Arc::new(ProcessLaunchLimiter::new(context.launch_starts_per_second)),
-        rate: Arc::new(RateDomainLimiter::new_with_tenant_ceilings(
+        rate: Arc::new(RateDomainLimiter::new_with_provider_ceilings(
             context.concurrency,
-            context.tenant_concurrency_ceilings.clone(),
+            context.provider_rate_ceilings.clone(),
         )),
     };
     spawn_batch_worker_with(context, tx, cancel, limiters)
@@ -182,7 +182,7 @@ pub(crate) fn spawn_batch_worker_with(
 ) -> thread::JoinHandle<()> {
     let BatchExecutionContext {
         concurrency,
-        tenant_concurrency_ceilings: _,
+        provider_rate_ceilings: _,
         launch_starts_per_second: _,
         mode,
         retry_count,

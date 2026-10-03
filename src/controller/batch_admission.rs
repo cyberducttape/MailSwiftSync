@@ -135,11 +135,11 @@ pub(crate) fn admit_batch_launch(
         .into_iter()
         .map(|admission| (admission.job_id.clone(), admission))
         .collect::<HashMap<_, _>>();
-    let tenant_concurrency_ceilings = organization_policy
-        .tenant_concurrency_ceilings()
+    let provider_rate_ceilings = organization_policy
+        .provider_rate_ceilings()
         .map_err(|error| format!("Batch admission blocked by organization policy: {error}"))?;
     let mut preparation =
-        BatchRunPreparation::new(mode, selected_ids.len(), tenant_concurrency_ceilings);
+        BatchRunPreparation::new(mode, selected_ids.len(), provider_rate_ceilings);
     let mut destinations = HashSet::new();
     let mut case_collisions = CaseCollisionDetector::default();
     let mut ambiguous_case_collision = false;
@@ -484,7 +484,7 @@ pub(crate) struct PreparedBatchRun {
     pub(crate) batch_plan_fingerprints: Vec<String>,
     pub(crate) plan_snapshot: String,
     pub(crate) child_plans: Vec<core::BatchChildPlan>,
-    pub(crate) tenant_concurrency_ceilings: std::collections::BTreeMap<String, usize>,
+    pub(crate) provider_rate_ceilings: crate::organization_policy::ProviderRateCeilings,
 }
 
 /// Persist the admitted parent/child run set and return the ownership context
@@ -537,7 +537,7 @@ pub(crate) fn admit_batch_run(
 /// deliberately has no egui or process-launch responsibilities.
 pub(crate) struct BatchRunPreparation {
     mode: BatchExecutionMode,
-    tenant_concurrency_ceilings: std::collections::BTreeMap<String, usize>,
+    provider_rate_ceilings: crate::organization_policy::ProviderRateCeilings,
     selected_job_ids: Vec<String>,
     queue_checkpoints: Vec<Option<String>>,
     batch_plan_fingerprints: Vec<String>,
@@ -551,11 +551,11 @@ impl BatchRunPreparation {
     pub(crate) fn new(
         mode: BatchExecutionMode,
         capacity: usize,
-        tenant_concurrency_ceilings: std::collections::BTreeMap<String, usize>,
+        provider_rate_ceilings: crate::organization_policy::ProviderRateCeilings,
     ) -> Self {
         Self {
             mode,
-            tenant_concurrency_ceilings,
+            provider_rate_ceilings,
             selected_job_ids: Vec::with_capacity(capacity),
             queue_checkpoints: Vec::with_capacity(capacity),
             batch_plan_fingerprints: Vec::with_capacity(capacity),
@@ -642,7 +642,7 @@ impl BatchRunPreparation {
             batch_plan_fingerprints: self.batch_plan_fingerprints,
             plan_snapshot,
             child_plans: self.child_plans,
-            tenant_concurrency_ceilings: self.tenant_concurrency_ceilings,
+            provider_rate_ceilings: self.provider_rate_ceilings,
         })
     }
 }

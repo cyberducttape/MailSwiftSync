@@ -106,7 +106,7 @@ impl App {
         self.mark_bulk_jobs_changed();
         let worker = launch_batch_worker(BatchExecutionContext {
             concurrency,
-            tenant_concurrency_ceilings: prepared.tenant_concurrency_ceilings,
+            provider_rate_ceilings: prepared.provider_rate_ceilings,
             launch_starts_per_second:
                 crate::migration_plan::effective_batch_process_starts_per_second(
                     self.form.profile.batch_process_starts_per_second,

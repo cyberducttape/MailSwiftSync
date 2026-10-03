@@ -44,9 +44,10 @@ operator distribution archives.
 - Batch admission now evaluates the same organization-policy snapshot against
   every rebuilt durable row, preventing endpoint or tenant overrides from
   bypassing provider-specific safety ceilings.
-- Provider tenant concurrency ceilings now constrain each runtime tenant rate
-  domain independently, while unrelated tenants can use the global worker
-  pool; policy snapshots flow from admission into the scheduler.
+- Provider endpoint, tenant, and credential concurrency ceilings now constrain
+  their corresponding runtime rate domains independently, while unrelated
+  domains can use the global worker pool; policy snapshots flow from admission
+  into the scheduler.
 - Stable release verification now builds and publishes one provider
   qualification pack per release-required provider pair after the evidence
   gate passes; preview releases continue to refuse unsupported qualification
