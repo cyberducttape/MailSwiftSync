@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  100k-message-mailbox:
+  scale-100k-message-mailbox:
     name: Packaged imapsync with 100k-message mailbox
     runs-on: ubuntu-24.04
     timeout-minutes: 60
