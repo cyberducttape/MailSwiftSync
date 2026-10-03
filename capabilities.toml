@@ -98,7 +98,7 @@ evidence = "Engine mapping controls and folder-policy validation exist; a comple
 [[production_features]]
 feature = "Executable cutover orchestration"
 status = "partial"
-evidence = "Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI; external MX/DNS confirmation remains an explicit operator acknowledgement."
+evidence = "Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI with persisted schedule/window enforcement; external MX/DNS confirmation remains an explicit operator acknowledgement."
 
 [[production_features]]
 feature = "Organization policy enforcement"

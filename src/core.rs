@@ -49,6 +49,7 @@ mod state;
 mod transfer_passes;
 mod webhook_outbox;
 pub use capabilities::{NamespaceEntry, NamespaceInfo, ServerCapabilities};
+pub(crate) use cutover::CutoverStage;
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{

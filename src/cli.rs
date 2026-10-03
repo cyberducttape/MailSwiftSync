@@ -1,8 +1,8 @@
 use crate::credentials::read_secret_file;
 use crate::headless::{
-    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute_selected,
-    headless_execute_with_credentials, headless_recover, headless_status, headless_status_summary,
-    headless_supervise,
+    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute,
+    headless_batch_execute_selected, headless_execute_with_credentials, headless_recover,
+    headless_status, headless_status_summary, headless_supervise,
 };
 use crate::maintenance_window::MaintenanceWindow;
 use crate::*;
@@ -1218,6 +1218,73 @@ pub(crate) fn run() -> eframe::Result<()> {
                     values.get(3).and_then(|value| value.to_str()),
                 )
                 .map(|stage| format!("Cutover advanced to {}.", stage.as_str())),
+            Some("run") if (3..=4).contains(&values.len()) => {
+                let acknowledge_destination_loss = values.get(3).is_some_and(|value| {
+                    value == std::ffi::OsStr::new(ACKNOWLEDGE_DESTINATION_LOSS)
+                });
+                if values.len() == 4 && !acknowledge_destination_loss {
+                    eprintln!(
+                        "{usage} run accepts only {ACKNOWLEDGE_DESTINATION_LOSS} as its optional fourth argument"
+                    );
+                    std::process::exit(2);
+                }
+                let workflow = match store.cutover_workflow(project_id.to_str().unwrap_or_default())
+                {
+                    Ok(Some(workflow)) => workflow,
+                    Ok(None) => {
+                        eprintln!("Cutover run refused: no workflow exists for this project");
+                        std::process::exit(1);
+                    }
+                    Err(error) => {
+                        eprintln!("Cutover run refused: could not read workflow: {error}");
+                        std::process::exit(1);
+                    }
+                };
+                if workflow.approved_by.is_none() {
+                    eprintln!("Cutover run refused: explicit operator approval is required");
+                    std::process::exit(1);
+                }
+                if workflow.stage == crate::core::CutoverStage::Completed {
+                    eprintln!("Cutover run refused: workflow is already complete");
+                    std::process::exit(1);
+                }
+                let scheduled_at =
+                    match chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at) {
+                        Ok(value) => value.with_timezone(&chrono::Utc),
+                        Err(_) => {
+                            eprintln!("Cutover run refused: scheduled_at is not RFC 3339");
+                            std::process::exit(1);
+                        }
+                    };
+                if scheduled_at > chrono::Utc::now() {
+                    eprintln!("Cutover run refused: scheduled time has not arrived");
+                    std::process::exit(1);
+                }
+                if let Some(window) = workflow.maintenance_window.as_deref() {
+                    let window = match MaintenanceWindow::parse(window) {
+                        Ok(window) => window,
+                        Err(_) => {
+                            eprintln!("Cutover run refused: durable maintenance window is invalid");
+                            std::process::exit(1);
+                        }
+                    };
+                    if !window.contains_now() {
+                        eprintln!(
+                            "Cutover run refused: current time is outside the approved maintenance window"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+                headless_batch_execute(
+                    std::path::Path::new(state),
+                    true,
+                    acknowledge_destination_loss,
+                )
+                .map_err(|error| {
+                    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error)))
+                })
+                .map(|message| format!("{} Cutover stage: {}.", message, workflow.stage.as_str()))
+            }
             Some("status") if values.len() == 3 => store
                 .cutover_workflow(project_id.to_str().unwrap_or_default())
                 .and_then(|workflow| {
@@ -1474,7 +1541,7 @@ fn print_cli_help() {
         "\nReport export:\n  post-report-state <state> <output> [project-id]  Export a durable-snapshot post-migration report"
     );
     out!(
-        "\nAdditional operator workflow commands:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON\n  cutover <state> <operation> <project>  Approve and advance staged cutover lifecycle"
+        "\nAdditional operator workflow commands:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON\n  cutover <state> <operation> <project>  Approve, run, and advance staged cutover lifecycle"
     );
     out!(
         "\nWebhook delivery:\n  notify-webhook <state> <url> --watch [--poll-seconds=N]  Continuously drain durable signed deliveries"
