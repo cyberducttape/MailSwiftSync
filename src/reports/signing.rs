@@ -223,6 +223,18 @@ pub(crate) fn sign_file(
     signing_key_path: &Path,
     key_id: &str,
 ) -> Result<String, String> {
+    sign_file_to(path, path, signing_key_path, key_id, false)
+}
+
+/// Sign a proof into a separate destination. The certificate command uses
+/// this to keep an unsigned intermediate out of the final output path.
+pub(crate) fn sign_file_to(
+    path: &Path,
+    output_path: &Path,
+    signing_key_path: &Path,
+    key_id: &str,
+    certificate: bool,
+) -> Result<String, String> {
     #[cfg(unix)]
     let key_bytes = read_private_signing_key(signing_key_path)?;
     #[cfg(not(unix))]
@@ -273,6 +285,38 @@ pub(crate) fn sign_file(
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
     let mut value = with_proof_digest(value)?;
+    if certificate {
+        let completion_status = value
+            .get("completion_claim")
+            .and_then(|claim| claim.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let object = value
+            .as_object_mut()
+            .ok_or("Migration proof must be a JSON object.")?;
+        if object.get("format").and_then(serde_json::Value::as_str)
+            != Some("mailswiftsync-customer-proof")
+        {
+            return Err("Migration certificate requires a customer-proof artifact.".into());
+        }
+        if completion_status.as_deref() != Some("durably_complete") {
+            return Err("Migration certificate requires durable project completion.".into());
+        }
+        object.insert(
+            "artifact_role".into(),
+            serde_json::Value::String("signed_migration_certificate".into()),
+        );
+        object.insert(
+            "certificate".into(),
+            serde_json::json!({
+                "type": "authenticated_durable_migration_evidence",
+                "issued_at": chrono::Utc::now().to_rfc3339(),
+                "independent_message_level_attestation": false,
+                "note": "This certificate authenticates the exported durable ledger evidence and signer. It does not replace per-message reconciliation or provider-independent audit review."
+            }),
+        );
+        value = with_proof_digest(value)?;
+    }
     let public_key = hex_encode(key_pair.public_key().as_ref());
     value
         .as_object_mut()
@@ -300,8 +344,14 @@ pub(crate) fn sign_file(
             serde_json::Value::String(hex_encode(signature.as_ref())),
         );
     let output = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-    write_private_atomic(path, &output).map_err(|error| error.to_string())?;
-    Ok(format!("Signed migration proof with key {key_id}"))
+    write_private_atomic(output_path, &output).map_err(|error| error.to_string())?;
+    if certificate {
+        Ok(format!(
+            "Created signed migration certificate with key {key_id}"
+        ))
+    } else {
+        Ok(format!("Signed migration proof with key {key_id}"))
+    }
 }
 
 pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Result<String, String> {

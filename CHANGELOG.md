@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a dedicated `certificate` command that refuses incomplete projects and
+  atomically emits an Ed25519-signed migration certificate from the completed,
+  redacted customer-proof artifact. The certificate records its authenticated
+  durable-ledger scope explicitly and does not overclaim independent
+  message-level attestation.
 - Live transfer attempts now emit bounded, content-free durable progress
   checkpoints (separate from lossy UI telemetry); Recovery shows the latest
   observed attempt/message/byte position while continuing to make clear that

@@ -140,6 +140,12 @@ screen-reader checklist are recorded in
   artifact whose JSON is labeled `completion_claim.status=incomplete`, and is
   never a completion certificate. The result remains unsigned until an
   approved Ed25519 signing key is applied with `sign`.
+- A headless `certificate <state.db> <output.json> <key>` command combines
+  completed customer-proof export and Ed25519 signing. It refuses incomplete
+  projects and publishes the signed output atomically, so an operator cannot
+  accidentally deliver the unsigned intermediate as the final artifact. The
+  certificate authenticates the durable ledger evidence and signer; it does
+  not claim independent per-message attestation.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy

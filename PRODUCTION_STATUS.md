@@ -60,7 +60,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Run-level batch throttle policy | implemented | Current concurrency and throughput settings are snapshotted, confirmed, and applied when rebuilding durable mailbox rows. |
 | Adaptive launch and worker ceilings | implemented | Global launch and worker ceilings are configurable with conservative bounds; provider and tenant rate domains adapt from observed signals. |
 | Provider qualification packs | planned | Qualification evidence schema and procedures exist, but bundled live provider-pair packs are not present. |
-| Signed migration certificate | partial | Durable evidence and customer-proof exports exist; an Ed25519-signed final certificate is not yet emitted. |
+| Signed migration certificate | implemented | The certificate command exports only durably completed customer evidence and atomically publishes an Ed25519-signed certificate; the artifact explicitly remains an authenticated ledger claim rather than independent message-level attestation. |
 | Migration simulation | partial | Plan risk assessment and provider checklist are available; complete destination-capacity simulation is not yet guaranteed. |
 | Automatic destination capacity checks | partial | Quota parsing and plan warnings exist where data is exposed; provider-wide capacity discovery is not qualified. |
 | Advanced typed folder mapping | partial | Engine mapping controls and folder-policy validation exist; a complete typed rule editor is not yet shipped. |

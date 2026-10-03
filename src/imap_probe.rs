@@ -3324,13 +3324,10 @@ mod resume_tests {
             let mut fetched = server.fetched.clone();
             fetched.sort_unstable();
             assert_eq!(fetched, uids, "every UID fetched exactly once");
-            if server.fetch_commands > 12 {
-                panic!(
-                    "{} FETCH round trips for {} messages",
-                    server.fetch_commands,
-                    uids.len()
-                );
-            }
+            assert!(
+                server.fetch_commands <= 12,
+                "adaptive FETCH round-trip bound exceeded"
+            );
             debug_assert!(server.fetch_commands <= 12);
         }
     }

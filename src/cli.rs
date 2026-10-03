@@ -253,6 +253,80 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("certificate") {
+        let (Some(state), Some(output), Some(signing_key)) =
+            (arguments.next(), arguments.next(), arguments.next())
+        else {
+            eprintln!(
+                "Usage: mailswiftsync certificate <state.db> <output.json> <ed25519-pkcs8-key> [project-id] [key-id]"
+            );
+            std::process::exit(2);
+        };
+        let project_id = arguments.next();
+        let key_id = arguments
+            .next()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "operator".into());
+        if arguments.next().is_some() {
+            eprintln!(
+                "Usage: mailswiftsync certificate <state.db> <output.json> <ed25519-pkcs8-key> [project-id] [key-id]"
+            );
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let output = std::path::PathBuf::from(output);
+        let signing_key = std::path::PathBuf::from(signing_key);
+        let store = match core::StateStore::open_readonly(&state) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!(
+                    "Migration certificate refused: durable SQLite state is unavailable: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let project_id = match project_id {
+            Some(project_id) => match project_id.to_str() {
+                Some(project_id) => project_id.to_owned(),
+                None => {
+                    eprintln!("Migration certificate refused: project ID must be valid UTF-8");
+                    std::process::exit(2);
+                }
+            },
+            None => match store.latest_project() {
+                Ok(Some(project)) => project.id,
+                Ok(None) => {
+                    eprintln!(
+                        "Migration certificate refused: no durable migration project is available"
+                    );
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Migration certificate refused: could not select latest project: {error}"
+                    );
+                    std::process::exit(1);
+                }
+            },
+        };
+        let temporary = output.with_extension(format!("certificate-tmp-{}", uuid::Uuid::new_v4()));
+        let branding = crate::branding::OperatorBranding::load();
+        let result = (|| {
+            reports::customer::export_from_store(&store, &project_id, &temporary, &branding)?;
+            reports::signing::sign_file_to(&temporary, &output, &signing_key, &key_id, true)
+        })();
+        let _ = std::fs::remove_file(&temporary);
+        match result {
+            Ok(message) => {
+                out!("{message}: {}", output.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration certificate export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if matches!(command.to_str(), Some("audit" | "migrateaudit")) {
         let (Some(source), Some(destination), Some(output)) =
             (arguments.next(), arguments.next(), arguments.next())

@@ -206,11 +206,10 @@ pub(crate) fn demo_data(app: &mut App) {
         }
     }
     app.queue.attach(imported.project_id, imported.len);
-    // Masked session placeholders so screenshots show a configured plan
-    // rather than "password is required" validation.
-    // Use environment variable to avoid hardcoded credential flags in security scanning
-    let placeholder = std::env::var("MAILSWIFTSYNC_DEBUG_PLACEHOLDER")
-        .unwrap_or_else(|_| "placeholder-secret".to_string());
+    // Ephemeral session placeholders keep the debug scene configured without
+    // embedding a credential-like value in source or accepting one from the
+    // environment. These values never enter durable state or engine argv.
+    let placeholder = uuid::Uuid::new_v4().to_string();
     app.form.source_password = placeholder.clone().into();
     app.form.destination_password = placeholder.into();
     for index in [1, 8] {

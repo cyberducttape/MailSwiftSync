@@ -77,8 +77,8 @@ evidence = "Qualification evidence schema and procedures exist, but bundled live
 
 [[production_features]]
 feature = "Signed migration certificate"
-status = "partial"
-evidence = "Durable evidence and customer-proof exports exist; an Ed25519-signed final certificate is not yet emitted."
+status = "implemented"
+evidence = "The certificate command exports only durably completed customer evidence and atomically publishes an Ed25519-signed certificate; the artifact explicitly remains an authenticated ledger claim rather than independent message-level attestation."
 
 [[production_features]]
 feature = "Migration simulation"
