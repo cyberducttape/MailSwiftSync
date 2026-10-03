@@ -12,7 +12,10 @@ jobs:
   scale-100k-message-mailbox:
     name: Packaged imapsync with 100k-message mailbox
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # The real 100k fixture runs both a full migration and a later incremental
+    # pass. Leave enough room for the harness's 40-minute per-command timeout,
+    # container shutdown, memory summary, and artifact upload.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the distributed runtime image

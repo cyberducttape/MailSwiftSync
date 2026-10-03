@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "scripts" / "provider-integration-test.sh").read_text(encoding="utf-8")
 SCALE_SCRIPT = (ROOT / "scripts" / "imap-integration-smoke.sh").read_text(encoding="utf-8")
 STORAGE_FAULT_SCRIPT = (ROOT / "scripts" / "engine-storage-fault-smoke.sh").read_text(encoding="utf-8")
+SCALE_WORKFLOW = (ROOT / ".github" / "workflows" / "scale-qualification.yml").read_text(encoding="utf-8")
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
@@ -60,6 +61,9 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_smoke_timeouts_manage_engine_process_groups(self):
         self.assertIn('timeout 300 "$binary" "$@"', STORAGE_FAULT_SCRIPT)
         self.assertNotIn('timeout --foreground', STORAGE_FAULT_SCRIPT)
+
+    def test_100k_scale_job_allows_command_timeout_and_diagnostic_upload(self):
+        self.assertIn("timeout-minutes: 90", SCALE_WORKFLOW)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,10 @@ operator distribution archives.
   the output pipe open and stall the harness until the CI job timeout. The
   first memory-sampling run exposed this issue and was cancelled before its
   transfer completed; it provides no new scale or memory measurement.
+- Raised the 100k scale workflow ceiling to 90 minutes after the instrumented
+  rerun confirmed exact reconciliation of 100,016 messages but reached the
+  job limit during its subsequent incremental pass, before memory diagnostics
+  could be summarized. That cancelled run also provides no memory measurement.
 - Cutover commands reject non-UTF-8 control arguments rather than silently
   dropping an invalid maintenance-window or confirmation value.
 - Production-readiness guidance now distinguishes implemented provider-scoped
