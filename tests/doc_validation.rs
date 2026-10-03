@@ -98,6 +98,23 @@ fn production_readiness_surfaces_have_one_conservative_source() {
 }
 
 #[test]
+fn documented_scale_workflow_timeout_matches_release_readiness() {
+    let workflow = fs::read_to_string(".github/workflows/scale-qualification.yml")
+        .expect("scale qualification workflow should exist");
+    let readiness = fs::read_to_string("docs/release-readiness.md")
+        .expect("release-readiness criteria should exist");
+    let timeout = workflow
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("timeout-minutes:"))
+        .expect("scale workflow should declare a job timeout")
+        .trim();
+    assert!(
+        readiness.contains(&format!("within a {timeout}-minute workflow limit")),
+        "release-readiness must state the scale workflow's configured timeout ({timeout} minutes)"
+    );
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");

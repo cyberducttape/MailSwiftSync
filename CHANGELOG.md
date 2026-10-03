@@ -10,6 +10,9 @@ operator distribution archives.
   than planned: schemas, strict evidence validation, and pack construction are
   implemented, but real automated provider-pair qualification evidence and
   bundled live packs remain outstanding.
+- Release-readiness guidance now reflects the 90-minute 100k scale job limit,
+  and does not claim a peak-memory result until an instrumented run completes
+  with its resource summary retained.
 - Migration Assurance mismatch details now hash payloads left unmatched by the
   multiset reconciliation, rather than arbitrary representatives that may be
   identical on both sides. A streamed-SQLite/reference-comparator differential
