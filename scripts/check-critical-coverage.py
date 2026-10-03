@@ -26,6 +26,7 @@ CRITICAL_FILES = {
     "src/core/recovery_queue.rs": 85.0,
     "src/core/state.rs": 80.0,
     "src/extra_options.rs": 80.0,
+    "src/imap_probe/auth.rs": 85.0,
     "src/migrate_audit.rs": 70.0,
     "src/migration_plan.rs": 70.0,
     "src/oauth_authorize.rs": 70.0,

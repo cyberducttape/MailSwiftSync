@@ -23,13 +23,15 @@ operator distribution archives.
   a private, auto-cleaned on-disk database; the JSON reader continues to parse
   and insert one record at a time under the existing input-size bounds.
 - Expanded the CI line-coverage gate to include observed floors for batch
-  scheduling/start, event ownership, queue handling, polling, and recovery.
+  scheduling/start, event ownership, queue handling, polling, recovery, and
+  IMAP authentication (85% floor; 87.77% observed).
 - Extracted bounded tagged-response parsing and budget-aware IMAP command I/O
   into a protocol module, preserving literal-safe completion detection.
 - Isolated certificate-validated IMAP/STARTTLS setup, deadline-aware handshake
   handling, custom CA roots, and SHA-256 pin enforcement in the TLS module.
 - Moved LOGIN/XOAUTH2 exchange and post-auth capability refresh into the IMAP
-  authentication module while keeping the shared probe API unchanged.
+  authentication module while keeping the shared probe API unchanged; added
+  transcript tests for credential quoting, OAuth framing, PREAUTH, and rejection.
 - Corrected the operator-facing rate-limit summary to describe the current
   hierarchical adaptive process-launch policy instead of implying a fixed
   global-only process-start ceiling; documentation validation now checks that

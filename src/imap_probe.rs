@@ -1,7 +1,5 @@
 use crate::core;
-use crate::credentials::SecretString;
 use crate::imap_protocol::{advertises_capability, atom_eq, is_untagged_response};
-use crate::oauth::{read_auth_continuation_with_deadline, read_auth_result_with_deadline};
 use std::{
     collections::{HashMap, HashSet},
     io::{Read, Write},
