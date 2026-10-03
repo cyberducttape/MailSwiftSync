@@ -439,3 +439,51 @@ fn confirmation_dialogs_are_named_start_safe_and_keep_focus_inside() {
         }
     }
 }
+
+#[test]
+fn failed_preflight_remediation_opens_the_plan_from_the_keyboard() {
+    let mut harness = Harness::new(1.0, false);
+    harness.app.preflight = vec![(
+        "Destination endpoint".into(),
+        "Missing destination server".into(),
+        false,
+    )];
+    harness.app.active_view = WorkspaceView::Overview;
+    let nodes = harness.tree();
+    let action_id = nodes
+        .iter()
+        .find(|(_, node)| {
+            node.role() == accesskit::Role::Button
+                && node.label().is_some_and(|label| label == "Fix in Plan")
+        })
+        .map(|(id, _)| *id)
+        .expect("failed preflight should expose a named Plan remediation button");
+    let tab = || Event::Key {
+        key: Key::Tab,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    };
+    let mut focused_action = false;
+    for _ in 0..128 {
+        let focus = harness
+            .frame(vec![tab()])
+            .platform_output
+            .accesskit_update
+            .map(|update| update.focus);
+        if focus == Some(action_id) {
+            focused_action = true;
+            break;
+        }
+    }
+    assert!(focused_action, "Fix in Plan should be keyboard reachable");
+    harness.frame(vec![Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    assert!(matches!(harness.app.active_view, WorkspaceView::Plan));
+}
