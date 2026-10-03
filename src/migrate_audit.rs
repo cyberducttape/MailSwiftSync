@@ -67,11 +67,9 @@ fn create_staging_database() -> Result<StagingDatabase, String> {
         .map_err(|error| {
             format!("could not create private migration-audit staging database: {error}")
         })?;
-    let connection = Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )
-    .map_err(|error| format!("could not open migration-audit staging database: {error}"))?;
+    let connection =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|error| format!("could not open migration-audit staging database: {error}"))?;
     connection
         .execute_batch(
             "PRAGMA temp_store=FILE;

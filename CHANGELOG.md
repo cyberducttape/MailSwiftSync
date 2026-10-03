@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Fixed macOS migration-audit staging database opens; the database is
+  pre-created exclusively with owner-only permissions inside a private
+  per-run directory, then opened using the SQLite flags supported consistently
+  by the bundled runtime.
 - Reused the queue model's generation-cached health summary during selection-only
   refreshes instead of rescanning all durable rows for unchanged state counts.
 - Reconciled production-status maturity wording with the wired provider
