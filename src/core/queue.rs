@@ -899,6 +899,14 @@ mod tests {
             store.queue_state_counts(&project).unwrap(),
             vec![("imported".to_owned(), 12)]
         );
+        store.force_mailbox_state(&ids[2], "attention").unwrap();
+        store.force_mailbox_state(&ids[4], "failed").unwrap();
+        assert_eq!(
+            store
+                .queue_ids_by_effective_states(&project, &["attention", "failed"])
+                .unwrap(),
+            vec![ids[2].clone(), ids[4].clone()]
+        );
         let mut scanned = Vec::new();
         store
             .queue_scan(&project, |row| scanned.push((row.id, row.destructive)))

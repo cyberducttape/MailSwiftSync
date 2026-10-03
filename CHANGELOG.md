@@ -27,6 +27,8 @@ operator distribution archives.
   separate from code-level provider identity handling.
 - Batch state-set selection now uses a durable SQL effective-state projection
   instead of scanning every mailbox row in the UI thread.
+- Added a regression assertion covering SQL state-set selection across multiple
+  effective mailbox states.
 - Closed the debug-scene hard-coded cryptographic-value finding by keeping
   debug credentials empty, and removed detailed UID collections from IMAP
   probe assertion diagnostics so sensitive mailbox data cannot be emitted in
