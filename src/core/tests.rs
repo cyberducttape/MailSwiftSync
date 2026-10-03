@@ -40,11 +40,18 @@ fn mailbox_state_wire_values_and_policy_are_centralized() {
 #[test]
 fn capability_parser_selects_modern_strategy() {
     let caps = ServerCapabilities::parse(
-        "* CAPABILITY IMAP4rev1 UIDPLUS CONDSTORE QRESYNC SPECIAL-USE\r\na1 OK",
+        "* CAPABILITY IMAP4rev1 UIDPLUS CONDSTORE QRESYNC SPECIAL-USE APPENDLIMIT=52428800\r\na1 OK",
     );
     assert!(caps.supports("qresync"));
     assert!(caps.detected_capabilities().contains(&"QRESYNC advertised"));
+    assert_eq!(caps.append_limit_bytes, Some(52_428_800));
     assert!(!caps.inventory_complete);
+}
+
+#[test]
+fn capability_parser_keeps_invalid_append_limit_unknown() {
+    let caps = ServerCapabilities::parse("* CAPABILITY IMAP4rev1 APPENDLIMIT=unknown\r\na1 OK");
+    assert!(caps.append_limit_bytes.is_none());
 }
 
 #[test]

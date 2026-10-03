@@ -30,6 +30,8 @@ pub struct ServerCapabilities {
     pub quota_observed: bool,
     pub quota_exceeded: bool,
     pub quota_resources: BTreeMap<String, QuotaResource>,
+    /// RFC 7889 APPENDLIMIT, in octets, when the server advertises it.
+    pub append_limit_bytes: Option<u64>,
     pub namespace: Option<NamespaceInfo>,
 }
 
@@ -73,6 +75,7 @@ impl ServerCapabilities {
         special_use_mailboxes: usize,
     ) -> Self {
         let mut values = BTreeSet::new();
+        let mut append_limit_bytes = None;
         for line in capability_response.lines() {
             let mut fields = line.split_whitespace();
             if fields.next() == Some("*")
@@ -81,7 +84,11 @@ impl ServerCapabilities {
                     .is_some_and(|keyword| crate::imap_protocol::atom_eq(keyword, "CAPABILITY"))
             {
                 for token in fields {
-                    values.insert(token.to_ascii_uppercase());
+                    let token = token.to_ascii_uppercase();
+                    if let Some(limit) = token.strip_prefix("APPENDLIMIT=") {
+                        append_limit_bytes = limit.parse::<u64>().ok();
+                    }
+                    values.insert(token);
                 }
             }
         }
@@ -93,6 +100,7 @@ impl ServerCapabilities {
             quota_observed: false,
             quota_exceeded: false,
             quota_resources: BTreeMap::new(),
+            append_limit_bytes,
             namespace: None,
         }
     }

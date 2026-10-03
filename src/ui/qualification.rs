@@ -399,6 +399,30 @@ fn format_quota_details(
                 .to_owned()
         };
     }
+    if !capabilities.quota_resources.is_empty() || capabilities.append_limit_bytes.is_some() {
+        let quota_details = capabilities
+            .quota_resources
+            .iter()
+            .map(|(resource, quota)| format!("{resource} {} / {}", quota.used, quota.limit))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let mut details = Vec::new();
+        if !quota_details.is_empty() {
+            details.push(format!(
+                "{}{}",
+                language.text("Provider units: "),
+                quota_details
+            ));
+        }
+        if let Some(limit) = capabilities.append_limit_bytes {
+            details.push(format!(
+                "{}{}",
+                language.message("ui.max-append-message"),
+                limit
+            ));
+        }
+        return details.join(" · ");
+    }
     if !capabilities.quota_observed {
         return language
             .text("Unknown: provider did not report usable quota headroom")
@@ -412,7 +436,7 @@ fn format_quota_details(
         .join(" · ");
     if details.is_empty() {
         language
-            .text("Observed, but no supported quota resource was returned")
+            .message("ui.observed-no-supported-quota-or-message-size-limit")
             .to_owned()
     } else {
         format!("{}{}", language.text("Provider units: "), details)

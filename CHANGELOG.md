@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Destination readiness now retains RFC 7889 `APPENDLIMIT` capability data and
+  shows the observed maximum message size in the simulation/capacity view.
+  Unsupported provider-specific limits remain explicitly unknown.
 - Added immutable typed exact folder mappings. Each source-to-destination rule
   is validated, included in the plan snapshot/fingerprint, emitted as
   imapsync `--f1f2`, editable from the advanced plan controls, and reused by
