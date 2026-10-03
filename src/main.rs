@@ -278,7 +278,7 @@ mod tests {
     fn dovecot_plan_uses_additive_sync_by_default() {
         let mut form = dovecot_form();
         form.dry_run = false;
-        let (exe, args) = form.command(true);
+        let (exe, args) = form.command(true).unwrap();
         assert_eq!(exe, "doveadm");
         assert!(
             args.windows(2)
@@ -332,7 +332,9 @@ mod tests {
             let mut form = dovecot_form();
             form.dry_run = false;
             form.profile.dovecot_strategy = strategy;
-            let (_, args) = form.command_with_checkpoint(true, Some("checkpoint"));
+            let (_, args) = form
+                .command_with_checkpoint(true, Some("checkpoint"))
+                .unwrap();
             assert!(args.contains(&"backup".into()));
             assert!(!args.contains(&"sync".into()));
             assert!(!args.contains(&"-1".into()));
@@ -351,7 +353,7 @@ mod tests {
             let mut form = dovecot_form();
             form.dry_run = false;
             form.profile.dovecot_strategy = strategy;
-            let (_, args) = form.command(true);
+            let (_, args) = form.command(true).unwrap();
             assert!(args.contains(&"sync".into()));
             assert!(args.contains(&"-1".into()));
             assert!(!args.contains(&"backup".into()));
@@ -393,7 +395,9 @@ mod tests {
     fn live_dovecot_plan_uses_previous_checkpoint() {
         let mut form = dovecot_form();
         form.dry_run = false;
-        let (_, args) = form.command_with_checkpoint(true, Some("AQAAAHm4+Jk="));
+        let (_, args) = form
+            .command_with_checkpoint(true, Some("AQAAAHm4+Jk="))
+            .unwrap();
         assert!(args.windows(2).any(|pair| pair == ["-s", "AQAAAHm4+Jk="]));
     }
 
@@ -940,7 +944,7 @@ destination = "Archive"
     #[test]
     fn dovecot_dry_plan_is_non_mutating() {
         let form = dovecot_form();
-        let (_, args) = form.command(true);
+        let (_, args) = form.command(true).unwrap();
         assert!(args.windows(2).any(|pair| pair == ["mailbox", "list"]));
         assert!(!args.contains(&"backup".into()));
         assert!(!args.contains(&"sync".into()));
@@ -1032,7 +1036,7 @@ destination = "Archive"
     fn dovecot_execution_is_local_only() {
         let form = dovecot_form();
         assert!(form.local_doveadm());
-        let (exe, args) = form.command(true);
+        let (exe, args) = form.command(true).unwrap();
         assert_eq!(exe, form.profile.doveadm_path);
         assert!(!args.iter().any(|arg| arg.contains("IMAPC_PASSWORD")));
         assert!(!args.iter().any(|arg| arg.contains("top-secret-credential")));
@@ -2670,7 +2674,7 @@ destination = "Archive"
     fn dovecot_plain_tls_maps_to_dovecot_no() {
         let mut form = dovecot_form();
         form.profile.source_tls = "plain".into();
-        let (_, args) = form.command(true);
+        let (_, args) = form.command(true).unwrap();
         assert!(args.iter().any(|arg| arg == "imapc_ssl=no"));
         assert!(
             !args
@@ -2685,7 +2689,7 @@ destination = "Archive"
         form.profile.source_tls = "starttls".into();
         form.profile.dovecot_config = "/etc/dovecot/custom.conf".into();
         form.profile.source_ca_bundle = "/etc/company-ca.pem".into();
-        let (_, args) = form.command(true);
+        let (_, args) = form.command(true).unwrap();
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["-o", "ssl_client_require_valid_cert=yes"])
@@ -2849,6 +2853,13 @@ destination = "Archive"
         form.profile.extra_options = "--not-an-allowed-imapsync-option".into();
         let error = engine::imapsync_args(&form.profile, true, 1).unwrap_err();
         assert!(error.contains("safe imapsync option allowlist"), "{error}");
+        let preview_error = engine::imapsync_preview_args(&form.profile, true, 1).unwrap_err();
+        assert!(preview_error.contains("safe imapsync option allowlist"));
+        let invalid_fingerprint = form.plan_fingerprint();
+        assert!(invalid_fingerprint.starts_with("invalid-imapsync-plan\n"));
+        assert!(!invalid_fingerprint.contains("not-an-allowed-imapsync-option"));
+        form.profile.extra_options.clear();
+        assert_ne!(invalid_fingerprint, form.plan_fingerprint());
     }
 
     #[test]
@@ -2857,7 +2868,7 @@ destination = "Archive"
         form.profile.engine = core::Engine::ImapSync;
         form.profile.source_auth = "oauth2".into();
         form.profile.destination_auth = "oauth2".into();
-        let args = engine::imapsync_preview_args(&form.profile, true, 1);
+        let args = engine::imapsync_preview_args(&form.profile, true, 1).unwrap();
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["--authmech1", "XOAUTH2"])

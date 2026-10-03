@@ -31,35 +31,15 @@ pub(crate) fn imapsync_preview_args(
     profile: &Profile,
     dry_run: bool,
     throttle_divisor: usize,
-) -> Vec<String> {
-    imapsync_args_with_placeholders(profile, dry_run, throttle_divisor, true)
-}
-
-/// Preview generation has the same validation boundary as execution. Callers
-/// that present a plan to an operator must not receive a partial argv list.
-pub(crate) fn try_imapsync_preview_args(
-    profile: &Profile,
-    dry_run: bool,
-    throttle_divisor: usize,
 ) -> Result<Vec<String>, String> {
-    crate::extra_options::canonical(&profile.extra_options)?;
-    Ok(imapsync_preview_args(profile, dry_run, throttle_divisor))
-}
-
-fn imapsync_args_with_placeholders(
-    profile: &Profile,
-    dry_run: bool,
-    throttle_divisor: usize,
-    include_placeholders: bool,
-) -> Vec<String> {
-    let extra_options = crate::extra_options::canonical(&profile.extra_options).unwrap_or_default();
-    imapsync_args_with_extra_options(
+    let extra_options = crate::extra_options::canonical(&profile.extra_options)?;
+    Ok(imapsync_args_with_extra_options(
         profile,
         dry_run,
         throttle_divisor,
-        include_placeholders,
+        true,
         extra_options,
-    )
+    ))
 }
 
 fn imapsync_args_with_extra_options(

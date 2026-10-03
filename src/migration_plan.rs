@@ -914,13 +914,14 @@ impl Form {
         throttle_divisor: usize,
     ) -> Vec<String> {
         self.args_with_throttle_divisor_and_mode(redact, throttle_divisor, self.dry_run)
+            .expect("test form uses valid extra options")
     }
     pub(crate) fn args_with_throttle_divisor_and_mode(
         &self,
         redact: bool,
         throttle_divisor: usize,
         dry_run: bool,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, String> {
         let _ = redact;
         engine::imapsync_preview_args(&self.profile, dry_run, throttle_divisor)
     }
@@ -965,11 +966,11 @@ impl Form {
     pub(crate) fn preview_command(&self) -> Result<(String, Vec<String>), String> {
         self.validate_internal(false)?;
         if self.engine() == core::Engine::Dovecot {
-            return Ok(self.command(true));
+            return self.command(true);
         }
         Ok((
             self.profile.imapsync_path.clone(),
-            engine::try_imapsync_preview_args(&self.profile, self.dry_run, 1)?,
+            engine::imapsync_preview_args(&self.profile, self.dry_run, 1)?,
         ))
     }
     /// A deterministic, secret-free description of the live execution plan.
@@ -977,7 +978,17 @@ impl Form {
     /// option, endpoint, engine, mapping, or credential reference invalidates
     /// an earlier preflight. Password bytes are intentionally excluded.
     pub(crate) fn plan_fingerprint(&self) -> String {
-        let (executable, mut args) = self.command_with_checkpoint_and_mode(true, None, false);
+        let (executable, mut args) = match self.command_with_checkpoint_and_mode(true, None, false)
+        {
+            Ok(command) => command,
+            Err(_) => {
+                return format!(
+                    "invalid-imapsync-plan\n{}\nextra-options-sha256={}",
+                    self.profile.imapsync_path,
+                    crate::plan_identity::snapshot_sha256(&self.profile.extra_options),
+                );
+            }
+        };
         if self.engine() == core::Engine::ImapSync {
             remove_option(&mut args, "--password1");
             remove_option(&mut args, "--password2");
@@ -1126,14 +1137,14 @@ impl Form {
         // hostname or a locally installed executable; see effective_engine.
         self.profile.effective_engine()
     }
-    pub(crate) fn command(&self, redact: bool) -> (String, Vec<String>) {
+    pub(crate) fn command(&self, redact: bool) -> Result<(String, Vec<String>), String> {
         self.command_with_checkpoint(redact, None)
     }
     pub(crate) fn command_with_checkpoint(
         &self,
         redact: bool,
         checkpoint: Option<&str>,
-    ) -> (String, Vec<String>) {
+    ) -> Result<(String, Vec<String>), String> {
         self.command_with_checkpoint_and_mode(redact, checkpoint, self.dry_run)
     }
     pub(crate) fn command_with_checkpoint_and_mode(
@@ -1141,7 +1152,7 @@ impl Form {
         redact: bool,
         checkpoint: Option<&str>,
         dry_run: bool,
-    ) -> (String, Vec<String>) {
+    ) -> Result<(String, Vec<String>), String> {
         self.command_with_checkpoint_and_mode_and_config(
             redact,
             checkpoint,
@@ -1157,12 +1168,12 @@ impl Form {
         dry_run: bool,
         runtime_config: Option<&str>,
         dovecot_dialect: DovecotConfigDialect,
-    ) -> (String, Vec<String>) {
+    ) -> Result<(String, Vec<String>), String> {
         if self.engine() != core::Engine::Dovecot {
-            return (
+            return Ok((
                 self.profile.imapsync_path.clone(),
-                self.args_with_throttle_divisor_and_mode(redact, 1, dry_run),
-            );
+                self.args_with_throttle_divisor_and_mode(redact, 1, dry_run)?,
+            ));
         }
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
@@ -1229,7 +1240,7 @@ impl Form {
                 "imapc:".into(),
             ]);
         }
-        (self.profile.doveadm_path.clone(), args)
+        Ok((self.profile.doveadm_path.clone(), args))
     }
     #[cfg(test)]
     pub(crate) fn local_doveadm(&self) -> bool {
@@ -1391,7 +1402,7 @@ impl ValidatedPlan<'_> {
                 form.dry_run,
                 Some(&config_path),
                 dovecot_dialect,
-            );
+            )?;
             let verification = if form.dry_run {
                 Vec::new()
             } else {
@@ -1527,8 +1538,9 @@ mod tests {
                 "mail_location=imapc:",
             ),
         ] {
-            let (_, args) =
-                form.command_with_checkpoint_and_mode_and_config(true, None, true, None, dialect);
+            let (_, args) = form
+                .command_with_checkpoint_and_mode_and_config(true, None, true, None, dialect)
+                .unwrap();
             assert!(args.iter().any(|argument| argument == expected));
             assert!(!args.iter().any(|argument| argument == unexpected));
             let verification = form.dovecot_verification_commands_with_config(true, None, dialect);

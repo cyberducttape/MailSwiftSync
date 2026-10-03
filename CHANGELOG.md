@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- imapsync command previews now return validation errors for malformed expert
+  options, and invalid plans receive distinct secret-safe fingerprints rather
+  than hashes of silently shortened argument lists.
 - Proof verification now rejects a non-UTF-8 trusted-key argument instead of
   silently downgrading signer authentication to checksum-only validation.
 - Cutover commands reject non-UTF-8 control arguments rather than silently
