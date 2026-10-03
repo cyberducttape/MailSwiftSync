@@ -68,7 +68,7 @@ evidence = "Current concurrency and throughput settings are snapshotted, confirm
 [[production_features]]
 feature = "Adaptive launch and worker ceilings"
 status = "implemented"
-evidence = "Global launch and worker ceilings are configurable with conservative bounds; launch pressure halves on observed capacity failures and recovers additively under the configured ceiling, while provider and tenant rate domains adapt from observed signals."
+evidence = "Global launch and worker ceilings are configurable with conservative bounds; observed capacity failures reduce launch pressure and apply AIMD to provider-endpoint, tenant, credential, and mailbox domains. Organization policy may set independent endpoint, tenant, and credential worker ceilings; provider-derived live defaults remain unqualified."
 
 [[production_features]]
 feature = "Provider qualification packs"
@@ -103,7 +103,7 @@ evidence = "Durable approval-gated Seed, Catch-up, Final Delta, and Verification
 [[production_features]]
 feature = "Organization policy enforcement"
 status = "partial"
-evidence = "Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, global concurrency, and provider-scoped tenant concurrency at preflight/batch admission; provider quota discovery and role-scoped policy administration remain open."
+evidence = "Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, global worker concurrency, and provider-endpoint/tenant/credential runtime ceilings at preflight and batch admission; provider quota discovery and role-scoped policy administration remain open."
 
 [[production_features]]
 feature = "Durable signed webhook delivery"
