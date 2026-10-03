@@ -336,6 +336,12 @@ pub(crate) fn canonical_destination_identity(profile: &Profile) -> Result<String
 /// created. This policy belongs to admission rather than the egui dispatcher
 /// so GUI and headless callers cannot diverge.
 pub(crate) fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), String> {
+    crate::organization_policy::load_and_check(&crate::Form {
+        profile: profile.clone(),
+        source_password: crate::credentials::SecretString::default(),
+        destination_password: crate::credentials::SecretString::default(),
+        dry_run: false,
+    })?;
     let workers = concurrency.max(1);
     if profile.max_messages_per_second > 0 && profile.max_messages_per_second < workers as u32 {
         return Err(format!(

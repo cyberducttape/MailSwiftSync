@@ -25,6 +25,7 @@ mod oauth_authorize;
 mod oauth_onboarding;
 mod oauth_redirect;
 mod oauth_refresh;
+mod organization_policy;
 mod output;
 mod plan_identity;
 mod process;

@@ -146,6 +146,11 @@ screen-reader checklist are recorded in
   accidentally deliver the unsigned intermediate as the final artifact. The
   certificate authenticates the durable ledger evidence and signer; it does
   not claim independent per-message attestation.
+- An owner-only `organization-policy.toml` may require TLS, prohibit
+  destination mutation, require metadata or bounded body verification, and cap
+  batch concurrency. The same policy is shown during preflight and rechecked at
+  batch admission; provider-tenant rate quotas and role-scoped policy
+  administration remain outside this local policy file.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy

@@ -31,6 +31,7 @@ pub(crate) fn assess_plan(
     source_capabilities: Option<&core::ServerCapabilities>,
     destination_capabilities: Option<&core::ServerCapabilities>,
 ) -> Vec<(String, String, bool)> {
+    let organization_policy = crate::organization_policy::OrganizationPolicy::load();
     let mut checks = vec![
         (
             "Source endpoint".into(),
@@ -73,6 +74,17 @@ pub(crate) fn assess_plan(
             "Credential persistence".into(),
             "Passwords are excluded from saved profiles and the SQLite ledger".into(),
             true,
+        ),
+        (
+            "Organization policy".into(),
+            match &organization_policy {
+                Ok(policy) => match policy.check_form(form) {
+                    Ok(()) => "Organization policy permits this plan".into(),
+                    Err(error) => error,
+                },
+                Err(error) => error.clone(),
+            },
+            matches!(&organization_policy, Ok(policy) if policy.check_form(form).is_ok()),
         ),
         (
             "Body-content verification bounds".into(),
@@ -267,7 +279,7 @@ mod tests {
     fn assessment_keeps_local_checks_separate_from_network_readiness() {
         let form = Form::default();
         let checks = assess_plan(&form, None, None);
-        assert_eq!(checks.len(), 7);
+        assert_eq!(checks.len(), 8);
         assert_eq!(checks[0].0, "Source endpoint");
         assert_eq!(checks[1].0, "Destination endpoint");
         assert_eq!(checks[2].0, "Execution mode");

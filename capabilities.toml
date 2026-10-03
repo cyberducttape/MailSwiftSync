@@ -102,8 +102,8 @@ evidence = "Seed/delta lifecycle concepts and maintenance windows exist; multi-s
 
 [[production_features]]
 feature = "Organization policy enforcement"
-status = "planned"
-evidence = "Plan safety acknowledgements are enforced; organization-wide tenant policy profiles are not yet shipped."
+status = "partial"
+evidence = "Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, and concurrency at preflight/batch admission; provider-tenant quotas and role-scoped policy administration remain open."
 
 [[production_features]]
 feature = "Durable signed webhook delivery"

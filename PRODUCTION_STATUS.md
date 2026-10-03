@@ -65,7 +65,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Automatic destination capacity checks | partial | Quota parsing and plan warnings exist where data is exposed; provider-wide capacity discovery is not qualified. |
 | Advanced typed folder mapping | partial | Engine mapping controls and folder-policy validation exist; a complete typed rule editor is not yet shipped. |
 | Executable cutover orchestration | planned | Seed/delta lifecycle concepts and maintenance windows exist; multi-step external cutover automation is not yet shipped. |
-| Organization policy enforcement | planned | Plan safety acknowledgements are enforced; organization-wide tenant policy profiles are not yet shipped. |
+| Organization policy enforcement | partial | Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, and concurrency at preflight/batch admission; provider-tenant quotas and role-scoped policy administration remain open. |
 | Durable signed webhook delivery | partial | HTTPS webhook transport exists; durable event IDs, retry queues, dead letters, and signed delivery envelopes remain open. |
 <!-- production-features:end -->
 
