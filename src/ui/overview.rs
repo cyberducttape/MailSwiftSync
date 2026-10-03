@@ -704,19 +704,19 @@ impl App {
                     .show(ui, |ui| {
                         ui.strong(self.language.message("ui.check"));
                         ui.strong(self.language.message("ui.result"));
-                        ui.strong(self.language.text("Action"));
+                        ui.strong(self.language.message("ui.action"));
                         ui.end_row();
                         for (name, detail, passed) in &self.preflight {
-                            let status = ui.label(RichText::new(if *passed { "✓" } else { "!" }).color(
-                                if *passed {
+                            let status = ui.label(
+                                RichText::new(if *passed { "✓" } else { "!" }).color(if *passed {
                                     self.theme_colors().success
                                 } else {
                                     self.theme_colors().danger
-                                },
-                            ));
+                                }),
+                            );
                             if !passed {
-                                status.on_hover_text(self.language.text(
-                                    "This check is not satisfied and may block migration readiness.",
+                                status.on_hover_text(self.language.message(
+                                    "ui.preflight-check-not-satisfied-may-block-readiness",
                                 ));
                             }
                             ui.label(RichText::new(name).strong());
@@ -725,14 +725,14 @@ impl App {
                                 if ui
                                     .add_enabled(
                                         !self.running() && !self.workspace_read_only,
-                                        egui::Button::new(self.language.text("Fix in Plan")),
+                                        egui::Button::new(self.language.message("ui.fix-in-plan")),
                                     )
                                     .clicked()
                                 {
                                     open_plan = true;
                                 }
                             } else {
-                                ui.label("—");
+                                ui.label(self.language.message("ui.not-applicable"));
                             }
                             ui.end_row();
                         }

@@ -37,6 +37,9 @@ operator distribution archives.
   Mailboxes first frame was 91 ms against its 100 ms budget.
 - Failed local preflight checks now include a direct “Fix in Plan” action and
   explain that the unmet check may block readiness.
+- Added stable English/German locale catalog entries for the preflight
+  remediation action and blocker explanation, and reused the existing
+  “Not applicable” translation in the overview table.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.
