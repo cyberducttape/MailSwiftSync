@@ -60,16 +60,29 @@ struct StagingDatabase {
 /// SQLite may spill indexed payloads to the private runtime directory.
 fn create_staging_database() -> Result<StagingDatabase, String> {
     let directory = crate::credentials::create_secret_directory()?;
-    let path = directory.join("migration-audit.sqlite3");
-    let cleanup = crate::credentials::CleanupGuard::new(vec![directory]);
+    let cleanup = crate::credentials::CleanupGuard::new(vec![directory.clone()]);
+    // SQLite's NOFOLLOW flag rejects a filename if any component is a symlink.
+    // macOS temp paths commonly begin with /var, which aliases /private/var;
+    // resolve the already-private run directory before creating/opening the DB
+    // so NOFOLLOW can remain enabled without weakening the filesystem check.
+    #[cfg(unix)]
+    let database_directory = fs::canonicalize(&directory)
+        .map_err(|error| format!("could not resolve private migration-audit directory: {error}"))?;
+    #[cfg(not(unix))]
+    let database_directory = directory.clone();
+    crate::credentials::verify_private_directory(&database_directory)
+        .map_err(|error| format!("could not verify private migration-audit directory: {error}"))?;
+    let path = database_directory.join("migration-audit.sqlite3");
     crate::credentials::open_secret_file(&path)
         .map(drop)
         .map_err(|error| {
             format!("could not create private migration-audit staging database: {error}")
         })?;
-    let connection =
-        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|error| format!("could not open migration-audit staging database: {error}"))?;
+    let connection = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|error| format!("could not open migration-audit staging database: {error}"))?;
     connection
         .execute_batch(
             "PRAGMA temp_store=FILE;
@@ -904,6 +917,7 @@ mod tests {
         let staging = create_staging_database().unwrap();
         let path = staging._path.clone();
         let directory = path.parent().unwrap().to_owned();
+        assert_eq!(fs::canonicalize(&directory).unwrap(), directory);
         let databases: Vec<(String, String)> = staging
             .connection
             .prepare("PRAGMA database_list")

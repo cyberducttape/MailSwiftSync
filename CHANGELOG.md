@@ -15,10 +15,9 @@ operator distribution archives.
   current lack of centralized fleet/tenant isolation stated explicitly.
 - Corrected provider-status wording to distinguish the wired Gmail/Microsoft
   failure classifier from still-absent quota defaults and live qualification.
-- Fixed macOS migration-audit staging database opens; the database is
-  pre-created exclusively with owner-only permissions inside a private
-  per-run directory, then opened using the SQLite flags supported consistently
-  by the bundled runtime.
+- Fixed macOS migration-audit staging database opens while retaining SQLite's
+  no-follow protection: the private run directory is resolved and revalidated
+  before the exclusive owner-only database file is created and opened.
 - Reused the queue model's generation-cached health summary during selection-only
   refreshes instead of rescanning all durable rows for unchanged state counts.
 - Reconciled production-status maturity wording with the wired provider
