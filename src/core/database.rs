@@ -1,4 +1,9 @@
 use super::*;
+mod files;
+use files::{
+    create_private_database_file, database_identity, remove_created_database_file,
+    verify_database_identity, verify_database_parent,
+};
 
 type SchemaColumn = (&'static str, &'static str, bool, i64);
 type SchemaTable = (&'static str, &'static [SchemaColumn]);
@@ -142,80 +147,6 @@ fn sqlite_check_expressions(sql: &str) -> Vec<String> {
 
 fn is_sql_identifier(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-#[cfg(unix)]
-type DatabaseIdentity = (u64, u64);
-#[cfg(windows)]
-type DatabaseIdentity = crate::windows_private::FileIdentity;
-#[cfg(all(not(unix), not(windows)))]
-type DatabaseIdentity = ();
-
-fn database_identity(path: &Path) -> std::io::Result<DatabaseIdentity> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "state database path is not a regular file",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok((metadata.dev(), metadata.ino()))
-    }
-    #[cfg(windows)]
-    {
-        // Volume serial and FILE_ID_INFO from a no-follow handle, so a
-        // replaced path is detected as it is by device/inode on Unix.
-        crate::windows_private::path_identity(path)
-    }
-    #[cfg(all(not(unix), not(windows)))]
-    {
-        Ok(())
-    }
-}
-
-fn verify_database_identity(path: &Path, expected: DatabaseIdentity) -> std::io::Result<()> {
-    if database_identity(path)? != expected {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "state database path changed while opening",
-        ));
-    }
-    Ok(())
-}
-
-fn verify_database_parent(path: &Path) -> std::io::Result<&Path> {
-    let parent = path.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "state database path has no parent directory",
-        )
-    })?;
-    crate::credentials::verify_private_directory(parent)?;
-    Ok(parent)
-}
-
-fn create_private_database_file(path: &Path) -> std::io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true).write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    }
-    options.open(path).map(drop)
-}
-
-fn remove_created_database_file(path: &Path) {
-    let _ = std::fs::remove_file(path);
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = Path::new(&format!("{}{}", path.display(), suffix)).to_owned();
-        let _ = std::fs::remove_file(sidecar);
-    }
 }
 
 impl StateStore {
