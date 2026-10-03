@@ -83,7 +83,8 @@ pub(crate) fn admit_batch_launch(
         acknowledge_ambiguous_destination_case,
         run_id,
     } = request;
-    let concurrency = fallback_profile.batch_concurrency.clamp(1, 16);
+    let concurrency =
+        crate::migration_plan::effective_batch_concurrency(fallback_profile.batch_concurrency);
     let mut plan = build_plan_builder(retry_scope, fallback_profile, mode);
     let mut selected_ids = Vec::new();
     store
@@ -249,7 +250,11 @@ fn build_plan_builder(
     fallback_profile: &Profile,
     mode: BatchExecutionMode,
 ) -> BatchActionPlanBuilder {
-    BatchActionPlanBuilder::new(retry_scope, fallback_profile.batch_concurrency, mode)
+    BatchActionPlanBuilder::new(
+        retry_scope,
+        crate::migration_plan::effective_batch_concurrency(fallback_profile.batch_concurrency),
+        mode,
+    )
 }
 
 /// Derive durable batch-project metadata from the admitted queue. Keeping

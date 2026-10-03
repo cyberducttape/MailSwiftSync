@@ -169,7 +169,8 @@ pub(crate) fn job_from_plan_with_batch_policy(
     dry_run: bool,
 ) -> Result<BulkJob, String> {
     let mut form = job_from_plan(row, &batch_profile.extra_options, secrets, dry_run)?.form();
-    form.profile.batch_concurrency = batch_profile.batch_concurrency.clamp(1, 16);
+    form.profile.batch_concurrency =
+        crate::migration_plan::effective_batch_concurrency(batch_profile.batch_concurrency);
     form.profile.max_messages_per_second = batch_profile.max_messages_per_second;
     form.profile.max_bytes_per_second = batch_profile.max_bytes_per_second;
     Ok(BulkJob::from_form(

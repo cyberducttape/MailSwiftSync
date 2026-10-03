@@ -16,9 +16,10 @@ use crate::{
 };
 use keyring::Entry;
 pub(crate) use profile::{
-    DovecotMigrationStrategy, Profile, RunPlanSnapshot, RunProfileSnapshot, auth_method_is_oauth,
-    completeness, default_auth_method, default_destination_tls, default_doveadm_path,
-    default_migration_timeout_hours, default_source_tls,
+    DovecotMigrationStrategy, MAX_BATCH_CONCURRENCY, MAX_BATCH_PROCESS_STARTS_PER_SECOND, Profile,
+    RunPlanSnapshot, RunProfileSnapshot, auth_method_is_oauth, completeness, default_auth_method,
+    default_destination_tls, default_doveadm_path, default_migration_timeout_hours,
+    default_source_tls, effective_batch_concurrency, effective_batch_process_starts_per_second,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -1043,6 +1044,7 @@ impl Form {
                 dovecot_config: profile.dovecot_config.clone(),
                 batch_concurrency: profile.batch_concurrency,
                 batch_retry_count: profile.batch_retry_count,
+                batch_process_starts_per_second: profile.batch_process_starts_per_second,
                 max_messages_per_second: profile.max_messages_per_second,
                 max_bytes_per_second: profile.max_bytes_per_second,
                 body_hash_verification: profile.body_hash_verification,

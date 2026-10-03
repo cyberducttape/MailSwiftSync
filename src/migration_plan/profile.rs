@@ -45,6 +45,8 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) dovecot_config: String,
     pub(crate) batch_concurrency: usize,
     pub(crate) batch_retry_count: usize,
+    #[serde(default = "default_batch_process_starts_per_second")]
+    pub(crate) batch_process_starts_per_second: usize,
     pub(crate) max_messages_per_second: u32,
     pub(crate) max_bytes_per_second: u64,
     #[serde(default)]
@@ -281,6 +283,8 @@ pub(crate) struct Profile {
     pub(crate) batch_concurrency: usize,
     #[serde(default)]
     pub(crate) batch_retry_count: usize,
+    #[serde(default = "default_batch_process_starts_per_second")]
+    pub(crate) batch_process_starts_per_second: usize,
     #[serde(default)]
     pub(crate) max_messages_per_second: u32,
     #[serde(default)]
@@ -360,6 +364,7 @@ impl Default for Profile {
             dovecot_config: String::new(),
             batch_concurrency: default_batch_concurrency(),
             batch_retry_count: 0,
+            batch_process_starts_per_second: default_batch_process_starts_per_second(),
             max_messages_per_second: 0,
             max_bytes_per_second: 0,
             body_hash_verification: false,
@@ -390,6 +395,17 @@ pub(crate) fn default_doveadm_path() -> String {
 }
 pub(crate) fn default_batch_concurrency() -> usize {
     2
+}
+pub(crate) const MAX_BATCH_CONCURRENCY: usize = 256;
+pub(crate) const MAX_BATCH_PROCESS_STARTS_PER_SECOND: usize = 100;
+pub(crate) fn default_batch_process_starts_per_second() -> usize {
+    2
+}
+pub(crate) fn effective_batch_concurrency(value: usize) -> usize {
+    value.clamp(1, MAX_BATCH_CONCURRENCY)
+}
+pub(crate) fn effective_batch_process_starts_per_second(value: usize) -> usize {
+    value.clamp(1, MAX_BATCH_PROCESS_STARTS_PER_SECOND)
 }
 pub(crate) fn default_migration_timeout_hours() -> u64 {
     24

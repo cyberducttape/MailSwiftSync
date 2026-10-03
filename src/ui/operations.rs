@@ -158,7 +158,9 @@ impl App {
             });
             ui.add_space(6.0);
             let limit = if scope.total > 1 {
-                self.form.profile.batch_concurrency.clamp(1, 16)
+                crate::migration_plan::effective_batch_concurrency(
+                    self.form.profile.batch_concurrency,
+                )
             } else {
                 1
             };

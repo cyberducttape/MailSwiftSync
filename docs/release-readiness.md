@@ -275,6 +275,11 @@ screen-reader checklist are recorded in
   confirmation fingerprints. The importer, UI, and reload gates are reproducible
   with the three benchmark scripts below and must be repeated on each
   supported release host class.
+- Batch scheduling keeps conservative defaults but exposes explicit global
+  worker and process-start ceilings for qualified deployments. The adaptive
+  global/provider/tenant/credential/mailbox rate-domain limiter remains the
+  effective safety boundary; changing these ceilings is recorded in the run
+  snapshot and invalidates an open live confirmation.
 
   The latest local release-mode baseline on 2026-09-30 (Linux x86_64, the
   cases run sequentially in one process) was:

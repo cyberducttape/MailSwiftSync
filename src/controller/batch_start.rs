@@ -95,7 +95,8 @@ impl App {
         let prepared = admission.prepared;
         let selected_job_ids = prepared.selected_job_ids.clone();
         let job_count = selected_job_ids.len();
-        let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
+        let concurrency =
+            crate::migration_plan::effective_batch_concurrency(self.form.profile.batch_concurrency);
         self.selected_project_id = Some(project_id.clone());
         self.bulk_live_run = live;
         self.run_id = Some(run_id.clone());
@@ -105,6 +106,10 @@ impl App {
         self.mark_bulk_jobs_changed();
         let worker = launch_batch_worker(BatchExecutionContext {
             concurrency,
+            launch_starts_per_second:
+                crate::migration_plan::effective_batch_process_starts_per_second(
+                    self.form.profile.batch_process_starts_per_second,
+                ),
             mode,
             retry_count: self.form.profile.batch_retry_count.min(3),
             job_count,

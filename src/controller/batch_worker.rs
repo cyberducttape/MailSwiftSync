@@ -17,7 +17,6 @@ use std::{
     thread,
 };
 
-const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const MAX_BATCH_PENDING_EVENTS: usize = 4_096;
 
 pub(crate) type OAuthRefreshLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
@@ -126,6 +125,7 @@ pub(crate) struct BatchWorkerLaunch {
 /// the controller and worker coordinator.
 pub(crate) struct BatchExecutionContext {
     pub(crate) concurrency: usize,
+    pub(crate) launch_starts_per_second: usize,
     pub(crate) mode: BatchExecutionMode,
     pub(crate) retry_count: usize,
     pub(crate) job_count: usize,
@@ -164,7 +164,7 @@ pub(crate) fn spawn_batch_worker(
     cancel: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     let limiters = BatchLimiters {
-        launch: Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND)),
+        launch: Arc::new(ProcessLaunchLimiter::new(context.launch_starts_per_second)),
         rate: Arc::new(RateDomainLimiter::new(context.concurrency)),
     };
     spawn_batch_worker_with(context, tx, cancel, limiters)
@@ -178,6 +178,7 @@ pub(crate) fn spawn_batch_worker_with(
 ) -> thread::JoinHandle<()> {
     let BatchExecutionContext {
         concurrency,
+        launch_starts_per_second: _,
         mode,
         retry_count,
         job_count,

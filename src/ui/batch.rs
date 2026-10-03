@@ -790,13 +790,31 @@ impl App {
                 crate::ui::form_row(ui, self.language.message("ui.concurrent-workers"), |ui| {
                     let field = ui.add_enabled(
                         editable,
-                        egui::DragValue::new(&mut self.form.profile.batch_concurrency).range(1..=16),
+                        egui::DragValue::new(&mut self.form.profile.batch_concurrency)
+                            .range(1..=crate::migration_plan::MAX_BATCH_CONCURRENCY),
                     );
                     ui.label(
                         RichText::new(
                             self.language
                                 .text("Applies to preflight and live migration."),
                         )
+                        .small()
+                        .color(colors.text_secondary),
+                    );
+                    field
+                });
+                crate::ui::form_row(ui, self.language.text("Process starts per second"), |ui| {
+                    let field = ui.add_enabled(
+                        editable,
+                        egui::DragValue::new(
+                            &mut self.form.profile.batch_process_starts_per_second,
+                        )
+                        .range(1..=crate::migration_plan::MAX_BATCH_PROCESS_STARTS_PER_SECOND),
+                    );
+                    ui.label(
+                        RichText::new(self.language.text(
+                            "Global launch ceiling; provider and credential domains still adapt independently.",
+                        ))
                         .small()
                         .color(colors.text_secondary),
                     );

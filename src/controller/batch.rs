@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(plan.eligible_count, 1);
         assert_eq!(plan.blocked_count, 2);
         assert_eq!(plan.destructive_count, 1);
-        assert_eq!(plan.concurrency, 16);
+        assert_eq!(plan.concurrency, 99);
         assert_eq!(plan.blocked_reasons.len(), 2);
         assert!(!plan.identity_hash.is_empty());
     }
@@ -825,7 +825,7 @@ impl BatchActionPlanBuilder {
             blocked_reasons
                 .push("One or more selected rows are outside the selected retry scope".to_owned());
         }
-        let concurrency = concurrency.clamp(1, 16);
+        let concurrency = crate::migration_plan::effective_batch_concurrency(concurrency);
         let identity_input = format!(
             "mode={execution_mode:?}\nscope={retry_scope:?}\nconcurrency={concurrency}\ndestructive_count={destructive_count}\nselected_count={explicit_selection_count}\nxor={digest_xor:02x?}\nsum={digest_sum:02x?}"
         );
@@ -859,6 +859,8 @@ pub(crate) struct BatchConfirmationIdentity {
     pub(crate) execution_mode: BatchExecutionMode,
     /// Worker concurrency
     pub(crate) concurrency: usize,
+    /// Global process launch ceiling shown to the operator.
+    pub(crate) launch_starts_per_second: usize,
     /// Run-level message throughput policy shown to the operator.
     pub(crate) max_messages_per_second: u32,
     /// Run-level byte throughput policy shown to the operator.

@@ -513,6 +513,7 @@ mod tests {
             let coordinator = spawn_batch_worker_with(
                 BatchExecutionContext {
                     concurrency,
+                    launch_starts_per_second: 2,
                     mode: BatchExecutionMode::Preflight,
                     retry_count,
                     job_count: count,

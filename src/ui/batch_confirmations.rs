@@ -190,6 +190,10 @@ crate::ui::name_modal(ui, &modal_heading);
                 retry_scope: self.bulk_retry_scope,
                 execution_mode: self.bulk_mode,
                 concurrency: plan.concurrency,
+                launch_starts_per_second:
+                    crate::migration_plan::effective_batch_process_starts_per_second(
+                        self.form.profile.batch_process_starts_per_second,
+                    ),
                 max_messages_per_second: self.form.profile.max_messages_per_second,
                 max_bytes_per_second: self.form.profile.max_bytes_per_second,
                 deletion_enabled: plan.destructive_count > 0,
@@ -381,9 +385,15 @@ crate::ui::name_modal(ui, &modal_heading);
                         )
                         .clicked()
                     {
-                        let current_concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
+                        let current_concurrency = crate::migration_plan::effective_batch_concurrency(
+                            self.form.profile.batch_concurrency,
+                        );
                         let identity_matches = stored_identity.as_ref().is_some_and(|stored| {
                             stored.concurrency == current_concurrency
+                                && stored.launch_starts_per_second
+                                    == crate::migration_plan::effective_batch_process_starts_per_second(
+                                        self.form.profile.batch_process_starts_per_second,
+                                    )
                                 && stored.max_messages_per_second
                                     == self.form.profile.max_messages_per_second
                                 && stored.max_bytes_per_second
