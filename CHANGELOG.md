@@ -8,6 +8,8 @@ operator distribution archives.
 
 - Proof verification now rejects a non-UTF-8 trusted-key argument instead of
   silently downgrading signer authentication to checksum-only validation.
+- Cutover commands reject non-UTF-8 control arguments rather than silently
+  dropping an invalid maintenance-window or confirmation value.
 - Production-readiness guidance now distinguishes implemented provider-scoped
   failure intelligence and exact folder mappings from still-pending live
   provider qualification and complete provider-specific capacity simulation.

@@ -114,6 +114,15 @@ fn parse_trusted_public_key_argument(
         .transpose()
 }
 
+fn parse_cutover_text_arguments(arguments: &[OsString]) -> Result<Vec<String>, usize> {
+    arguments
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(index, value)| value.clone().into_string().map_err(|_| index))
+        .collect()
+}
+
 const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]] [--acknowledge-destination-loss]";
 const WEBHOOK_USAGE: &str = "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata] [--watch] [--poll-seconds=N] (N: 1..3600)";
 /// Required for unattended live runs whose plan may remove destination-only
@@ -1286,9 +1295,16 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("{usage}");
             std::process::exit(2);
         }
+        let text_arguments = match parse_cutover_text_arguments(&values) {
+            Ok(arguments) => arguments,
+            Err(index) => {
+                eprintln!("{usage}\nCutover control argument {index} must be valid UTF-8.");
+                std::process::exit(2);
+            }
+        };
         let state = &values[0];
-        let operation = &values[1];
-        let project_id = &values[2];
+        let operation = &text_arguments[0];
+        let project_id = &text_arguments[1];
         let store = match core::StateStore::open(state) {
             Ok(store) => store,
             Err(error) => {
@@ -1296,30 +1312,24 @@ pub(crate) fn run() -> eframe::Result<()> {
                 std::process::exit(1);
             }
         };
-        let result = match operation.to_str() {
-            Some("create") if (4..=5).contains(&values.len()) => store
+        let result = match operation.as_str() {
+            "create" if (4..=5).contains(&values.len()) => store
                 .create_cutover_workflow(
-                    project_id.to_str().unwrap_or_default(),
-                    values[3].to_str().unwrap_or_default(),
-                    values.get(4).and_then(|value| value.to_str()),
+                    project_id,
+                    &text_arguments[2],
+                    text_arguments.get(3).map(String::as_str),
                 )
                 .map(|()| {
                     "Cutover workflow created; explicit approval is required before execution."
                         .to_owned()
                 }),
-            Some("approve") if values.len() == 4 => store
-                .approve_cutover(
-                    project_id.to_str().unwrap_or_default(),
-                    values[3].to_str().unwrap_or_default(),
-                )
+            "approve" if values.len() == 4 => store
+                .approve_cutover(project_id, &text_arguments[2])
                 .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned()),
-            Some("advance") if (3..=4).contains(&values.len()) => store
-                .advance_cutover(
-                    project_id.to_str().unwrap_or_default(),
-                    values.get(3).and_then(|value| value.to_str()),
-                )
+            "advance" if (3..=4).contains(&values.len()) => store
+                .advance_cutover(project_id, text_arguments.get(2).map(String::as_str))
                 .map(|stage| format!("Cutover advanced to {}.", stage.as_str())),
-            Some("run") if (3..=4).contains(&values.len()) => {
+            "run" if (3..=4).contains(&values.len()) => {
                 let acknowledge_destination_loss = values.get(3).is_some_and(|value| {
                     value == std::ffi::OsStr::new(ACKNOWLEDGE_DESTINATION_LOSS)
                 });
@@ -1329,8 +1339,7 @@ pub(crate) fn run() -> eframe::Result<()> {
                     );
                     std::process::exit(2);
                 }
-                let workflow = match store.cutover_workflow(project_id.to_str().unwrap_or_default())
-                {
+                let workflow = match store.cutover_workflow(project_id) {
                     Ok(Some(workflow)) => workflow,
                     Ok(None) => {
                         eprintln!("Cutover run refused: no workflow exists for this project");
@@ -1386,12 +1395,12 @@ pub(crate) fn run() -> eframe::Result<()> {
                 })
                 .map(|message| format!("{} Cutover stage: {}.", message, workflow.stage.as_str()))
             }
-            Some("status") if values.len() == 3 => store
-                .cutover_workflow(project_id.to_str().unwrap_or_default())
-                .and_then(|workflow| {
+            "status" if values.len() == 3 => {
+                store.cutover_workflow(project_id).and_then(|workflow| {
                     serde_json::to_string_pretty(&workflow)
                         .map_err(|_| rusqlite::Error::InvalidQuery)
-                }),
+                })
+            }
             _ => {
                 eprintln!("{usage}");
                 std::process::exit(2);
@@ -1826,7 +1835,8 @@ fn oauth_authorize_command(
 mod tests {
     use super::{
         HeadlessMode, SuperviseArguments, ensure_certificate_output_is_distinct,
-        parse_supervise_arguments, parse_trusted_public_key_argument, sha256_file,
+        parse_cutover_text_arguments, parse_supervise_arguments, parse_trusted_public_key_argument,
+        sha256_file,
     };
     use crate::maintenance_window::MaintenanceWindow;
     use std::ffi::OsString;
@@ -1907,6 +1917,33 @@ mod tests {
                 parse_trusted_public_key_argument(Some(invalid_utf8)),
                 Err("trusted public key must be valid UTF-8")
             );
+        }
+    }
+
+    #[test]
+    fn cutover_control_arguments_reject_non_utf8_instead_of_dropping_values() {
+        let valid = [
+            OsString::from("state.db"),
+            OsString::from("create"),
+            OsString::from("project"),
+            OsString::from("2026-10-03T22:00:00Z"),
+            OsString::from("22:00-01:00"),
+        ];
+        assert_eq!(
+            parse_cutover_text_arguments(&valid).unwrap(),
+            ["create", "project", "2026-10-03T22:00:00Z", "22:00-01:00"]
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let invalid_window = [
+                OsString::from("state.db"),
+                OsString::from("create"),
+                OsString::from("project"),
+                OsString::from("2026-10-03T22:00:00Z"),
+                OsString::from_vec(vec![0xff]),
+            ];
+            assert_eq!(parse_cutover_text_arguments(&invalid_window), Err(4));
         }
     }
 
