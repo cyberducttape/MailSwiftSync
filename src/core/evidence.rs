@@ -198,8 +198,16 @@ impl ReportMailboxSnapshot {
         MailboxAssurance {
             transfer_completed,
             destination_reachable: evidence.map(|_| true),
-            inventory_reconciled: evidence
-                .is_some_and(|value| value.source_folders == value.destination_folders),
+            // Equal aggregate folder counts do not prove that the same
+            // folders were present. Only an exact per-message reconciliation
+            // establishes that the independently inventoried mailboxes
+            // reconcile.
+            inventory_reconciled: evidence.is_some_and(|value| {
+                matches!(
+                    value.verification_method(),
+                    VerificationMethod::MetadataReconciliation | VerificationMethod::BodyHash
+                ) && value.is_exact_match()
+            }),
             message_level_evidence: evidence.is_some_and(|value| {
                 matches!(
                     value.verification_method(),
@@ -208,9 +216,13 @@ impl ReportMailboxSnapshot {
             }),
             differences_found,
             differences_accepted: self.acceptance.is_some(),
-            unresolved: self.job.state == "attention"
-                || self.job.state == "verification_difference"
-                || self.job.state == "failed",
+            // A successful transfer attempt is not the same as a mailbox
+            // that is safe to close. Until verification is accepted (with or
+            // without exceptions), the project still has unresolved work.
+            unresolved: !matches!(
+                self.job.state.as_str(),
+                "verified" | "verified_with_exceptions"
+            ),
             verification_authority: evidence
                 .map(|value| value.verification_method().as_str().to_owned()),
             evidence_run_id,
@@ -573,6 +585,57 @@ mod tests {
         assert_eq!(assurance.destination_reachable, None);
         assert!(!assurance.inventory_reconciled);
         assert!(!assurance.message_level_evidence);
-        assert!(!assurance.unresolved);
+        assert!(
+            assurance.unresolved,
+            "a completed transfer without verification is not safe to close"
+        );
+    }
+
+    #[test]
+    fn assurance_does_not_infer_inventory_identity_from_equal_aggregate_counts() {
+        let mailbox = ReportMailboxSnapshot {
+            job: MailboxJob {
+                id: "job".into(),
+                source_mailbox: "source".into(),
+                destination_mailbox: "destination".into(),
+                state: "delta_required".into(),
+                config: None,
+            },
+            attention_reason: None,
+            acceptance: None,
+            evidence: Some((
+                "run".into(),
+                MailboxEvidence {
+                    verification_method: VerificationMethod::AggregateEngine,
+                    verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+                    source_messages: 10,
+                    destination_messages: 10,
+                    source_bytes: 100,
+                    destination_bytes: 100,
+                    unmatched_messages: Some(0),
+                    failed_messages: 0,
+                    source_folders: 3,
+                    destination_folders: 3,
+                    authoritative: true,
+                    missing_messages: 0,
+                    extra_messages: 0,
+                    modified_messages: 0,
+                    probable_messages: 0,
+                },
+                None,
+            )),
+        };
+
+        let assurance = mailbox.assurance();
+        assert!(assurance.transfer_completed);
+        assert_eq!(assurance.destination_reachable, Some(true));
+        assert!(
+            !assurance.inventory_reconciled,
+            "matching folder counts do not establish matching folder identities"
+        );
+        assert!(
+            assurance.unresolved,
+            "a mailbox awaiting its delta is not safe to close"
+        );
     }
 }

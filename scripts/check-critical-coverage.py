@@ -21,6 +21,7 @@ CRITICAL_FILES = {
     "src/controller/poll.rs": 70.0,
     "src/controller/queue.rs": 80.0,
     "src/core/database.rs": 65.0,
+    "src/core/evidence.rs": 85.0,
     "src/core/message_verification.rs": 70.0,
     "src/core/recovery.rs": 80.0,
     "src/core/recovery_queue.rs": 85.0,

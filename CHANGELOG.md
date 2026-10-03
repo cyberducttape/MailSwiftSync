@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Migration Assurance now marks every mailbox unresolved until verification is
+  accepted, including completed transfers awaiting a delta, and no longer calls
+  equal aggregate folder counts a reconciled inventory.
 - Extracted bounded IMAP LIST parsing, mailbox descriptor construction, and
   folder metadata handling into a dedicated folder-inventory module. Existing
   response-size, literal-size, mailbox-count, retained-inventory, timeout, and
@@ -24,7 +27,8 @@ operator distribution archives.
   and insert one record at a time under the existing input-size bounds.
 - Expanded the CI line-coverage gate to include observed floors for batch
   scheduling/start, event ownership, queue handling, polling, recovery, and
-  IMAP authentication (85% floor; 87.77% observed).
+  IMAP authentication (85% floor; 87.77% observed) and evidence projection
+  (85% floor; 89.54% observed).
 - Extracted bounded tagged-response parsing and budget-aware IMAP command I/O
   into a protocol module, preserving literal-safe completion detection.
 - Isolated certificate-validated IMAP/STARTTLS setup, deadline-aware handshake
