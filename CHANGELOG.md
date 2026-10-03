@@ -11,6 +11,9 @@ operator distribution archives.
   than hashes of silently shortened argument lists.
 - Proof verification now rejects a non-UTF-8 trusted-key argument instead of
   silently downgrading signer authentication to checksum-only validation.
+- Production provider qualification now requires every customer proof to have
+  a valid Ed25519 signature from the explicitly pinned qualification key;
+  recomputable proof digests no longer suffice as release provenance.
 - Cutover commands reject non-UTF-8 control arguments rather than silently
   dropping an invalid maintenance-window or confirmation value.
 - Production-readiness guidance now distinguishes implemented provider-scoped

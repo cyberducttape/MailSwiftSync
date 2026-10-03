@@ -18,6 +18,11 @@ if [[ "${1:-}" == "--release" ]]; then
 fi
 export MAILSWIFTSYNC_GATE_MODE="$MODE"
 
+if [[ "$MODE" == "release" && ! "${MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY:-}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "FAIL: release provider evidence requires MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY (pinned Ed25519 public key hex)" >&2
+  exit 1
+fi
+
 if [[ ! -f "$POLICY_FILE" ]]; then
   echo "FAIL: provider evidence policy not found: $POLICY_FILE" >&2
   exit 1
@@ -126,7 +131,7 @@ PY
     continue
   fi
 
-policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$expected_source_auth" "$expected_destination_auth" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios_by_phase_json" "$scenario_requirements_json" "$required_phases" "${provider_files[@]}" <<'PY'
+policy_result=$(PYTHONPATH="$REPOSITORY_ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$expected_source_auth" "$expected_destination_auth" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios_by_phase_json" "$scenario_requirements_json" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
 import hashlib
 import os
@@ -292,6 +297,16 @@ for filename in files:
             calculated = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             if expected_proof_digest != calculated or expected_proof_digest != proof_digest:
                 errors.append(f"{filename}: referenced customer proof digest does not match evidence")
+            if os.environ.get("MAILSWIFTSYNC_GATE_MODE") == "release":
+                signature = proof.get("proof_signature")
+                if not isinstance(signature, dict) or signature.get("algorithm") != "Ed25519":
+                    errors.append(f"{filename}: release customer proof must have an Ed25519 signature")
+                else:
+                    try:
+                        from provider_proof_signature import verify_proof_signature
+                        verify_proof_signature(proof, os.environ["MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY"])
+                    except (ImportError, KeyError, TypeError, ValueError) as error:
+                        errors.append(f"{filename}: customer proof Ed25519 signature verification failed ({error})")
         except (OSError, json.JSONDecodeError, TypeError) as error:
             errors.append(f"{filename}: referenced customer proof is invalid ({error})")
     if isinstance(proof, dict):

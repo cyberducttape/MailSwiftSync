@@ -43,6 +43,7 @@ jobs:
           fi
       - name: Install provider evidence validator
         run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
+      - run: python3 tests/provider_proof_signature_test.py
       - name: Fetch externally retained provider evidence
         if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-rc.') }}
         env:
@@ -56,6 +57,7 @@ jobs:
         shell: bash
         env:
           MAILSWIFTSYNC_RELEASE_COMMIT: ${{ github.sha }}
+          MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY: ${{ vars.MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY }}
           MAILSWIFTSYNC_EVIDENCE_DIR: ${{ runner.temp }}/mailswiftsync-release-evidence
           MAILSWIFTSYNC_POLICY_FILE: ${{ github.workspace }}/tests/provider-evidence/policy.json
           MAILSWIFTSYNC_SCHEMA_FILE: ${{ github.workspace }}/tests/provider-evidence/schema.json

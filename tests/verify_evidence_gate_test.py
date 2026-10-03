@@ -17,6 +17,20 @@ SOURCE_EVIDENCE = ROOT / "tests" / "provider-evidence"
 
 
 class EvidenceGateTests(unittest.TestCase):
+    def test_release_mode_requires_pinned_provider_proof_signer(self):
+        environment = os.environ.copy()
+        environment.pop("MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY", None)
+        result = subprocess.run(
+            [str(GATE), "--release"],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY", result.stderr)
+
     def test_release_policy_covers_customer_migration_directions_and_auth_modes(self):
         policy = json.loads((SOURCE_EVIDENCE / "policy.json").read_text(encoding="utf-8"))
         routes = {

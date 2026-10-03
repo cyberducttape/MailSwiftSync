@@ -23,6 +23,13 @@ downloads and verifies that archive into the runner's temporary directory
 before invoking the gate; it no longer reads release evidence from the source
 tree.
 
+Production release verification also requires the repository Actions variable
+`MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY`, containing the trusted
+qualification signer's 32-byte Ed25519 public key as 64 hexadecimal
+characters. Every referenced customer proof must carry a valid signature by
+that pinned key. A proof's self-reported public key and recomputable SHA-256
+digest alone do not establish who produced the qualification evidence.
+
 Example hand-off for a release candidate:
 
 ```bash
