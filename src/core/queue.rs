@@ -14,6 +14,7 @@ use super::{
 };
 use rusqlite::{OptionalExtension, params, params_from_iter};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// The presented state, derived from durable facts only: a row whose child
@@ -49,7 +50,7 @@ pub struct QueueInsert {
     /// Secret-free serialized plan.
     pub config: String,
     /// Shared normalized policy for new queue rows.
-    pub batch_plan_config: Option<String>,
+    pub batch_plan_config: Option<Arc<str>>,
     /// Compact mailbox identity/credential delta applied to the shared plan.
     pub row_overrides: Option<String>,
     pub facts: QueueRowFacts,
@@ -171,13 +172,20 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let mut shared_configs = std::collections::HashSet::new();
+        let mut shared_bytes = 0usize;
         rows.iter().try_fold(0usize, |total, row| {
             let config = row.batch_plan_config.as_deref().unwrap_or(&row.config);
             if config.len() > MAX_PERSISTED_PROFILE_BYTES {
                 return Err(rusqlite::Error::InvalidQuery);
             }
             if let Some(config) = row.batch_plan_config.as_ref() {
-                shared_configs.insert(config.clone());
+                let identity = Arc::as_ptr(config) as *const () as usize;
+                if shared_configs.insert(identity) {
+                    shared_bytes = shared_bytes
+                        .checked_add(config.len())
+                        .filter(|value| *value <= MAX_TOTAL_PERSISTED_PROFILE_BYTES)
+                        .ok_or(rusqlite::Error::InvalidQuery)?;
+                }
             }
             total
                 .checked_add(if row.batch_plan_config.is_some() {
@@ -185,12 +193,6 @@ impl StateStore {
                 } else {
                     row.config.len()
                 })
-                .filter(|value| *value <= MAX_TOTAL_PERSISTED_PROFILE_BYTES)
-                .ok_or(rusqlite::Error::InvalidQuery)
-        })?;
-        let shared_bytes = shared_configs.iter().try_fold(0usize, |total, config| {
-            total
-                .checked_add(config.len())
                 .filter(|value| *value <= MAX_TOTAL_PERSISTED_PROFILE_BYTES)
                 .ok_or(rusqlite::Error::InvalidQuery)
         })?;
@@ -237,17 +239,18 @@ impl StateStore {
             params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
         )?;
         let mut ids = Vec::with_capacity(rows.len());
-        let mut plan_ids = std::collections::HashMap::<String, String>::new();
+        let mut plan_ids = std::collections::HashMap::<usize, String>::new();
         for config in rows.iter().filter_map(|row| row.batch_plan_config.as_ref()) {
-            if plan_ids.contains_key(config) {
+            let identity = Arc::as_ptr(config) as *const () as usize;
+            if plan_ids.contains_key(&identity) {
                 continue;
             }
             let id = Uuid::new_v4().to_string();
             tx.execute(
                 "INSERT INTO batch_plans(id,project_id,config) VALUES(?1,?2,?3)",
-                params![id, project.id, config],
+                params![id, project.id, config.as_ref()],
             )?;
-            plan_ids.insert(config.clone(), id);
+            plan_ids.insert(identity, id);
         }
         {
             let mut insert = tx.prepare(
@@ -269,9 +272,9 @@ impl StateStore {
                     } else {
                         Some(row.config.clone())
                     },
-                    row.batch_plan_config
-                        .as_ref()
-                        .and_then(|config| plan_ids.get(config)),
+                    row.batch_plan_config.as_ref().and_then(|config| {
+                        plan_ids.get(&(Arc::as_ptr(config) as *const () as usize))
+                    }),
                     row.row_overrides,
                 ])?;
                 facts.execute(params![
@@ -742,9 +745,10 @@ impl StateStore {
         tx.commit()
     }
 
-    /// Replace the plans (and derived facts) of rows that are not running,
-    /// in one transaction. A changed plan no longer matches its preflight,
-    /// so its recorded preflight plan is cleared.
+    /// Replace row-level plan deltas (and derived facts) of rows that are not
+    /// running, in one transaction. A changed delta no longer matches its
+    /// preflight, so its recorded preflight plan is cleared. Shared batch plan
+    /// references and legacy full-row configs remain unchanged.
     pub fn update_queue_plans(
         &self,
         project_id: &str,
@@ -752,7 +756,7 @@ impl StateStore {
     ) -> rusqlite::Result<usize> {
         if updates
             .iter()
-            .any(|(_, config, _)| config.len() > MAX_PERSISTED_PROFILE_BYTES)
+            .any(|(_, overrides, _)| overrides.len() > MAX_PERSISTED_PROFILE_BYTES)
         {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -768,11 +772,11 @@ impl StateStore {
         let mut changed = 0;
         {
             let mut update = tx.prepare_cached(
-                "UPDATE mailbox_jobs SET config=?3,row_overrides=NULL,preflight_plan=NULL WHERE project_id=?1 AND id=?2",
+                "UPDATE mailbox_jobs SET row_overrides=?3,preflight_plan=NULL WHERE project_id=?1 AND id=?2",
             )?;
             let mut upsert = tx.prepare_cached(FACTS_UPSERT)?;
-            for (id, config, facts) in updates {
-                let updated = update.execute(params![project_id, id, config])?;
+            for (id, overrides, facts) in updates {
+                let updated = update.execute(params![project_id, id, overrides])?;
                 if updated == 1 {
                     upsert_facts(&mut upsert, id, facts)?;
                 }
@@ -890,6 +894,87 @@ mod tests {
     }
 
     #[test]
+    fn rows_sharing_a_plan_allocation_persist_one_normalized_plan() {
+        let store = StateStore::in_memory().unwrap();
+        let plan = Arc::<str>::from("shared immutable plan");
+        let mut first = insert(0, false);
+        first.config.clear();
+        first.batch_plan_config = Some(plan.clone());
+        let mut second = insert(1, false);
+        second.config.clear();
+        second.batch_plan_config = Some(plan);
+
+        let (project, _) = store
+            .create_batch_queue("queue", "old.example", "new.example", &[first, second])
+            .unwrap();
+        let plans: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM batch_plans WHERE project_id=?1",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let shared_references: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(DISTINCT batch_plan_id) FROM mailbox_jobs WHERE project_id=?1 AND config IS NULL",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(plans, 1);
+        assert_eq!(shared_references, 1);
+    }
+
+    #[test]
+    fn delta_update_keeps_shared_plan_and_invalidates_preflight() {
+        let store = StateStore::in_memory().unwrap();
+        let mut row = insert(0, false);
+        row.config.clear();
+        row.batch_plan_config = Some(Arc::from("shared immutable plan"));
+        row.row_overrides = Some("source_user = 'before@example.test'\n".into());
+        let (project, ids) = store
+            .create_batch_queue("queue", "old.example", "new.example", &[row])
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET preflight_plan='digest' WHERE id=?1",
+                [&ids[0]],
+            )
+            .unwrap();
+
+        store
+            .update_queue_plans(
+                &project.id,
+                &[(
+                    ids[0].clone(),
+                    "source_user = 'after@example.test'\n".into(),
+                    insert(0, false).facts,
+                )],
+            )
+            .unwrap();
+        let (config, plan_id, overrides, preflight): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = store
+            .connection
+            .query_row(
+                "SELECT config,batch_plan_id,row_overrides,preflight_plan FROM mailbox_jobs WHERE id=?1",
+                [&ids[0]],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert!(config.is_none());
+        assert!(plan_id.is_some());
+        assert!(overrides.unwrap().contains("after@example.test"));
+        assert!(preflight.is_none());
+    }
+
+    #[test]
     fn queue_reads_filter_page_and_count_without_materializing_plans() {
         let store = StateStore::in_memory().unwrap();
         let (project, ids) = queue(&store, 12);
@@ -971,7 +1056,11 @@ mod tests {
         store
             .update_queue_plans(
                 &project,
-                &[(ids[0].clone(), "config = 1\n".into(), facts.clone())],
+                &[(
+                    ids[0].clone(),
+                    "source_user = 'user0@example.test'\n".into(),
+                    facts.clone(),
+                )],
             )
             .unwrap();
         let (preflight, label): (Option<String>, String) = store
@@ -983,6 +1072,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!((preflight, label.as_str()), (None, "Renamed"));
+        let unchanged_config: String = store
+            .connection
+            .query_row(
+                "SELECT config FROM mailbox_jobs WHERE id=?1",
+                [&ids[0]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(unchanged_config.contains("destination_host"));
         assert!(
             store
                 .update_queue_plans(&project, &[("missing".into(), "x".into(), facts.clone())])

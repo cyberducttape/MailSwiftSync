@@ -26,6 +26,11 @@ operator distribution archives.
   command deadlines and added non-sensitive phase/timing markers to retained
   evidence, so stalled runs can be diagnosed without losing the full workflow
   window.
+- Durable batch imports now serialize each shared immutable plan once and
+  reference it from mailbox rows, avoiding 100,000 transient duplicate TOML
+  profile allocations during large imports. Applying a shared keyring
+  credential now changes only mailbox identity deltas, preserving normalized
+  shared-plan storage and invalidating the affected preflight.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.

@@ -303,6 +303,7 @@ pub(crate) fn batch_project_identity(
 /// The durable batch configuration excludes free-form expert options. Those
 /// options are revalidated from the current editable profile before launch;
 /// the run snapshot records their digest instead of persisting raw text.
+#[cfg(test)]
 pub(crate) fn durable_batch_profile_config(profile: &Profile) -> Result<String, String> {
     let mut safe_profile = profile.clone();
     safe_profile.extra_options.clear();

@@ -2,13 +2,15 @@
 //! persisting an import, rebuilding a row's executable plan, and bulk plan
 //! edits. Presentation reads live in `ui::queue_model`.
 
+#[cfg(test)]
+use super::batch_admission::durable_batch_profile_config;
 use super::batch_admission::{
     batch_project_identity, decode_persisted_batch_profile, duplicate_destination,
-    durable_batch_profile_config,
 };
 use crate::{Form, Profile, SecretString, bulk_import::BulkJob, core};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Session-only passwords from an explicitly acknowledged plaintext import,
 /// keyed by durable job ID. They are never written to the ledger.
@@ -58,6 +60,26 @@ pub(crate) fn durable_batch_plan_config(profile: &Profile) -> Result<String, Str
     plan.extra_options.clear();
     toml::to_string(&plan)
         .map_err(|error| format!("Could not serialize shared batch plan: {error}"))
+}
+
+/// Serialize each immutable import default once, then share its allocation
+/// across all durable mailbox rows built from those defaults.
+fn durable_batch_plan_configs(jobs: &[BulkJob]) -> Result<HashMap<usize, Arc<str>>, String> {
+    let mut by_defaults = HashMap::<usize, Arc<str>>::new();
+    let mut interned = HashMap::<String, Arc<str>>::new();
+    for job in jobs {
+        let identity = Arc::as_ptr(&job.defaults) as usize;
+        if by_defaults.contains_key(&identity) {
+            continue;
+        }
+        let serialized = durable_batch_plan_config(&job.defaults.profile)?;
+        let config = interned
+            .entry(serialized.clone())
+            .or_insert_with(|| Arc::<str>::from(serialized))
+            .clone();
+        by_defaults.insert(identity, config);
+    }
+    Ok(by_defaults)
 }
 
 fn apply_durable_batch_row_overrides(
@@ -129,10 +151,12 @@ pub(crate) fn persist_imported_queue(
         return Err(error);
     }
     let identity = batch_project_identity(&jobs, fallback_profile);
+    let batch_plan_configs = durable_batch_plan_configs(&jobs)?;
     let rows = jobs
         .iter()
         .map(|job| {
             let profile = job.profile();
+            let defaults_identity = Arc::as_ptr(&job.defaults) as usize;
             Ok(core::QueueInsert {
                 source_mailbox: profile.source_user.clone(),
                 destination_mailbox: profile.destination_user.clone(),
@@ -144,7 +168,7 @@ pub(crate) fn persist_imported_queue(
                     &profile.destination_port,
                 ),
                 config: String::new(),
-                batch_plan_config: Some(durable_batch_plan_config(&profile)?),
+                batch_plan_config: Some(batch_plan_configs[&defaults_identity].clone()),
                 row_overrides: Some(durable_batch_row_overrides(&profile)?),
                 facts: queue_row_facts(&job.label, &profile),
             })
@@ -295,7 +319,7 @@ pub(crate) fn apply_keyring_to_queue(
         *reference = credential_id.to_owned();
         updates.push((
             row.id.clone(),
-            durable_batch_profile_config(&profile)?,
+            durable_batch_row_overrides(&profile)?,
             queue_row_facts(&row.label, &profile),
         ));
         Ok(())
@@ -305,7 +329,7 @@ pub(crate) fn apply_keyring_to_queue(
     }
     store
         .update_queue_plans(project_id, &updates)
-        .map_err(|error| format!("Could not update the queue's credential references: {error}"))
+        .map_err(|error| format!("Could not update the queue's credential deltas: {error}"))
 }
 
 /// A scheduler job source over admitted rows of `project_id`. With a ledger
@@ -471,6 +495,30 @@ mod tests {
         assert_eq!(rebuilt.profile().extra_options, "--nofoldersizes");
         assert_eq!(rebuilt.profile().source_credential_id, "kr");
         assert!(rebuilt.form().dry_run);
+    }
+
+    #[test]
+    fn shared_import_defaults_reuse_one_serialized_durable_plan() {
+        let first = job(0, "");
+        let defaults = first.defaults.clone();
+        let mut second_form = Form {
+            profile: defaults.profile.as_ref().clone(),
+            ..Form::default()
+        };
+        second_form.profile.source_host = "old.example".into();
+        second_form.profile.source_user = "user1@old.example".into();
+        second_form.profile.destination_host = "new.example".into();
+        second_form.profile.destination_user = "user1@new.example".into();
+        let second = BulkJob::from_form_with_defaults(
+            "Row 1".into(),
+            second_form,
+            "imported".into(),
+            defaults.clone(),
+        );
+
+        let plans = durable_batch_plan_configs(&[first, second]).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert!(plans.contains_key(&(Arc::as_ptr(&defaults) as usize)));
     }
 
     #[test]
