@@ -7,11 +7,84 @@ use super::batch_admission::{
     durable_batch_profile_config,
 };
 use crate::{Form, Profile, SecretString, bulk_import::BulkJob, core};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Session-only passwords from an explicitly acknowledged plaintext import,
 /// keyed by durable job ID. They are never written to the ledger.
 pub(crate) type SessionSecrets = HashMap<String, (SecretString, SecretString)>;
+
+/// Mailbox-specific fields stored beside a shared durable batch plan.
+#[derive(Serialize, Deserialize)]
+struct DurableBatchRowOverrides {
+    source_host: String,
+    source_user: String,
+    source_credential_id: String,
+    source_oauth_refresh_credential_id: String,
+    destination_host: String,
+    destination_user: String,
+    destination_credential_id: String,
+    destination_oauth_refresh_credential_id: String,
+    profile_name: Option<String>,
+}
+
+fn durable_batch_row_overrides(profile: &Profile) -> Result<String, String> {
+    toml::to_string(&DurableBatchRowOverrides {
+        source_host: profile.source_host.clone(),
+        source_user: profile.source_user.clone(),
+        source_credential_id: profile.source_credential_id.clone(),
+        source_oauth_refresh_credential_id: profile.source_oauth_refresh_credential_id.clone(),
+        destination_host: profile.destination_host.clone(),
+        destination_user: profile.destination_user.clone(),
+        destination_credential_id: profile.destination_credential_id.clone(),
+        destination_oauth_refresh_credential_id: profile
+            .destination_oauth_refresh_credential_id
+            .clone(),
+        profile_name: (!profile.name.is_empty()).then(|| profile.name.clone()),
+    })
+    .map_err(|error| format!("Could not serialize mailbox identity delta: {error}"))
+}
+
+pub(crate) fn durable_batch_plan_config(profile: &Profile) -> Result<String, String> {
+    let mut plan = profile.clone();
+    plan.source_host.clear();
+    plan.source_user.clear();
+    plan.source_credential_id.clear();
+    plan.source_oauth_refresh_credential_id.clear();
+    plan.destination_host.clear();
+    plan.destination_user.clear();
+    plan.destination_credential_id.clear();
+    plan.destination_oauth_refresh_credential_id.clear();
+    plan.extra_options.clear();
+    toml::to_string(&plan)
+        .map_err(|error| format!("Could not serialize shared batch plan: {error}"))
+}
+
+fn apply_durable_batch_row_overrides(
+    profile: &mut Profile,
+    overrides: Option<&str>,
+    job_id: &str,
+) -> Result<(), String> {
+    let Some(overrides) = overrides else {
+        return Ok(());
+    };
+    let overrides: DurableBatchRowOverrides = toml::from_str(overrides).map_err(|error| {
+        format!("Saved batch mailbox {job_id} has corrupt identity deltas: {error}")
+    })?;
+    profile.source_host = overrides.source_host;
+    profile.source_user = overrides.source_user;
+    profile.source_credential_id = overrides.source_credential_id;
+    profile.source_oauth_refresh_credential_id = overrides.source_oauth_refresh_credential_id;
+    profile.destination_host = overrides.destination_host;
+    profile.destination_user = overrides.destination_user;
+    profile.destination_credential_id = overrides.destination_credential_id;
+    profile.destination_oauth_refresh_credential_id =
+        overrides.destination_oauth_refresh_credential_id;
+    if let Some(name) = overrides.profile_name {
+        profile.name = name;
+    }
+    Ok(())
+}
 
 /// Secret-free presentation facts derived from a row's plan.
 pub(crate) fn queue_row_facts(label: &str, profile: &Profile) -> core::QueueRowFacts {
@@ -70,7 +143,9 @@ pub(crate) fn persist_imported_queue(
                     &profile.destination_tls,
                     &profile.destination_port,
                 ),
-                config: durable_batch_profile_config(&profile)?,
+                config: String::new(),
+                batch_plan_config: Some(durable_batch_plan_config(&profile)?),
+                row_overrides: Some(durable_batch_row_overrides(&profile)?),
                 facts: queue_row_facts(&job.label, &profile),
             })
         })
@@ -113,7 +188,14 @@ pub(crate) fn backfill_queue_facts(store: &core::StateStore) -> Result<usize, St
             .map(|row| {
                 let label = format!("{} → {}", row.source_mailbox, row.destination_mailbox);
                 let facts = decode_persisted_batch_profile(row.config.as_deref(), &row.id)
-                    .map(|profile| queue_row_facts(&label, &profile))
+                    .and_then(|mut profile| {
+                        apply_durable_batch_row_overrides(
+                            &mut profile,
+                            row.row_overrides.as_deref(),
+                            &row.id,
+                        )?;
+                        Ok(queue_row_facts(&label, &profile))
+                    })
                     // An undecodable plan still gets a searchable label; its
                     // admission fails closed on the same decode.
                     .unwrap_or_else(|_| core::QueueRowFacts {
@@ -141,6 +223,7 @@ pub(crate) fn job_from_plan(
     dry_run: bool,
 ) -> Result<BulkJob, String> {
     let mut profile = decode_persisted_batch_profile(row.config.as_deref(), &row.id)?;
+    apply_durable_batch_row_overrides(&mut profile, row.row_overrides.as_deref(), &row.id)?;
     if profile.destination_tls.is_empty() {
         profile.destination_tls = crate::default_destination_tls();
     }
@@ -200,6 +283,7 @@ pub(crate) fn apply_keyring_to_queue(
             }
         });
         let mut profile = decode_persisted_batch_profile(row.config.as_deref(), &row.id)?;
+        apply_durable_batch_row_overrides(&mut profile, row.row_overrides.as_deref(), &row.id)?;
         let reference = if source {
             &mut profile.source_credential_id
         } else {
@@ -443,9 +527,12 @@ mod tests {
             let profile = job_from_plan(&plan, "", None, true).unwrap().profile();
             assert_eq!(
                 store.mailbox_destination_identity(&plan.id).unwrap(),
-                core::normalized_destination_identity_for_test(
+                core::destination_identity_from_parts(
                     &profile.destination_user,
-                    plan.config.as_deref()
+                    &profile.destination_user,
+                    &profile.destination_host,
+                    &profile.destination_tls,
+                    &profile.destination_port,
                 )
             );
         }

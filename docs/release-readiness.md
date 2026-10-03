@@ -266,6 +266,9 @@ screen-reader checklist are recorded in
   immutable batch defaults through an `Arc`; a full `Form` is hydrated only at
   admission or worker execution. Since 2026-10-02 the queue itself is
   SQLite-backed: an import is written to the ledger as a batch project, the
+  durable ledger stores one normalized `batch_plans` record per distinct batch
+  policy and compact mailbox identity/credential deltas on `mailbox_jobs`,
+  while legacy full-row configs remain readable for compatibility. The
   Mailboxes view renders virtual rows from a filtered row-ID index plus a
   bounded row cache, search and state filters run as SQL over a narrow facts
   table, and admission and the scheduler read rows from the ledger instead of

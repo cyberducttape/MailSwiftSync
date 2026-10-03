@@ -48,6 +48,10 @@ pub struct QueueInsert {
     pub destination_identity: String,
     /// Secret-free serialized plan.
     pub config: String,
+    /// Shared normalized policy for new queue rows.
+    pub batch_plan_config: Option<String>,
+    /// Compact mailbox identity/credential delta applied to the shared plan.
+    pub row_overrides: Option<String>,
     pub facts: QueueRowFacts,
 }
 
@@ -88,6 +92,7 @@ pub struct QueuePlanRow {
     pub state: String,
     pub label: String,
     pub config: Option<String>,
+    pub row_overrides: Option<String>,
     pub destructive: bool,
 }
 
@@ -98,6 +103,7 @@ pub struct QueueFactsRow {
     pub source_mailbox: String,
     pub destination_mailbox: String,
     pub config: Option<String>,
+    pub row_overrides: Option<String>,
 }
 
 /// Aggregate selection projection used by the batch UI. The database counts
@@ -164,15 +170,33 @@ impl StateStore {
         if rows.is_empty() || rows.len() > MAX_DURABLE_MAILBOX_ROWS {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let mut shared_configs = std::collections::HashSet::new();
         rows.iter().try_fold(0usize, |total, row| {
-            if row.config.len() > MAX_PERSISTED_PROFILE_BYTES {
+            let config = row.batch_plan_config.as_deref().unwrap_or(&row.config);
+            if config.len() > MAX_PERSISTED_PROFILE_BYTES {
                 return Err(rusqlite::Error::InvalidQuery);
             }
+            if let Some(config) = row.batch_plan_config.as_ref() {
+                shared_configs.insert(config.clone());
+            }
             total
-                .checked_add(row.config.len())
+                .checked_add(if row.batch_plan_config.is_some() {
+                    0
+                } else {
+                    row.config.len()
+                })
                 .filter(|value| *value <= MAX_TOTAL_PERSISTED_PROFILE_BYTES)
                 .ok_or(rusqlite::Error::InvalidQuery)
         })?;
+        let shared_bytes = shared_configs.iter().try_fold(0usize, |total, config| {
+            total
+                .checked_add(config.len())
+                .filter(|value| *value <= MAX_TOTAL_PERSISTED_PROFILE_BYTES)
+                .ok_or(rusqlite::Error::InvalidQuery)
+        })?;
+        if shared_bytes > MAX_TOTAL_PERSISTED_PROFILE_BYTES {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let mut destinations = BTreeSet::new();
         if rows
             .iter()
@@ -213,9 +237,21 @@ impl StateStore {
             params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
         )?;
         let mut ids = Vec::with_capacity(rows.len());
+        let mut plan_ids = std::collections::HashMap::<String, String>::new();
+        for config in rows.iter().filter_map(|row| row.batch_plan_config.as_ref()) {
+            if plan_ids.contains_key(config) {
+                continue;
+            }
+            let id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO batch_plans(id,project_id,config) VALUES(?1,?2,?3)",
+                params![id, project.id, config],
+            )?;
+            plan_ids.insert(config.clone(), id);
+        }
         {
             let mut insert = tx.prepare(
-                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state,config) VALUES(?1,?2,?3,?4,?5,'queued',?6)",
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state,config,batch_plan_id,row_overrides) VALUES(?1,?2,?3,?4,?5,'queued',?6,?7,?8)",
             )?;
             let mut facts = tx.prepare(
                 "INSERT INTO mailbox_queue_facts(job_rowid,job_id,project_id,label,source_host,destination_host,search_key,destructive,policy,state) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'queued')",
@@ -228,7 +264,15 @@ impl StateStore {
                     row.source_mailbox,
                     row.destination_mailbox,
                     row.destination_identity,
-                    row.config,
+                    if row.batch_plan_config.is_some() {
+                        None::<String>
+                    } else {
+                        Some(row.config.clone())
+                    },
+                    row.batch_plan_config
+                        .as_ref()
+                        .and_then(|config| plan_ids.get(config)),
+                    row.row_overrides,
                 ])?;
                 facts.execute(params![
                     tx.last_insert_rowid(),
@@ -579,7 +623,7 @@ impl StateStore {
         for chunk in job_ids.chunks(MAX_IDS_PER_QUERY) {
             let placeholders = numbered_placeholders(chunk.len());
             let mut statement = self.connection.prepare(&format!(
-                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),m.config,COALESCE(f.destructive,0) FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 AND m.id IN ({placeholders})"
+                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),COALESCE(m.config,p.config),m.row_overrides,COALESCE(f.destructive,0) FROM mailbox_jobs m LEFT JOIN batch_plans p ON p.id=m.batch_plan_id LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 AND m.id IN ({placeholders})"
             ))?;
             let values = std::iter::once(project_id.to_owned()).chain(chunk.iter().cloned());
             let rows = statement
@@ -601,7 +645,7 @@ impl StateStore {
         let mut statement = self
             .connection
             .prepare_cached(&format!(
-                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),m.config,COALESCE(f.destructive,0) FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 ORDER BY m.rowid"
+                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),COALESCE(m.config,p.config),m.row_overrides,COALESCE(f.destructive,0) FROM mailbox_jobs m LEFT JOIN batch_plans p ON p.id=m.batch_plan_id LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 ORDER BY m.rowid"
             ))
             .map_err(|error| error.to_string())?;
         let mut rows = statement
@@ -617,7 +661,7 @@ impl StateStore {
     /// never derived (rows written before schema v16).
     pub fn queue_rows_missing_facts(&self, limit: u32) -> rusqlite::Result<Vec<QueueFactsRow>> {
         let mut statement = self.connection.prepare_cached(
-            "SELECT m.id,m.source_mailbox,m.destination_mailbox,m.config FROM mailbox_jobs m WHERE m.config IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mailbox_queue_facts f WHERE f.job_rowid=m.rowid) ORDER BY m.rowid LIMIT ?1",
+            "SELECT m.id,m.source_mailbox,m.destination_mailbox,COALESCE(m.config,p.config),m.row_overrides FROM mailbox_jobs m LEFT JOIN batch_plans p ON p.id=m.batch_plan_id WHERE COALESCE(m.config,p.config) IS NOT NULL AND NOT EXISTS(SELECT 1 FROM mailbox_queue_facts f WHERE f.job_rowid=m.rowid) ORDER BY m.rowid LIMIT ?1",
         )?;
         statement
             .query_map([limit], |row| {
@@ -626,6 +670,7 @@ impl StateStore {
                     source_mailbox: row.get(1)?,
                     destination_mailbox: row.get(2)?,
                     config: row.get(3)?,
+                    row_overrides: row.get(4)?,
                 })
             })?
             .collect()
@@ -669,7 +714,7 @@ impl StateStore {
         let mut changed = 0;
         {
             let mut update = tx.prepare_cached(
-                "UPDATE mailbox_jobs SET config=?3,preflight_plan=NULL WHERE project_id=?1 AND id=?2",
+                "UPDATE mailbox_jobs SET config=?3,row_overrides=NULL,preflight_plan=NULL WHERE project_id=?1 AND id=?2",
             )?;
             let mut upsert = tx.prepare_cached(FACTS_UPSERT)?;
             for (id, config, facts) in updates {
@@ -746,7 +791,8 @@ fn queue_plan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuePlanRow> {
         state: row.get(2)?,
         label: row.get(3)?,
         config: row.get(4)?,
-        destructive: sql_bool(row.get(5)?),
+        row_overrides: row.get(5)?,
+        destructive: sql_bool(row.get(6)?),
     })
 }
 
@@ -766,6 +812,8 @@ mod tests {
                 )),
             ),
             config: format!("destination_host = \"new.example\"\ndestination_user = \"{user}\"\n"),
+            batch_plan_config: None,
+            row_overrides: None,
             facts: QueueRowFacts {
                 label: format!("Row {index}"),
                 source_host: "old.example".into(),

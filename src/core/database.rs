@@ -265,7 +265,7 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v16 application schema, rather than treating
+    /// Validate the complete v17 application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
     /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
@@ -296,6 +296,16 @@ impl StateStore {
                     ("preflight_plan", "TEXT", false, 0),
                     ("config", "TEXT", false, 0),
                     ("attention_reason", "TEXT", false, 0),
+                    ("batch_plan_id", "TEXT", false, 0),
+                    ("row_overrides", "TEXT", false, 0),
+                ],
+            ),
+            (
+                "batch_plans",
+                &[
+                    ("id", "TEXT", false, 1),
+                    ("project_id", "TEXT", true, 0),
+                    ("config", "TEXT", true, 0),
                 ],
             ),
             (
@@ -531,6 +541,27 @@ impl StateStore {
         const FOREIGN_KEYS: &[ForeignKeyTable] = &[
             (
                 "mailbox_jobs",
+                &[
+                    (
+                        "projects",
+                        "project_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    (
+                        "batch_plans",
+                        "batch_plan_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                ],
+            ),
+            (
+                "batch_plans",
                 &[(
                     "projects",
                     "project_id",
@@ -988,7 +1019,7 @@ impl StateStore {
         // ledger boundary so a crafted large queue cannot turn startup into an
         // unbounded allocation before admission has a chance to run.
         let profile_budget_exceeded: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE config IS NOT NULL AND length(CAST(config AS BLOB)) > ?1) OR COALESCE((SELECT SUM(length(CAST(config AS BLOB))) FROM mailbox_jobs WHERE config IS NOT NULL), 0) > ?2",
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE config IS NOT NULL AND length(CAST(config AS BLOB)) > ?1) OR EXISTS(SELECT 1 FROM batch_plans WHERE length(CAST(config AS BLOB)) > ?1) OR COALESCE((SELECT SUM(length(CAST(config AS BLOB))) FROM mailbox_jobs WHERE config IS NOT NULL), 0) + COALESCE((SELECT SUM(length(CAST(config AS BLOB))) FROM batch_plans), 0) > ?2",
             rusqlite::params![
                 MAX_PERSISTED_PROFILE_BYTES as i64,
                 MAX_TOTAL_PERSISTED_PROFILE_BYTES as i64
@@ -1420,7 +1451,8 @@ impl StateStore {
         // 13 establishes destination identity policy v2; version 14 binds the
         // current evidence projection directly to its run for report reads;
         // version 15 adds durable per-attempt transfer-pass provenance;
-        // version 16 adds narrow per-mailbox queue presentation facts.
+        // version 16 adds narrow per-mailbox queue presentation facts; version
+        // 17 stores shared batch policies separately from mailbox deltas.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1459,7 +1491,8 @@ impl StateStore {
         Self::prepare_legacy_mailbox_jobs(&tx)?;
         tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT);
+                 CREATE TABLE IF NOT EXISTS batch_plans (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), config TEXT NOT NULL);
+                 CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT, batch_plan_id TEXT REFERENCES batch_plans(id), row_overrides TEXT);
                  CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL DEFAULT 0 CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL DEFAULT 0 CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
@@ -1478,6 +1511,7 @@ impl StateStore {
                  CREATE TRIGGER IF NOT EXISTS mailbox_queue_facts_state AFTER UPDATE OF state ON mailbox_jobs BEGIN UPDATE mailbox_queue_facts SET state=NEW.state WHERE job_rowid=NEW.rowid; END;
                  CREATE INDEX IF NOT EXISTS idx_mailbox_queue_facts_project ON mailbox_queue_facts(project_id, job_rowid);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_queue ON mailbox_jobs(project_id, id, state);
+                 CREATE INDEX IF NOT EXISTS idx_batch_plans_project ON batch_plans(project_id);
                  CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
@@ -1567,6 +1601,15 @@ impl StateStore {
                 "ALTER TABLE mailbox_jobs ADD COLUMN destination_identity TEXT NOT NULL DEFAULT ''",
                 [],
             )?;
+        }
+        if !job_columns.iter().any(|column| column == "batch_plan_id") {
+            tx.execute(
+                "ALTER TABLE mailbox_jobs ADD COLUMN batch_plan_id TEXT REFERENCES batch_plans(id)",
+                [],
+            )?;
+        }
+        if !job_columns.iter().any(|column| column == "row_overrides") {
+            tx.execute("ALTER TABLE mailbox_jobs ADD COLUMN row_overrides TEXT", [])?;
         }
         // Older releases stored the generated preflight plan itself. Do not
         // carry that potentially sensitive configuration into the hardened
@@ -2030,6 +2073,8 @@ impl StateStore {
             ("preflight_plan", "TEXT"),
             ("config", "TEXT"),
             ("attention_reason", "TEXT"),
+            ("batch_plan_id", "TEXT"),
+            ("row_overrides", "TEXT"),
         ] {
             if !columns.iter().any(|existing| existing == column) {
                 tx.execute(

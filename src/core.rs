@@ -72,7 +72,7 @@ pub use transfer_passes::{
     TransferPassIntent, TransferPassRecord, folder_digest, sha256_hex,
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 16;
+pub const CURRENT_SCHEMA_VERSION: i64 = 17;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 
@@ -211,8 +211,3 @@ fn restrict_database_sidecars(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
-
-#[cfg(test)]
-pub fn normalized_destination_identity_for_test(destination: &str, config: Option<&str>) -> String {
-    policy::normalized_destination_identity(destination, config)
-}
