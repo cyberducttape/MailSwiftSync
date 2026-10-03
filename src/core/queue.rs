@@ -88,6 +88,7 @@ pub struct QueuePlanRow {
     pub state: String,
     pub label: String,
     pub config: Option<String>,
+    pub destructive: bool,
 }
 
 /// A row whose presentation facts must be (re)derived from its plan.
@@ -97,6 +98,19 @@ pub struct QueueFactsRow {
     pub source_mailbox: String,
     pub destination_mailbox: String,
     pub config: Option<String>,
+}
+
+/// Aggregate selection projection used by the batch UI. The database counts
+/// selected rows without materializing or visiting the rest of a large queue.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueueSelectionSummary {
+    pub selected_loaded: usize,
+    pub live_eligible: usize,
+    pub delta_eligible: usize,
+    pub ready: usize,
+    pub review: usize,
+    pub visible: usize,
+    pub selected_rowids: Vec<i64>,
 }
 
 /// Columns of a presented `QueueRow` from `mailbox_jobs m` joined to
@@ -379,6 +393,181 @@ impl StateStore {
             .collect()
     }
 
+    /// Return the first queue row not excluded by a compact select-all set.
+    pub fn first_queue_job_excluding(
+        &self,
+        project_id: &str,
+        excluded_ids: &std::collections::HashSet<String>,
+    ) -> rusqlite::Result<Option<String>> {
+        let excluded = excluded_ids.iter().cloned().collect::<Vec<_>>();
+        let predicate = if excluded.is_empty() {
+            String::new()
+        } else {
+            format!(" AND id NOT IN ({})", numbered_placeholders(excluded.len()))
+        };
+        let sql = format!(
+            "SELECT id FROM mailbox_jobs WHERE project_id=?1{predicate} ORDER BY rowid LIMIT 1"
+        );
+        let params = std::iter::once(project_id.to_owned()).chain(excluded);
+        self.connection
+            .query_row(&sql, params_from_iter(params), |row| row.get(0))
+            .optional()
+    }
+
+    /// Return the first existing queue row from an explicit selection.
+    pub fn first_queue_job_in(
+        &self,
+        project_id: &str,
+        selected_ids: &std::collections::HashSet<String>,
+    ) -> rusqlite::Result<Option<String>> {
+        let selected = selected_ids.iter().cloned().collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Ok(None);
+        }
+        let mut first: Option<(i64, String)> = None;
+        for chunk in selected.chunks(MAX_IDS_PER_QUERY) {
+            let sql = format!(
+                "SELECT rowid,id FROM mailbox_jobs WHERE project_id=?1 AND id IN ({}) ORDER BY rowid LIMIT 1",
+                numbered_placeholders(chunk.len())
+            );
+            let params = std::iter::once(project_id.to_owned()).chain(chunk.iter().cloned());
+            if let Some((rowid, id)) = self
+                .connection
+                .query_row(&sql, params_from_iter(params), |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .optional()?
+            {
+                if first.as_ref().is_none_or(|current| rowid < current.0) {
+                    first = Some((rowid, id));
+                }
+            }
+        }
+        Ok(first.map(|(_, id)| id))
+    }
+
+    /// Aggregate the selected-row projection in SQL. Explicit selections are
+    /// queried in SQLite parameter-sized chunks; select-all uses one aggregate
+    /// query and only pays for its compact exclusion set.
+    pub fn queue_selection_summary(
+        &self,
+        project_id: &str,
+        selected_ids: &[String],
+        all_selected: bool,
+        visible_rowids: &[i64],
+    ) -> rusqlite::Result<QueueSelectionSummary> {
+        let ids = if all_selected {
+            Vec::new()
+        } else {
+            selected_ids.to_vec()
+        };
+        let mut summary = QueueSelectionSummary::default();
+        let mut selected_rowids = Vec::new();
+        let chunks = if all_selected {
+            vec![selected_ids]
+        } else {
+            ids.chunks(MAX_IDS_PER_QUERY).collect::<Vec<_>>()
+        };
+        for chunk in chunks {
+            let (predicate, values): (String, Vec<String>) = if all_selected {
+                let predicate = if chunk.is_empty() {
+                    String::new()
+                } else {
+                    format!(" AND m.id NOT IN ({})", numbered_placeholders(chunk.len()))
+                };
+                (predicate, chunk.to_vec())
+            } else {
+                if chunk.is_empty() {
+                    continue;
+                }
+                (
+                    format!(" AND m.id IN ({})", numbered_placeholders(chunk.len())),
+                    chunk.to_vec(),
+                )
+            };
+            let sql = format!(
+                "SELECT COUNT(*), COALESCE(SUM(effective='ready'),0), COALESCE(SUM(effective IN ('attention','failed','cancelled','verification_difference')),0), COALESCE(SUM(durable_state IN ('queued','preflight','ready','running','completed','verified','verified_with_exceptions','failed','cancelled','attention','delta_required','verification_difference')),0), COALESCE(SUM(durable_state='delta_required'),0) FROM (SELECT m.state AS durable_state, {EFFECTIVE_STATE} AS effective FROM mailbox_jobs m WHERE m.project_id=?1{predicate})"
+            );
+            let params = std::iter::once(project_id.to_owned()).chain(values.iter().cloned());
+            let row = self
+                .connection
+                .query_row(&sql, params_from_iter(params), |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? as usize,
+                        row.get::<_, i64>(1)? as usize,
+                        row.get::<_, i64>(2)? as usize,
+                        row.get::<_, i64>(3)? as usize,
+                        row.get::<_, i64>(4)? as usize,
+                    ))
+                })?;
+            summary.selected_loaded += row.0;
+            summary.ready += row.1;
+            summary.review += row.2;
+            summary.live_eligible += row.3;
+            summary.delta_eligible += row.4;
+            if !all_selected {
+                let rowid_sql = format!(
+                    "SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1{predicate} ORDER BY m.rowid"
+                );
+                let params = std::iter::once(project_id.to_owned()).chain(values.iter().cloned());
+                selected_rowids.extend(
+                    self.connection
+                        .prepare(&rowid_sql)?
+                        .query_map(params_from_iter(params), |row| row.get(0))?
+                        .collect::<rusqlite::Result<Vec<i64>>>()?,
+                );
+            }
+        }
+        summary.visible = if all_selected {
+            let excluded = if selected_ids.is_empty() {
+                0
+            } else {
+                let excluded = self.queue_rowids_for_ids(project_id, selected_ids)?;
+                visible_rowids
+                    .iter()
+                    .filter(|rowid| excluded.contains(rowid))
+                    .count()
+            };
+            visible_rowids.len().saturating_sub(excluded)
+        } else {
+            let visible = visible_rowids
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+            selected_rowids
+                .iter()
+                .filter(|rowid| visible.contains(rowid))
+                .count()
+        };
+        summary.selected_rowids = selected_rowids;
+        Ok(summary)
+    }
+
+    fn queue_rowids_for_ids(
+        &self,
+        project_id: &str,
+        ids: &[String],
+    ) -> rusqlite::Result<std::collections::HashSet<i64>> {
+        let mut rowids = std::collections::HashSet::with_capacity(ids.len());
+        for chunk in ids.chunks(MAX_IDS_PER_QUERY) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let sql = format!(
+                "SELECT rowid FROM mailbox_jobs WHERE project_id=?1 AND id IN ({})",
+                numbered_placeholders(chunk.len())
+            );
+            let params = std::iter::once(project_id.to_owned()).chain(chunk.iter().cloned());
+            rowids.extend(
+                self.connection
+                    .prepare(&sql)?
+                    .query_map(params_from_iter(params), |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<i64>>>()?,
+            );
+        }
+        Ok(rowids)
+    }
+
     /// Plans of the given jobs, in the order requested. Missing IDs are
     /// omitted; callers compare lengths when every ID must resolve.
     pub fn queue_plans(
@@ -390,7 +579,7 @@ impl StateStore {
         for chunk in job_ids.chunks(MAX_IDS_PER_QUERY) {
             let placeholders = numbered_placeholders(chunk.len());
             let mut statement = self.connection.prepare(&format!(
-                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),m.config FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 AND m.id IN ({placeholders})"
+                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),m.config,COALESCE(f.destructive,0) FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 AND m.id IN ({placeholders})"
             ))?;
             let values = std::iter::once(project_id.to_owned()).chain(chunk.iter().cloned());
             let rows = statement
@@ -412,7 +601,7 @@ impl StateStore {
         let mut statement = self
             .connection
             .prepare_cached(&format!(
-                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),m.config FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 ORDER BY m.rowid"
+                "SELECT m.rowid,m.id,{EFFECTIVE_STATE},COALESCE(f.label,''),m.config,COALESCE(f.destructive,0) FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid WHERE m.project_id=?1 ORDER BY m.rowid"
             ))
             .map_err(|error| error.to_string())?;
         let mut rows = statement
@@ -557,6 +746,7 @@ fn queue_plan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuePlanRow> {
         state: row.get(2)?,
         label: row.get(3)?,
         config: row.get(4)?,
+        destructive: sql_bool(row.get(5)?),
     })
 }
 

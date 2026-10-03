@@ -269,7 +269,10 @@ screen-reader checklist are recorded in
   Mailboxes view renders virtual rows from a filtered row-ID index plus a
   bounded row cache, search and state filters run as SQL over a narrow facts
   table, and admission and the scheduler read rows from the ledger instead of
-  an in-memory job list. The importer, UI, and reload gates are reproducible
+  an in-memory job list. Selection summaries and first-selection lookups use
+  SQL aggregates and `LIMIT 1`; full queue scans remain only for operations
+  whose identity deliberately includes every selected mailbox, such as live
+  confirmation fingerprints. The importer, UI, and reload gates are reproducible
   with the three benchmark scripts below and must be repeated on each
   supported release host class.
 

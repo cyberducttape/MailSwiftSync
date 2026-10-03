@@ -30,43 +30,53 @@ impl App {
             self.form.profile.batch_concurrency,
             execution_mode,
         );
-        let mut seen_explicit = 0_usize;
         if let Some(project_id) = self.queue.project_id() {
-            let _ = self.store.queue_scan(project_id, |row| {
-                if !self.bulk_is_selected(&row.id) {
-                    return;
-                }
-                seen_explicit += usize::from(!self.bulk_all_selected);
-                builder.add(BatchActionRow {
-                    id: &row.id,
-                    selected: true,
-                    visible: self.queue.is_visible(row.rowid),
-                    durable_state: Some(&row.durable_state),
-                    destructive: row.destructive,
-                });
-            });
-        }
-        if !self.bulk_all_selected && seen_explicit < self.bulk_selected_ids.len() {
-            let mut known = std::collections::HashSet::new();
-            if let Some(project_id) = self.queue.project_id() {
+            if self.bulk_all_selected {
                 let _ = self.store.queue_scan(project_id, |row| {
-                    if self.bulk_selected_ids.contains(&row.id) {
-                        known.insert(row.id);
+                    if !self.bulk_is_selected(&row.id) {
+                        return;
                     }
+                    builder.add(BatchActionRow {
+                        id: &row.id,
+                        selected: true,
+                        visible: self.queue.is_visible(row.rowid),
+                        durable_state: Some(&row.durable_state),
+                        destructive: row.destructive,
+                    });
                 });
-            }
-            for id in self
-                .bulk_selected_ids
-                .iter()
-                .filter(|id| !known.contains(*id))
-            {
-                builder.add(BatchActionRow {
-                    id,
-                    selected: true,
-                    visible: false,
-                    durable_state: None,
-                    destructive: false,
-                });
+            } else if let Ok(rows) = self.store.queue_plans(
+                project_id,
+                &self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>(),
+            ) {
+                let found = rows
+                    .iter()
+                    .map(|row| row.id.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                for row in rows {
+                    builder.add(BatchActionRow {
+                        id: &row.id,
+                        selected: true,
+                        visible: self.queue.is_visible(row.rowid),
+                        durable_state: Some(&row.state),
+                        destructive: row.destructive,
+                    });
+                }
+                for id in self
+                    .bulk_selected_ids
+                    .iter()
+                    .filter(|id| !found.contains(*id))
+                {
+                    builder.add(BatchActionRow {
+                        id,
+                        selected: true,
+                        visible: false,
+                        durable_state: None,
+                        destructive: false,
+                    });
+                }
+                return builder.finish();
+            } else {
+                return builder.finish();
             }
         }
         builder.finish()
@@ -90,42 +100,31 @@ impl App {
         view.selected_loaded = 0;
         // Compact select-all keeps no per-row list.
         let compact_all = self.bulk_all_selected && self.bulk_selection_count() > 1;
-        // The same pass yields queue health counts for every row.
-        let mut presented_counts = std::collections::HashMap::<String, usize>::new();
-        let mut scanned = false;
         if let Some(project_id) = self.queue.project_id() {
-            let result = self.store.queue_scan(project_id, |row| {
-                let presented = self.queue.presented_state_of(&row.id, &row.state);
-                if let Some(count) = presented_counts.get_mut(presented) {
-                    *count += 1;
-                } else {
-                    presented_counts.insert(presented.to_owned(), 1);
+            match self.store.queue_selection_summary(
+                project_id,
+                &self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>(),
+                self.bulk_all_selected,
+                self.queue.visible(),
+            ) {
+                Ok(summary) => {
+                    if !compact_all {
+                        view.rows = summary.selected_rowids;
+                    }
+                    view.selected_loaded = summary.selected_loaded;
+                    view.ready = summary.ready;
+                    view.review = summary.review;
+                    view.live_eligible = summary.live_eligible;
+                    view.delta_eligible = summary.delta_eligible;
+                    view.visible = summary.visible;
+                    if let Ok(counts) = self.store.queue_state_counts(project_id) {
+                        self.queue.store_summary(&counts.into_iter().collect());
+                    }
                 }
-                if !self.bulk_is_selected(&row.id) {
-                    return;
-                }
-                if !compact_all {
-                    view.rows.push(row.rowid);
-                }
-                view.selected_loaded += 1;
-                let presented = self.queue.presented_state_of(&row.id, &row.state);
-                view.ready += usize::from(presented == "ready");
-                view.review += usize::from(crate::ui::needs_operator_review(presented));
-                // Same eligibility rule as `build_batch_action_plan`.
-                view.live_eligible += usize::from(BulkRetryScope::All.includes(&row.durable_state));
-                view.delta_eligible +=
-                    usize::from(BulkRetryScope::DeltaRequired.includes(&row.durable_state));
-                view.visible += usize::from(self.queue.is_visible(row.rowid));
-            });
-            match result {
-                Ok(()) => scanned = true,
                 Err(error) => {
                     self.bulk_message = format!("Could not read the mailbox queue: {error}");
                 }
             }
-        }
-        if scanned {
-            self.queue.store_summary(&presented_counts);
         }
         self.bulk_selection_view = view;
         self.bulk_selection_view_dirty = false;
@@ -134,13 +133,17 @@ impl App {
     /// The first selected job ID in queue order.
     pub(crate) fn first_selected_job_id(&self) -> Option<String> {
         let project_id = self.queue.project_id()?;
-        let mut first = None;
-        let _ = self.store.queue_scan(project_id, |row| {
-            if first.is_none() && self.bulk_is_selected(&row.id) {
-                first = Some(row.id);
-            }
-        });
-        first
+        if self.bulk_all_selected {
+            self.store
+                .first_queue_job_excluding(project_id, &self.bulk_selected_ids)
+                .ok()
+                .flatten()
+        } else {
+            self.store
+                .first_queue_job_in(project_id, &self.bulk_selected_ids)
+                .ok()
+                .flatten()
+        }
     }
 
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
@@ -410,16 +413,16 @@ impl App {
                         self.select_all_bulk_rows();
                     } else {
                         self.bulk_all_selected = false;
-                        let mut selected = std::collections::HashSet::new();
                         if let Some(project_id) = self.queue.project_id() {
-                            let queue = &self.queue;
-                            let _ = self.store.queue_scan(project_id, |row| {
-                                if queue.is_visible(row.rowid) {
-                                    selected.insert(row.id);
-                                }
-                            });
+                            let selected = self
+                                .store
+                                .queue_rows(project_id, self.queue.visible())
+                                .map(|rows| rows.into_iter().map(|row| row.id).collect())
+                                .unwrap_or_default();
+                            self.bulk_selected_ids = selected;
+                        } else {
+                            self.bulk_selected_ids.clear();
                         }
-                        self.bulk_selected_ids = selected;
                         self.bulk_selection_view_dirty = true;
                     }
                     selection_changed = true;
