@@ -1,0 +1,45 @@
+name: Large mailbox scale qualification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 1 * *"
+
+permissions:
+  contents: read
+
+jobs:
+  100k-message-mailbox:
+    name: Packaged imapsync with 100k-message mailbox
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the distributed runtime image
+        run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:scale .
+      - name: Run single-mailbox 100k-message transfer and verification
+        run: |
+          mkdir -p provider-scale-evidence
+          chmod 0700 provider-scale-evidence
+          sudo chown 10001:10001 provider-scale-evidence
+          docker run --rm \
+            --user 0:0 \
+            --volume "$PWD/provider-scale-evidence:/provider-evidence" \
+            --env MAILSWIFTSYNC_EVIDENCE_OUTPUT=/provider-evidence \
+            --env MAILSWIFTSYNC_SCALE_MESSAGES=100000 \
+            --entrypoint /bin/bash mailswiftsync:scale \
+            /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+      - name: Restore private artifact ownership for upload
+        if: always()
+        run: |
+          if [ -d provider-scale-evidence ]; then
+            sudo chown -R "$(id -u):$(id -g)" provider-scale-evidence
+            chmod -R u+rwX,go-rwx provider-scale-evidence
+          fi
+      - name: Upload scale diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: 100k-message-imap-scale-evidence
+          path: provider-scale-evidence
+          if-no-files-found: warn

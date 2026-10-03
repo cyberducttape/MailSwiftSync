@@ -258,9 +258,9 @@ To reach GA 1.0, the following work is required:
 
 **Medium-term (v1.0 GA):**
 - [x] Implement SQLite-backed streaming reconciliation in the live metadata-verification path
-- [ ] Qualify large-account performance and memory behavior with 100k+ message load tests
+- [ ] Qualify large-account performance and memory behavior with 100k+ message load tests (a scheduled/manual generic-IMAP workflow now exercises one 100k-message mailbox; first-run evidence and hosted-provider qualification remain pending)
 - [ ] Implement durable per-message transfer checkpoints (run-level Dovecot restart binding and snapshot-bound restartable verification staging are implemented)
-- [ ] Performance benchmarks with 100k+ message mailboxes
+- [ ] Performance benchmarks with 100k+ message mailboxes (scheduled/manual generic-IMAP scale lab added; measured baselines not yet recorded)
 - [ ] Provider edge case testing
 - [x] Document MSP customer scoping, change approvals, wave controls, incident handling, and evidence retention in [`docs/msp-operations-runbook.md`](docs/msp-operations-runbook.md); centralized fleet control remains out of scope.
 - [ ] Load testing with multiple concurrent migrations (the CI scheduler stress test settles 1,024 synthetic mailbox jobs across 32 tenant domains at 16 workers; real IMAP-engine/provider concurrency qualification remains outstanding)

@@ -8,6 +8,12 @@ set -euo pipefail
 # native Dovecot path separately.
 
 test_engine="${MAILSWIFTSYNC_TEST_ENGINE:-ImapSync}"
+scale_messages_raw="${MAILSWIFTSYNC_SCALE_MESSAGES:-0}"
+if [[ ! "$scale_messages_raw" =~ ^[0-9]{1,6}$ ]] || (( 10#$scale_messages_raw > 100000 )); then
+  echo "FAIL: MAILSWIFTSYNC_SCALE_MESSAGES must be between 0 and 100000" >&2
+  exit 1
+fi
+scale_messages=$((10#$scale_messages_raw))
 if [[ "$test_engine" != "ImapSync" && "$test_engine" != "Dovecot" ]]; then
   echo "FAIL: MAILSWIFTSYNC_TEST_ENGINE must be ImapSync or Dovecot" >&2
   exit 1
@@ -449,6 +455,21 @@ Sparse UID fixture message $index.
 EOF
 done
 
+# Optional end-to-end scale qualification. Keep the ordinary smoke path quick;
+# the dedicated scale workflow opts into 100k real RFC822 messages in one
+# mailbox and then exercises the same packaged transfer and verifier path.
+if (( scale_messages > 0 )); then
+  echo "Generating $scale_messages scale messages in the source mailbox"
+  for ((index = 1; index <= scale_messages; index++)); do
+    printf -v scale_filename 'scale-%06d.eml' "$index"
+    printf 'From: scale-lab@example.test\nTo: lab@example.test\nSubject: Scale fixture %d\nMessage-ID: <mailswiftsync-scale-%06d@example.test>\nDate: Tue, 01 Jan 2030 02:00:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nScale fixture message %d for durable transfer and verification.\n' \
+      "$index" "$index" "$index" > "$workspace/source/mail/$user/Maildir/new/$scale_filename"
+    if (( index % 10000 == 0 )); then
+      echo "Generated $index / $scale_messages scale messages"
+    fi
+  done
+fi
+
 # Select/expunge through Dovecot so the Maildir fixture is tested with actual
 # UID assignment rather than relying on filename order.
 chown -R "$mail_uid:$mail_gid" "$workspace/source/mail/$user/Maildir"
@@ -739,6 +760,13 @@ echo "PASS: destination retained the fixture Message-ID"
 if [[ "$destination_messages" -lt 17 ]] || ! destination_has_message_id "mailswiftsync-incremental-fixture@example.test"; then
   echo "FAIL: destination is missing the incremental fixture Message-ID" >&2
   exit 1
+fi
+if (( scale_messages > 0 && destination_messages < scale_messages + 17 )); then
+  echo "FAIL: destination retained $destination_messages messages; expected at least $((scale_messages + 17)) including scale fixtures" >&2
+  exit 1
+fi
+if (( scale_messages > 0 )); then
+  echo "PASS: destination retained at least $scale_messages scale messages in the single-mailbox run"
 fi
 echo "PASS: destination retained both initial and incremental Message-IDs"
 for message_id in \

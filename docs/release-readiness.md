@@ -317,6 +317,12 @@ screen-reader checklist are recorded in
   confirmation fingerprints. The importer, UI, and reload gates are reproducible
   with the three benchmark scripts below and must be repeated on each
   supported release host class.
+- **100k-message end-to-end scale gate:** `.github/workflows/scale-qualification.yml`
+  provides a monthly/manual run that creates 100,000 distinct RFC822 messages
+  in one disposable Dovecot mailbox, then exercises the packaged imapsync
+  transfer, durable evidence, and metadata verifier. The first result is not
+  yet recorded; this generic-IMAP lab does not qualify Gmail, Microsoft 365, or
+  other hosted providers.
 - Batch scheduling keeps conservative defaults but exposes explicit global
   worker and process-start ceilings for qualified deployments. The adaptive
   global/provider/tenant/credential/mailbox rate-domain limiter remains the
