@@ -295,6 +295,7 @@ fn is_durably_complete(snapshot: &core::ProjectReportSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ring::signature::KeyPair;
 
     #[test]
     fn execution_binary_hash_is_extracted_only_from_a_valid_run_snapshot() {
@@ -377,19 +378,44 @@ mod tests {
                 },
             )
             .unwrap();
+        store
+            .transition(&project.id, core::Phase::Preflight)
+            .unwrap();
+        store
+            .transition(&project.id, core::Phase::Verification)
+            .unwrap();
+        store
+            .transition(&project.id, core::Phase::Complete)
+            .unwrap();
 
         let output = directory.join("customer-proof.json");
-        export_from_store_with_options(
-            &store,
-            &project.id,
+        export_from_store(&store, &project.id, &output, &OperatorBranding::default()).unwrap();
+        let signing_key =
+            ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+                .unwrap();
+        let signing_key_path = directory.join("signing-key.pk8");
+        let mut key_file = crate::credentials::open_secret_file(&signing_key_path).unwrap();
+        std::io::Write::write_all(&mut key_file, signing_key.as_ref()).unwrap();
+        drop(key_file);
+        let signed_output = directory.join("certificate.json");
+        crate::reports::signing::sign_file_to(
             &output,
+            &signed_output,
+            &signing_key_path,
+            "test-key",
             true,
-            &OperatorBranding::default(),
         )
         .unwrap();
-        let proof: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
-        let evidence = &proof["mailboxes"][0]["evidence"];
+        let signing_key_pair =
+            ring::signature::Ed25519KeyPair::from_pkcs8(signing_key.as_ref()).unwrap();
+        let trusted_public_key =
+            crate::reports::integrity::hex_encode(signing_key_pair.public_key().as_ref());
+        crate::reports::signing::verify_file(&signed_output, Some(&trusted_public_key)).unwrap();
+        let certificate: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
+        assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
+        assert_eq!(certificate["proof_signature"]["algorithm"], "Ed25519");
+        let evidence = &certificate["mailboxes"][0]["evidence"];
         assert_eq!(
             evidence["migration_plan_sha256"],
             crate::plan_identity::snapshot_sha256(&plan_snapshot)
@@ -400,9 +426,9 @@ mod tests {
             evidence["engine_binary_sha256"],
             binary_identity.strip_prefix("sha256:").unwrap()
         );
-        assert!(!proof.to_string().contains(&plan_snapshot));
+        assert!(!certificate.to_string().contains(&plan_snapshot));
         assert!(
-            !proof
+            !certificate
                 .to_string()
                 .contains(&executable.to_string_lossy().to_string())
         );
