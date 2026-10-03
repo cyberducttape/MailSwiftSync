@@ -151,6 +151,25 @@ mod tests {
     use super::{MAX_WEBHOOK_ATTEMPTS, StateStore};
     use std::{fs, path::PathBuf};
 
+    #[cfg(windows)]
+    fn remove_test_directory(path: &std::path::Path) -> std::io::Result<()> {
+        for attempt in 0..20 {
+            match fs::remove_dir_all(path) {
+                Ok(()) => return Ok(()),
+                Err(error) if attempt < 19 && matches!(error.raw_os_error(), Some(5 | 32)) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("the bounded Windows cleanup loop always returns")
+    }
+
+    #[cfg(not(windows))]
+    fn remove_test_directory(path: &std::path::Path) -> std::io::Result<()> {
+        fs::remove_dir_all(path)
+    }
+
     fn test_store() -> (StateStore, PathBuf) {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-outbox-{}", uuid::Uuid::new_v4()));
@@ -170,6 +189,14 @@ mod tests {
             )
             .unwrap();
         (store, directory)
+    }
+
+    fn close_test_store(store: StateStore) {
+        let StateStore { connection } = store;
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
+            .unwrap();
+        connection.close().unwrap();
     }
 
     #[test]
@@ -211,7 +238,9 @@ mod tests {
                 )
                 .is_err()
         );
-        fs::remove_dir_all(directory).unwrap();
+        // Windows cannot delete the database while SQLite holds it open.
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
     }
 
     #[test]
@@ -250,7 +279,9 @@ mod tests {
             row,
             ("dead_letter".to_owned(), i64::from(MAX_WEBHOOK_ATTEMPTS))
         );
-        fs::remove_dir_all(directory).unwrap();
+        // Windows cannot delete the database while SQLite holds it open.
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
     }
 
     #[test]
@@ -263,7 +294,9 @@ mod tests {
         assert_eq!(deliveries.len(), 1);
         assert_eq!(deliveries[0].event_type, "migration.completed");
         assert!(deliveries[0].payload.contains("migration.completed"));
-        fs::remove_dir_all(directory).unwrap();
+        // Windows cannot delete the database while SQLite holds it open.
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
     }
 
     #[test]
@@ -299,6 +332,8 @@ mod tests {
             .unwrap();
         assert_eq!(delivery.event_type, "mailbox.failed");
         assert!(delivery.payload.contains("mailbox.failed"));
-        fs::remove_dir_all(directory).unwrap();
+        // Windows cannot delete the database while SQLite holds it open.
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
     }
 }

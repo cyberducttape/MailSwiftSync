@@ -154,5 +154,10 @@ pub(crate) fn canonical(extra_options: &str) -> Result<Vec<String>, String> {
         }
         index += 1;
     }
+    if canonical.len() > MAX_EXTRA_OPTION_TOKENS {
+        return Err(format!(
+            "Extra options expand to more than {MAX_EXTRA_OPTION_TOKENS} engine arguments"
+        ));
+    }
     Ok(canonical)
 }

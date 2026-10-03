@@ -1158,6 +1158,24 @@ destination = "Archive"
     }
 
     #[test]
+    fn canonical_extra_options_never_expand_past_the_reparse_limit() {
+        let accepted = "--timeout=1 ".repeat(64);
+        let canonical = crate::extra_options::canonical(&accepted).unwrap();
+        assert_eq!(canonical.len(), 128);
+        assert_eq!(
+            crate::extra_options::canonical(&canonical.join(" ")).unwrap(),
+            canonical
+        );
+
+        let rejected = "--timeout=1 ".repeat(65);
+        assert!(
+            crate::extra_options::canonical(&rejected)
+                .unwrap_err()
+                .contains("expand to more than 128")
+        );
+    }
+
+    #[test]
     fn command_preparation_rejects_unvalidated_extra_options() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;

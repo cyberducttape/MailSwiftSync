@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- The extra-options fuzzer exposed valid inline integer options expanding past
+  the canonical argv limit; such plans now fail validation before fingerprinting
+  or execution, preserving round-trip canonicalization.
+- Windows webhook-outbox tests now tolerate brief OS file-handle release delays
+  after closing their SQLite ledgers.
 - Destination readiness now retains RFC 7889 `APPENDLIMIT` capability data and
   shows the observed maximum message size in the simulation/capacity view.
   Unsupported provider-specific limits remain explicitly unknown.

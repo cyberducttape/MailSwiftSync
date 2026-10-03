@@ -13,6 +13,8 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     let result = extra_options::canonical(input);
     if let Ok(tokens) = result {
         let canonical = tokens.join(" ");
-        assert_eq!(extra_options::canonical(&canonical).unwrap(), tokens);
+        let reparsed = extra_options::canonical(&canonical)
+            .expect("canonical extra options must remain within parser limits");
+        assert_eq!(reparsed, tokens);
     }
 });
