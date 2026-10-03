@@ -153,8 +153,7 @@ screen-reader checklist are recorded in
   administration remain outside this local policy file.
 - `notify-webhook` includes a deterministic event ID, event type, and
   idempotency key. `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or its owner-only
-  file form adds an HMAC-SHA256 envelope signature; this notifier still does
-  not claim durable retry/dead-letter delivery.
+  file form adds an HMAC-SHA256 envelope signature.
 - The notifier now persists a credential-free outbox record before attempting
   delivery, retries due records with bounded exponential backoff, and records
   dead-letter state after repeated failure. The outbox stores only an endpoint

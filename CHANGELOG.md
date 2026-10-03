@@ -13,6 +13,9 @@ operator distribution archives.
 - Release-readiness guidance now reflects the 90-minute 100k scale job limit,
   and does not claim a peak-memory result until an instrumented run completes
   with its resource summary retained.
+- Removed an obsolete release-readiness statement that contradicted the
+  implemented durable webhook retry/dead-letter outbox; a documentation test
+  now guards against reintroducing the stale limitation.
 - Migration Assurance mismatch details now hash payloads left unmatched by the
   multiset reconciliation, rather than arbitrary representatives that may be
   identical on both sides. A streamed-SQLite/reference-comparator differential

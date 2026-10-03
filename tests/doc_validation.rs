@@ -79,6 +79,13 @@ fn production_readiness_surfaces_have_one_conservative_source() {
     let release_readiness = fs::read_to_string("docs/release-readiness.md")
         .expect("release-readiness criteria should exist");
     assert!(
+        !release_readiness.contains("does not claim durable retry/dead-letter delivery")
+            && release_readiness.contains("persists a credential-free outbox record")
+            && release_readiness.contains("dead-letter state after repeated failure"),
+        "release-readiness must not retain the pre-outbox webhook limitation"
+    );
+
+    assert!(
         release_readiness.contains("Required before calling it production-ready"),
         "release-readiness must retain explicit production gates"
     );
