@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Updated the migration-snapshot fuzz target's private-directory shim to match
+  the stager's canonical-directory validation after the macOS path fix.
+- Added coverage-increasing migration-snapshot fuzz inputs to the regression
+  corpus.
 - Added a CI scheduler stress test for 1,024 synthetic jobs across 32 tenant
   domains at 16 workers; it verifies full settlement, tenant accounting, and
   parallel execution without claiming real-engine/provider load qualification.
