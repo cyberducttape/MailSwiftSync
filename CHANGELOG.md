@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- imapsync runtime argument construction is now fail-closed: invalid expert
+  options return a named plan-construction error before any argv or secret
+  files are prepared, instead of silently dropping the invalid tokens. Added a
+  regression test for the partial-command hazard.
 - Documentation status is now generated from `capabilities.toml`: release
   feature and provider-qualification matrices, package version, SQLite schema
   version, qualified engine, and review metadata are rendered into

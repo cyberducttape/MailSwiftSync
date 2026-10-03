@@ -2732,12 +2732,21 @@ mod tests {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
         form.profile.source_tls = "plain".into();
-        let args = engine::imapsync_args(&form.profile, true, 1);
+        let args = engine::imapsync_args(&form.profile, true, 1).unwrap();
 
         assert!(args.iter().any(|arg| arg == "--nossl1"));
         assert!(args.iter().any(|arg| arg == "--notls1"));
         assert!(!args.iter().any(|arg| arg == "--ssl1"));
         assert!(!args.iter().any(|arg| arg == "--tls1"));
+    }
+
+    #[test]
+    fn imapsync_argument_builder_rejects_invalid_extra_options_without_partial_argv() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.extra_options = "--not-an-allowed-imapsync-option".into();
+        let error = engine::imapsync_args(&form.profile, true, 1).unwrap_err();
+        assert!(error.contains("safe imapsync option allowlist"), "{error}");
     }
 
     #[test]
@@ -2769,7 +2778,7 @@ mod tests {
     fn imapsync_argument_builder_never_materializes_runtime_credentials() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
-        let args = engine::imapsync_args(&form.profile, false, 1);
+        let args = engine::imapsync_args(&form.profile, false, 1).unwrap();
         assert!(!args.iter().any(|arg| arg.contains("source-secret")));
         assert!(!args.iter().any(|arg| arg.contains("destination-secret")));
         assert!(!args.iter().any(|arg| {

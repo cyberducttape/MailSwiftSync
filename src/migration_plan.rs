@@ -1376,7 +1376,7 @@ impl ValidatedPlan<'_> {
                 verification,
             });
         }
-        let mut args = engine::imapsync_args(&form.profile, form.dry_run, throttle_divisor);
+        let mut args = engine::imapsync_args(&form.profile, form.dry_run, throttle_divisor)?;
         let secret_dir = create_secret_directory()?;
         let source_file = secret_dir.join("source.secret");
         let destination_file = secret_dir.join("destination.secret");

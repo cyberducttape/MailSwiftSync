@@ -1,5 +1,11 @@
 use super::Profile;
 
+/// Engine-plan construction errors are surfaced instead of producing a
+/// shortened, apparently valid command line. The controller currently uses
+/// bounded human-readable strings for plan errors, so keep this alias aligned
+/// with the surrounding validation API while preserving a named boundary.
+pub(crate) type PlanError = String;
+
 /// Build the runtime imapsync argument vector from the validated migration
 /// profile. Credential arguments are deliberately absent: runtime callers
 /// append only protected passfile/token-file paths after writing the secrets.
@@ -7,8 +13,15 @@ pub(crate) fn imapsync_args(
     profile: &Profile,
     dry_run: bool,
     throttle_divisor: usize,
-) -> Vec<String> {
-    imapsync_args_with_placeholders(profile, dry_run, throttle_divisor, false)
+) -> Result<Vec<String>, PlanError> {
+    let extra_options = canonical_extra_options(&profile.extra_options)?;
+    Ok(imapsync_args_with_extra_options(
+        profile,
+        dry_run,
+        throttle_divisor,
+        false,
+        extra_options,
+    ))
 }
 
 /// Build the secret-free preview/fingerprint form of the imapsync arguments.
@@ -38,6 +51,23 @@ fn imapsync_args_with_placeholders(
     dry_run: bool,
     throttle_divisor: usize,
     include_placeholders: bool,
+) -> Vec<String> {
+    let extra_options = canonical_extra_options(&profile.extra_options).unwrap_or_default();
+    imapsync_args_with_extra_options(
+        profile,
+        dry_run,
+        throttle_divisor,
+        include_placeholders,
+        extra_options,
+    )
+}
+
+fn imapsync_args_with_extra_options(
+    profile: &Profile,
+    dry_run: bool,
+    throttle_divisor: usize,
+    include_placeholders: bool,
+    extra_options: Vec<String>,
 ) -> Vec<String> {
     let placeholder = include_placeholders.then_some("••••••••");
     let source_default_port = super::default_imap_port(&profile.source_tls);
@@ -136,9 +166,7 @@ fn imapsync_args_with_placeholders(
     }
     // MailSwiftSync owns the journal and retention policy.
     args.push("--nolog".into());
-    if let Ok(extra) = canonical_extra_options(&profile.extra_options) {
-        args.extend(extra);
-    }
+    args.extend(extra_options);
     args
 }
 
