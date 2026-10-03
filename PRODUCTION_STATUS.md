@@ -257,7 +257,7 @@ new metadata verifier against real accounts.
 - 🔲 Live provider validation (Gmail, O365, Fastmail)
 - 🔲 Real-world performance benchmarks
 - ✅ MSP single-customer operational procedure ([runbook](docs/msp-operations-runbook.md)); centralized fleet controls and tenant isolation remain future work.
-- 🔲 Advanced folder mapping rules
+- 🔲 Complete provider-specific folder and capacity simulation beyond exact mappings and exclusions
 
 ### Future (Post-1.0)
 - 🔲 More providers (Yahoo, ProtonMail, etc.)
@@ -339,9 +339,11 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 
 The system provides a durable, safety-gated migration controller suitable for
 technical-preview use. It provides bounded, opt-in body-content proof only for
-encrypted imapsync runs; it does not yet provide provider-specific execution
-intelligence; provider runbooks are guidance only, not provider-specific
-execution or qualification. Activity exposes an explicitly labelled imapsync
-ETA, while native Dovecot runs remain progress- and ETA-free.
+encrypted imapsync runs and provider-scoped failure classification with
+adaptive rate-domain feedback. This execution intelligence is limited to
+observed provider signals: provider-specific quota defaults and live provider
+qualification remain absent. Provider runbooks are guidance only, not provider
+qualification. Activity exposes an explicitly labelled imapsync ETA, while
+native Dovecot runs remain progress- and ETA-free.
 
 **Next milestone:** Live validation with real provider mailboxes to reach GA 1.0 status.

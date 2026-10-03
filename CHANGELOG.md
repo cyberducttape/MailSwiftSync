@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Production-readiness guidance now distinguishes implemented provider-scoped
+  failure intelligence and exact folder mappings from still-pending live
+  provider qualification and complete provider-specific capacity simulation.
 - The certificate command now refuses output paths that resolve to the SQLite
   ledger or signing-key file, preventing accidental destruction of either.
 - Successful signed migration-certificate exports now record a durable
