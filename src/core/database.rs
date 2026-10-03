@@ -600,6 +600,17 @@ impl StateStore {
                 )],
             ),
             (
+                "cutover_workflows",
+                &[(
+                    "projects",
+                    "project_id",
+                    "id",
+                    "NO ACTION",
+                    "NO ACTION",
+                    "NONE",
+                )],
+            ),
+            (
                 "evidence",
                 &[
                     (
@@ -1217,6 +1228,10 @@ impl StateStore {
                     "attempts>=0",
                     "statusin('queued','delivered','dead_letter')",
                 ],
+            ),
+            (
+                "cutover_workflows",
+                &["stagein('seed','catch_up','final_delta','verification','completed')"],
             ),
             (
                 "transfer_pass_folders",

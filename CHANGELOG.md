@@ -13,7 +13,8 @@ operator distribution archives.
   confirmation. A staged workflow now prevents generic polling from silently
   collapsing a cutover into Complete. The `cutover run` command now refuses to
   start before the approved RFC 3339 time or outside the persisted maintenance
-  window, and preserves the destructive-destination acknowledgement gate.
+  window, and preserves the destructive-destination acknowledgement gate. The
+  schema validator also verifies the workflow foreign key and stage constraint.
 - Migration simulation now shows separate source and destination capacity
   facts from the latest endpoint readiness probe, including provider-reported
   quota usage/limits, exhausted destination capacity, and an explicit unknown
