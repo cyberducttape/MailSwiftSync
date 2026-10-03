@@ -40,6 +40,10 @@ operator distribution archives.
 - Added stable English/German locale catalog entries for the preflight
   remediation action and blocker explanation, and reused the existing
   “Not applicable” translation in the overview table.
+- Corrected the capability manifest's retry limitations: typed bounded retry
+  and Microsoft server-suggested backoff are implemented; proactive provider
+  quota policies, provider-specific default rate policies, and live
+  qualification remain outstanding.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.

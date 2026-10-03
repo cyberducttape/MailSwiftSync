@@ -181,8 +181,8 @@ particular target.
 
 ❌ **Not implemented:**
 - Per-message checkpoint/restart persistence (Dovecot run-level checkpoints are UIDVALIDITY-context-bound)
-- Provider-specific throttling enforcement (adaptive cooldown reacts to observed signals, but provider quota policies are not encoded)
-- Automatic retry with provider-specific backoff
+- Proactive provider quota enforcement and provider-specific default rate policies (adaptive cooldown reacts to observed signals, and Microsoft server-suggested retry delays are honored, but provider quota policies are not encoded or live-qualified)
+- Provider-specific retry tuning beyond typed failure-class defaults and explicit server-suggested delays
 - Pre-migration risk report generation during migration
 - Automatic post-migration exception-report generation after each live run (an explicit headless `post-report` export is available)
 - Dedicated multi-run resume/recovery dashboard UI
