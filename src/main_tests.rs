@@ -576,6 +576,21 @@ fn typed_folder_mapping_rejects_ambiguous_or_unsafe_names() {
         exclude: true,
     };
     assert!(form.validate_for_import().is_err());
+
+    form.profile.folder_mapping_rules = vec![
+        FolderMappingRule {
+            source: "[Gmail]/Sent Mail".into(),
+            destination: "Sent".into(),
+            exclude: false,
+        },
+        FolderMappingRule {
+            source: "Sent Items".into(),
+            destination: "sent".into(),
+            exclude: false,
+        },
+    ];
+    let error = form.validate_for_import().unwrap_err();
+    assert!(error.contains("after case folding"), "{error}");
 }
 
 #[test]

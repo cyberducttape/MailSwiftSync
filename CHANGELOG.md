@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject explicit folder-mapping rules whose destination targets collide after
+  case folding, preventing an unannounced merge when provider case semantics
+  differ; document that provider-specific normalization remains unqualified.
 - Reuse one Rustls webhook HTTP client and connection pool across queued
   deliveries in watch mode instead of rebuilding the transport for each event.
 - Page filtered mailbox row IDs directly from SQLite during ordinary browsing;
@@ -54,6 +57,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Reject explicit folder targets that collide after case folding, avoiding
+  unannounced mailbox merges; provider-specific normalization remains
+  unqualified.
 - Reuse the connection-pooled Rustls webhook client across event deliveries.
 - Filtered, unselected mailbox browsing now obtains its count and virtual-row
   pages directly from SQLite; exact ID materialization remains for explicit

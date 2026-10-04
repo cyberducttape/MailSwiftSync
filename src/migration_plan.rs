@@ -1001,6 +1001,7 @@ impl Form {
             return Err("Folder mapping rules cannot exceed 256 entries.".into());
         }
         let mut seen_sources = std::collections::HashSet::new();
+        let mut destination_sources = std::collections::HashMap::new();
         for rule in &self.profile.folder_mapping_rules {
             let source = &rule.source;
             let destination = (!rule.exclude).then_some(&rule.destination);
@@ -1021,6 +1022,15 @@ impl Form {
                     "Folder mapping source is specified more than once: {}",
                     source
                 ));
+            }
+            if let Some(destination) = destination {
+                let collision_key = crate::ui::fold_search_text(destination);
+                if let Some(previous_source) = destination_sources.get(&collision_key) {
+                    return Err(format!(
+                        "Folder mapping destination targets collide after case folding: {previous_source} and {source} both map to {destination}. Choose distinct destination folders to avoid an unintended merge."
+                    ));
+                }
+                destination_sources.insert(collision_key, source.as_str());
             }
         }
         Ok(())

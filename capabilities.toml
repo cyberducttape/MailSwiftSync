@@ -93,7 +93,7 @@ evidence = "Quota parsing, RFC 7889 APPENDLIMIT observation, explicit unknown-ca
 [[production_features]]
 feature = "Advanced typed folder mapping"
 status = "partial"
-evidence = "The advanced plan editor now supports bounded exact source-to-destination mappings and source-folder exclusions; rules are immutable plan state, emitted as imapsync --f1f2/anchored --exclude arguments, and reused by independent verification. Arbitrary regex transforms remain unsupported."
+evidence = "The advanced plan editor supports bounded exact source-to-destination mappings and source-folder exclusions; rules are immutable plan state, emitted as imapsync --f1f2/anchored --exclude arguments, and reused by independent verification. Explicit destination targets that collide after case folding are rejected to prevent unintended folder merges. Provider-specific normalization and arbitrary regex transforms remain unsupported."
 
 [[production_features]]
 feature = "Executable cutover orchestration"
