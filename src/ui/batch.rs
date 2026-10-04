@@ -254,6 +254,11 @@ impl App {
                 );
             });
         } else {
+            self.refresh_bulk_filter_cache();
+            if let Some(error) = self.queue.filter_error().map(str::to_owned) {
+                self.queue_unavailable_card(ui, "Mailbox filtering unavailable", &error);
+                return;
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(
@@ -308,7 +313,13 @@ impl App {
             });
             // One queue scan serves the selection counts and queue health.
             self.refresh_bulk_selection_view();
-            let summary = self.bulk_queue_summary();
+            let summary = match self.bulk_queue_summary() {
+                Ok(summary) => summary,
+                Err(error) => {
+                    self.queue_unavailable_card(ui, "Queue status unavailable", &error);
+                    return;
+                }
+            };
             crate::ui::card(ui, |ui| {
                 crate::ui::section_label(ui, self.language.message("ui.queue-health"));
                 ui.add_space(2.0);
@@ -492,6 +503,10 @@ impl App {
             if self.refresh_bulk_filter_cache() || selection_changed {
                 self.refresh_bulk_selection_view();
                 ui.ctx().request_repaint();
+            }
+            if let Some(error) = self.queue.filter_error().map(str::to_owned) {
+                self.queue_unavailable_card(ui, "Mailbox filtering unavailable", &error);
+                return;
             }
             let visible_count = self.queue.visible_count();
             let visible_and_selected = self.bulk_selection_view.visible;
@@ -1290,6 +1305,27 @@ impl App {
             return Some(job_id.clone());
         }
         None
+    }
+
+    fn queue_unavailable_card(&mut self, ui: &mut egui::Ui, title: &'static str, error: &str) {
+        let colors = self.theme_colors();
+        let mut retry = false;
+        crate::ui::card(ui, |ui| {
+            ui.label(
+                RichText::new(self.language.text(title).to_owned())
+                    .strong()
+                    .color(colors.danger),
+            );
+            ui.label(RichText::new(error).color(colors.text_secondary));
+            retry = ui.button(self.language.text("Retry queue read")).clicked();
+        });
+        if retry {
+            self.queue.invalidate();
+            self.queue.retry_filter();
+            self.bulk_selection_view = SelectionView::default();
+            self.bulk_selection_view_dirty = true;
+            ui.ctx().request_repaint();
+        }
     }
 }
 

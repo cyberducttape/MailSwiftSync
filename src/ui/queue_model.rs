@@ -29,6 +29,7 @@ pub(crate) struct MailboxQueue {
     filter: Option<FilterKey>,
     visible: Vec<i64>,
     visible_count: usize,
+    filter_error: Option<String>,
     /// The common unfiltered view is paged directly from SQLite; filtered or
     /// transient-state views retain their compact matching rowid set.
     visible_paged: bool,
@@ -87,6 +88,7 @@ impl MailboxQueue {
         self.rowid_by_id.clear();
         self.visible.clear();
         self.visible_count = 0;
+        self.filter_error = None;
         self.visible_paged = false;
         self.summary = None;
     }
@@ -160,6 +162,7 @@ impl MailboxQueue {
             self.visible.clear();
             self.visible_count = 0;
             self.visible_paged = false;
+            self.filter_error = None;
             return Ok(changed);
         };
         let key = FilterKey {
@@ -175,37 +178,65 @@ impl MailboxQueue {
         }
         if key.folded_search.is_empty() && key.state.is_none() && self.transient.is_empty() {
             self.visible.clear();
-            self.visible_count = store
-                .queue_len(&project_id)
-                .map_err(|error| format!("Could not count the mailbox queue: {error}"))?;
+            self.visible_count = match store.queue_len(&project_id) {
+                Ok(count) => count,
+                Err(error) => {
+                    return self
+                        .filter_failed(key, format!("Could not count the mailbox queue: {error}"));
+                }
+            };
             self.visible_paged = true;
             self.filter = Some(key);
+            self.filter_error = None;
             return Ok(true);
         }
-        self.visible = store
-            .queue_rowids(&project_id, &key.folded_search, key.state.as_deref())
-            .map_err(|error| format!("Could not filter the mailbox queue: {error}"))?;
+        self.visible =
+            match store.queue_rowids(&project_id, &key.folded_search, key.state.as_deref()) {
+                Ok(rowids) => rowids,
+                Err(error) => {
+                    return self.filter_failed(
+                        key,
+                        format!("Could not filter the mailbox queue: {error}"),
+                    );
+                }
+            };
         // A transient state is not durable, so a state filter must also
         // honour claimed rows' presented state.
         if let Some(state) = key.state.as_deref()
             && !self.transient.is_empty()
         {
             let claimed = self.transient.keys().cloned().collect::<Vec<_>>();
-            let plans = store
-                .queue_plans(&project_id, &claimed)
-                .map_err(|error| format!("Could not filter the mailbox queue: {error}"))?;
+            let plans = match store.queue_plans(&project_id, &claimed) {
+                Ok(plans) => plans,
+                Err(error) => {
+                    return self.filter_failed(
+                        key,
+                        format!("Could not filter the mailbox queue: {error}"),
+                    );
+                }
+            };
             for plan in plans {
                 let presented = self.transient.get(&plan.id).map(String::as_str);
                 let matches = presented == Some(state);
+                let matches_search = if matches && self.visible.binary_search(&plan.rowid).is_err()
+                {
+                    match store.queue_row_matches(&project_id, plan.rowid, &key.folded_search) {
+                        Ok(matches) => matches,
+                        Err(error) => {
+                            return self.filter_failed(
+                                key,
+                                format!("Could not filter the mailbox queue: {error}"),
+                            );
+                        }
+                    }
+                } else {
+                    false
+                };
                 match (self.visible.binary_search(&plan.rowid), matches) {
                     (Ok(index), false) => {
                         self.visible.remove(index);
                     }
-                    (Err(index), true)
-                        if store
-                            .queue_row_matches(&project_id, plan.rowid, &key.folded_search)
-                            .unwrap_or(false) =>
-                    {
+                    (Err(index), true) if matches_search => {
                         self.visible.insert(index, plan.rowid);
                     }
                     _ => {}
@@ -215,7 +246,29 @@ impl MailboxQueue {
         self.visible_count = self.visible.len();
         self.visible_paged = false;
         self.filter = Some(key);
+        self.filter_error = None;
         Ok(true)
+    }
+
+    fn filter_failed(&mut self, key: FilterKey, error: String) -> Result<bool, String> {
+        self.visible.clear();
+        self.visible_count = 0;
+        self.visible_paged = false;
+        self.filter = Some(key);
+        self.filter_error = Some(error.clone());
+        Err(error)
+    }
+
+    pub(crate) fn filter_error(&self) -> Option<&str> {
+        self.filter_error.as_deref()
+    }
+
+    pub(crate) fn retry_filter(&mut self) {
+        self.filter = None;
+        self.filter_error = None;
+        self.visible.clear();
+        self.visible_count = 0;
+        self.visible_paged = false;
     }
 
     /// Row IDs matching the current filter, ascending.
@@ -333,23 +386,26 @@ impl MailboxQueue {
     }
 
     /// Queue health counts, with claimed rows counted by presented state.
-    pub(crate) fn summary(&mut self, store: &StateStore) -> BulkQueueSummary {
+    pub(crate) fn summary(&mut self, store: &StateStore) -> Result<BulkQueueSummary, String> {
         if let Some((generation, summary)) = self.summary
             && generation == self.generation
         {
-            return summary;
+            return Ok(summary);
         }
         let Some(project_id) = self.project_id.clone() else {
-            return BulkQueueSummary::default();
+            return Ok(BulkQueueSummary::default());
         };
         let mut counts = store
             .queue_state_counts(&project_id)
-            .unwrap_or_default()
+            .map_err(|error| format!("Could not read mailbox queue status: {error}"))?
             .into_iter()
             .collect::<HashMap<_, _>>();
         if !self.transient.is_empty() {
             let claimed = self.transient.keys().cloned().collect::<Vec<_>>();
-            for plan in store.queue_plans(&project_id, &claimed).unwrap_or_default() {
+            for plan in store
+                .queue_plans(&project_id, &claimed)
+                .map_err(|error| format!("Could not read mailbox queue status: {error}"))?
+            {
                 if let Some(count) = counts.get_mut(&plan.state) {
                     *count = count.saturating_sub(1);
                 }
@@ -362,7 +418,7 @@ impl MailboxQueue {
             counts.iter().map(|(state, count)| (state.as_str(), *count)),
         );
         self.summary = Some((self.generation, summary));
-        summary
+        Ok(summary)
     }
 }
 
@@ -419,12 +475,31 @@ mod tests {
         assert_eq!(queue.visible(), [row.rowid]);
         assert!(queue.refresh_filter(&store, "", "imported").unwrap());
         assert_eq!(queue.visible().len(), 19);
-        assert_eq!(queue.summary(&store).imported, 19);
+        assert_eq!(queue.summary(&store).unwrap().imported, 19);
         queue.clear_transient(&row.id);
         assert!(queue.refresh_filter(&store, "", "retrying").unwrap());
         assert!(queue.visible().is_empty());
         assert_eq!(queue.visible_count(), 0);
-        assert_eq!(queue.summary(&store).imported, 20);
+        assert_eq!(queue.summary(&store).unwrap().imported, 20);
+    }
+
+    #[test]
+    fn queue_summary_and_filter_fail_explicitly_when_durable_reads_fail() {
+        let store = StateStore::in_memory().unwrap();
+        let mut queue = imported(&store, 3);
+        store.hide_mailbox_jobs_for_test().unwrap();
+
+        let summary_error = queue.summary(&store).unwrap_err();
+        assert!(summary_error.contains("queue status"), "{summary_error}");
+
+        let filter_error = queue.refresh_filter(&store, "user", "all").unwrap_err();
+        assert!(
+            filter_error.contains("filter the mailbox queue"),
+            "{filter_error}"
+        );
+        assert!(queue.filter_error().is_some());
+        assert!(queue.visible().is_empty());
+        assert_eq!(queue.visible_count(), 0);
     }
 
     #[test]

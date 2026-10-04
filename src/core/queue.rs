@@ -160,6 +160,12 @@ fn sql_bool(value: Option<i64>) -> bool {
 }
 
 impl StateStore {
+    #[cfg(test)]
+    pub(crate) fn hide_mailbox_jobs_for_test(&self) -> rusqlite::Result<()> {
+        self.connection
+            .execute_batch("ALTER TABLE mailbox_jobs RENAME TO hidden_mailbox_jobs")
+    }
+
     /// Create a batch project whose rows are the queue, in one transaction.
     pub fn create_batch_queue(
         &self,

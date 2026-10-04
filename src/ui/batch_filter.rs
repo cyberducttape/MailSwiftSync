@@ -15,6 +15,7 @@ impl App {
             Ok(changed) => changed,
             Err(error) => {
                 self.bulk_message = error;
+                self.bulk_selection_view = Default::default();
                 false
             }
         }
@@ -265,12 +266,12 @@ pub(crate) mod tests {
         // A successful dry run records each row's credential binding for the
         // live gate, in this session only.
         assert_eq!(app.queue.preflight_credentials.len(), 3);
-        assert_eq!(app.bulk_queue_summary().ready, 3);
+        assert_eq!(app.bulk_queue_summary().unwrap().ready, 3);
         drop(app);
 
         let mut app = crate::App::from_state_path(Some(&state_path));
         assert_eq!(app.queue.project_id(), Some(project_id.as_str()));
-        assert_eq!(app.bulk_queue_summary().ready, 3);
+        assert_eq!(app.bulk_queue_summary().unwrap().ready, 3);
         assert!(app.queue.session_secrets.is_empty());
         drop(app);
         remove_benchmark_state_files(state_path);

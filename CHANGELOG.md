@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Surface durable queue summary/filter read failures instead of converting them
+  to zero counts or non-matches; clear stale selection projections and show an
+  explicit retryable unavailable state in Mailboxes and Overview.
 - Require exact, bidirectional mailbox-key coverage for forensic content
   fingerprints; reject equal-count orphan substitutions and never skip a
   missing fingerprint while comparing a reconciled message pair.
@@ -30,6 +33,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Made the queue read model propagate SQLite failures from health counts,
+  transient row plans, and filtering. Failed filters clear the visible-row
+  projection and expose an explicit retryable unavailable card; Overview and
+  Mailboxes no longer render healthy-looking zeroed batch status on read error.
 - Made body-hash verification fail closed on missing or orphaned source or
   destination fingerprint keys, both at the staged-data boundary and in the
   comparator itself. Clean metadata pairs can no longer silently bypass

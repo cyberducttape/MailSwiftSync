@@ -56,7 +56,26 @@ impl App {
             .unwrap_or(core::Phase::Discovery);
         let attention_count = self.ui_snapshot.mailbox_counts.needs_review;
         let mailbox_counts = self.ui_snapshot.mailbox_counts;
-        let batch_summary = self.bulk_queue_summary();
+        let batch_summary = match self.bulk_queue_summary() {
+            Ok(summary) => summary,
+            Err(error) => {
+                crate::ui::card(ui, |ui| {
+                    ui.label(
+                        RichText::new(self.language.text("Queue status unavailable"))
+                            .strong()
+                            .color(colors.danger),
+                    );
+                    ui.label(RichText::new(error).color(colors.text_secondary));
+                    if ui
+                        .button(self.language.text("Open Mailboxes to retry queue reads"))
+                        .clicked()
+                    {
+                        self.active_view = WorkspaceView::Mailboxes;
+                    }
+                });
+                return;
+            }
+        };
         let has_bulk_jobs = batch_summary.total > 0;
         let has_durable_jobs = mailbox_counts.total > 0;
         let has_mailboxes = has_durable_jobs || has_bulk_jobs;

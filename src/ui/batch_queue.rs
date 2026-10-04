@@ -238,7 +238,9 @@ impl App {
         self.recovery.invalidate();
     }
 
-    pub(crate) fn bulk_queue_summary(&mut self) -> crate::controller::BulkQueueSummary {
+    pub(crate) fn bulk_queue_summary(
+        &mut self,
+    ) -> Result<crate::controller::BulkQueueSummary, String> {
         self.queue.summary(&self.store)
     }
 }
