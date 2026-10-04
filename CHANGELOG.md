@@ -49,6 +49,9 @@ operator distribution archives.
   stale.
 - Expanded preflight remediation guidance to state that the issue applies to
   the current project and that any plan edit requires a fresh preflight.
+- Hardened the 100k scale host watchdog to stop the container independently of
+  the `docker wait` client and bound a stuck wait client, preserving time for
+  diagnostic and resource-summary artifact collection.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.
