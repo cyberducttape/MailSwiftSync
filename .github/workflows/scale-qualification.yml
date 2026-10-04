@@ -38,6 +38,7 @@ jobs:
             --volume "$PWD/provider-scale-evidence:/provider-evidence" \
             --env MAILSWIFTSYNC_EVIDENCE_OUTPUT=/provider-evidence \
             --env MAILSWIFTSYNC_SCALE_MESSAGES=100000 \
+            --env MAILSWIFTSYNC_DISPOSABLE_SCALE=1 \
             --entrypoint /bin/bash mailswiftsync:scale \
             /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
           started_at="$(date +%s)"

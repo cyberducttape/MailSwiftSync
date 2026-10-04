@@ -11,9 +11,35 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WATCHDOG = ROOT / "scripts" / "scale-docker-wait.sh"
 CONTAINER_WAIT = ROOT / "scripts" / "scale-container-wait.sh"
+INTEGRATION_SMOKE = ROOT / "scripts" / "imap-integration-smoke.sh"
+SCALE_WORKFLOW = ROOT / ".github" / "workflows" / "scale-qualification.yml"
 
 
 class ScaleDockerWaitTests(unittest.TestCase):
+    def test_disposable_scale_teardown_is_explicit_and_has_a_completion_marker(self):
+        script = INTEGRATION_SMOKE.read_text(encoding="utf-8")
+        workflow = SCALE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('disposable_scale="${MAILSWIFTSYNC_DISPOSABLE_SCALE:-0}"', script)
+        self.assertIn('if [[ "$disposable_scale" == 1 ]]; then', script)
+        self.assertIn("dovecot_shutdown=delegated_to_disposable_container_teardown", script)
+        self.assertIn("harness_cleanup_complete=true exit_status=%s", script)
+        self.assertIn("MAILSWIFTSYNC_DISPOSABLE_SCALE=1", workflow)
+
+    def test_disposable_scale_mode_requires_scale_fixture(self):
+        environment = os.environ.copy()
+        environment["MAILSWIFTSYNC_SCALE_MESSAGES"] = "0"
+        environment["MAILSWIFTSYNC_DISPOSABLE_SCALE"] = "1"
+        result = subprocess.run(
+            ["bash", str(INTEGRATION_SMOKE)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("requires a scale message fixture", result.stderr)
+
     def test_outer_deadline_kills_a_stuck_helper_and_preserves_its_marker(self):
         with tempfile.TemporaryDirectory(prefix="scale-outer-watchdog-test-") as temporary:
             directory = Path(temporary)

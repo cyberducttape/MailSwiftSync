@@ -358,6 +358,16 @@ screen-reader checklist are recorded in
   orphaned fixture children and exit with the harness; Dovecot shutdown remains
   bounded to 10 seconds per server, and the host wait has its own deadline and
   fallback marker. These changes still need a successful hosted rerun. The
+  following [run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37179192679)
+  completed seed, incremental delta, fixture scan, and durable exact-metadata
+  reconciliation for 100,016 messages / 28,681,943 bytes with zero differences.
+  Its markers also show both Dovecot stop commands and the disposable workspace
+  handoff completed, but the container stayed alive until the 90-minute workflow
+  timeout. Cleanup now has an explicit disposable-scale mode that delegates
+  fixture-server shutdown to container teardown rather than waiting on processes
+  that may be in uninterruptible filesystem I/O. A new completion marker will
+  distinguish harness cleanup from container exit; this fix still needs a
+  hosted rerun and peak-resource summary.
   earlier repeated Maildir scans have been
   replaced by one pass, which took 1.78 seconds on a synthetic 100,004-file
   Maildir. None of

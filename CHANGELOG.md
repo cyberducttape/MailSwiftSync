@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Updated disposable 100k-mailbox harness teardown to delegate Dovecot process
+  cleanup to container teardown, avoiding an unbounded wait after SIGKILL when
+  fixture processes are stuck in filesystem I/O; evidence now marks completion
+  of harness cleanup separately from container exit.
 - Separated unattributed batch failures from generic cross-provider discovery:
   ambiguous diagnostics now use provider-neutral heuristics and universal IMAP
   codes, and cannot trigger a provider-specific rate-domain cooldown.

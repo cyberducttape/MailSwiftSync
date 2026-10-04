@@ -15,6 +15,15 @@ if [[ ! "$scale_messages_raw" =~ ^[0-9]{1,6}$ ]] || (( 10#$scale_messages_raw > 
   exit 1
 fi
 scale_messages=$((10#$scale_messages_raw))
+disposable_scale="${MAILSWIFTSYNC_DISPOSABLE_SCALE:-0}"
+if [[ "$disposable_scale" != 0 && "$disposable_scale" != 1 ]]; then
+  echo "FAIL: MAILSWIFTSYNC_DISPOSABLE_SCALE must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$disposable_scale" == 1 ]] && (( scale_messages == 0 )); then
+  echo "FAIL: MAILSWIFTSYNC_DISPOSABLE_SCALE=1 requires a scale message fixture" >&2
+  exit 1
+fi
 if [[ "$test_engine" != "ImapSync" && "$test_engine" != "Dovecot" ]]; then
   echo "FAIL: MAILSWIFTSYNC_TEST_ENGINE must be ImapSync or Dovecot" >&2
   exit 1
@@ -206,8 +215,20 @@ cleanup() {
     fi
     wait "$pid" 2>/dev/null || true
   }
-  stop_server "${destination_pid:-}" "${workspace:-}/destination.conf" destination
-  stop_server "${source_pid:-}" "${workspace:-}/source.conf" source
+  if [[ "$disposable_scale" == 1 ]]; then
+    # A 100k-message Dovecot process can remain in uninterruptible filesystem
+    # I/O while its Maildir is still mounted. `wait` after SIGKILL cannot be
+    # bounded in that state. The caller runs this harness as the container's
+    # main process with Docker --init, so let container teardown reap the
+    # disposable servers rather than waiting on them here.
+    if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+      printf 'dovecot_shutdown=delegated_to_disposable_container_teardown\n' \
+        >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
+    fi
+  else
+    stop_server "${destination_pid:-}" "${workspace:-}/destination.conf" destination
+    stop_server "${source_pid:-}" "${workspace:-}/source.conf" source
+  fi
   if [[ "${MAILSWIFTSYNC_KEEP_LAB:-0}" == "1" ]]; then
     echo "Keeping integration lab workspace: $workspace" >&2
   elif (( scale_messages > 0 )); then
@@ -233,6 +254,10 @@ cleanup() {
       echo "FAIL: could not remove stopped integration workspace $workspace" >&2
       status=1
     fi
+  fi
+  if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+    printf 'harness_cleanup_complete=true exit_status=%s\n' "$status" \
+      >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
   fi
   return "$status"
 }
