@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep the OAuth loopback listener alive after malformed or wrong-state
+  callbacks; only a state-verified provider denial terminates authorization.
+  Added an end-to-end forged-then-legitimate callback regression test.
 - Scope webhook lifecycle-event binding and delivery claims to the selected
   project; add atomic leased claims with crash recovery and race-safe retry
   accounting, plus schema-v24 migration and isolation/concurrency tests.
@@ -24,6 +27,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Hardened OAuth loopback availability: invalid and wrong-state callback
+  requests receive HTTP 400 and are counted while the listener continues
+  waiting; a matching-state provider rejection still terminates, and a valid
+  later callback can complete the flow.
 - Hardened the transactional webhook outbox for MSP isolation: project-scoped
   notifiers bind and claim only that project's lifecycle events, while unscoped
   notifiers retain all-project behavior. Delivery now atomically leases due

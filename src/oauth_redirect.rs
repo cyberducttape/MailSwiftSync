@@ -4,7 +4,8 @@ use zeroize::Zeroizing;
 
 pub(crate) enum RedirectOutcome {
     Code(Zeroizing<String>),
-    Rejected(String),
+    ProviderRejected(String),
+    InvalidCallback(String),
     Unrelated,
 }
 
@@ -12,14 +13,20 @@ const MAX_AUTHORIZATION_CODE_BYTES: usize = 4096;
 
 pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> RedirectOutcome {
     let Some(request_line) = head.lines().next() else {
-        return RedirectOutcome::Unrelated;
+        return RedirectOutcome::InvalidCallback(
+            "the authorization redirect request was empty".into(),
+        );
     };
     let mut parts = request_line.split(' ');
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
-        return RedirectOutcome::Rejected("the authorization redirect request is malformed".into());
+        return RedirectOutcome::InvalidCallback(
+            "the authorization redirect request is malformed".into(),
+        );
     };
     let Ok(url) = url::Url::parse(&format!("http://loopback{target}")) else {
-        return RedirectOutcome::Unrelated;
+        return RedirectOutcome::InvalidCallback(
+            "the authorization redirect request target is malformed".into(),
+        );
     };
     if method != "GET" || url.path() != "/" {
         return RedirectOutcome::Unrelated;
@@ -37,7 +44,7 @@ pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> Redire
             _ => continue,
         };
         if slot.replace(Zeroizing::new(value.into_owned())).is_some() {
-            return RedirectOutcome::Rejected(format!(
+            return RedirectOutcome::InvalidCallback(format!(
                 "the authorization redirect repeated the {name} parameter"
             ));
         }
@@ -49,7 +56,7 @@ pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> Redire
         .as_deref()
         .is_some_and(|state| constant_time_eq(state.as_bytes(), expected_state.as_bytes()))
     {
-        return RedirectOutcome::Rejected(
+        return RedirectOutcome::InvalidCallback(
             "the authorization redirect state did not match this request; nothing was stored"
                 .into(),
         );
@@ -65,7 +72,7 @@ pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> Redire
                     .collect::<String>()
             })
             .filter(|value| !value.is_empty());
-        return RedirectOutcome::Rejected(match description {
+        return RedirectOutcome::ProviderRejected(match description {
             Some(description) => format!(
                 "the provider declined authorization ({}): {description}",
                 error.as_str()
@@ -77,7 +84,7 @@ pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> Redire
         Some(code) if !code.is_empty() && code.len() <= MAX_AUTHORIZATION_CODE_BYTES => {
             RedirectOutcome::Code(code)
         }
-        _ => RedirectOutcome::Rejected(
+        _ => RedirectOutcome::InvalidCallback(
             "the authorization redirect did not carry a usable code".into(),
         ),
     }

@@ -409,6 +409,7 @@ impl RedirectListener {
     ) -> Result<Zeroizing<String>, String> {
         let deadline = Instant::now() + timeout;
         let mut unrelated = 0_usize;
+        let mut invalid_callbacks = 0_usize;
         loop {
             if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Err("OAuth authorization was cancelled; no token was stored".into());
@@ -428,9 +429,14 @@ impl RedirectListener {
             }
             let Some(mut stream) = accepted else {
                 if Instant::now() >= deadline {
+                    let ignored = if invalid_callbacks == 0 {
+                        String::new()
+                    } else {
+                        format!("; ignored {invalid_callbacks} invalid callback request(s)")
+                    };
                     return Err(format!(
-                        "no authorization redirect arrived within {} seconds",
-                        timeout.as_secs()
+                        "no authorization redirect arrived within {} seconds{ignored}",
+                        timeout.as_secs(),
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -445,13 +451,21 @@ impl RedirectListener {
                     );
                     return Ok(code);
                 }
-                RedirectOutcome::Rejected(error) => {
+                RedirectOutcome::ProviderRejected(error) => {
                     respond(
                         &mut stream,
                         "400 Bad Request",
                         "MailSwiftSync did not accept this authorization. Return to the terminal for details.",
                     );
                     return Err(error);
+                }
+                RedirectOutcome::InvalidCallback(_error) => {
+                    respond(
+                        &mut stream,
+                        "400 Bad Request",
+                        "MailSwiftSync rejected this callback. The authorization flow is still waiting for the provider.",
+                    );
+                    invalid_callbacks = invalid_callbacks.saturating_add(1);
                 }
                 RedirectOutcome::Unrelated => {
                     respond(&mut stream, "404 Not Found", "Not found.");
@@ -470,7 +484,7 @@ impl RedirectListener {
 fn handle_redirect(stream: &mut TcpStream, expected_state: &str) -> RedirectOutcome {
     let head = match read_request_head(stream) {
         Ok(head) => head,
-        Err(error) => return RedirectOutcome::Rejected(error),
+        Err(error) => return RedirectOutcome::InvalidCallback(error),
     };
     parse_redirect_request(&head, expected_state)
 }
@@ -796,11 +810,15 @@ mod tests {
 
     #[test]
     fn redirect_with_wrong_or_missing_state_is_refused() {
-        let error =
-            redirect_with(b"GET /?state=forged&code=abc HTTP/1.1\r\n\r\n", "expected").unwrap_err();
-        assert!(error.contains("state did not match"), "{error}");
-        let error = redirect_with(b"GET /?code=abc HTTP/1.1\r\n\r\n", "expected").unwrap_err();
-        assert!(error.contains("state did not match"), "{error}");
+        for request in [
+            "GET /?state=forged&code=abc HTTP/1.1\r\n\r\n",
+            "GET /?code=abc HTTP/1.1\r\n\r\n",
+        ] {
+            assert!(matches!(
+                parse_redirect_request(request, "expected"),
+                RedirectOutcome::InvalidCallback(_)
+            ));
+        }
     }
 
     #[test]
@@ -818,12 +836,39 @@ mod tests {
 
     #[test]
     fn repeated_parameters_are_refused() {
-        let error = redirect_with(
-            b"GET /?state=expected&code=a&code=b HTTP/1.1\r\n\r\n",
+        let outcome = parse_redirect_request(
+            "GET /?state=expected&code=a&code=b HTTP/1.1\r\n\r\n",
             "expected",
-        )
-        .unwrap_err();
-        assert!(error.contains("repeated"), "{error}");
+        );
+        assert!(
+            matches!(outcome, RedirectOutcome::InvalidCallback(error) if error.contains("repeated"))
+        );
+    }
+
+    #[test]
+    fn forged_wrong_state_callback_is_rejected_then_legitimate_callback_succeeds() {
+        let listener = RedirectListener::bind(RedirectHost::Ipv4Loopback).unwrap();
+        let port = listener.port();
+        let client = thread::spawn(move || {
+            let send = |request: &[u8]| {
+                let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                stream.write_all(request).unwrap();
+                let mut response = String::new();
+                stream.read_to_string(&mut response).unwrap();
+                response
+            };
+            let forged = send(b"GET /?state=wrong&code=forged HTTP/1.1\r\n\r\n");
+            let legitimate = send(b"GET /?state=expected&code=real-code HTTP/1.1\r\n\r\n");
+            (forged, legitimate)
+        });
+
+        let code = listener
+            .wait_for_code("expected", Duration::from_secs(5))
+            .unwrap();
+        let (forged_response, legitimate_response) = client.join().unwrap();
+        assert!(forged_response.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(legitimate_response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(code.as_str(), "real-code");
     }
 
     #[test]
