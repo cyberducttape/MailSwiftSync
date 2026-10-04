@@ -16,6 +16,8 @@ operator distribution archives.
   remain separate from the schema proof invariants.
 - Added the extracted SQLite schema-proof module to the critical-module line
   coverage gate with an 85% floor (89.93% measured across the full local suite).
+- Separated independent IMAP reconciliation and Dovecot verification/checkpoint
+  validation from process launch/supervision in the runner.
 - Adaptive provider scheduling now accepts explicit source and destination
   tenant scopes in the advanced plan and per-row batch imports. These scopes
   are persisted, fingerprinted, and included in run snapshots; blank values
