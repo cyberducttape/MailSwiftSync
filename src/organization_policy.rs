@@ -9,8 +9,10 @@ use crate::{Form, Profile};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
+// Unknown keys are refused: a misspelled safety key (`require_tsl`) must not
+// silently fall back to the permissive default.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct OrganizationProviderPolicy {
     /// Maximum worker concurrency allowed for one endpoint on this provider.
     pub(crate) max_concurrency: Option<usize>,
@@ -28,7 +30,7 @@ pub(crate) struct ProviderRateCeilings {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct OrganizationPolicy {
     /// Require encrypted source and destination transport.
     pub(crate) require_tls: bool,
@@ -349,5 +351,22 @@ mod tests {
         };
         let error = policy.check_form(&Form::default()).unwrap_err();
         assert!(error.contains("unsupported provider"), "{error}");
+    }
+
+    #[test]
+    fn misspelled_policy_keys_fail_closed_instead_of_defaulting() {
+        for text in [
+            "require_tsl = true\n",
+            "[providers.gmail]\nmax_concurency = 1\n",
+        ] {
+            assert!(
+                toml::from_str::<OrganizationPolicy>(text).is_err(),
+                "{text:?} must not decode to a permissive policy"
+            );
+        }
+        let policy: OrganizationPolicy =
+            toml::from_str("require_tls = true\n[providers.google]\nmax_concurrency = 2\n")
+                .unwrap();
+        assert!(policy.require_tls);
     }
 }
