@@ -722,10 +722,13 @@ impl App {
                             ui.label(RichText::new(name).strong());
                             ui.label(detail);
                             if !passed {
-                                if ui
-                                    .add_enabled(
-                                        !self.running() && !self.workspace_read_only,
-                                        egui::Button::new(self.language.message("ui.fix-in-plan")),
+                                let fix_button = ui.add_enabled(
+                                    !self.running() && !self.workspace_read_only,
+                                    egui::Button::new(self.language.message("ui.fix-in-plan")),
+                                );
+                                if fix_button
+                                    .on_hover_text(
+                                        self.language.message("ui.fix-preflight-plan-tooltip"),
                                     )
                                     .clicked()
                                 {

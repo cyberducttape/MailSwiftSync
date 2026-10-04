@@ -47,6 +47,8 @@ operator distribution archives.
 - Generated the capability manifest's review date from `capabilities.toml` and
   added a drift check so its release-review timestamp cannot silently become
   stale.
+- Expanded preflight remediation guidance to state that the issue applies to
+  the current project and that any plan edit requires a fresh preflight.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.
