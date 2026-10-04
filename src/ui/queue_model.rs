@@ -19,6 +19,7 @@ struct FilterKey {
     folded_search: String,
     state: Option<String>,
     generation: u64,
+    page_matches: bool,
 }
 
 #[derive(Default)]
@@ -30,8 +31,8 @@ pub(crate) struct MailboxQueue {
     visible: Vec<i64>,
     visible_count: usize,
     filter_error: Option<String>,
-    /// The common unfiltered view is paged directly from SQLite; filtered or
-    /// transient-state views retain their compact matching rowid set.
+    /// The unfiltered and unselected filtered views are paged directly from
+    /// SQLite; explicit selection and transient overlays retain matching IDs.
     visible_paged: bool,
     rows: HashMap<i64, QueueRow>,
     rowid_by_id: HashMap<String, i64>,
@@ -151,11 +152,25 @@ impl MailboxQueue {
     }
 
     /// Bring the filtered row index up to date. Returns whether it changed.
+    #[cfg(test)]
     pub(crate) fn refresh_filter(
         &mut self,
         store: &StateStore,
         search: &str,
         state_filter: &str,
+    ) -> Result<bool, String> {
+        self.refresh_filter_with_paging(store, search, state_filter, false)
+    }
+
+    /// Filter rows in SQLite and retain only the visible viewport index when
+    /// browsing without an explicit selection. Selection operations can ask
+    /// for the materialized index so their membership remains exact.
+    pub(crate) fn refresh_filter_with_paging(
+        &mut self,
+        store: &StateStore,
+        search: &str,
+        state_filter: &str,
+        page_matches: bool,
     ) -> Result<bool, String> {
         let Some(project_id) = self.project_id.clone() else {
             let changed = !self.visible.is_empty() || self.visible_count != 0;
@@ -172,17 +187,26 @@ impl MailboxQueue {
                 state => Some(state.to_owned()),
             },
             generation: self.generation,
+            page_matches,
         };
         if self.filter.as_ref() == Some(&key) {
             return Ok(false);
         }
-        if key.folded_search.is_empty() && key.state.is_none() && self.transient.is_empty() {
+        if self.transient.is_empty()
+            && (key.folded_search.is_empty() && key.state.is_none() || page_matches)
+        {
             self.visible.clear();
-            self.visible_count = match store.queue_len(&project_id) {
+            self.visible_count = match if key.folded_search.is_empty() && key.state.is_none() {
+                store.queue_len(&project_id)
+            } else {
+                store.queue_rowid_count(&project_id, &key.folded_search, key.state.as_deref())
+            } {
                 Ok(count) => count,
                 Err(error) => {
-                    return self
-                        .filter_failed(key, format!("Could not count the mailbox queue: {error}"));
+                    return self.filter_failed(
+                        key,
+                        format!("Could not count matching mailbox rows: {error}"),
+                    );
                 }
             };
             self.visible_paged = true;
@@ -282,6 +306,10 @@ impl MailboxQueue {
 
     pub(crate) fn is_unfiltered_paged(&self) -> bool {
         self.visible_paged
+            && self
+                .filter
+                .as_ref()
+                .is_some_and(|filter| filter.folded_search.is_empty() && filter.state.is_none())
     }
 
     /// Read a rowid range for virtualization. The default all-mailboxes view
@@ -481,6 +509,35 @@ mod tests {
         assert!(queue.visible().is_empty());
         assert_eq!(queue.visible_count(), 0);
         assert_eq!(queue.summary(&store).unwrap().imported, 20);
+    }
+
+    #[test]
+    fn filtered_browsing_pages_matches_until_selection_needs_materialization() {
+        let store = StateStore::in_memory().unwrap();
+        let mut queue = imported(&store, 200);
+
+        assert!(
+            queue
+                .refresh_filter_with_paging(&store, "USER1", "all", true)
+                .unwrap()
+        );
+        assert!(queue.visible().is_empty());
+        assert!(queue.visible_paged);
+        assert!(!queue.is_unfiltered_paged());
+        let expected = store
+            .queue_rowids(queue.project_id().unwrap(), "user1", None)
+            .unwrap();
+        assert_eq!(queue.visible_count(), expected.len());
+        assert_eq!(queue.visible_page(&store, 0..7).unwrap(), expected[..7]);
+        assert_eq!(queue.materialize_visible(&store).unwrap(), expected);
+
+        assert!(
+            queue
+                .refresh_filter_with_paging(&store, "USER1", "all", false)
+                .unwrap()
+        );
+        assert!(!queue.visible_paged);
+        assert_eq!(queue.visible(), expected);
     }
 
     #[test]

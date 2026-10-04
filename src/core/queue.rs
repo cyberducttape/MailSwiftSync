@@ -333,6 +333,23 @@ impl StateStore {
             .collect()
     }
 
+    /// Count rows matching a folded search and optional effective state
+    /// without materializing their row IDs in the UI process.
+    pub fn queue_rowid_count(
+        &self,
+        project_id: &str,
+        folded_search: &str,
+        state: Option<&str>,
+    ) -> rusqlite::Result<usize> {
+        self.connection.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR instr(f.search_key,?2)>0) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3))"
+            ),
+            params![project_id, folded_search, state],
+            |row| Ok(row.get::<_, i64>(0)? as usize),
+        )
+    }
+
     /// Fetch one ordered page of row IDs matching a folded search and
     /// optional effective state, without materializing the full virtual-row
     /// index in the GUI.

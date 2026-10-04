@@ -314,10 +314,11 @@ screen-reader checklist are recorded in
   repeatedly serializing full profiles; legacy full-row configs remain readable
   for compatibility. The
   Mailboxes view renders virtual rows from SQLite rowid pages in the default
-  unfiltered state, plus a bounded row cache; search and state filters run as
-  SQL over a narrow facts table (their matching rowids are retained for the
-  active filter). Admission and the scheduler read rows from the ledger instead
-  of an in-memory job list. Selection summaries and first-selection lookups use
+  unfiltered and unselected filtered states, plus a bounded row cache; search
+  and state filters run as SQL over a narrow facts table and fetch matching
+  rowid pages on demand. Explicit selection materializes the filtered index so
+  selection membership remains exact. Admission and the scheduler read rows
+  from the ledger instead of an in-memory job list. Selection summaries and first-selection lookups use
   SQL aggregates and `LIMIT 1`; full queue scans remain only for operations
   whose identity deliberately includes every selected mailbox, such as live
   confirmation fingerprints. The importer, UI, and reload gates are reproducible
@@ -426,9 +427,9 @@ screen-reader checklist are recorded in
   queue it measures a SQL filter keystroke, select-all with its selection and
   queue-health accounting, a 1,000-row durable state change, the first
   Mailboxes frame through the real App, and the off-thread write of a parsed
-  import to the ledger. The latest local release-mode result on 2026-10-03 was
-  24 ms for filtering, 49 ms for select-all, 21 ms for the state change, 91 ms
-  for the Mailboxes first frame, and 1.647 s to write the import; the complete
+  import to the ledger. The latest local release-mode result on 2026-10-04 was
+  25 ms for filtering, 52 ms for select-all, 22 ms for the state change, 97 ms
+  for the Mailboxes first frame, and 1.711 s to write the import; the complete
   shell's first frame was 45 ms, selected-frame update 0 ms, and search-frame
   update 26 ms. The same 100k-row CSV import benchmark measured 262 ms and 43
   MiB RSS growth. All scripted budgets passed; the Mailboxes first frame is
@@ -436,7 +437,10 @@ screen-reader checklist are recorded in
   slower than the earlier in-memory
   baselines (single-digit milliseconds) in exchange for bounded memory and a
   queue that survives restarts unchanged. These are release-mode host
-  baselines. The script enforces default budgets of 100 ms for filtering, 250
+  baselines. Filter results now use SQL counts and viewport paging when no
+  explicit selection is active, avoiding a Rust-side vector of every matching
+  row ID; substring matching still scans the SQLite facts table and is not
+  indexed. The script enforces default budgets of 100 ms for filtering, 250
   ms for selection-all, 100 ms for state refresh, 100 ms for the virtualized
   first frame, 5,000 ms for writing the import, and 500 ms for the full shell; qualified host classes may
   override these with the documented `MAILSWIFTSYNC_UI_*_BUDGET_MS`

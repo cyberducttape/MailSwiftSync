@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Page filtered mailbox row IDs directly from SQLite during ordinary browsing;
+  explicit selection and transient-state overlays retain exact materialized
+  membership. Add SQL match counts and paging-transition regression coverage.
 - Add a manually selectable 10k-message / 1 GiB RFC822 body-payload scenario to
   the packaged IMAP scale workflow, with bounded deterministic fixture
   generation and validation; hosted performance/recovery qualification remains
@@ -49,6 +52,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Filtered, unselected mailbox browsing now obtains its count and virtual-row
+  pages directly from SQLite; exact ID materialization remains for explicit
+  selection and transient-state overlays.
 - Added a reproducible 10k-message / 1 GiB RFC822 body-payload scale scenario
   alongside the 100k-small-message run. The bounded fixture generator and
   selectable workflow scenario are tested; no qualification claim is made

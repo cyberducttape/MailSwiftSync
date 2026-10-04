@@ -1,17 +1,20 @@
 //! Search and state filtering for the batch mailbox cockpit.
 //!
-//! Filtering runs as SQL against the durable queue (`core::queue`); the
-//! view keeps only the matching row IDs and renders rows on demand.
+//! Filtering runs as SQL against the durable queue (`core::queue`); normal
+//! browsing fetches only the current viewport and renders rows on demand.
 
 use crate::App;
 
 impl App {
     /// Bring the filtered row index up to date. Returns whether it changed.
     pub(crate) fn refresh_bulk_filter_cache(&mut self) -> bool {
-        match self
-            .queue
-            .refresh_filter(&self.store, &self.bulk_search, &self.bulk_state_filter)
-        {
+        let page_matches = self.bulk_selection_is_empty();
+        match self.queue.refresh_filter_with_paging(
+            &self.store,
+            &self.bulk_search,
+            &self.bulk_state_filter,
+            page_matches,
+        ) {
             Ok(changed) => changed,
             Err(error) => {
                 self.bulk_message = error;
