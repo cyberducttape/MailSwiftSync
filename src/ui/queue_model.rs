@@ -195,7 +195,9 @@ impl MailboxQueue {
         if self.transient.is_empty()
             && (key.folded_search.is_empty() && key.state.is_none() || page_matches)
         {
-            self.visible.clear();
+            // Release a potentially large filtered-ID allocation when an
+            // operator returns from explicit selection to paged browsing.
+            self.visible = Vec::new();
             self.visible_count = match if key.folded_search.is_empty() && key.state.is_none() {
                 store.queue_len(&project_id)
             } else {
@@ -275,7 +277,7 @@ impl MailboxQueue {
     }
 
     fn filter_failed(&mut self, key: FilterKey, error: String) -> Result<bool, String> {
-        self.visible.clear();
+        self.visible = Vec::new();
         self.visible_count = 0;
         self.visible_paged = false;
         self.filter = Some(key);
@@ -538,6 +540,14 @@ mod tests {
         );
         assert!(!queue.visible_paged);
         assert_eq!(queue.visible(), expected);
+        assert!(queue.visible.capacity() >= expected.len());
+        assert!(
+            queue
+                .refresh_filter_with_paging(&store, "USER1", "all", true)
+                .unwrap()
+        );
+        assert!(queue.visible_paged);
+        assert_eq!(queue.visible.capacity(), 0);
 
         let project_id = queue.project_id().unwrap().to_owned();
         for id in store.mailbox_ids(&project_id).unwrap().into_iter().take(10) {
