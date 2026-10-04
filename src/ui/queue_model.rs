@@ -362,8 +362,11 @@ impl MailboxQueue {
             .map_err(|error| format!("Could not read visible mailbox rows: {error}"))
     }
 
+    /// Whether `rowid` is in the current view. A filtered paged view keeps no
+    /// membership index, so it answers conservatively (not visible) rather
+    /// than hiding a filtered-out selection from a safety confirmation.
     pub(crate) fn is_visible(&self, rowid: i64) -> bool {
-        self.visible_paged || self.visible.binary_search(&rowid).is_ok()
+        self.is_unfiltered_paged() || self.visible.binary_search(&rowid).is_ok()
     }
 
     /// Make sure `rowids` are cached, fetching any that are not.
