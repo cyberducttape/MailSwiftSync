@@ -13,8 +13,8 @@ jobs:
     name: Packaged imapsync with 100k-message mailbox
     runs-on: ubuntu-24.04
     # The real 100k fixture runs both a full migration and a later incremental
-    # pass. The host watchdog bounds container wait independently of command
-    # timeouts; an outer timeout on that helper is a final workflow-level guard.
+    # pass. The host completion-marker deadline is independent of command
+    # timeouts; the hosted runner VM owns final disposal of the fixture.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,11 +28,10 @@ jobs:
           container_name="mailswiftsync-scale-${GITHUB_RUN_ID}"
           stats_file="$RUNNER_TEMP/docker-memory-${GITHUB_RUN_ID}.txt"
           summary_file="$RUNNER_TEMP/scale-resource-summary-${GITHUB_RUN_ID}.txt"
-          wait_output_file="$RUNNER_TEMP/docker-wait-${GITHUB_RUN_ID}.txt"
           watchdog_marker="$RUNNER_TEMP/scale-watchdog-${GITHUB_RUN_ID}.txt"
-          # The integration harness starts disposable Dovecot processes. Use
-          # Docker's init shim as PID 1 so orphaned fixture children are
-          # reaped and the container exits as soon as the harness shell exits.
+          # The integration harness starts disposable Dovecot processes. Keep
+          # them contained under an init process; do not synchronously wait for
+          # Docker to stop a fixture that may be blocked in filesystem I/O.
           docker run --detach --init --name "$container_name" \
             --user 0:0 \
             --volume "$PWD/provider-scale-evidence:/provider-evidence" \
@@ -44,17 +43,11 @@ jobs:
           started_at="$(date +%s)"
           docker stats --format '{{.MemUsage}}' "$container_name" > "$stats_file" &
           stats_pid=$!
-          container_status="$(bash scripts/scale-container-completion-wait.sh \
-            "$container_name" "$PWD/provider-scale-evidence/scale-progress.txt" \
-            "$wait_output_file" "$watchdog_marker" 3800)"
+          harness_status="$(bash scripts/scale-container-completion-wait.sh \
+            "$PWD/provider-scale-evidence/scale-progress.txt" \
+            "$watchdog_marker" 3800)"
           finished_at="$(date +%s)"
           kill "$stats_pid" 2>/dev/null || true
-          wait "$stats_pid" 2>/dev/null || true
-          if [ "$container_status" -eq 124 ] || [ "$container_status" -eq 125 ]; then
-            timeout --foreground --kill-after=5s 60 docker logs "$container_name" 2>&1 | tail -n 100 || true
-          else
-            timeout --foreground --kill-after=5s 120 docker logs "$container_name"
-          fi
           if [ -f provider-scale-evidence/scale-progress.txt ]; then
             echo 'Scale command progress markers:'
             cat provider-scale-evidence/scale-progress.txt
@@ -64,17 +57,13 @@ jobs:
             sudo chown 10001:10001 provider-scale-evidence/scale-watchdog.txt
           fi
           python3 scripts/docker_memory.py "$stats_file" > "$summary_file"
-          printf 'wall_clock_seconds=%s\nharness_exit_status=%s\n' \
-            "$((finished_at - started_at))" "$container_status" >> "$summary_file"
-          if [ -f "$wait_output_file" ]; then
-            printf 'container_exit_status=%s\n' "$(head -n 1 "$wait_output_file")" >> "$summary_file"
-          fi
+          printf 'wall_clock_seconds=%s\nharness_exit_status=%s\ncontainer_teardown=delegated_to_ephemeral_runner\n' \
+            "$((finished_at - started_at))" "$harness_status" >> "$summary_file"
           cat "$summary_file"
           sudo cp "$summary_file" provider-scale-evidence/scale-resource-summary.txt
           sudo chown 10001:10001 provider-scale-evidence/scale-resource-summary.txt
-          timeout --foreground --kill-after=5s 20 docker rm "$container_name" >/dev/null
-          if [ "$container_status" -ne 0 ]; then
-            exit "$container_status"
+          if [ "$harness_status" -ne 0 ]; then
+            exit "$harness_status"
           fi
       - name: Restore private artifact ownership for upload
         if: always()

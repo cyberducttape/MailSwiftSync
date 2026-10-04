@@ -3,15 +3,17 @@
 ## Unreleased
 
 - Make the disposable 100k-message scale qualification finish from the harness
-  completion marker and record the fixture container's teardown status separately.
+  completion marker and delegate container disposal to the ephemeral hosted runner.
 - Add regression coverage for completed harnesses whose Dovecot children keep
   the disposable container from exiting naturally.
 - Generate OAuth test credentials at runtime to avoid fixed cryptographic
   values in the test source and binary.
 - Update the scale-workflow guard test to cover completion-marker teardown and
-  distinct harness/container exit reporting.
-- Test that the scale completion waiter kills a stalled container and leaves a
-  watchdog marker when the harness never signals completion.
+  separate harness status from delegated fixture teardown.
+- Test that the scale completion waiter reports a timeout and leaves a watchdog
+  marker when the harness never signals completion.
+- Remove post-harness Docker kill/wait/log/remove calls from scale qualification;
+  completed fixtures are disposed with the ephemeral runner to avoid a wedged daemon.
 
 All notable changes to MailSwiftSync are documented here. Detailed pre-alpha
 development history is preserved in repository history and is not shipped in

@@ -47,21 +47,18 @@ class ScaleDockerWaitTests(unittest.TestCase):
             progress = directory / "scale-progress.txt"
             progress.write_text("harness_cleanup_complete=true exit_status=0\n", encoding="utf-8")
             kill_marker = directory / "container-killed"
-            wait_output = directory / "wait-output.txt"
             watchdog_marker = directory / "watchdog-marker.txt"
             environment = os.environ.copy()
             environment["PATH"] = f"{binary_dir}{os.pathsep}{environment['PATH']}"
             environment["FAKE_DOCKER_KILL_MARKER"] = str(kill_marker)
             result = subprocess.run(
-                ["bash", str(COMPLETION_WAIT), "test-container", str(progress),
-                 str(wait_output), str(watchdog_marker), "5"],
+                ["bash", str(COMPLETION_WAIT), str(progress), str(watchdog_marker), "5"],
                 check=False, capture_output=True, text=True, env=environment, timeout=8,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "0")
-            self.assertIn("container_exit_status=137", result.stderr)
-            self.assertTrue(kill_marker.exists())
-            self.assertEqual(wait_output.read_text(encoding="utf-8").strip(), "137")
+            self.assertIn("container_teardown=delegated_to_ephemeral_runner", result.stderr)
+            self.assertFalse(kill_marker.exists())
 
     def test_missing_completion_marker_kills_container_and_preserves_watchdog_marker(self):
         with tempfile.TemporaryDirectory(prefix="scale-missing-completion-test-") as temporary:
@@ -87,13 +84,12 @@ class ScaleDockerWaitTests(unittest.TestCase):
             environment["PATH"] = f"{binary_dir}{os.pathsep}{environment['PATH']}"
             environment["FAKE_DOCKER_KILL_MARKER"] = str(kill_marker)
             result = subprocess.run(
-                ["bash", str(COMPLETION_WAIT), "test-container", str(progress),
-                 str(directory / "wait-output.txt"), str(watchdog_marker), "1"],
+                ["bash", str(COMPLETION_WAIT), str(progress), str(watchdog_marker), "1"],
                 check=False, capture_output=True, text=True, env=environment, timeout=8,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "124")
-            self.assertTrue(kill_marker.exists())
+            self.assertFalse(kill_marker.exists())
             self.assertEqual(
                 watchdog_marker.read_text(encoding="utf-8").strip(),
                 "completion_watchdog_triggered=true",
