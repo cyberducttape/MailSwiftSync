@@ -25,6 +25,8 @@ PROVIDER_BEGIN = "<!-- provider-qualification:begin -->"
 PROVIDER_END = "<!-- provider-qualification:end -->"
 FEATURES_BEGIN = "<!-- production-features:begin -->"
 FEATURES_END = "<!-- production-features:end -->"
+REVIEW_BEGIN = "<!-- capability-review-date:begin -->"
+REVIEW_END = "<!-- capability-review-date:end -->"
 TABLE_FIELDS = (
     "code",
     "controller",
@@ -133,6 +135,11 @@ def render_release_metadata(manifest: dict, schema_version: int, package_version
             f"| Qualified engine | `{release.get('qualified_engine', '')} {release.get('qualified_engine_version', '')}` |",
         ]
     )
+
+
+def render_capability_review_date(manifest: dict) -> str:
+    """Render the manifest review date from its machine-readable source."""
+    return str(manifest.get("last_reviewed", ""))
 
 
 def render_provider_qualification_table(manifest: dict) -> str:
@@ -476,6 +483,7 @@ def main(argv: list[str]) -> int:
     production_content = PRODUCTION_STATUS_MD.read_text(encoding="utf-8")
     schema_version = get_schema_version()
     package_version = get_package_version()
+    capability_review_date = render_capability_review_date(manifest)
     release_metadata = render_release_metadata(manifest, schema_version, package_version)
     provider_qualification = render_provider_qualification_table(manifest)
     production_features = render_production_feature_table(manifest)
@@ -483,6 +491,16 @@ def main(argv: list[str]) -> int:
         regenerated = replace_status_table(manifest_content, manifest)
         if regenerated is None:
             print(f"{CAPABILITY_MANIFEST_MD.name}: missing {TABLE_BEGIN} / {TABLE_END} markers")
+            return 1
+        CAPABILITY_MANIFEST_MD.write_text(regenerated, encoding="utf-8")
+        manifest_content = regenerated
+        regenerated = replace_block(
+            manifest_content, REVIEW_BEGIN, REVIEW_END, capability_review_date
+        )
+        if regenerated is None:
+            print(
+                f"{CAPABILITY_MANIFEST_MD.name}: missing {REVIEW_BEGIN} / {REVIEW_END} markers"
+            )
             return 1
         CAPABILITY_MANIFEST_MD.write_text(regenerated, encoding="utf-8")
         manifest_content = regenerated
@@ -532,6 +550,16 @@ def main(argv: list[str]) -> int:
 
     violations = []
 
+    violations.extend(
+        f"{CAPABILITY_MANIFEST_MD.name}: {violation}"
+        for violation in generated_document_violations(
+            manifest_content,
+            REVIEW_BEGIN,
+            REVIEW_END,
+            capability_review_date,
+            CAPABILITY_MANIFEST_MD.name,
+        )
+    )
     violations.extend(
         f"{CAPABILITY_MANIFEST_MD.name}: {violation}"
         for violation in find_manifest_drift(manifest_content, manifest)

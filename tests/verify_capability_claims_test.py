@@ -153,6 +153,15 @@ class CapabilityClaimTests(unittest.TestCase):
         self.assertEqual(
             CHECKER.replace_block(
                 capability,
+                CHECKER.REVIEW_BEGIN,
+                CHECKER.REVIEW_END,
+                CHECKER.render_capability_review_date(manifest),
+            ),
+            capability,
+        )
+        self.assertEqual(
+            CHECKER.replace_block(
+                capability,
                 CHECKER.PROVIDER_BEGIN,
                 CHECKER.PROVIDER_END,
                 CHECKER.render_provider_qualification_table(manifest),

@@ -44,6 +44,9 @@ operator distribution archives.
   and Microsoft server-suggested backoff are implemented; proactive provider
   quota policies, provider-specific default rate policies, and live
   qualification remain outstanding.
+- Generated the capability manifest's review date from `capabilities.toml` and
+  added a drift check so its release-review timestamp cannot silently become
+  stale.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.
