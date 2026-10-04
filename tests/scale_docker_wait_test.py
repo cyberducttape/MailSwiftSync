@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WATCHDOG = ROOT / "scripts" / "scale-docker-wait.sh"
 CONTAINER_WAIT = ROOT / "scripts" / "scale-container-wait.sh"
+COMPLETION_WAIT = ROOT / "scripts" / "scale-container-completion-wait.sh"
 INTEGRATION_SMOKE = ROOT / "scripts" / "imap-integration-smoke.sh"
 SCALE_WORKFLOW = ROOT / ".github" / "workflows" / "scale-qualification.yml"
 
@@ -24,6 +25,43 @@ class ScaleDockerWaitTests(unittest.TestCase):
         self.assertIn("dovecot_shutdown=delegated_to_disposable_container_teardown", script)
         self.assertIn("harness_cleanup_complete=true exit_status=%s", script)
         self.assertIn("MAILSWIFTSYNC_DISPOSABLE_SCALE=1", workflow)
+        self.assertIn("scale-container-completion-wait.sh", workflow)
+
+    def test_completion_marker_releases_container_but_preserves_harness_status(self):
+        with tempfile.TemporaryDirectory(prefix="scale-completion-wait-test-") as temporary:
+            directory = Path(temporary)
+            binary_dir = directory / "bin"
+            binary_dir.mkdir()
+            fake_docker = binary_dir / "docker"
+            fake_docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "case \"$1\" in\n"
+                "  kill) touch \"$FAKE_DOCKER_KILL_MARKER\" ;;\n"
+                "  wait) printf '137\\n' ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_docker.chmod(0o700)
+            progress = directory / "scale-progress.txt"
+            progress.write_text("harness_cleanup_complete=true exit_status=0\n", encoding="utf-8")
+            kill_marker = directory / "container-killed"
+            wait_output = directory / "wait-output.txt"
+            watchdog_marker = directory / "watchdog-marker.txt"
+            environment = os.environ.copy()
+            environment["PATH"] = f"{binary_dir}{os.pathsep}{environment['PATH']}"
+            environment["FAKE_DOCKER_KILL_MARKER"] = str(kill_marker)
+            result = subprocess.run(
+                ["bash", str(COMPLETION_WAIT), "test-container", str(progress),
+                 str(wait_output), str(watchdog_marker), "5"],
+                check=False, capture_output=True, text=True, env=environment, timeout=8,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "0")
+            self.assertIn("container_exit_status=137", result.stderr)
+            self.assertTrue(kill_marker.exists())
+            self.assertEqual(wait_output.read_text(encoding="utf-8").strip(), "137")
 
     def test_disposable_scale_mode_requires_scale_fixture(self):
         environment = os.environ.copy()

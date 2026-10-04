@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Make the disposable 100k-message scale qualification finish from the harness
+  completion marker and record the fixture container's teardown status separately.
+- Add regression coverage for completed harnesses whose Dovecot children keep
+  the disposable container from exiting naturally.
+
 All notable changes to MailSwiftSync are documented here. Detailed pre-alpha
 development history is preserved in repository history and is not shipped in
 operator distribution archives.

@@ -44,8 +44,9 @@ jobs:
           started_at="$(date +%s)"
           docker stats --format '{{.MemUsage}}' "$container_name" > "$stats_file" &
           stats_pid=$!
-          container_status="$(bash scripts/scale-container-wait.sh \
-            "$container_name" "$wait_output_file" "$watchdog_marker" 3600 3800)"
+          container_status="$(bash scripts/scale-container-completion-wait.sh \
+            "$container_name" "$PWD/provider-scale-evidence/scale-progress.txt" \
+            "$wait_output_file" "$watchdog_marker" 3800)"
           finished_at="$(date +%s)"
           kill "$stats_pid" 2>/dev/null || true
           wait "$stats_pid" 2>/dev/null || true
@@ -63,8 +64,11 @@ jobs:
             sudo chown 10001:10001 provider-scale-evidence/scale-watchdog.txt
           fi
           python3 scripts/docker_memory.py "$stats_file" > "$summary_file"
-          printf 'wall_clock_seconds=%s\ncontainer_exit_status=%s\n' \
+          printf 'wall_clock_seconds=%s\nharness_exit_status=%s\n' \
             "$((finished_at - started_at))" "$container_status" >> "$summary_file"
+          if [ -f "$wait_output_file" ]; then
+            printf 'container_exit_status=%s\n' "$(head -n 1 "$wait_output_file")" >> "$summary_file"
+          fi
           cat "$summary_file"
           sudo cp "$summary_file" provider-scale-evidence/scale-resource-summary.txt
           sudo chown 10001:10001 provider-scale-evidence/scale-resource-summary.txt
