@@ -34,12 +34,28 @@ use crate::credentials::{SecretString, read_secret_file};
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderName, HeaderValue};
 use ring::hmac;
-use std::{io::Read, time::Duration};
+use std::{io::Read, sync::OnceLock, time::Duration};
 use zeroize::Zeroizing;
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const WEBHOOK_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WEBHOOK_TOTAL_BUDGET: Duration = Duration::from_secs(30);
+static WEBHOOK_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+
+fn webhook_client() -> Result<&'static reqwest::blocking::Client, String> {
+    WEBHOOK_CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .use_rustls_tls()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
+                .timeout(WEBHOOK_TOTAL_BUDGET)
+                .build()
+                .map_err(|error| format!("could not build webhook client: {error}"))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
 
 /// Retain only identifiers, phases, and aggregate counts for the default
 /// webhook representation. Names, endpoints, and process metadata require an
@@ -84,15 +100,7 @@ pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
     let parsed_url = parse_https_url(&url)?;
     let event_id = event_id(body);
 
-    let client = reqwest::blocking::Client::builder()
-        .use_rustls_tls()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
-        .timeout(WEBHOOK_TOTAL_BUDGET)
-        .build()
-        .map_err(|error| format!("could not build webhook client: {error}"))?;
-
-    let mut request = client
+    let mut request = webhook_client()?
         .post(parsed_url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(reqwest::header::ACCEPT, "application/json")
@@ -388,6 +396,13 @@ fn validate_header_value(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webhook_requests_share_a_connection_pooled_client() {
+        let first = webhook_client().unwrap();
+        let second = webhook_client().unwrap();
+        assert!(std::ptr::eq(first, second));
+    }
 
     #[test]
     fn event_id_is_stable_for_idempotent_delivery_and_changes_with_body() {

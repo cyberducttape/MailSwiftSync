@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reuse one Rustls webhook HTTP client and connection pool across queued
+  deliveries in watch mode instead of rebuilding the transport for each event.
 - Page filtered mailbox row IDs directly from SQLite during ordinary browsing;
   explicit selection and transient-state overlays retain exact materialized
   membership. Add SQL match counts and paging-transition regression coverage.
@@ -52,6 +54,7 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Reuse the connection-pooled Rustls webhook client across event deliveries.
 - Filtered, unselected mailbox browsing now obtains its count and virtual-row
   pages directly from SQLite; exact ID materialization remains for explicit
   selection and transient-state overlays.
