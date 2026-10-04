@@ -341,16 +341,20 @@ screen-reader checklist are recorded in
   with zero failed or unmatched messages. Its phase markers show the initial
   live pass, the later incremental live pass, and the one-pass Maildir fixture
   scan all completed. However, the proof was exported before the incremental
-  pass, so it does not verify the post-delta result. The container then failed
-  to exit and the job hit its 90-minute limit; no resource summary was
-  collected. The artifact contains no explicit cleanup marker, but the last
-  successful fixture-scan marker and the unbounded `doveadm stop` in harness
-  cleanup point to a likely teardown hang. Dovecot shutdown is now bounded to
-  10 seconds per server and emits start/end markers. A workflow-level timeout
-  now also bounds the entire host wait helper and records fallback activation;
-  these changes still need a successful hosted rerun. The earlier repeated
-  Maildir scans have been replaced by one pass, which took 1.78 seconds on a
-  synthetic 100,004-file Maildir. None of
+  pass, so it does not verify the post-delta result. A subsequent
+  [instrumented run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37169979731)
+  again retained an exact-metadata proof for 100,016 messages with zero
+  unresolved differences; its incremental transfer, fixture scan, and both
+  Dovecot shutdowns completed. The final markers stop immediately before
+  recursive workspace deletion, and the job hit its 90-minute limit without a
+  resource summary. Scale mode now leaves that 100k-file workspace inside the
+  disposable container for host teardown, avoiding per-file deletion after
+  verification. Dovecot shutdown is bounded to 10 seconds per server and emits
+  start/end markers. A workflow-level timeout bounds the entire host wait
+  helper and records fallback activation. These changes still need a
+  successful hosted rerun. The earlier repeated Maildir scans have been
+  replaced by one pass, which took 1.78 seconds on a synthetic 100,004-file
+  Maildir. None of
   these runs qualifies peak memory, 20 GiB mailboxes, Gmail, or Microsoft 365.
   This small-message generic-IMAP fixture does not measure peak memory or
   qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.

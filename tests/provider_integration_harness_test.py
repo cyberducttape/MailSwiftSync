@@ -125,6 +125,12 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn("operation=dovecot-%s-stop", stop_server)
         self.assertIn("terminating the disposable fixture server", stop_server)
 
+    def test_large_scale_fixture_skips_expensive_recursive_teardown(self):
+        cleanup = SCALE_SCRIPT.split("cleanup() {", 1)[1].split("\n}\ntrap cleanup EXIT", 1)[0]
+        self.assertIn("elif (( scale_messages > 0 )); then", cleanup)
+        self.assertIn("workspace_cleanup=skipped_disposable_scale_container", cleanup)
+        self.assertIn("Keeping large scale workspace until disposable container teardown", cleanup)
+
     def test_maildir_fixture_scanner_streams_headers_and_counts_duplicates(self):
         with tempfile.TemporaryDirectory(prefix="mailswiftsync-maildir-scan-") as directory:
             root = Path(directory)

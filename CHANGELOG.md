@@ -19,6 +19,9 @@ operator distribution archives.
   a helper regression cannot consume the full hosted job window. A fake-Docker
   test forces the outer deadline and verifies both container-stop fallback
   and marker retention.
+- Scale-mode cleanup now leaves its 100k-file workspace inside the disposable
+  container for host teardown rather than recursively deleting every message
+  file after verification; a phase marker records the deliberate skip.
 - Signed customer evidence now exposes the immutable migration-plan SHA-256
   and the execution-engine binary SHA-256 when resolved in the plan snapshot;
   the underlying plan and its endpoint or credential-reference details remain

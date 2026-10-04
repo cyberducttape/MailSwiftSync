@@ -208,7 +208,19 @@ cleanup() {
   }
   stop_server "${destination_pid:-}" "${workspace:-}/destination.conf" destination
   stop_server "${source_pid:-}" "${workspace:-}/source.conf" source
-  if [[ "${MAILSWIFTSYNC_KEEP_LAB:-0}" != "1" ]]; then
+  if [[ "${MAILSWIFTSYNC_KEEP_LAB:-0}" == "1" ]]; then
+    echo "Keeping integration lab workspace: $workspace" >&2
+  elif (( scale_messages > 0 )); then
+    # The scale lab runs in a disposable container that the host removes after
+    # collecting evidence. Recursively unlinking 100k message files inside
+    # overlayfs can take longer than the migration itself; leave those files
+    # for container teardown instead of blocking qualification completion.
+    if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+      printf 'workspace_cleanup=skipped_disposable_scale_container\n' \
+        >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
+    fi
+    echo "Keeping large scale workspace until disposable container teardown" >&2
+  else
     local removed=0
     for _ in {1..10}; do
       if rm -rf -- "$workspace"; then
@@ -221,8 +233,6 @@ cleanup() {
       echo "FAIL: could not remove stopped integration workspace $workspace" >&2
       status=1
     fi
-  else
-    echo "Keeping integration lab workspace: $workspace" >&2
   fi
   return "$status"
 }
