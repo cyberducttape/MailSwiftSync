@@ -9,6 +9,8 @@ operator distribution archives.
 - Moved the binary's integration/unit test module out of `main.rs` into a
   dedicated test source file, keeping the production entrypoint compact without
   changing test visibility or behavior.
+- Separated IMAP probe unit and restart/resume test harnesses from the
+  production protocol implementation for more focused security review.
 - Adaptive provider scheduling now accepts explicit source and destination
   tenant scopes in the advanced plan and per-row batch imports. These scopes
   are persisted, fingerprinted, and included in run snapshots; blank values
