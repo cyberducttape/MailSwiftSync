@@ -319,11 +319,13 @@ mod tests {
             &SideIdentity {
                 endpoint: "imap.gmail.com:993",
                 user: source,
+                tenant: "",
                 principal: "keyring:account-a",
             },
             &SideIdentity {
                 endpoint: "imap.example.net:993",
                 user: destination,
+                tenant: "",
                 principal: "keyring:account-b",
             },
         );
@@ -331,11 +333,13 @@ mod tests {
             &SideIdentity {
                 endpoint: "imap.gmail.com:993",
                 user: "two@another.example",
+                tenant: "",
                 principal: "keyring:account-c",
             },
             &SideIdentity {
                 endpoint: "imap.example.net:993",
                 user: "other@destination.example",
+                tenant: "",
                 principal: "keyring:account-d",
             },
         );

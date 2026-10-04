@@ -21,23 +21,32 @@ pub(crate) type SessionSecrets = HashMap<String, (SecretString, SecretString)>;
 struct DurableBatchRowOverrides {
     source_host: String,
     source_user: String,
+    #[serde(default)]
+    source_rate_tenant: Option<String>,
     source_credential_id: String,
     source_oauth_refresh_credential_id: String,
     destination_host: String,
     destination_user: String,
+    #[serde(default)]
+    destination_rate_tenant: Option<String>,
     destination_credential_id: String,
     destination_oauth_refresh_credential_id: String,
     profile_name: Option<String>,
 }
 
-fn durable_batch_row_overrides(profile: &Profile) -> Result<String, String> {
+fn durable_batch_row_overrides(profile: &Profile, defaults: &Profile) -> Result<String, String> {
     toml::to_string(&DurableBatchRowOverrides {
         source_host: profile.source_host.clone(),
         source_user: profile.source_user.clone(),
+        source_rate_tenant: (profile.source_rate_tenant != defaults.source_rate_tenant)
+            .then(|| profile.source_rate_tenant.clone()),
         source_credential_id: profile.source_credential_id.clone(),
         source_oauth_refresh_credential_id: profile.source_oauth_refresh_credential_id.clone(),
         destination_host: profile.destination_host.clone(),
         destination_user: profile.destination_user.clone(),
+        destination_rate_tenant: (profile.destination_rate_tenant
+            != defaults.destination_rate_tenant)
+            .then(|| profile.destination_rate_tenant.clone()),
         destination_credential_id: profile.destination_credential_id.clone(),
         destination_oauth_refresh_credential_id: profile
             .destination_oauth_refresh_credential_id
@@ -97,10 +106,16 @@ fn apply_durable_batch_row_overrides(
     })?;
     profile.source_host = overrides.source_host;
     profile.source_user = overrides.source_user;
+    if let Some(tenant) = overrides.source_rate_tenant {
+        profile.source_rate_tenant = tenant;
+    }
     profile.source_credential_id = overrides.source_credential_id;
     profile.source_oauth_refresh_credential_id = overrides.source_oauth_refresh_credential_id;
     profile.destination_host = overrides.destination_host;
     profile.destination_user = overrides.destination_user;
+    if let Some(tenant) = overrides.destination_rate_tenant {
+        profile.destination_rate_tenant = tenant;
+    }
     profile.destination_credential_id = overrides.destination_credential_id;
     profile.destination_oauth_refresh_credential_id =
         overrides.destination_oauth_refresh_credential_id;
@@ -171,7 +186,10 @@ pub(crate) fn persist_imported_queue(
                 ),
                 config: String::new(),
                 batch_plan_config: Some(batch_plan_configs[&defaults_identity].clone()),
-                row_overrides: Some(durable_batch_row_overrides(&profile)?),
+                row_overrides: Some(durable_batch_row_overrides(
+                    &profile,
+                    &job.defaults.profile,
+                )?),
                 facts: queue_row_facts(&job.label, &profile),
             })
         })
@@ -309,6 +327,7 @@ pub(crate) fn apply_keyring_to_queue(
             }
         });
         let mut profile = decode_persisted_batch_profile(row.config.as_deref(), &row.id)?;
+        let defaults = profile.clone();
         apply_durable_batch_row_overrides(&mut profile, row.row_overrides.as_deref(), &row.id)?;
         let reference = if source {
             &mut profile.source_credential_id
@@ -321,7 +340,7 @@ pub(crate) fn apply_keyring_to_queue(
         *reference = credential_id.to_owned();
         updates.push((
             row.id.clone(),
-            durable_batch_row_overrides(&profile)?,
+            durable_batch_row_overrides(&profile, &defaults)?,
             queue_row_facts(&row.label, &profile),
         ));
         Ok(())
@@ -530,6 +549,8 @@ mod tests {
         imported_form.profile.max_messages_per_second = 1_000;
         imported_form.profile.max_bytes_per_second = 10_000;
         imported_form.profile.batch_concurrency = 4;
+        imported_form.profile.source_rate_tenant = "source-tenant-guid".into();
+        imported_form.profile.destination_rate_tenant = "destination-tenant-guid".into();
         let imported_job = BulkJob::from_form(
             imported_form.profile.source_user.clone(),
             imported_form,
@@ -555,6 +576,54 @@ mod tests {
         assert_eq!(rebuilt.profile().max_messages_per_second, 200);
         assert_eq!(rebuilt.profile().max_bytes_per_second, 2_000);
         assert_eq!(rebuilt.profile().extra_options, "--nofoldersizes");
+        assert_eq!(rebuilt.profile().source_rate_tenant, "source-tenant-guid");
+        assert_eq!(
+            rebuilt.profile().destination_rate_tenant,
+            "destination-tenant-guid"
+        );
+    }
+
+    #[test]
+    fn shared_tenant_rate_scope_is_not_duplicated_in_each_durable_row() {
+        let store = core::StateStore::in_memory().unwrap();
+        let mut base = Form::default();
+        base.profile.source_rate_tenant = "workspace-tenant-guid".into();
+        base.profile.destination_rate_tenant = "exchange-tenant-guid".into();
+        let defaults = BulkJob::defaults_from_form(&base);
+        let jobs = (0..2)
+            .map(|index| {
+                let mut form = base.clone_without_credentials();
+                form.profile.source_host = "imap.gmail.com".into();
+                form.profile.source_user = format!("user{index}@brand-{index}.example");
+                form.profile.destination_host = "outlook.office365.com".into();
+                form.profile.destination_user = format!("user{index}@brand-{index}.example");
+                BulkJob::from_form_with_defaults(
+                    format!("row {index}"),
+                    form,
+                    "imported".into(),
+                    Arc::clone(&defaults),
+                )
+            })
+            .collect::<Vec<_>>();
+        let imported = persist_imported_queue(&store, jobs, &Profile::default()).unwrap();
+        let ids = store.mailbox_ids(&imported.project_id).unwrap();
+        let rows = store.queue_plans(&imported.project_id, &ids).unwrap();
+        assert!(rows.iter().all(|row| {
+            !row.row_overrides
+                .as_deref()
+                .unwrap_or_default()
+                .contains("rate_tenant")
+        }));
+        let rebuilt = rows
+            .iter()
+            .map(|row| {
+                job_from_plan_with_batch_policy(row, &Profile::default(), None, true).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(rebuilt.iter().all(|job| {
+            job.profile().source_rate_tenant == "workspace-tenant-guid"
+                && job.profile().destination_rate_tenant == "exchange-tenant-guid"
+        }));
     }
 
     #[test]

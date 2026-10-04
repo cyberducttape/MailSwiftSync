@@ -35,6 +35,8 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) source_certificate_pin_sha256: String,
     pub(crate) allow_insecure_source_transport: bool,
     pub(crate) source_user: String,
+    #[serde(default)]
+    pub(crate) source_rate_tenant: String,
     #[serde(default = "default_auth_method")]
     pub(crate) source_auth: String,
     pub(crate) source_credential_id: String,
@@ -42,6 +44,8 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) source_oauth_refresh_credential_id: String,
     pub(crate) destination_host: String,
     pub(crate) destination_user: String,
+    #[serde(default)]
+    pub(crate) destination_rate_tenant: String,
     #[serde(default = "default_auth_method")]
     pub(crate) destination_auth: String,
     pub(crate) destination_credential_id: String,
@@ -264,6 +268,10 @@ pub(crate) struct Profile {
     #[serde(default)]
     pub(crate) allow_insecure_source_transport: bool,
     pub(crate) source_user: String,
+    /// Explicit provider tenant/account scope for adaptive batch scheduling.
+    /// Empty falls back to the mailbox's email domain as a best-effort key.
+    #[serde(default)]
+    pub(crate) source_rate_tenant: String,
     #[serde(default = "default_auth_method")]
     pub(crate) source_auth: String,
     #[serde(default)]
@@ -272,6 +280,8 @@ pub(crate) struct Profile {
     pub(crate) source_oauth_refresh_credential_id: String,
     pub(crate) destination_host: String,
     pub(crate) destination_user: String,
+    #[serde(default)]
+    pub(crate) destination_rate_tenant: String,
     #[serde(default = "default_auth_method")]
     pub(crate) destination_auth: String,
     #[serde(default)]
@@ -362,11 +372,13 @@ impl Default for Profile {
             source_certificate_pin_sha256: String::new(),
             allow_insecure_source_transport: false,
             source_user: String::new(),
+            source_rate_tenant: String::new(),
             source_auth: default_auth_method(),
             source_credential_id: String::new(),
             source_oauth_refresh_credential_id: String::new(),
             destination_host: String::new(),
             destination_user: String::new(),
+            destination_rate_tenant: String::new(),
             destination_auth: default_auth_method(),
             destination_credential_id: String::new(),
             destination_oauth_refresh_credential_id: String::new(),

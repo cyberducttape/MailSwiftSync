@@ -54,10 +54,12 @@ pub(crate) struct BulkJob {
     pub(crate) defaults: Arc<BatchPlanDefaults>,
     pub(crate) source_host: String,
     pub(crate) source_user: String,
+    pub(crate) source_rate_tenant: Option<String>,
     pub(crate) source_credential_id: String,
     pub(crate) source_password: SecretString,
     pub(crate) destination_host: String,
     pub(crate) destination_user: String,
+    pub(crate) destination_rate_tenant: Option<String>,
     pub(crate) destination_credential_id: String,
     pub(crate) destination_password: SecretString,
     pub(crate) profile_name: Option<String>,
@@ -92,10 +94,16 @@ impl BulkJob {
     ) -> Self {
         let source_host = form.profile.source_host.clone();
         let source_user = form.profile.source_user.clone();
+        let source_rate_tenant = (form.profile.source_rate_tenant
+            != defaults.profile.source_rate_tenant)
+            .then(|| form.profile.source_rate_tenant.clone());
         let source_credential_id = form.profile.source_credential_id.clone();
         let source_password = form.source_password.clone();
         let destination_host = form.profile.destination_host.clone();
         let destination_user = form.profile.destination_user.clone();
+        let destination_rate_tenant = (form.profile.destination_rate_tenant
+            != defaults.profile.destination_rate_tenant)
+            .then(|| form.profile.destination_rate_tenant.clone());
         let destination_credential_id = form.profile.destination_credential_id.clone();
         let destination_password = form.destination_password.clone();
         let profile_name = (!form.profile.name.is_empty()).then(|| form.profile.name.clone());
@@ -104,10 +112,12 @@ impl BulkJob {
             defaults,
             source_host,
             source_user,
+            source_rate_tenant,
             source_credential_id,
             source_password,
             destination_host,
             destination_user,
+            destination_rate_tenant,
             destination_credential_id,
             destination_password,
             profile_name,
@@ -130,9 +140,15 @@ impl BulkJob {
         let mut profile = (*self.defaults.profile).clone();
         profile.source_host = self.source_host.clone();
         profile.source_user = self.source_user.clone();
+        if let Some(tenant) = &self.source_rate_tenant {
+            profile.source_rate_tenant = tenant.clone();
+        }
         profile.source_credential_id = self.source_credential_id.clone();
         profile.destination_host = self.destination_host.clone();
         profile.destination_user = self.destination_user.clone();
+        if let Some(tenant) = &self.destination_rate_tenant {
+            profile.destination_rate_tenant = tenant.clone();
+        }
         profile.destination_credential_id = self.destination_credential_id.clone();
         if let Some(name) = &self.profile_name {
             profile.name = name.clone();
@@ -685,12 +701,18 @@ fn job_from_values_with_defaults(
     let mut form = base.clone_without_credentials();
     form.profile.source_host = get("source_host");
     form.profile.source_user = get("source_user");
+    if values.contains_key("source_rate_tenant") {
+        form.profile.source_rate_tenant = get("source_rate_tenant");
+    }
     if let Some(value) = values.get("source_credential_id") {
         form.profile.source_credential_id = value.trim().to_owned();
     }
     form.source_password = SecretString::new(source_password);
     form.profile.destination_host = get("destination_host");
     form.profile.destination_user = get("destination_user");
+    if values.contains_key("destination_rate_tenant") {
+        form.profile.destination_rate_tenant = get("destination_rate_tenant");
+    }
     if let Some(value) = values.get("destination_credential_id") {
         form.profile.destination_credential_id = value.trim().to_owned();
     }
@@ -885,6 +907,7 @@ mod tests {
         base.profile.source_tls = "starttls".into();
         base.profile.source_host = "source.example".into();
         base.profile.destination_host = "destination.example".into();
+        base.profile.source_rate_tenant = "workspace-tenant-guid".into();
         let defaults = BulkJob::defaults_from_form(&base);
         let mut first = base.clone_without_credentials();
         first.profile.source_host = "source-a.example".into();
@@ -914,6 +937,14 @@ mod tests {
         assert_eq!(first.form().profile.source_user, "a@example.com");
         assert_eq!(second.form().profile.destination_user, "b@new.example");
         assert_eq!(first.form().profile.source_tls, "starttls");
+        assert_eq!(
+            first.form().profile.source_rate_tenant,
+            "workspace-tenant-guid"
+        );
+        assert_eq!(
+            second.form().profile.source_rate_tenant,
+            "workspace-tenant-guid"
+        );
     }
 
     #[test]
@@ -1124,6 +1155,26 @@ mod tests {
         let job = job_from_values(values, &Form::default(), 2, false).unwrap();
         assert_eq!(job.form().profile.name, "Acme Corp cutover");
         assert_eq!(job.label, "finance mailbox");
+    }
+
+    #[test]
+    fn tenant_rate_scopes_import_as_row_deltas() {
+        let values = HashMap::from([
+            ("source_host".into(), "old.example.test".into()),
+            ("source_user".into(), "finance@brand-a.example".into()),
+            ("source_rate_tenant".into(), "Workspace-Tenant".into()),
+            ("destination_host".into(), "new.example.test".into()),
+            ("destination_user".into(), "finance@brand-b.example".into()),
+            ("destination_rate_tenant".into(), "Exchange-Tenant".into()),
+        ]);
+        let job = job_from_values(values, &Form::default(), 2, false).unwrap();
+        assert_eq!(job.form().profile.source_rate_tenant, "Workspace-Tenant");
+        assert_eq!(
+            job.form().profile.destination_rate_tenant,
+            "Exchange-Tenant"
+        );
+        assert!(job.defaults.profile.source_rate_tenant.is_empty());
+        assert!(job.defaults.profile.destination_rate_tenant.is_empty());
     }
 
     #[test]

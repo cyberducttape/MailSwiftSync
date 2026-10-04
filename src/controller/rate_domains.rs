@@ -108,6 +108,9 @@ pub(crate) struct SideIdentity<'a> {
     /// Canonical `host:port` endpoint.
     pub(crate) endpoint: &'a str,
     pub(crate) user: &'a str,
+    /// Explicit provider tenant/account scope. When absent, the account's
+    /// email domain is used as a conservative best-effort grouping key.
+    pub(crate) tenant: &'a str,
     /// Authentication principal: an OAuth refresh credential, a keyring
     /// credential, or empty to fall back to the user.
     pub(crate) principal: &'a str,
@@ -119,10 +122,13 @@ fn side_chain(side: Side, identity: &SideIdentity<'_>) -> [DomainKey; 4] {
     let user = identity.user.trim().to_lowercase();
     // Mail domain of the account; accounts without one share the endpoint's
     // unnamed tenant, which is the server operator's own scope.
-    let tenant = user
-        .rsplit_once('@')
-        .map(|(_, domain)| domain.trim_end_matches('.').to_owned())
-        .unwrap_or_default();
+    let tenant = if identity.tenant.trim().is_empty() {
+        user.rsplit_once('@')
+            .map(|(_, domain)| domain.trim_end_matches('.').to_owned())
+            .unwrap_or_default()
+    } else {
+        identity.tenant.trim().to_ascii_lowercase()
+    };
     let principal = match identity.principal.trim() {
         "" => user.clone(),
         principal => principal.to_owned(),
@@ -577,11 +583,13 @@ mod tests {
             &SideIdentity {
                 endpoint: "imap.gmail.com:993",
                 user: source_user,
+                tenant: "",
                 principal: "",
             },
             &SideIdentity {
                 endpoint: "outlook.office365.com:993",
                 user: destination_user,
+                tenant: "",
                 principal: "",
             },
         )
@@ -609,6 +617,40 @@ mod tests {
         drop(held);
         assert!(limiter.try_admit(&same_tenant).is_ok());
         drop(independent);
+    }
+
+    #[test]
+    fn explicit_tenant_scope_groups_mailboxes_across_email_domains() {
+        let tenant = |user: &str| {
+            RateDomainPath::new(
+                &SideIdentity {
+                    endpoint: "imap.gmail.com:993",
+                    user,
+                    tenant: "workspace-tenant-guid",
+                    principal: user,
+                },
+                &SideIdentity {
+                    endpoint: "outlook.office365.com:993",
+                    user,
+                    tenant: "exchange-tenant-guid",
+                    principal: user,
+                },
+            )
+        };
+        let first = tenant("alice@brand-a.example");
+        let second = tenant("bob@brand-b.example");
+        assert_eq!(
+            first.domain(Side::Source, DomainLevel::Tenant),
+            second.domain(Side::Source, DomainLevel::Tenant)
+        );
+        assert_eq!(
+            first.domain(Side::Destination, DomainLevel::Tenant),
+            second.domain(Side::Destination, DomainLevel::Tenant)
+        );
+        assert_ne!(
+            first.domain(Side::Source, DomainLevel::Tenant),
+            first.domain(Side::Destination, DomainLevel::Tenant)
+        );
     }
 
     #[test]
@@ -641,11 +683,13 @@ mod tests {
                 &SideIdentity {
                     endpoint: "imap.gmail.com:993",
                     user,
+                    tenant: "",
                     principal,
                 },
                 &SideIdentity {
                     endpoint: "outlook.office365.com:993",
                     user: "dest@outlook.com",
+                    tenant: "",
                     principal: "",
                 },
             )
@@ -791,11 +835,13 @@ mod tests {
             &SideIdentity {
                 endpoint: "imap.other.example:993",
                 user: "carol@c.example",
+                tenant: "",
                 principal: "",
             },
             &SideIdentity {
                 endpoint: "outlook.office365.com:993",
                 user: "carol@c.example",
+                tenant: "",
                 principal: "",
             },
         );
@@ -812,11 +858,13 @@ mod tests {
         let identity = |user| SideIdentity {
             endpoint: "imap.gmail.com:993",
             user,
+            tenant: "",
             principal: "oauth:workspace-admin",
         };
         let destination = SideIdentity {
             endpoint: "dest.example:993",
             user: "x@d.example",
+            tenant: "",
             principal: "",
         };
         let first = RateDomainPath::new(&identity("one@a.example"), &destination);

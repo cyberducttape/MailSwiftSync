@@ -36,3 +36,11 @@ and `o365` are accepted aliases for canonical provider names. These local
 safety ceilings are not provider quota discovery: live provider limits,
 credential semantics, RBAC, and centrally administered policy distribution
 still require qualification or future control-plane work.
+
+Tenant scheduling scope can be set separately for source and destination in
+Migration plan → Advanced options. For batch imports, `source_rate_tenant` and
+`destination_rate_tenant` may set it per row. Use a stable provider tenant or
+account ID when one organization owns mailboxes across multiple email domains;
+otherwise the scheduler falls back to the mailbox email domain. Tenant scope
+only groups adaptive scheduling and never changes mailbox identity or server
+authentication.

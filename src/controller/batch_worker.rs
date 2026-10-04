@@ -74,11 +74,13 @@ pub(crate) fn rate_domain_path(form: &crate::Form) -> RateDomainPath {
         &SideIdentity {
             endpoint: &source_endpoint,
             user: &profile.source_user,
+            tenant: &profile.source_rate_tenant,
             principal: &source_principal,
         },
         &SideIdentity {
             endpoint: &destination_endpoint,
             user: &profile.destination_user,
+            tenant: &profile.destination_rate_tenant,
             principal: &destination_principal,
         },
     )

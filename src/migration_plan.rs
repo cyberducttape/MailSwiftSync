@@ -876,6 +876,22 @@ impl Form {
                 ));
             }
         }
+        for (label, value) in [
+            (
+                "Source provider tenant scope",
+                &self.profile.source_rate_tenant,
+            ),
+            (
+                "Destination provider tenant scope",
+                &self.profile.destination_rate_tenant,
+            ),
+        ] {
+            if value.trim().len() > 256 || value.chars().any(char::is_control) {
+                return Err(format!(
+                    "{label} must not contain control characters and must be at most 256 bytes."
+                ));
+            }
+        }
         self.validate_folder_mapping_rules()?;
         if require_credentials && self.requires_insecure_transport_ack() {
             return Err(
@@ -1004,13 +1020,15 @@ impl Form {
             remove_option(&mut args, "--oauthaccesstoken2");
         }
         format!(
-            "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-ca-bundle-sha256={}\ndestination-ca-bundle={}\ndestination-ca-bundle-sha256={}\nsource-certificate-pin={}\ndestination-certificate-pin={}\nexecution-executable-sha256={}\ndovecot-config-sha256={}\nbody-hash-verification={}\nbody-hash-max-bytes={}\nbody-hash-max-total-bytes={}",
+            "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\nsource-rate-tenant={}\ndestination-rate-tenant={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-ca-bundle-sha256={}\ndestination-ca-bundle={}\ndestination-ca-bundle-sha256={}\nsource-certificate-pin={}\ndestination-certificate-pin={}\nexecution-executable-sha256={}\ndovecot-config-sha256={}\nbody-hash-verification={}\nbody-hash-max-bytes={}\nbody-hash-max-total-bytes={}",
             executable,
             args.join("\u{1f}"),
             self.profile.source_credential_id.trim(),
             self.profile.destination_credential_id.trim(),
             self.profile.source_auth,
             self.profile.destination_auth,
+            self.profile.source_rate_tenant.trim(),
+            self.profile.destination_rate_tenant.trim(),
             self.profile.allow_insecure_source_transport,
             self.profile.source_ca_bundle.trim(),
             configured_file_content_identity(&self.profile.source_ca_bundle),
@@ -1071,6 +1089,7 @@ impl Form {
                 source_certificate_pin_sha256: profile.source_certificate_pin_sha256.clone(),
                 allow_insecure_source_transport: profile.allow_insecure_source_transport,
                 source_user: profile.source_user.clone(),
+                source_rate_tenant: profile.source_rate_tenant.clone(),
                 source_auth: profile.source_auth.clone(),
                 source_credential_id: profile.source_credential_id.clone(),
                 source_oauth_refresh_credential_id: profile
@@ -1078,6 +1097,7 @@ impl Form {
                     .clone(),
                 destination_host: profile.destination_host.clone(),
                 destination_user: profile.destination_user.clone(),
+                destination_rate_tenant: profile.destination_rate_tenant.clone(),
                 destination_auth: profile.destination_auth.clone(),
                 destination_credential_id: profile.destination_credential_id.clone(),
                 destination_oauth_refresh_credential_id: profile
@@ -1669,6 +1689,33 @@ mod tests {
         assert_eq!(profile.destination_tls, "imaps");
         assert_eq!(profile.source_auth, "password");
         assert_eq!(profile.destination_auth, "password");
+    }
+
+    #[test]
+    fn rate_tenant_scope_is_bounded_and_bound_to_plan_fingerprint() {
+        let mut form = Form::default();
+        form.profile.source_host = "imap.source.example".into();
+        form.profile.source_user = "user@source.example".into();
+        form.profile.destination_host = "imap.destination.example".into();
+        form.profile.destination_user = "user@destination.example".into();
+        assert!(form.validate_internal(false).is_ok());
+        let original = form.plan_fingerprint();
+        form.profile.source_rate_tenant = "source-tenant-guid".into();
+        assert_ne!(original, form.plan_fingerprint());
+        assert!(form.validate_internal(false).is_ok());
+
+        form.profile.source_rate_tenant = "x".repeat(257);
+        assert!(
+            form.validate_internal(false)
+                .unwrap_err()
+                .contains("Source provider tenant scope")
+        );
+        form.profile.source_rate_tenant = "tenant\nforged".into();
+        assert!(
+            form.validate_internal(false)
+                .unwrap_err()
+                .contains("Source provider tenant scope")
+        );
     }
 
     #[test]

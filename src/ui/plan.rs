@@ -510,6 +510,25 @@ impl App {
                     ui.add_space(8.0);
                     crate::ui::card(ui, |ui| {
                         ui.heading(self.language.message("ui.performance"));
+                        ui.label(RichText::new(self.language.message("ui.rate-domain-tenant-scope-explainer")).size(12.0).color(self.theme_colors().text_secondary));
+                        ui.horizontal(|ui| {
+                            let label = ui.label(self.language.message("ui.source-rate-tenant-scope"));
+                            crate::ui::LabelledField::link_label(
+                                &ui.add(egui::TextEdit::singleline(
+                                    &mut self.form.profile.source_rate_tenant,
+                                ).desired_width(f32::INFINITY)),
+                                &label,
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            let label = ui.label(self.language.message("ui.destination-rate-tenant-scope"));
+                            crate::ui::LabelledField::link_label(
+                                &ui.add(egui::TextEdit::singleline(
+                                    &mut self.form.profile.destination_rate_tenant,
+                                ).desired_width(f32::INFINITY)),
+                                &label,
+                            );
+                        });
                         ui.checkbox(&mut self.form.profile.fastio1, self.language.message("ui.fast-i-o-for-source-fastio1"))
                             .on_hover_text(self.language.message("ui.uses-imapsync-s-faster-source-i-o-path-test-this-with-the-provider-before-a-f268a275a4"));
                         ui.checkbox(&mut self.form.profile.fastio2, self.language.message("ui.fast-i-o-for-destination-fastio2"))

@@ -18,8 +18,8 @@ single customer migration; MailSwiftSync uses it for the durable project name.
 The per-row `name` remains the mailbox label shown in the queue.
 
 ```csv
-project_name,name,source_host,source_user,source_credential_id,destination_host,destination_user,destination_credential_id
-Finance archive,finance mailbox,imap.old.example,finance@example.com,finance-source,imap.new.example,finance@example.com,finance-destination
+project_name,name,source_host,source_user,source_rate_tenant,source_credential_id,destination_host,destination_user,destination_rate_tenant,destination_credential_id
+Finance archive,finance mailbox,imap.old.example,finance@example.com,workspace-tenant-id,finance-source,imap.new.example,finance@example.com,exchange-tenant-id,finance-destination
 ```
 
 Required columns are:
@@ -29,7 +29,7 @@ Required columns are:
 - `destination_host`
 - `destination_user`
 
-Optional columns are `project_name`, `source_credential_id`, `destination_credential_id`, and `name`. Password columns are intentionally rejected by default, even when blank; use keyring IDs instead, either as columns or with **Queue settings → Passwordless queue credentials** after import. The normal protected workflow starts from the [CSV template](../bulk-migrations-template.csv). Plaintext password imports are a separate administrative exception: set `MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1`, then acknowledge the warning separately for each file in the GUI. The Mailboxes page displays a persistent warning while this environment opt-in is enabled. Never commit a populated password spreadsheet. Engine options are trusted application settings and cannot be imported from a spreadsheet.
+Optional columns are `project_name`, `source_rate_tenant`, `destination_rate_tenant`, `source_credential_id`, `destination_credential_id`, and `name`. Set the tenant columns to the provider tenant/account ID when multiple mailbox email domains belong to one tenant; otherwise rate limiting falls back to the mailbox email domain. Password columns are intentionally rejected by default, even when blank; use keyring IDs instead, either as columns or with **Queue settings → Passwordless queue credentials** after import. The normal protected workflow starts from the [CSV template](../bulk-migrations-template.csv). Plaintext password imports are a separate administrative exception: set `MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1`, then acknowledge the warning separately for each file in the GUI. The Mailboxes page displays a persistent warning while this environment opt-in is enabled. Never commit a populated password spreadsheet. Engine options are trusted application settings and cannot be imported from a spreadsheet.
 
 ## Import and review
 
