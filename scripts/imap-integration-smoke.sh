@@ -15,6 +15,17 @@ if [[ ! "$scale_messages_raw" =~ ^[0-9]{1,6}$ ]] || (( 10#$scale_messages_raw > 
   exit 1
 fi
 scale_messages=$((10#$scale_messages_raw))
+scale_total_body_bytes_raw="${MAILSWIFTSYNC_SCALE_TOTAL_BODY_BYTES:-0}"
+if [[ ! "$scale_total_body_bytes_raw" =~ ^[0-9]{1,10}$ ]] \
+  || (( 10#$scale_total_body_bytes_raw > 2147483648 )); then
+  echo "FAIL: MAILSWIFTSYNC_SCALE_TOTAL_BODY_BYTES must be between 0 and 2147483648" >&2
+  exit 1
+fi
+scale_total_body_bytes=$((10#$scale_total_body_bytes_raw))
+if (( scale_total_body_bytes > 0 && scale_messages == 0 )); then
+  echo "FAIL: nonzero scale body bytes require MAILSWIFTSYNC_SCALE_MESSAGES" >&2
+  exit 1
+fi
 disposable_scale="${MAILSWIFTSYNC_DISPOSABLE_SCALE:-0}"
 if [[ "$disposable_scale" != 0 && "$disposable_scale" != 1 ]]; then
   echo "FAIL: MAILSWIFTSYNC_DISPOSABLE_SCALE must be 0 or 1" >&2
@@ -514,14 +525,20 @@ done
 # mailbox and then exercises the same packaged transfer and verifier path.
 if (( scale_messages > 0 )); then
   echo "Generating $scale_messages scale messages in the source mailbox"
-  for ((index = 1; index <= scale_messages; index++)); do
-    printf -v scale_filename 'scale-%06d.eml' "$index"
-    printf 'From: scale-lab@example.test\nTo: lab@example.test\nSubject: Scale fixture %d\nMessage-ID: <mailswiftsync-scale-%06d@example.test>\nDate: Tue, 01 Jan 2030 02:00:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nScale fixture message %d for durable transfer and verification.\n' \
-      "$index" "$index" "$index" > "$workspace/source/mail/$user/Maildir/new/$scale_filename"
-    if (( index % 10000 == 0 )); then
-      echo "Generated $index / $scale_messages scale messages"
-    fi
-  done
+  if (( scale_total_body_bytes > 0 )); then
+    python3 "$script_dir/generate-scale-maildir.py" \
+      "$workspace/source/mail/$user/Maildir/new" \
+      "$scale_messages" "$scale_total_body_bytes"
+  else
+    for ((index = 1; index <= scale_messages; index++)); do
+      printf -v scale_filename 'scale-%06d.eml' "$index"
+      printf 'From: scale-lab@example.test\nTo: lab@example.test\nSubject: Scale fixture %d\nMessage-ID: <mailswiftsync-scale-%06d@example.test>\nDate: Tue, 01 Jan 2030 02:00:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nScale fixture message %d for durable transfer and verification.\n' \
+        "$index" "$index" "$index" > "$workspace/source/mail/$user/Maildir/new/$scale_filename"
+      if (( index % 10000 == 0 )); then
+        echo "Generated $index / $scale_messages scale messages"
+      fi
+    done
+  fi
 fi
 
 # Select/expunge through Dovecot so the Maildir fixture is tested with actual

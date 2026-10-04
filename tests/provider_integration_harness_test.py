@@ -123,6 +123,8 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_scale_fixture_assertions_scan_maildir_ids_once(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("required_tools+=(python3)", SCALE_SCRIPT)
+        self.assertIn("generate-scale-maildir.py", SCALE_SCRIPT)
+        self.assertIn("MAILSWIFTSYNC_SCALE_TOTAL_BODY_BYTES", SCALE_SCRIPT)
         self.assertIn("maildir-fixture-scan.py", dockerfile)
         self.assertIn('python3 "$script_dir/maildir-fixture-scan.py" "$destination_maildir"', SCALE_SCRIPT)
         self.assertIn("operation=fixture-message-id-scan", SCALE_SCRIPT)

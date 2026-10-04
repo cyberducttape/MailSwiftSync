@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a manually selectable 10k-message / 1 GiB RFC822 body-payload scenario to
+  the packaged IMAP scale workflow, with bounded deterministic fixture
+  generation and validation; hosted performance/recovery qualification remains
+  pending.
 - Add an evidence-based Migration confidence panel with typed readiness states,
   transparent unknowns for unqualified providers or unobserved quota, and
   direct routes to plan, mailbox, and verification remediation.
@@ -45,6 +49,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a reproducible 10k-message / 1 GiB RFC822 body-payload scale scenario
+  alongside the 100k-small-message run. The bounded fixture generator and
+  selectable workflow scenario are tested; no qualification claim is made
+  until hosted evidence completes.
 - Added a project-level Migration confidence panel that groups transfer,
   verification, provider qualification, and cutover findings without a numeric
   score; unknown evidence remains explicit and findings route to remediation.

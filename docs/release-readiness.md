@@ -374,6 +374,11 @@ screen-reader checklist are recorded in
   these runs qualifies peak memory, 20 GiB mailboxes, Gmail, or Microsoft 365.
   This small-message generic-IMAP fixture does not measure peak memory or
   qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.
+  Manual dispatch now also offers a 10,000-message fixture with exactly 1 GiB
+  of RFC822 body payload, generated in bounded chunks and transferred through
+  the same packaged path. This exercises byte-volume pressure separately from
+  record count; it is not a qualified result until a hosted run completes and
+  retains its throughput, peak-memory, and recovery evidence.
   Scale mode disables per-message debug output and allows up to 40 minutes per
   CLI command within a 90-minute workflow limit. The instrumented workflow
   samples aggregate container memory once per second and retains peak and wall

@@ -2,6 +2,15 @@ name: Large mailbox scale qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: Reproducible generic-IMAP qualification fixture
+        required: true
+        type: choice
+        options:
+          - 100k-small
+          - 10k-1g
+        default: 100k-small
   schedule:
     - cron: "41 4 1 * *"
 
@@ -10,7 +19,7 @@ permissions:
 
 jobs:
   scale-100k-message-mailbox:
-    name: Packaged imapsync with 100k-message mailbox
+    name: Packaged imapsync scale scenarios
     runs-on: ubuntu-24.04
     # The real 100k fixture runs both a full migration and a later incremental
     # pass. The host completion-marker deadline is independent of command
@@ -20,8 +29,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the distributed runtime image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:scale .
-      - name: Run single-mailbox 100k-message transfer and verification
+      - name: Run selected transfer and verification scenario
+        env:
+          SCALE_SCENARIO: ${{ github.event.inputs.scenario || '100k-small' }}
         run: |
+          scale_messages=100000
+          scale_total_body_bytes=0
+          if [ "$SCALE_SCENARIO" = '10k-1g' ]; then
+            scale_messages=10000
+            scale_total_body_bytes=1073741824
+          elif [ "$SCALE_SCENARIO" != '100k-small' ]; then
+            echo "Unknown scale scenario: $SCALE_SCENARIO" >&2
+            exit 2
+          fi
           mkdir -p provider-scale-evidence
           chmod 0700 provider-scale-evidence
           sudo chown 10001:10001 provider-scale-evidence
@@ -36,7 +56,8 @@ jobs:
             --user 0:0 \
             --volume "$PWD/provider-scale-evidence:/provider-evidence" \
             --env MAILSWIFTSYNC_EVIDENCE_OUTPUT=/provider-evidence \
-            --env MAILSWIFTSYNC_SCALE_MESSAGES=100000 \
+            --env MAILSWIFTSYNC_SCALE_MESSAGES="$scale_messages" \
+            --env MAILSWIFTSYNC_SCALE_TOTAL_BODY_BYTES="$scale_total_body_bytes" \
             --env MAILSWIFTSYNC_DISPOSABLE_SCALE=1 \
             --entrypoint /bin/bash mailswiftsync:scale \
             /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
@@ -57,7 +78,8 @@ jobs:
             sudo chown 10001:10001 provider-scale-evidence/scale-watchdog.txt
           fi
           python3 scripts/docker_memory.py "$stats_file" > "$summary_file"
-          printf 'wall_clock_seconds=%s\nharness_exit_status=%s\ncontainer_teardown=delegated_to_ephemeral_runner\n' \
+          printf 'scenario=%s\nscale_messages=%s\nscale_body_payload_bytes=%s\nwall_clock_seconds=%s\nharness_exit_status=%s\ncontainer_teardown=delegated_to_ephemeral_runner\n' \
+            "$SCALE_SCENARIO" "$scale_messages" "$scale_total_body_bytes" \
             "$((finished_at - started_at))" "$harness_status" >> "$summary_file"
           cat "$summary_file"
           sudo cp "$summary_file" provider-scale-evidence/scale-resource-summary.txt
