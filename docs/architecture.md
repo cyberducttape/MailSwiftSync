@@ -66,6 +66,16 @@ The Project Cockpit performs an authenticated endpoint readiness probe in imapsy
 
 The Mailboxes workspace presents the same lifecycle as the Overview cockpit: import, resolve blockers, preflight, pilot/seed, catch-up, final delta, verification, and proof delivery. It surfaces the recommended next action for the active phase and keeps queue-policy controls under an explicit Operator tools disclosure, so expert controls remain available without competing with the normal migration path.
 
+Overview's Migration confidence panel composes current plan completeness,
+plan-bound endpoint observations, preflight outcomes, available quota
+observations, verification scope, provider qualification, and mailbox
+attention into named readiness states rather than a numeric score. It treats
+missing qualification or capacity evidence as unknown, not success; provider
+probe success is not provider qualification, and a non-exhausted quota is not a
+capacity guarantee. Each finding exposes its consequence and routes to an
+existing Plan, Mailboxes, or Verification remediation surface. A plan-affecting
+remediation flags when another preflight is required.
+
 Recovery groups are actionable projections of durable attention reasons: each group states the consequence of leaving it unresolved and routes to the safest existing follow-up (plan/account repair, queue policy, evidence review, or explicit mailbox selection). A remediation route never silently starts a migration; it returns the operator to the review/preflight path, and the group remains durable until the required evidence is recorded.
 
 External-engine transfer progress is checkpointed as bounded, content-free JSON events at a coarse interval and at attempt completion. These checkpoints record observed aggregate message/byte counters and the attempt number; they do not claim individual-message transfer proof. Dovecot resume tokens and the independent imapsync verification cursors remain the stronger recovery/evidence mechanisms, while imapsync retries still fail closed to revalidation rather than pretending to resume at a message boundary.

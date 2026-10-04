@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add an evidence-based Migration confidence panel with typed readiness states,
+  transparent unknowns for unqualified providers or unobserved quota, and
+  direct routes to plan, mailbox, and verification remediation.
 - Bound batch scheduler dispatch and worker-report channels by execution
   concurrency, encoding the one-outstanding-task/report-per-worker limit in
   channel capacity.
@@ -42,6 +45,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a project-level Migration confidence panel that groups transfer,
+  verification, provider qualification, and cutover findings without a numeric
+  score; unknown evidence remains explicit and findings route to remediation.
 - Bounded batch scheduler dispatch and worker-report channels by concurrency so
   unexpected producer/consumer imbalance cannot grow those queues without
   limit.

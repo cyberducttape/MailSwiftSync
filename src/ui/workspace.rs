@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 pub(crate) const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const MAILBOX_PAGE_SIZE: u32 = 200;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceView {
     Overview,
     Plan,

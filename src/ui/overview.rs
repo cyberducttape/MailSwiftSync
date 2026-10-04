@@ -3,6 +3,9 @@
 use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
+use crate::ui::confidence::{
+    ConfidenceInputs, ConfidenceSection, ConfidenceState, migration_confidence,
+};
 use crate::ui::status::RecommendedAction;
 use crate::ui::{StatusSeverity, WorkspaceView};
 use crate::ui::{customer_proof_ready, recommended_workspace_action};
@@ -200,6 +203,19 @@ impl App {
             self.refresh_bulk_selection_view();
         }
         self.operator_cockpit(ui, phase, workspace_attention_count, has_bulk_jobs);
+        ui.add_space(16.0);
+
+        self.migration_confidence_panel(
+            ui,
+            has_bulk_jobs,
+            batch_summary,
+            proof_ready,
+            if has_bulk_jobs {
+                batch_summary.unresolved()
+            } else {
+                workspace_attention_count
+            },
+        );
         ui.add_space(16.0);
 
         self.attention_center(ui);
@@ -437,6 +453,195 @@ impl App {
                 );
             }
         });
+    }
+
+    fn migration_confidence_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        has_bulk_jobs: bool,
+        batch_summary: crate::controller::BulkQueueSummary,
+        proof_ready: bool,
+        attention_count: usize,
+    ) {
+        let plan_digest = crate::plan_identity::fingerprint_digest(&self.form.plan_fingerprint());
+        let accounts_current = crate::controller::capability_observation_matches(
+            self.capability_observation_fingerprint.as_deref(),
+            &plan_digest,
+        ) && self.source_capabilities.is_some()
+            && self.destination_capabilities.is_some();
+        let (preflight, preflight_scope, preflight_label, preflight_action, requires_preflight) =
+            if has_bulk_jobs {
+                if batch_summary.total > 0
+                    && batch_summary.imported + batch_summary.queued + batch_summary.preflight
+                        == batch_summary.total
+                {
+                    (
+                        None,
+                        "mailboxes preflighted and ready",
+                        "Mailbox preflight",
+                        "Run preflight",
+                        true,
+                    )
+                } else {
+                    (
+                        Some((
+                            batch_summary.ready + batch_summary.verified,
+                            batch_summary.unresolved(),
+                            batch_summary.total,
+                        )),
+                        "mailboxes preflighted and ready",
+                        "Mailbox preflight",
+                        "Review mailboxes",
+                        true,
+                    )
+                }
+            } else if self.ui_snapshot.mailbox_counts.total > 0 {
+                let counts = self.ui_snapshot.mailbox_counts;
+                (
+                    Some((
+                        counts.ready + counts.verified,
+                        counts.needs_review,
+                        counts.total,
+                    )),
+                    "mailboxes preflighted and ready",
+                    "Mailbox preflight",
+                    "Review mailboxes",
+                    true,
+                )
+            } else if self.preflight.is_empty() {
+                (
+                    None,
+                    "plan validation checks passed",
+                    "Plan assessment",
+                    "Review assessment",
+                    false,
+                )
+            } else {
+                (
+                    Some((
+                        self.preflight
+                            .iter()
+                            .filter(|(_, _, passed)| *passed)
+                            .count(),
+                        self.preflight
+                            .iter()
+                            .filter(|(_, _, passed)| !*passed)
+                            .count(),
+                        self.preflight.len(),
+                    )),
+                    "plan validation checks passed",
+                    "Plan assessment",
+                    "Review assessment",
+                    false,
+                )
+            };
+        let quota_exceeded = if accounts_current && !has_bulk_jobs {
+            self.destination_capabilities
+                .as_ref()
+                .filter(|capabilities| capabilities.quota_observed)
+                .map(|capabilities| capabilities.quota_exceeded)
+        } else {
+            None
+        };
+        let (configured, total) = plan_completeness(&self.form.profile);
+        let destination_tls = self.form.profile.destination_tls != "plain";
+        let findings = migration_confidence(ConfidenceInputs {
+            plan_complete: configured == total,
+            encrypted_transport: self.form.profile.source_tls != "plain" && destination_tls,
+            tls_observed: accounts_current && !has_bulk_jobs,
+            // The currently tested mailbox is not evidence for every row in
+            // a heterogeneous/imported queue.
+            accounts_current: accounts_current && !has_bulk_jobs,
+            preflight,
+            preflight_scope,
+            preflight_label,
+            preflight_action,
+            requires_preflight,
+            attention_count,
+            quota_exceeded,
+            provider_pair: &format!(
+                "{} → {}",
+                self.form.profile.source_host, self.form.profile.destination_host
+            ),
+            // A provider probe is not a qualification run. This becomes true
+            // only when machine-generated, verified packs are loaded here.
+            provider_qualified: false,
+            proof_ready,
+            verification_level: if self.form.engine() == core::Engine::Dovecot {
+                "Level 1 — engine/aggregate evidence"
+            } else if self.form.profile.body_hash_verification {
+                "Level 3 — bounded body-hash evidence"
+            } else {
+                "Level 2 — metadata reconciliation"
+            },
+        });
+        let colors = self.theme_colors();
+        let mut navigate = None;
+        crate::ui::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading(self.language.text("Migration confidence"));
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("Evidence-based readiness · no percentage score"),
+                    )
+                    .small()
+                    .color(colors.text_secondary),
+                );
+            });
+            ui.label(
+                RichText::new(self.language.text("Each finding reflects observed evidence. Unknown means not established—not passed."))
+                    .small()
+                    .color(colors.text_secondary),
+            );
+            for section in [
+                ConfidenceSection::Transfer,
+                ConfidenceSection::Verification,
+                ConfidenceSection::ProviderQualification,
+                ConfidenceSection::Cutover,
+            ] {
+                let (title, default_open) = match section {
+                    ConfidenceSection::Transfer => ("Transfer readiness", true),
+                    ConfidenceSection::Verification => ("Verification readiness", false),
+                    ConfidenceSection::ProviderQualification => ("Provider qualification", false),
+                    ConfidenceSection::Cutover => ("Cutover", false),
+                };
+                egui::CollapsingHeader::new(self.language.text(title))
+                    .default_open(default_open)
+                    .show(ui, |ui| {
+                        for finding in findings.iter().filter(|finding| finding.section == section) {
+                            let (symbol, color, state_text) = match finding.state {
+                                ConfidenceState::Ready => ("✓", colors.success, "Established"),
+                                ConfidenceState::Blocked => ("■", colors.danger, "Blocked"),
+                                ConfidenceState::Warning => ("!", colors.warning, "Warning"),
+                                ConfidenceState::Unknown => ("?", colors.text_secondary, "Unknown"),
+                            };
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(symbol).strong().color(color));
+                                ui.label(RichText::new(self.language.text(finding.label)).strong());
+                                ui.label(RichText::new(self.language.text(state_text)).color(color));
+                                ui.label(
+                                    self.language
+                                        .lookup(&finding.evidence)
+                                        .unwrap_or(&finding.evidence)
+                                        .to_owned(),
+                                );
+                                let action = ui.small_button(self.language.text(finding.remediation));
+                                if action.on_hover_text(self.language.text(finding.consequence)).clicked() {
+                                    navigate = Some(finding.destination);
+                                }
+                            });
+                            if finding.requires_preflight {
+                                ui.label(RichText::new(self.language.text("Changing this finding's inputs requires another preflight before live execution."))
+                                    .small().italics().color(colors.text_secondary));
+                            }
+                        }
+                    });
+            }
+        });
+        if let Some(destination) = navigate {
+            self.active_view = destination;
+        }
     }
 
     pub(crate) fn source_transport_warning(&mut self, ui: &mut egui::Ui) {
