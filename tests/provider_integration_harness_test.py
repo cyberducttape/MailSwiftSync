@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "scripts" / "provider-integration-test.sh").read_text(encoding="utf-8")
 SCALE_SCRIPT = (ROOT / "scripts" / "imap-integration-smoke.sh").read_text(encoding="utf-8")
+SCALE_WATCHDOG = (ROOT / "scripts" / "scale-docker-wait.sh").read_text(encoding="utf-8")
 STORAGE_FAULT_SCRIPT = (ROOT / "scripts" / "engine-storage-fault-smoke.sh").read_text(encoding="utf-8")
 SCALE_WORKFLOW = (ROOT / ".github" / "workflows" / "scale-qualification.yml").read_text(encoding="utf-8")
 
@@ -87,12 +88,12 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn("timeout-minutes: 90", SCALE_WORKFLOW)
 
     def test_100k_scale_job_bounds_container_wait_and_preserves_stall_evidence(self):
-        self.assertIn(
-            'timeout --foreground --kill-after=15s 3600 docker wait "$container_name"',
-            SCALE_WORKFLOW,
-        )
-        self.assertIn('docker kill "$container_name"', SCALE_WORKFLOW)
-        self.assertIn("20 docker kill", SCALE_WORKFLOW)
+        self.assertIn("scripts/scale-docker-wait.sh", SCALE_WORKFLOW)
+        self.assertIn('"$container_name" "$wait_output_file" "$watchdog_marker" 3600', SCALE_WORKFLOW)
+        self.assertIn('timeout --kill-after=15s "$timeout_seconds" docker wait "$container_name"', SCALE_WATCHDOG)
+        self.assertIn('timeout --kill-after=5s 20 docker kill "$container_name"', SCALE_WATCHDOG)
+        self.assertIn('printf \'watchdog_triggered=true\\n\' > "$watchdog_marker"', SCALE_WATCHDOG)
+        self.assertIn('kill -KILL -- "-$wait_pgid"', SCALE_WATCHDOG)
         self.assertIn("60 docker logs", SCALE_WORKFLOW)
         self.assertIn("20 docker rm", SCALE_WORKFLOW)
         self.assertIn("provider-scale-evidence/scale-progress.txt", SCALE_WORKFLOW)
