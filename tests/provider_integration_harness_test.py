@@ -91,6 +91,9 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_100k_scale_job_bounds_container_wait_and_preserves_stall_evidence(self):
         self.assertIn("scripts/scale-docker-wait.sh", SCALE_WORKFLOW)
         self.assertIn('"$container_name" "$wait_output_file" "$watchdog_marker" 3600', SCALE_WORKFLOW)
+        self.assertIn("timeout --kill-after=10s 3800 bash scripts/scale-docker-wait.sh", SCALE_WORKFLOW)
+        self.assertIn("outer_watchdog_triggered=true", SCALE_WORKFLOW)
+        self.assertIn('provider-scale-evidence/scale-watchdog.txt', SCALE_WORKFLOW)
         self.assertIn('timeout --kill-after=15s "$timeout_seconds" docker wait "$container_name"', SCALE_WATCHDOG)
         self.assertIn('timeout --kill-after=5s 20 docker kill "$container_name"', SCALE_WATCHDOG)
         self.assertIn('printf \'watchdog_triggered=true\\n\' > "$watchdog_marker"', SCALE_WATCHDOG)

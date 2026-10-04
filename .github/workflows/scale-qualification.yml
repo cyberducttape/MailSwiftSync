@@ -13,8 +13,8 @@ jobs:
     name: Packaged imapsync with 100k-message mailbox
     runs-on: ubuntu-24.04
     # The real 100k fixture runs both a full migration and a later incremental
-    # pass. The host watchdog bounds the entire container wait independently
-    # of the harness's per-command timeout, leaving time to collect diagnostics.
+    # pass. The host watchdog bounds container wait independently of command
+    # timeouts; an outer timeout on that helper is a final workflow-level guard.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,8 +40,24 @@ jobs:
           started_at="$(date +%s)"
           docker stats --format '{{.MemUsage}}' "$container_name" > "$stats_file" &
           stats_pid=$!
-          container_status="$(bash scripts/scale-docker-wait.sh \
+          set +e
+          container_wait_output="$(timeout --kill-after=10s 3800 bash scripts/scale-docker-wait.sh \
             "$container_name" "$wait_output_file" "$watchdog_marker" 3600)"
+          wait_helper_status=$?
+          set -e
+          if [ "$wait_helper_status" -eq 0 ] && [[ "$container_wait_output" =~ ^[0-9]+$ ]]; then
+            container_status="$container_wait_output"
+          elif [ "$wait_helper_status" -eq 124 ] || [ "$wait_helper_status" -eq 137 ]; then
+            echo 'Outer scale wait deadline expired; force-stopping the container to preserve diagnostics.' >&2
+            printf 'outer_watchdog_triggered=true\n' > "$watchdog_marker"
+            timeout --kill-after=5s 20 docker kill "$container_name" >/dev/null 2>&1 || true
+            container_status=124
+          else
+            echo "Scale wait helper failed with status $wait_helper_status; force-stopping the container." >&2
+            printf 'wait_helper_failed_status=%s\n' "$wait_helper_status" > "$watchdog_marker"
+            timeout --kill-after=5s 20 docker kill "$container_name" >/dev/null 2>&1 || true
+            container_status=125
+          fi
           finished_at="$(date +%s)"
           kill "$stats_pid" 2>/dev/null || true
           wait "$stats_pid" 2>/dev/null || true
@@ -53,6 +69,10 @@ jobs:
           if [ -f provider-scale-evidence/scale-progress.txt ]; then
             echo 'Scale command progress markers:'
             cat provider-scale-evidence/scale-progress.txt
+          fi
+          if [ -f "$watchdog_marker" ]; then
+            sudo cp "$watchdog_marker" provider-scale-evidence/scale-watchdog.txt
+            sudo chown 10001:10001 provider-scale-evidence/scale-watchdog.txt
           fi
           python3 scripts/docker_memory.py "$stats_file" > "$summary_file"
           printf 'wall_clock_seconds=%s\ncontainer_exit_status=%s\n' \

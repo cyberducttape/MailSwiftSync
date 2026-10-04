@@ -346,9 +346,11 @@ screen-reader checklist are recorded in
   collected. The artifact contains no explicit cleanup marker, but the last
   successful fixture-scan marker and the unbounded `doveadm stop` in harness
   cleanup point to a likely teardown hang. Dovecot shutdown is now bounded to
-  10 seconds per server and emits start/end markers; this fix still needs a
-  hosted rerun. The earlier repeated Maildir scans have been replaced by one
-  pass, which took 1.78 seconds on a synthetic 100,004-file Maildir. None of
+  10 seconds per server and emits start/end markers. A workflow-level timeout
+  now also bounds the entire host wait helper and records fallback activation;
+  these changes still need a successful hosted rerun. The earlier repeated
+  Maildir scans have been replaced by one pass, which took 1.78 seconds on a
+  synthetic 100,004-file Maildir. None of
   these runs qualifies peak memory, 20 GiB mailboxes, Gmail, or Microsoft 365.
   This small-message generic-IMAP fixture does not measure peak memory or
   qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.

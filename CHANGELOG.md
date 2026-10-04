@@ -14,6 +14,9 @@ operator distribution archives.
   teardown phase markers. The latest hosted run completed initial and
   incremental transfer phases but hung before collecting resource metrics;
   qualification still requires a successful rerun.
+- Added a workflow-level hard deadline around the scale wait helper, with a
+  separately bounded container kill and retained watchdog-failure marker, so
+  a helper regression cannot consume the full hosted job window.
 - Signed customer evidence now exposes the immutable migration-plan SHA-256
   and the execution-engine binary SHA-256 when resolved in the plan snapshot;
   the underlying plan and its endpoint or credential-reference details remain
