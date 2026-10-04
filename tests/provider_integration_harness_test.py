@@ -112,6 +112,12 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         scale_count_function = SCALE_SCRIPT.split("maildir_count_matching() {", 1)[1].split("\n}", 1)[0]
         self.assertIn('grep -F -c -- "$pattern" "$fixture_message_ids_file"', scale_count_function)
 
+    def test_fixture_server_shutdown_is_bounded_and_phase_marked(self):
+        stop_server = SCALE_SCRIPT.split("  stop_server() {", 1)[1].split("\n  }", 1)[0]
+        self.assertIn("timeout --kill-after=2s 10 doveadm -c", stop_server)
+        self.assertIn("operation=dovecot-%s-stop", stop_server)
+        self.assertIn("terminating the disposable fixture server", stop_server)
+
     def test_maildir_fixture_scanner_streams_headers_and_counts_duplicates(self):
         with tempfile.TemporaryDirectory(prefix="mailswiftsync-maildir-scan-") as directory:
             root = Path(directory)

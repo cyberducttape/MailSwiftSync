@@ -10,6 +10,10 @@ operator distribution archives.
   provider identities through durable run context. Provider-specific error
   handling is used only when engine output unambiguously identifies the failed
   endpoint; ambiguous failures remain generic.
+- Bounded disposable Dovecot shutdown in the 100k scale harness and added
+  teardown phase markers. The latest hosted run completed initial and
+  incremental transfer phases but hung before collecting resource metrics;
+  qualification still requires a successful rerun.
 - Signed customer evidence now exposes the immutable migration-plan SHA-256
   and the execution-engine binary SHA-256 when resolved in the plan snapshot;
   the underlying plan and its endpoint or credential-reference details remain

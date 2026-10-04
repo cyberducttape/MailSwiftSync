@@ -168,12 +168,27 @@ cleanup() {
   stop_server() {
     local pid="$1"
     local config="$2"
+    local side="$3"
+    local stop_status=0
     [[ -n "$pid" ]] || return 0
     # Dovecot owns child workers that may still create run-directory state
     # after the master receives SIGTERM. Ask it to shut down cleanly, then
-    # wait for the foreground master before removing the fixture tree.
+    # wait for the foreground master before removing the fixture tree. The
+    # admin command itself is bounded: a wedged control socket must not keep
+    # the scale container alive until the workflow-level timeout.
     if [[ -f "$config" ]]; then
-      doveadm -c "$config" stop >/dev/null 2>&1 || true
+      if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+        printf 'begin epoch=%s operation=dovecot-%s-stop\n' \
+          "$(date +%s)" "$side" >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
+      fi
+      timeout --kill-after=2s 10 doveadm -c "$config" stop >/dev/null 2>&1 || stop_status=$?
+      if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+        printf 'end epoch=%s operation=dovecot-%s-stop status=%s\n' \
+          "$(date +%s)" "$side" "$stop_status" >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
+      fi
+      if [[ "$stop_status" -ne 0 ]]; then
+        echo "WARNING: graceful Dovecot $side shutdown did not complete; terminating the disposable fixture server" >&2
+      fi
     fi
     for _ in {1..50}; do
       kill -0 "$pid" 2>/dev/null || break
@@ -191,8 +206,8 @@ cleanup() {
     fi
     wait "$pid" 2>/dev/null || true
   }
-  stop_server "${destination_pid:-}" "${workspace:-}/destination.conf"
-  stop_server "${source_pid:-}" "${workspace:-}/source.conf"
+  stop_server "${destination_pid:-}" "${workspace:-}/destination.conf" destination
+  stop_server "${source_pid:-}" "${workspace:-}/source.conf" source
   if [[ "${MAILSWIFTSYNC_KEEP_LAB:-0}" != "1" ]]; then
     local removed=0
     for _ in {1..10}; do
