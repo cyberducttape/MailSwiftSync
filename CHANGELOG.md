@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Shell-quote the displayed manual Debian engine-install command and clarify
+  that a failed package-manager run may have changed system state; review
+  apt/dpkg output before retrying.
 - Surface durable queue summary/filter read failures instead of converting them
   to zero counts or non-matches; clear stale selection projections and show an
   explicit retryable unavailable state in Mailboxes and Overview.
@@ -33,6 +36,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Shell-quote the displayed manual Debian engine-install command and clarify
+  that a failed package-manager run may have changed system state; review
+  apt/dpkg output before retrying.
 - Made the queue read model propagate SQLite failures from health counts,
   transient row plans, and filtering. Failed filters clear the visible-row
   projection and expose an explicit retryable unavailable card; Overview and

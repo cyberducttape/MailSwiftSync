@@ -314,9 +314,11 @@ fn package_install_command(elevation: Elevation, package: &Path) -> Command {
 
 /// The exact privileged command, for operators who prefer to run it.
 pub(crate) fn manual_package_command(package: &Path) -> String {
+    let package = package.display().to_string();
+    let shell_quoted_package = format!("'{}'", package.replace('\'', "'\\''"));
     format!(
         "sudo apt-get install --no-install-recommends --yes {}",
-        package.display()
+        shell_quoted_package
     )
 }
 
@@ -356,7 +358,7 @@ pub(crate) fn install(
                 })?;
             if !status.success() {
                 return Err(format!(
-                    "the package manager did not complete ({status}); nothing was changed by MailSwiftSync. To install manually run: {}",
+                    "package installation did not complete successfully ({status}). The package manager may have changed system state. Review apt/dpkg output before retrying. To retry manually run: {}",
                     manual_package_command(&package)
                 ));
             }
@@ -377,8 +379,8 @@ pub(crate) fn install(
 #[cfg(test)]
 mod tests {
     use super::{
-        Artifact, DEBIAN_PACKAGE, InstallMethod, InstallPlan, InstallProgress, plan_for,
-        sha256_hex, store_verified, unpack_windows_engine,
+        Artifact, DEBIAN_PACKAGE, InstallMethod, InstallPlan, InstallProgress,
+        manual_package_command, plan_for, sha256_hex, store_verified, unpack_windows_engine,
     };
     use std::io::Write;
 
@@ -411,6 +413,16 @@ mod tests {
         );
         assert!(
             matches!(plan_for("macos", false, false), InstallPlan::Manual(text) if text.contains("2.314"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manual_package_command_shell_quotes_package_path() {
+        let package = std::path::Path::new("/tmp/dir with 'quote'/$() ;/imapsync.deb");
+        assert_eq!(
+            manual_package_command(package),
+            r#"sudo apt-get install --no-install-recommends --yes '/tmp/dir with '\''quote'\''/$() ;/imapsync.deb'"#
         );
     }
 
