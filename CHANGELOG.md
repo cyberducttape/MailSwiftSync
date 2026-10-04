@@ -16,7 +16,9 @@ operator distribution archives.
   qualification still requires a successful rerun.
 - Added a workflow-level hard deadline around the scale wait helper, with a
   separately bounded container kill and retained watchdog-failure marker, so
-  a helper regression cannot consume the full hosted job window.
+  a helper regression cannot consume the full hosted job window. A fake-Docker
+  test forces the outer deadline and verifies both container-stop fallback
+  and marker retention.
 - Signed customer evidence now exposes the immutable migration-plan SHA-256
   and the execution-engine binary SHA-256 when resolved in the plan snapshot;
   the underlying plan and its endpoint or credential-reference details remain

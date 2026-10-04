@@ -10,9 +10,54 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WATCHDOG = ROOT / "scripts" / "scale-docker-wait.sh"
+CONTAINER_WAIT = ROOT / "scripts" / "scale-container-wait.sh"
 
 
 class ScaleDockerWaitTests(unittest.TestCase):
+    def test_outer_deadline_kills_a_stuck_helper_and_preserves_its_marker(self):
+        with tempfile.TemporaryDirectory(prefix="scale-outer-watchdog-test-") as temporary:
+            directory = Path(temporary)
+            binary_dir = directory / "bin"
+            binary_dir.mkdir()
+            kill_marker = directory / "container-killed"
+            fake_docker = binary_dir / "docker"
+            fake_docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "case \"$1\" in\n"
+                "  wait) while :; do sleep 0.02; done ;;\n"
+                "  kill) touch \"$FAKE_DOCKER_KILL_MARKER\" ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_docker.chmod(0o700)
+            wait_output = directory / "wait-output.txt"
+            watchdog_marker = directory / "watchdog-marker.txt"
+            environment = os.environ.copy()
+            environment["PATH"] = f"{binary_dir}{os.pathsep}{environment['PATH']}"
+            environment["FAKE_DOCKER_KILL_MARKER"] = str(kill_marker)
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(CONTAINER_WAIT),
+                    "test-container",
+                    str(wait_output),
+                    str(watchdog_marker),
+                    "60",
+                    "1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=8,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "124")
+            self.assertTrue(kill_marker.exists())
+            self.assertEqual(watchdog_marker.read_text().strip(), "outer_watchdog_triggered=true")
+
     def run_watchdog(
         self, *, complete: bool, fail_kill: bool = False
     ) -> tuple[subprocess.CompletedProcess, Path]:
