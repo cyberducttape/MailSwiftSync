@@ -63,6 +63,42 @@ class ScaleDockerWaitTests(unittest.TestCase):
             self.assertTrue(kill_marker.exists())
             self.assertEqual(wait_output.read_text(encoding="utf-8").strip(), "137")
 
+    def test_missing_completion_marker_kills_container_and_preserves_watchdog_marker(self):
+        with tempfile.TemporaryDirectory(prefix="scale-missing-completion-test-") as temporary:
+            directory = Path(temporary)
+            binary_dir = directory / "bin"
+            binary_dir.mkdir()
+            kill_marker = directory / "container-killed"
+            fake_docker = binary_dir / "docker"
+            fake_docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "case \"$1\" in\n"
+                "  kill) touch \"$FAKE_DOCKER_KILL_MARKER\" ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_docker.chmod(0o700)
+            progress = directory / "scale-progress.txt"
+            progress.write_text("begin epoch=1 operation=live\\n", encoding="utf-8")
+            watchdog_marker = directory / "watchdog-marker.txt"
+            environment = os.environ.copy()
+            environment["PATH"] = f"{binary_dir}{os.pathsep}{environment['PATH']}"
+            environment["FAKE_DOCKER_KILL_MARKER"] = str(kill_marker)
+            result = subprocess.run(
+                ["bash", str(COMPLETION_WAIT), "test-container", str(progress),
+                 str(directory / "wait-output.txt"), str(watchdog_marker), "1"],
+                check=False, capture_output=True, text=True, env=environment, timeout=8,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "124")
+            self.assertTrue(kill_marker.exists())
+            self.assertEqual(
+                watchdog_marker.read_text(encoding="utf-8").strip(),
+                "completion_watchdog_triggered=true",
+            )
+
     def test_disposable_scale_mode_requires_scale_fixture(self):
         environment = os.environ.copy()
         environment["MAILSWIFTSYNC_SCALE_MESSAGES"] = "0"

@@ -10,6 +10,8 @@
   values in the test source and binary.
 - Update the scale-workflow guard test to cover completion-marker teardown and
   distinct harness/container exit reporting.
+- Test that the scale completion waiter kills a stalled container and leaves a
+  watchdog marker when the harness never signals completion.
 
 All notable changes to MailSwiftSync are documented here. Detailed pre-alpha
 development history is preserved in repository history and is not shipped in
