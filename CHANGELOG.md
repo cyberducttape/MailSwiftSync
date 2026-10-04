@@ -6,6 +6,8 @@
   completion marker and record the fixture container's teardown status separately.
 - Add regression coverage for completed harnesses whose Dovecot children keep
   the disposable container from exiting naturally.
+- Replace token-shaped OAuth test literals that triggered CodeQL hard-coded
+  cryptographic value alerts with clearly synthetic rotating values.
 
 All notable changes to MailSwiftSync are documented here. Detailed pre-alpha
 development history is preserved in repository history and is not shipped in
