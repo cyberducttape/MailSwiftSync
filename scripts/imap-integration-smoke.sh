@@ -8,6 +8,7 @@ set -euo pipefail
 # native Dovecot path separately.
 
 test_engine="${MAILSWIFTSYNC_TEST_ENGINE:-ImapSync}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 scale_messages_raw="${MAILSWIFTSYNC_SCALE_MESSAGES:-0}"
 if [[ ! "$scale_messages_raw" =~ ^[0-9]{1,6}$ ]] || (( 10#$scale_messages_raw > 100000 )); then
   echo "FAIL: MAILSWIFTSYNC_SCALE_MESSAGES must be between 0 and 100000" >&2
@@ -24,6 +25,9 @@ if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
 fi
 
 required_tools=(dovecot doveadm doveconf imapsync mailswiftsync openssl ps timeout)
+if (( scale_messages > 0 )); then
+  required_tools+=(python3)
+fi
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
@@ -754,9 +758,14 @@ echo "PASS: incremental orchestration preserved verified terminal state"
 
 destination_maildir="$workspace/destination/mail/$user/Maildir"
 destination_message_ids=""
+fixture_message_ids_file="$workspace/destination-fixture-message-ids.txt"
 maildir_count_matching() {
   local pattern="$1"
   local matches
+  if (( scale_messages > 0 )); then
+    grep -F -c -- "$pattern" "$fixture_message_ids_file" || true
+    return
+  fi
   matches="$(find "$destination_maildir" -type f \
     \( -path '*/cur/*' -o -path '*/new/*' \) -print0 |
     xargs -0 -r grep -F -l -- "$pattern" || true)"
@@ -777,11 +786,30 @@ if [[ "$test_engine" == Dovecot ]]; then
   } >> "$product_log"
 else
   destination_messages="$(find "$destination_maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
+  if (( scale_messages > 0 )); then
+    scan_status=0
+    if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+      printf 'begin epoch=%s operation=fixture-message-id-scan\n' "$(date +%s)" \
+        >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
+    fi
+    python3 "$script_dir/maildir-fixture-scan.py" "$destination_maildir" \
+      > "$fixture_message_ids_file" || scan_status=$?
+    if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+      printf 'end epoch=%s operation=fixture-message-id-scan status=%s\n' \
+        "$(date +%s)" "$scan_status" >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
+    fi
+    if [[ "$scan_status" -ne 0 ]]; then
+      echo "FAIL: could not scan Maildir fixture Message-ID headers" >&2
+      exit "$scan_status"
+    fi
+  fi
 fi
 destination_has_message_id() {
   local message_id="$1"
   if [[ "$test_engine" == Dovecot ]]; then
     grep -F -q -- "$message_id" <<<"$destination_message_ids"
+  elif (( scale_messages > 0 )); then
+    grep -F -q -- "$message_id" "$fixture_message_ids_file"
   else
     [[ "$(maildir_count_matching "Message-ID: <$message_id>")" -gt 0 ]]
   fi

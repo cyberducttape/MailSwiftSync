@@ -3,6 +3,7 @@
 
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -101,6 +102,57 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn('printf \'begin epoch=%s operation=%s\\n\'', SCALE_SCRIPT)
         self.assertIn('printf \'end epoch=%s operation=%s status=%s\\n\'', SCALE_SCRIPT)
         self.assertIn("process_snapshot epoch=", SCALE_SCRIPT)
+
+    def test_scale_fixture_assertions_scan_maildir_ids_once(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("required_tools+=(python3)", SCALE_SCRIPT)
+        self.assertIn("maildir-fixture-scan.py", dockerfile)
+        self.assertIn('python3 "$script_dir/maildir-fixture-scan.py" "$destination_maildir"', SCALE_SCRIPT)
+        self.assertIn("operation=fixture-message-id-scan", SCALE_SCRIPT)
+        scale_count_function = SCALE_SCRIPT.split("maildir_count_matching() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn('grep -F -c -- "$pattern" "$fixture_message_ids_file"', scale_count_function)
+
+    def test_maildir_fixture_scanner_streams_headers_and_counts_duplicates(self):
+        with tempfile.TemporaryDirectory(prefix="mailswiftsync-maildir-scan-") as directory:
+            root = Path(directory)
+            cur = root / "cur"
+            new = root / "new"
+            nested = root / ".Archive" / "cur"
+            cur.mkdir()
+            new.mkdir()
+            nested.mkdir(parents=True)
+            (cur / "ordinary").write_bytes(
+                b"Message-ID: <ordinary@example.test>\n\nbody mailswiftsync-not-a-header@example.test\n"
+            )
+            (new / "fixture-1").write_bytes(
+                b"From: fixture@example.test\nMessage-ID: <mailswiftsync-duplicate@example.test>\n\nbody\n"
+            )
+            (new / "fixture-2").write_bytes(
+                b"Message-ID: <mailswiftsync-duplicate@example.test>\n\nbody\n"
+            )
+            (new / "scale-message").write_bytes(
+                b"Message-ID: <mailswiftsync-scale-000001@example.test>\n\nbody\n"
+            )
+            (nested / "fixture-3").write_bytes(
+                b"message-id: <mailswiftsync-sparse-100@example.test>\n\nbody\n"
+            )
+            result = subprocess.run(
+                ["python3", str(ROOT / "scripts" / "maildir-fixture-scan.py"), str(root)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            sorted(result.stdout.splitlines()),
+            [
+                "Message-ID: <mailswiftsync-duplicate@example.test>",
+                "Message-ID: <mailswiftsync-duplicate@example.test>",
+                "Message-ID: <mailswiftsync-sparse-100@example.test>",
+            ],
+        )
+        self.assertIn("examined 5 message files", result.stderr)
 
 
 if __name__ == "__main__":

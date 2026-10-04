@@ -52,6 +52,14 @@ operator distribution archives.
 - Hardened the 100k scale host watchdog to stop the container independently of
   the `docker wait` client and bound a stuck wait client, preserving time for
   diagnostic and resource-summary artifact collection.
+- Replaced repeated whole-Maildir scans in the 100k integration harness with a
+  single streaming fixture-Message-ID pass; phase markers now isolate that
+  post-migration assertion step.
+- Recorded evidence from the latest instrumented 100k run: its 100,016-message
+  metadata proof and incremental live pass completed, but repeated fixture
+  scans kept the workflow from collecting its memory summary. A synthetic
+  100,004-file scan now completes in 1.78 seconds; hosted end-to-end rerun is
+  still required.
 - Removed an obsolete release-readiness statement that contradicted the
   implemented durable webhook retry/dead-letter outbox; a documentation test
   now guards against reintroducing the stale limitation.

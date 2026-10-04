@@ -336,6 +336,17 @@ screen-reader checklist are recorded in
   artifact](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37154259149).
   This confirms the base transfer again, not successful incremental recovery
   or a completed instrumented qualification run.
+  A third instrumented run retained exact metadata evidence for 100,016
+  messages / 28,681,943 bytes with zero failed or unmatched messages, and its
+  phase markers confirm that both the initial migration and incremental live
+  pass completed. The workflow then reached its 90-minute limit during
+  post-migration fixture assertions, before memory-summary collection. The
+  retained [run and artifacts](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37159734180)
+  show the completed transfer phases but do not qualify peak memory. The
+  cause was repeated full Maildir traversal for each fixture Message-ID; the
+  harness now scans headers once. A local 100,004-file synthetic Maildir scan
+  took 1.78 seconds, but a complete instrumented hosted run is still required
+  to validate the fix and retain resource measurements.
   This small-message generic-IMAP fixture does not measure peak memory or
   qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.
   Scale mode disables per-message debug output and allows up to 40 minutes per

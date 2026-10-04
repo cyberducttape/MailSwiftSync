@@ -41,6 +41,7 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         ca-certificates \
         openssl \
+        python3 \
         procps \
         "dovecot-core=${DOVECOT_VERSION}" \
         "dovecot-imapd=${DOVECOT_VERSION}" \
@@ -57,6 +58,7 @@ RUN apt-get update \
 
 COPY --from=builder /build/target/release/mailswiftsync /usr/local/bin/mailswiftsync
 COPY scripts/imap-integration-smoke.sh /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+COPY scripts/maildir-fixture-scan.py /usr/local/lib/mailswiftsync/maildir-fixture-scan.py
 COPY scripts/controller-recovery-smoke.sh /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
 COPY scripts/controller-chaos-smoke.sh /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
 COPY scripts/engine-storage-fault-smoke.sh /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
