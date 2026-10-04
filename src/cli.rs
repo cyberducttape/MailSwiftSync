@@ -250,18 +250,22 @@ fn deliver_webhook_once(
         )
         .map_err(|error| format!("could not queue durable delivery: {error}"))?;
     store
-        .bind_unbound_webhook_deliveries(&endpoint_digest)
+        .bind_unbound_webhook_deliveries(&endpoint_digest, project_id)
         .map_err(|error| format!("could not bind lifecycle events to endpoint: {error}"))?;
-    let deliveries = store
-        .due_webhook_deliveries(&endpoint_digest, 100)
-        .map_err(|error| format!("could not read durable delivery queue: {error}"))?;
+    let lease_owner = uuid::Uuid::new_v4().to_string();
     let mut delivered = 0_u32;
     let mut failed = 0_u32;
-    for delivery in deliveries {
+    for _ in 0..100 {
+        let delivery = store
+            .claim_webhook_deliveries(&endpoint_digest, project_id, &lease_owner, 1)
+            .map_err(|error| format!("could not claim durable delivery queue: {error}"))?;
+        let Some(delivery) = delivery.into_iter().next() else {
+            break;
+        };
         match webhook::post_json(url, &delivery.payload) {
             Ok(status_code) if (200..300).contains(&status_code) => {
                 store
-                    .mark_webhook_delivered(&delivery.event_id)
+                    .mark_webhook_delivered(&delivery.event_id, &lease_owner)
                     .map_err(|error| {
                         format!("durability failed after HTTP {status_code}: {error}")
                     })?;
@@ -270,7 +274,7 @@ fn deliver_webhook_once(
             Ok(status_code) => {
                 let error = format!("endpoint rejected delivery with HTTP {status_code}");
                 store
-                    .mark_webhook_failed(&delivery.event_id, &error)
+                    .mark_webhook_failed(&delivery.event_id, &lease_owner, &error)
                     .map_err(|mark_error| {
                         format!("delivery failure could not be durably recorded: {mark_error}")
                     })?;
@@ -278,7 +282,7 @@ fn deliver_webhook_once(
             }
             Err(error) => {
                 store
-                    .mark_webhook_failed(&delivery.event_id, &error)
+                    .mark_webhook_failed(&delivery.event_id, &lease_owner, &error)
                     .map_err(|mark_error| {
                         format!("delivery failure could not be durably recorded: {mark_error}")
                     })?;

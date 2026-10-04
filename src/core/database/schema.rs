@@ -153,6 +153,8 @@ impl StateStore {
                     ("next_attempt_at", "TEXT", true, 0),
                     ("created_at", "TEXT", true, 0),
                     ("delivered_at", "TEXT", false, 0),
+                    ("lease_owner", "TEXT", false, 0),
+                    ("lease_until", "TEXT", false, 0),
                 ],
             ),
             (
@@ -829,7 +831,7 @@ impl StateStore {
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE mismatch_type NOT IN ('message_id_only','message_present_wrong_folder','missing','extra','duplicated'))",
             "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE attention_reason IS NOT NULL AND attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))",
-            "SELECT EXISTS(SELECT 1 FROM webhook_deliveries WHERE status NOT IN ('queued','delivered','dead_letter'))",
+            "SELECT EXISTS(SELECT 1 FROM webhook_deliveries WHERE status NOT IN ('queued','delivering','delivered','dead_letter'))",
         ];
         for sql in ENUM_CHECKS {
             let has_unknown: bool = connection.query_row(sql, [], |row| row.get(0))?;
@@ -958,7 +960,7 @@ impl StateStore {
                 "webhook_deliveries",
                 &[
                     "attempts>=0",
-                    "statusin('queued','delivered','dead_letter')",
+                    "statusin('queued','delivering','delivered','dead_letter')",
                 ],
             ),
             (

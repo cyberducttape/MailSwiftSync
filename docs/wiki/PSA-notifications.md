@@ -49,6 +49,11 @@ only the endpoint digest and credential-free event payloads.
   mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc123 <project-id>
   ```
 
+  The durable outbox also binds and claims lifecycle deliveries by that
+  project ID; events belonging to other projects remain unbound for their own
+  endpoint. Concurrent notifier processes lease rows atomically, and expired
+  leases are retried after a worker crash.
+
 - Exit code `0` means the endpoint responded 2xx; any other outcome
   (non-2xx response, connection failure, TLS failure) exits non-zero with a
   message on stderr, so a wrapper script can tell delivery apart from

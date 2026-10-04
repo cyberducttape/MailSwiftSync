@@ -10,6 +10,7 @@ use rusqlite::{OptionalExtension, params};
 
 pub(crate) const MAX_WEBHOOK_PAYLOAD_BYTES: usize = 128 * 1024;
 pub(crate) const MAX_WEBHOOK_ATTEMPTS: u32 = 12;
+pub(crate) const WEBHOOK_DELIVERY_LEASE_SECONDS: u32 = 120;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WebhookDelivery {
@@ -48,12 +49,12 @@ impl StateStore {
             params![event_id, project_id, event_type, payload, endpoint_digest],
         )?;
         if inserted == 0 {
-            let existing: Option<(String, String, String)> = self
+            let existing: Option<(String, String, String, String)> = self
                 .connection
                 .query_row(
-                    "SELECT payload,endpoint_digest,event_type FROM webhook_deliveries WHERE event_id=?1",
+                    "SELECT payload,endpoint_digest,event_type,project_id FROM webhook_deliveries WHERE event_id=?1",
                     [event_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()?;
             if existing
@@ -61,6 +62,7 @@ impl StateStore {
                     payload.to_owned(),
                     endpoint_digest.to_owned(),
                     event_type.to_owned(),
+                    project_id.to_owned(),
                 ))
             {
                 return Err(rusqlite::Error::InvalidQuery);
@@ -69,6 +71,7 @@ impl StateStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn due_webhook_deliveries(
         &self,
         endpoint_digest: &str,
@@ -97,21 +100,82 @@ impl StateStore {
     pub(crate) fn bind_unbound_webhook_deliveries(
         &self,
         endpoint_digest: &str,
+        project_id: Option<&str>,
     ) -> rusqlite::Result<()> {
-        if endpoint_digest.len() != 64 {
+        if endpoint_digest.len() != 64 || project_id.is_some_and(str::is_empty) {
             return Err(rusqlite::Error::InvalidQuery);
         }
         self.connection.execute(
-            "UPDATE webhook_deliveries SET endpoint_digest=?1 WHERE endpoint_digest='' AND status='queued'",
-            [endpoint_digest],
+            "UPDATE webhook_deliveries SET endpoint_digest=?1 WHERE endpoint_digest='' AND status='queued' AND (?2 IS NULL OR project_id=?2)",
+            params![endpoint_digest, project_id],
         )?;
         Ok(())
     }
 
-    pub(crate) fn mark_webhook_delivered(&self, event_id: &str) -> rusqlite::Result<()> {
+    /// Atomically lease due rows for this endpoint. A single UPDATE ...
+    /// RETURNING statement ensures concurrent workers cannot both obtain the
+    /// same queued row; expired leases are reclaimed after worker crashes.
+    pub(crate) fn claim_webhook_deliveries(
+        &self,
+        endpoint_digest: &str,
+        project_id: Option<&str>,
+        lease_owner: &str,
+        limit: u32,
+    ) -> rusqlite::Result<Vec<WebhookDelivery>> {
+        if endpoint_digest.len() != 64
+            || lease_owner.is_empty()
+            || project_id.is_some_and(str::is_empty)
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let lease_modifier = format!("+{} seconds", WEBHOOK_DELIVERY_LEASE_SECONDS);
+        let mut statement = self.connection.prepare(
+            "UPDATE webhook_deliveries
+             SET status='delivering',lease_owner=?3,lease_until=datetime('now',?4)
+             WHERE event_id IN (
+                SELECT event_id FROM webhook_deliveries
+                WHERE endpoint_digest=?1
+                  AND (?2 IS NULL OR project_id=?2)
+                  AND ((status='queued' AND next_attempt_at<=CURRENT_TIMESTAMP)
+                       OR (status='delivering' AND lease_until<=CURRENT_TIMESTAMP))
+                ORDER BY created_at,event_id LIMIT ?5
+             )
+             RETURNING event_id,project_id,event_type,payload,endpoint_digest,attempts,status,last_error",
+        )?;
+        statement
+            .query_map(
+                params![
+                    endpoint_digest,
+                    project_id,
+                    lease_owner,
+                    lease_modifier,
+                    i64::from(limit.min(100))
+                ],
+                |row| {
+                    Ok(WebhookDelivery {
+                        event_id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        event_type: row.get(2)?,
+                        payload: row.get(3)?,
+                        endpoint_digest: row.get(4)?,
+                        attempts: u32::try_from(row.get::<_, i64>(5)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        status: row.get(6)?,
+                        last_error: row.get(7)?,
+                    })
+                },
+            )?
+            .collect()
+    }
+
+    pub(crate) fn mark_webhook_delivered(
+        &self,
+        event_id: &str,
+        lease_owner: &str,
+    ) -> rusqlite::Result<()> {
         let changed = self.connection.execute(
-            "UPDATE webhook_deliveries SET status='delivered',delivered_at=CURRENT_TIMESTAMP,last_error=NULL WHERE event_id=?1 AND status='queued'",
-            [event_id],
+            "UPDATE webhook_deliveries SET status='delivered',delivered_at=CURRENT_TIMESTAMP,last_error=NULL,lease_owner=NULL,lease_until=NULL WHERE event_id=?1 AND status='delivering' AND lease_owner=?2",
+            params![event_id, lease_owner],
         )?;
         if changed != 1 {
             return Err(rusqlite::Error::InvalidQuery);
@@ -119,29 +183,31 @@ impl StateStore {
         Ok(())
     }
 
-    pub(crate) fn mark_webhook_failed(&self, event_id: &str, error: &str) -> rusqlite::Result<()> {
-        let attempts: Option<u32> = self
-            .connection
-            .query_row(
-                "SELECT attempts FROM webhook_deliveries WHERE event_id=?1 AND status='queued'",
-                [event_id],
-                |row| {
-                    row.get::<_, i64>(0)
-                        .map(|value| u32::try_from(value).unwrap_or(u32::MAX))
-                },
-            )
-            .optional()?;
-        let Some(attempts) = attempts else {
-            return Err(rusqlite::Error::InvalidQuery);
-        };
-        let next_attempts = attempts.saturating_add(1);
-        let dead_letter = next_attempts >= MAX_WEBHOOK_ATTEMPTS;
-        let delay = 2_u64.pow(next_attempts.min(10));
+    pub(crate) fn mark_webhook_failed(
+        &self,
+        event_id: &str,
+        lease_owner: &str,
+        error: &str,
+    ) -> rusqlite::Result<()> {
         let bounded_error = crate::storage::bounded_event_detail(error);
-        self.connection.execute(
-            "UPDATE webhook_deliveries SET attempts=?2,status=CASE WHEN ?3 THEN 'dead_letter' ELSE 'queued' END,last_error=?4,next_attempt_at=datetime('now',?5) WHERE event_id=?1 AND status='queued'",
-            params![event_id, i64::from(next_attempts), dead_letter, bounded_error, format!("+{delay} seconds")],
+        let changed = self.connection.execute(
+            "UPDATE webhook_deliveries
+             SET attempts=attempts+1,
+                 status=CASE WHEN attempts+1>=?3 THEN 'dead_letter' ELSE 'queued' END,
+                 last_error=?4,
+                 next_attempt_at=datetime('now','+' || (2 << (min(attempts+1,10)-1)) || ' seconds'),
+                 lease_owner=NULL,lease_until=NULL
+             WHERE event_id=?1 AND status='delivering' AND lease_owner=?2",
+            params![
+                event_id,
+                lease_owner,
+                i64::from(MAX_WEBHOOK_ATTEMPTS),
+                bounded_error
+            ],
         )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         Ok(())
     }
 }
@@ -188,6 +254,10 @@ mod tests {
                 [],
             )
             .unwrap();
+        store.connection.execute(
+            "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES('project-b','test-b','source','destination','discovery')",
+            [],
+        ).unwrap();
         (store, directory)
     }
 
@@ -238,6 +308,18 @@ mod tests {
                 )
                 .is_err()
         );
+        assert!(
+            store
+                .enqueue_webhook_delivery(
+                    "event",
+                    "project-b",
+                    "migration.status_snapshot",
+                    "{}",
+                    &"a".repeat(64)
+                )
+                .is_err(),
+            "an idempotency-key collision must not silently transfer project ownership"
+        );
         // Windows cannot delete the database while SQLite holds it open.
         close_test_store(store);
         remove_test_directory(&directory).unwrap();
@@ -257,8 +339,12 @@ mod tests {
             )
             .unwrap();
         for attempt in 1..=MAX_WEBHOOK_ATTEMPTS {
+            let claimed = store
+                .claim_webhook_deliveries(&digest, None, "retry-worker", 10)
+                .unwrap();
+            assert_eq!(claimed.len(), 1);
             store
-                .mark_webhook_failed("event", "endpoint unavailable")
+                .mark_webhook_failed("event", "retry-worker", "endpoint unavailable")
                 .unwrap();
             if attempt < MAX_WEBHOOK_ATTEMPTS {
                 store
@@ -281,6 +367,185 @@ mod tests {
         );
         // Windows cannot delete the database while SQLite holds it open.
         close_test_store(store);
+        remove_test_directory(&directory).unwrap();
+    }
+
+    #[test]
+    fn scoped_binding_and_claims_never_cross_project_boundaries() {
+        let (store, directory) = test_store();
+        let endpoint_a = "a".repeat(64);
+        let endpoint_b = "b".repeat(64);
+        store
+            .enqueue_webhook_delivery("event-a", "project", "mailbox.completed", "{}", "")
+            .unwrap();
+        store
+            .enqueue_webhook_delivery("event-b", "project-b", "mailbox.completed", "{}", "")
+            .unwrap();
+
+        store
+            .bind_unbound_webhook_deliveries(&endpoint_a, Some("project"))
+            .unwrap();
+        let claimed_a = store
+            .claim_webhook_deliveries(&endpoint_a, Some("project"), "worker-a", 10)
+            .unwrap();
+        assert_eq!(
+            claimed_a
+                .iter()
+                .map(|row| row.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["event-a"]
+        );
+        assert!(
+            store
+                .claim_webhook_deliveries(&endpoint_a, Some("project-b"), "worker-a", 10)
+                .unwrap()
+                .is_empty()
+        );
+        let digest_b: String = store
+            .connection
+            .query_row(
+                "SELECT endpoint_digest FROM webhook_deliveries WHERE event_id='event-b'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            digest_b.is_empty(),
+            "project B must remain unbound after project A notification"
+        );
+
+        store
+            .bind_unbound_webhook_deliveries(&endpoint_b, Some("project-b"))
+            .unwrap();
+        let claimed_b = store
+            .claim_webhook_deliveries(&endpoint_b, Some("project-b"), "worker-b", 10)
+            .unwrap();
+        assert_eq!(
+            claimed_b
+                .iter()
+                .map(|row| row.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["event-b"]
+        );
+        assert!(
+            store
+                .claim_webhook_deliveries(&endpoint_a, None, "worker-a2", 10)
+                .unwrap()
+                .is_empty()
+        );
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
+    }
+
+    #[test]
+    fn webhook_claim_is_exclusive_and_expired_leases_are_reclaimed() {
+        let (store, directory) = test_store();
+        let digest = "c".repeat(64);
+        store
+            .enqueue_webhook_delivery(
+                "event",
+                "project",
+                "migration.status_snapshot",
+                "{}",
+                &digest,
+            )
+            .unwrap();
+        let first = store
+            .claim_webhook_deliveries(&digest, None, "worker-a", 10)
+            .unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(
+            store
+                .claim_webhook_deliveries(&digest, None, "worker-b", 10)
+                .unwrap()
+                .is_empty()
+        );
+        store.connection.execute("UPDATE webhook_deliveries SET lease_until=datetime('now','-1 second') WHERE event_id='event'", []).unwrap();
+        let reclaimed = store
+            .claim_webhook_deliveries(&digest, None, "worker-b", 10)
+            .unwrap();
+        assert_eq!(reclaimed.len(), 1);
+        assert!(store.mark_webhook_delivered("event", "worker-a").is_err());
+        store.mark_webhook_delivered("event", "worker-b").unwrap();
+        assert!(
+            store
+                .claim_webhook_deliveries(&digest, None, "worker-c", 10)
+                .unwrap()
+                .is_empty()
+        );
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
+    }
+
+    #[test]
+    fn schema_v23_migration_unbinds_queued_lifecycle_events() {
+        let (store, directory) = test_store();
+        store
+            .enqueue_webhook_delivery(
+                "event-a",
+                "project",
+                "mailbox.completed",
+                "{}",
+                &"a".repeat(64),
+            )
+            .unwrap();
+        store
+            .enqueue_webhook_delivery(
+                "snapshot",
+                "project",
+                "migration.status_snapshot",
+                "{}",
+                &"b".repeat(64),
+            )
+            .unwrap();
+        let database_path = directory.join("state.db");
+        close_test_store(store);
+
+        {
+            let connection = rusqlite::Connection::open(&database_path).unwrap();
+            connection
+                .execute_batch(
+                    "DROP TRIGGER IF EXISTS events_webhook_outbox;
+                     ALTER TABLE webhook_deliveries RENAME TO webhook_deliveries_v24;
+                     CREATE TABLE webhook_deliveries (
+                        event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL, payload TEXT NOT NULL,
+                        endpoint_digest TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+                        status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivered','dead_letter')),
+                        last_error TEXT,
+                        next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        delivered_at TEXT
+                     );
+                     INSERT INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest,attempts,status,last_error,next_attempt_at,created_at,delivered_at)
+                     SELECT event_id,project_id,event_type,payload,endpoint_digest,attempts,status,last_error,next_attempt_at,created_at,delivered_at FROM webhook_deliveries_v24;
+                     DROP TABLE webhook_deliveries_v24;
+                     PRAGMA user_version=23;",
+                )
+                .unwrap();
+        }
+
+        let migrated = StateStore::open(&database_path).unwrap();
+        let lifecycle_digest: String = migrated
+            .connection
+            .query_row(
+                "SELECT endpoint_digest FROM webhook_deliveries WHERE event_id='event-a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let snapshot_digest: String = migrated
+            .connection
+            .query_row(
+                "SELECT endpoint_digest FROM webhook_deliveries WHERE event_id='snapshot'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(lifecycle_digest.is_empty());
+        assert_eq!(snapshot_digest, "b".repeat(64));
+        close_test_store(migrated);
         remove_test_directory(&directory).unwrap();
     }
 

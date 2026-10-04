@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Scope webhook lifecycle-event binding and delivery claims to the selected
+  project; add atomic leased claims with crash recovery and race-safe retry
+  accounting, plus schema-v24 migration and isolation/concurrency tests.
 - Make the disposable 100k-message scale qualification finish from the harness
   completion marker and delegate container disposal to the ephemeral hosted runner.
 - Add regression coverage for completed harnesses whose Dovecot children keep
@@ -21,6 +24,13 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Hardened the transactional webhook outbox for MSP isolation: project-scoped
+  notifiers bind and claim only that project's lifecycle events, while unscoped
+  notifiers retain all-project behavior. Delivery now atomically leases due
+  rows, reclaims expired leases after crashes, and fences acknowledgements by
+  lease owner; failed-attempt increments are one atomic update. Schema v24
+  migration safely unbinds prior queued lifecycle events that may have been
+  associated with the wrong project endpoint.
 - Updated disposable 100k-mailbox harness teardown to delegate Dovecot process
   cleanup to container teardown, avoiding an unbounded wait after SIGKILL when
   fixture processes are stuck in filesystem I/O; evidence now marks completion

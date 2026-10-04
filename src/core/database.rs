@@ -401,8 +401,9 @@ impl StateStore {
         // adds the credential-free webhook delivery outbox; 19 adds the
         // transaction-bound lifecycle-event outbox trigger; 20 distinguishes
         // mailbox failure events from successful completion events; version
-        // 22 distinguishes failed mailbox preflights and version 23 adds
-        // durable notification for successfully generated proof artifacts.
+        // 22 distinguishes failed mailbox preflights, version 23 adds
+        // durable proof-ready notifications, and version 24 adds leased,
+        // project-scoped webhook delivery claims.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -449,8 +450,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
                  CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL CHECK(pid >= 0), start_ticks INTEGER CHECK(start_ticks IS NULL OR start_ticks >= 0), process_group INTEGER CHECK(process_group IS NULL OR process_group >= 0), session_id INTEGER CHECK(session_id IS NULL OR session_id >= 0), executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
                  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS webhook_deliveries (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, endpoint_digest TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivered','dead_letter')), last_error TEXT, next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TEXT);
-                 CREATE TRIGGER IF NOT EXISTS events_webhook_outbox AFTER INSERT ON events WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted') OR (NEW.kind='phase_changed' AND NEW.detail IN ('complete','final_delta')) BEGIN INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest) SELECT printf('ledger-event-%lld',NEW.id),NEW.project_id,CASE WHEN NEW.kind='run_started' THEN 'migration.started' WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference' WHEN NEW.kind='run_finished' THEN 'mailbox.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready' ELSE 'mailbox.verification_accepted' END,json_object('format','mailswiftsync-webhook-event','event_id',printf('ledger-event-%lld',NEW.id),'event_type',CASE WHEN NEW.kind='run_started' THEN 'migration.started' WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference' WHEN NEW.kind='run_finished' THEN 'mailbox.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed' WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready' ELSE 'mailbox.verification_accepted' END,'project_id',NEW.project_id,'run_id',NEW.run_id,'detail',NEW.detail),''; END;
+                 CREATE TABLE IF NOT EXISTS webhook_deliveries (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, endpoint_digest TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivering','delivered','dead_letter')), last_error TEXT, next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TEXT, lease_owner TEXT, lease_until TEXT);
                  CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -469,9 +469,12 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
                  CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_due ON webhook_deliveries(endpoint_digest, status, next_attempt_at, created_at);
+                 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_project_due ON webhook_deliveries(project_id, endpoint_digest, status, next_attempt_at, created_at);
                  CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);",
             )?;
+        Self::migrate_webhook_delivery_leases(&tx)?;
+        Self::create_webhook_outbox_trigger(&tx)?;
         tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_verification_acceptances_job ON verification_acceptances(job_id, id DESC)",
             [],
@@ -842,6 +845,79 @@ impl StateStore {
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn migrate_webhook_delivery_leases(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        let table_sql: String = tx.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='webhook_deliveries'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !table_sql.contains("'delivering'") {
+            tx.execute_batch("DROP TRIGGER IF EXISTS events_webhook_outbox;")?;
+            tx.execute_batch(
+                "CREATE TABLE webhook_deliveries_v24 (
+                    event_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    endpoint_digest TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+                    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivering','delivered','dead_letter')),
+                    last_error TEXT,
+                    next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    delivered_at TEXT,
+                    lease_owner TEXT,
+                    lease_until TEXT
+                 );
+                 INSERT INTO webhook_deliveries_v24(event_id,project_id,event_type,payload,endpoint_digest,attempts,status,last_error,next_attempt_at,created_at,delivered_at)
+                 SELECT event_id,project_id,event_type,payload,
+                        CASE WHEN event_type='migration.status_snapshot' OR status!='queued' THEN endpoint_digest ELSE '' END,
+                        attempts,status,last_error,next_attempt_at,created_at,delivered_at
+                 FROM webhook_deliveries;
+                 DROP TABLE webhook_deliveries;
+                 ALTER TABLE webhook_deliveries_v24 RENAME TO webhook_deliveries;",
+            )?;
+        }
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_due ON webhook_deliveries(endpoint_digest, status, next_attempt_at, created_at);
+             CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_project_due ON webhook_deliveries(project_id, endpoint_digest, status, next_attempt_at, created_at);",
+        )?;
+        Ok(())
+    }
+
+    fn create_webhook_outbox_trigger(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        tx.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS events_webhook_outbox AFTER INSERT ON events
+             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted')
+               OR (NEW.kind='phase_changed' AND NEW.detail IN ('complete','final_delta'))
+             BEGIN
+               INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest)
+               SELECT printf('ledger-event-%lld',NEW.id),NEW.project_id,
+                 CASE
+                   WHEN NEW.kind='run_started' THEN 'migration.started'
+                   WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
+                   WHEN NEW.kind='run_finished' THEN 'mailbox.completed'
+                   WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
+                   WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
+                   ELSE 'mailbox.verification_accepted'
+                 END,
+                 json_object(
+                   'format','mailswiftsync-webhook-event',
+                   'event_id',printf('ledger-event-%lld',NEW.id),
+                   'event_type',CASE
+                     WHEN NEW.kind='run_started' THEN 'migration.started'
+                     WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
+                     WHEN NEW.kind='run_finished' THEN 'mailbox.completed'
+                     WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
+                     WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
+                     ELSE 'mailbox.verification_accepted'
+                   END,
+                   'project_id',NEW.project_id,'run_id',NEW.run_id,'detail',NEW.detail
+                 ),'';
+             END;",
+        )
     }
 
     fn ensure_evidence_counter_constraints(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
