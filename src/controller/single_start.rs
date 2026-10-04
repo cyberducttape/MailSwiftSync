@@ -305,6 +305,14 @@ impl App {
                 plan_fingerprint,
                 credential_fingerprint,
                 plan_snapshot,
+                source_provider: crate::core::provider_intelligence::canonical_provider(
+                    &self.form.profile.source_host,
+                )
+                .to_owned(),
+                destination_provider: crate::core::provider_intelligence::canonical_provider(
+                    &self.form.profile.destination_host,
+                )
+                .to_owned(),
             },
         ) {
             Ok(context) => context,

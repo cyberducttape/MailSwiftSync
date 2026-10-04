@@ -248,6 +248,8 @@ mod tests {
             dry_run: true,
             plan_fingerprint: "plan-a".into(),
             credential_fingerprint: "credential-a".into(),
+            source_provider: "generic".into(),
+            destination_provider: "generic".into(),
         }
     }
 

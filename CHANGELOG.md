@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Single-mailbox terminal failures now retain canonical source/destination
+  provider identities through durable run context. Provider-specific error
+  handling is used only when engine output unambiguously identifies the failed
+  endpoint; ambiguous failures remain generic.
 - Signed customer evidence now exposes the immutable migration-plan SHA-256
   and the execution-engine binary SHA-256 when resolved in the plan snapshot;
   the underlying plan and its endpoint or credential-reference details remain

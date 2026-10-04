@@ -18,6 +18,14 @@ impl App {
                 return;
             };
             let succeeded = r.is_ok();
+            let terminal_failure_class = |error: &str| {
+                let provider = crate::controller::failure::provider_for_sided_error(
+                    &run_context.source_provider,
+                    &run_context.destination_provider,
+                    error,
+                );
+                crate::controller::failure::classify_failure_for_provider(provider, error)
+            };
             let delta_required = r
                 .as_ref()
                 .is_ok_and(|outcome| *outcome == StreamOutcome::DeltaRequired);
@@ -42,34 +50,33 @@ impl App {
                 self.report_store_error("record incomplete verification", result);
             }
             if !was_bulk_run && run_context.job_id.is_some() {
-                let final_state =
-                    if succeeded && run_context.dry_run {
-                        "ready"
-                    } else if !succeeded {
-                        if r.as_ref().err().is_some_and(|error| {
-                            classify_failure(error) == FailureClass::Verification
-                        }) {
-                            "attention"
-                        } else if r.as_ref().err().is_some_and(|error| {
-                            classify_failure(error) == FailureClass::Cancellation
-                        }) {
-                            "cancelled"
-                        } else {
-                            "failed"
-                        }
-                    } else if let Some(evidence) = terminal_evidence.as_ref() {
-                        if evidence.is_exact_match() && !delta_required {
-                            "verified"
-                        } else if delta_required {
-                            "delta_required"
-                        } else {
-                            "verification_difference"
-                        }
-                    } else if !run_context.dry_run {
+                let final_state = if succeeded && run_context.dry_run {
+                    "ready"
+                } else if !succeeded {
+                    if r.as_ref().err().is_some_and(|error| {
+                        terminal_failure_class(error) == FailureClass::Verification
+                    }) {
                         "attention"
+                    } else if r.as_ref().err().is_some_and(|error| {
+                        terminal_failure_class(error) == FailureClass::Cancellation
+                    }) {
+                        "cancelled"
                     } else {
-                        "completed"
-                    };
+                        "failed"
+                    }
+                } else if let Some(evidence) = terminal_evidence.as_ref() {
+                    if evidence.is_exact_match() && !delta_required {
+                        "verified"
+                    } else if delta_required {
+                        "delta_required"
+                    } else {
+                        "verification_difference"
+                    }
+                } else if !run_context.dry_run {
+                    "attention"
+                } else {
+                    "completed"
+                };
                 direct_final_state = Some(final_state);
             }
             let mut retry_terminal_commit = false;
@@ -78,26 +85,27 @@ impl App {
                 let run_id = &run_context.run_id;
                 let run_status = if succeeded {
                     "completed"
-                } else if r
-                    .as_ref()
-                    .err()
-                    .is_some_and(|error| classify_failure(error) == FailureClass::Verification)
-                {
+                } else if r.as_ref().err().is_some_and(|error| {
+                    terminal_failure_class(error) == FailureClass::Verification
+                }) {
                     "verification_failed"
-                } else if r
-                    .as_ref()
-                    .err()
-                    .is_some_and(|error| classify_failure(error) == FailureClass::Cancellation)
-                {
+                } else if r.as_ref().err().is_some_and(|error| {
+                    terminal_failure_class(error) == FailureClass::Cancellation
+                }) {
                     "cancelled"
                 } else {
                     "failed"
                 };
-                let detail = r
-                    .as_ref()
-                    .err()
-                    .map(|error| classified_failure_detail(error))
-                    .unwrap_or_default();
+                let detail = r.as_ref().err().map_or_else(String::new, |error| {
+                    let provider = crate::controller::failure::provider_for_sided_error(
+                        &run_context.source_provider,
+                        &run_context.destination_provider,
+                        error,
+                    );
+                    crate::controller::failure::classified_failure_detail_for_provider(
+                        provider, error,
+                    )
+                });
                 let terminal_write = if !was_bulk_run
                     && let (Some(job), Some(state)) = (&run_context.job_id, direct_final_state)
                 {

@@ -19,6 +19,10 @@ pub(crate) struct ActiveRunContext {
     pub(crate) dry_run: bool,
     pub(crate) plan_fingerprint: String,
     pub(crate) credential_fingerprint: String,
+    /// Canonical, non-secret endpoint identities for terminal failure
+    /// classification when engine output identifies the failing side.
+    pub(crate) source_provider: String,
+    pub(crate) destination_provider: String,
 }
 
 impl ActiveRunContext {

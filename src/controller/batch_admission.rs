@@ -530,6 +530,8 @@ pub(crate) fn admit_batch_run(
         dry_run: mode.is_preflight(),
         plan_fingerprint: String::new(),
         credential_fingerprint: String::new(),
+        source_provider: "generic".to_owned(),
+        destination_provider: "generic".to_owned(),
     })
 }
 

@@ -53,9 +53,9 @@ use controller::batch_admission::duplicate_destination;
 use controller::batch_admission::selection_value;
 #[cfg(test)]
 use controller::batch_admission::{durable_batch_profile_config, validate_batch_throttle};
-use controller::failure::{
-    FailureClass, classified_failure_detail, classify_failure, terminal_phase_advance_allowed,
-};
+use controller::failure::{FailureClass, terminal_phase_advance_allowed};
+#[cfg(test)]
+use controller::failure::{classified_failure_detail, classify_failure};
 #[cfg(test)]
 use controller::failure::{
     is_transient_batch_error, should_retry_batch_error, transient_retry_delay,
@@ -2008,6 +2008,8 @@ destination = "Archive"
             dry_run: true,
             plan_fingerprint: String::new(),
             credential_fingerprint: String::new(),
+            source_provider: "generic".into(),
+            destination_provider: "generic".into(),
         };
         assert!(context.owns_process("child-a", "job-a"));
         assert!(context.owns_process("child-b", "job-b"));

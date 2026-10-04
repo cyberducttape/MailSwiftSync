@@ -388,6 +388,21 @@ pub(crate) fn classify_failure_for_provider(provider: &str, error: &str) -> Fail
     classify_error_for_provider(provider, error).class()
 }
 
+/// Choose a provider classifier only when the engine diagnostic identifies
+/// one endpoint. Ambiguous diagnostics must not borrow either provider's
+/// provider-specific signatures.
+pub(crate) fn provider_for_sided_error<'a>(
+    source_provider: &'a str,
+    destination_provider: &'a str,
+    error: &str,
+) -> &'a str {
+    match crate::controller::rate_domains::failure_sides(error).as_slice() {
+        [crate::controller::rate_domains::Side::Source] => source_provider,
+        [crate::controller::rate_domains::Side::Destination] => destination_provider,
+        _ => "generic",
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn is_transient_batch_error(error: &str) -> bool {
     is_transient_batch_error_for_provider("generic", error)
@@ -533,12 +548,33 @@ pub(crate) fn classified_failure_detail_for_provider(provider: &str, error: &str
     classified_failure_detail_internal(provider, error, true)
 }
 
+#[cfg(test)]
 pub(crate) fn classified_failure_detail(error: &str) -> String {
     classified_failure_detail_internal("generic", error, false)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terminal_provider_selection_requires_unambiguous_endpoint_attribution() {
+        assert_eq!(
+            super::provider_for_sided_error("gmail", "microsoft365", "Host1: server busy"),
+            "gmail"
+        );
+        assert_eq!(
+            super::provider_for_sided_error("gmail", "microsoft365", "Host2: server busy"),
+            "microsoft365"
+        );
+        assert_eq!(
+            super::provider_for_sided_error("gmail", "microsoft365", "server busy"),
+            "generic"
+        );
+        assert_eq!(
+            super::provider_for_sided_error("gmail", "microsoft365", "Host1 and Host2 refused"),
+            "generic"
+        );
+    }
+
     #[test]
     fn failure_detail_names_a_recognized_signal_and_its_next_step() {
         let detail =

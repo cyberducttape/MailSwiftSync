@@ -74,6 +74,8 @@ pub(crate) struct SingleRunAdmission {
     pub(crate) plan_fingerprint: String,
     pub(crate) credential_fingerprint: String,
     pub(crate) plan_snapshot: String,
+    pub(crate) source_provider: String,
+    pub(crate) destination_provider: String,
 }
 
 /// Commit a single run snapshot and construct the matching ownership context.
@@ -104,6 +106,8 @@ pub(crate) fn admit_single_run(
         dry_run: admission.dry_run,
         plan_fingerprint: admission.plan_fingerprint,
         credential_fingerprint: admission.credential_fingerprint,
+        source_provider: admission.source_provider,
+        destination_provider: admission.destination_provider,
     })
 }
 

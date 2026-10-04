@@ -474,6 +474,8 @@ mod tests {
                 dry_run: true,
                 plan_fingerprint: "plan-a".into(),
                 credential_fingerprint: "credential-a".into(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
             });
             app.run_telemetry.reset(std::time::Instant::now(), 1);
             let progress = |bytes| crate::progress::TransferProgress {
