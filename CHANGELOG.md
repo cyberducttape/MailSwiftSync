@@ -11,6 +11,9 @@ operator distribution archives.
   changing test visibility or behavior.
 - Separated IMAP probe unit and restart/resume test harnesses from the
   production protocol implementation for more focused security review.
+- Split durable SQLite schema layout, constraint, and cleanliness validation
+  into a dedicated database schema module; open, backup, and migration code
+  remain separate from the schema proof invariants.
 - Adaptive provider scheduling now accepts explicit source and destination
   tenant scopes in the advanced plan and per-row batch imports. These scopes
   are persisted, fingerprinted, and included in run snapshots; blank values
