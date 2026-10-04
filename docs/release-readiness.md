@@ -256,8 +256,8 @@ screen-reader checklist are recorded in
   floors for safety-critical plan admission, batch attempt handling and
   lifecycle/scheduling,
   adaptive provider rate domains, provider response classification, durable
-  state, evidence projection, recovery, IMAP authentication, OAuth, process
-  supervision, and verification code;
+  state and schema-integrity proof, evidence projection, recovery, IMAP
+  authentication, OAuth, process supervision, and verification code;
   the report is uploaded as an artifact for review rather than reduced to one
   repository-wide percentage.
 - The publish job emits a deterministic SHA-256 manifest covering every

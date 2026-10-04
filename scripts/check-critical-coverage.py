@@ -23,6 +23,7 @@ CRITICAL_FILES = {
     "src/controller/queue.rs": 85.0,
     "src/controller/rate_domains.rs": 90.0,
     "src/core/database.rs": 80.0,
+    "src/core/database/schema.rs": 85.0,
     "src/core/evidence.rs": 90.0,
     "src/core/message_verification.rs": 90.0,
     "src/core/provider_intelligence.rs": 90.0,
