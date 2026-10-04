@@ -538,6 +538,26 @@ mod tests {
         );
         assert!(!queue.visible_paged);
         assert_eq!(queue.visible(), expected);
+
+        let project_id = queue.project_id().unwrap().to_owned();
+        for id in store.mailbox_ids(&project_id).unwrap().into_iter().take(10) {
+            store.force_mailbox_state(&id, "attention").unwrap();
+        }
+        queue.invalidate();
+        assert!(
+            queue
+                .refresh_filter_with_paging(&store, "", "attention", true)
+                .unwrap()
+        );
+        let expected_attention = store
+            .queue_rowids(&project_id, "", Some("attention"))
+            .unwrap();
+        assert_eq!(queue.visible_count(), 10);
+        assert_eq!(queue.visible_count(), expected_attention.len());
+        assert_eq!(
+            queue.visible_page(&store, 0..20).unwrap(),
+            expected_attention
+        );
     }
 
     #[test]
