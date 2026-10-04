@@ -1,0 +1,3139 @@
+use super::*;
+use crate::ui::contains_case_insensitive;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use uuid::Uuid;
+
+#[test]
+fn only_github_hosted_runner_environment_skips_privileged_windows_tests() {
+    assert!(is_github_hosted_runner(Some("github-hosted")));
+    assert!(!is_github_hosted_runner(Some("self-hosted")));
+    assert!(!is_github_hosted_runner(None));
+}
+
+fn create_private_test_directory(path: &std::path::Path) {
+    std::fs::create_dir_all(path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+}
+
+// GitHub-hosted Windows runners restrict certain security operations
+// (ACLs, nested jobs). Self-hosted Actions runners must execute these tests.
+#[allow(unused_macros)]
+macro_rules! skip_on_windows_hosted_runner {
+    () => {
+        #[cfg(windows)]
+        if crate::is_github_hosted_runner(std::env::var("RUNNER_ENVIRONMENT").ok().as_deref()) {
+            eprintln!("⊘ Skipping: GitHub-hosted Windows runner does not permit this operation");
+            return;
+        }
+    };
+}
+
+fn dovecot_form() -> Form {
+    let mut form = Form::default();
+    form.profile.engine = core::Engine::Dovecot;
+    form.profile.source_host = "old.example".into();
+    form.profile.source_user = "old-user".into();
+    form.profile.destination_host = "localhost".into();
+    form.profile.destination_user = "new-user".into();
+    form.source_password = String::from("secret").into();
+    form.destination_password = String::from("unused").into();
+    form
+}
+
+#[test]
+fn filter_matching_is_case_insensitive_without_changing_input() {
+    let value = "Customer-09@Example.Test";
+    assert!(contains_case_insensitive(value, "customer-09"));
+    assert!(contains_case_insensitive(value, "EXAMPLE.TEST"));
+    assert!(!contains_case_insensitive(value, "customer-10"));
+    assert!(contains_case_insensitive(value, ""));
+    assert_eq!(value, "Customer-09@Example.Test");
+}
+
+#[test]
+fn filter_matching_folds_unicode_case() {
+    assert!(contains_case_insensitive(
+        "Jürgen.Müller@Beispiel.de",
+        "MÜLLER"
+    ));
+    assert!(contains_case_insensitive("ÉLODIE@exemple.fr", "élodie"));
+    assert!(contains_case_insensitive("Straße-Archiv", "STRASSE"));
+    assert!(contains_case_insensitive("ΟΔΟΣ", "οδος"));
+    assert!(contains_case_insensitive("Иван.Петров", "ПЕТРОВ"));
+    assert!(contains_case_insensitive("Müller", "mül"));
+    assert!(!contains_case_insensitive("Müller", "muller"));
+}
+
+#[test]
+fn markdown_escape_protects_report_cells_and_line_structure() {
+    assert_eq!(
+        markdown_escape("folder|name\r\nsecond\\entry"),
+        "folder\\|name second\\\\entry"
+    );
+}
+
+#[test]
+fn dovecot_plan_uses_additive_sync_by_default() {
+    let mut form = dovecot_form();
+    form.dry_run = false;
+    let (exe, args) = form.command(true).unwrap();
+    assert_eq!(exe, "doveadm");
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-o", "imapc_host=old.example"])
+    );
+    assert!(args.contains(&"sync".into()));
+    assert!(args.contains(&"-1".into()));
+    let subcommand = args.iter().position(|arg| arg == "sync").unwrap();
+    assert!(subcommand < args.iter().position(|arg| arg == "-l").unwrap());
+    assert!(subcommand < args.iter().position(|arg| arg == "-s").unwrap());
+    assert!(subcommand < args.iter().position(|arg| arg == "-1").unwrap());
+    assert!(
+        args.windows(2).any(|pair| {
+            pair[0] == "-l" && pair[1] == DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()
+        })
+    );
+    assert!(args.windows(2).any(|pair| pair == ["-s", ""]));
+    assert!(!args.iter().any(|arg| arg == "secret"));
+}
+
+#[test]
+fn default_live_imapsync_plan_preserves_metadata_for_verification() {
+    // This is intentionally the real new-plan path: start with the
+    // literal UI default, then apply the normal live-run transformation.
+    let form = Form {
+        dry_run: false,
+        ..Default::default()
+    };
+    // Exact independent verification requires an immutable mapping from
+    // the engine; --automap is intentionally fail-closed until that
+    // mapping is retained as part of the run plan.
+    let mut form = form;
+    form.profile.automap = false;
+
+    assert!(form.profile.sync_internaldates);
+    assert!(runner::message_verification_enabled(&form));
+    assert!(form.args(false).contains(&"--syncinternaldates".into()));
+
+    // If evidence is unavailable after a successful transfer, the
+    // controller's terminal policy is review-required, not failed.
+    assert_eq!(
+        successful_run_status(false, false, None),
+        "Migration completed; verification requires operator review"
+    );
+}
+
+#[test]
+fn dovecot_initial_and_incremental_strategies_use_backup() {
+    for strategy in [
+        migration_plan::DovecotMigrationStrategy::InitialMirror,
+        migration_plan::DovecotMigrationStrategy::IncrementalMirror,
+    ] {
+        let mut form = dovecot_form();
+        form.dry_run = false;
+        form.profile.dovecot_strategy = strategy;
+        let (_, args) = form
+            .command_with_checkpoint(true, Some("checkpoint"))
+            .unwrap();
+        assert!(args.contains(&"backup".into()));
+        assert!(!args.contains(&"sync".into()));
+        assert!(!args.contains(&"-1".into()));
+        let subcommand = args.iter().position(|arg| arg == "backup").unwrap();
+        assert!(subcommand < args.iter().position(|arg| arg == "-l").unwrap());
+        assert!(subcommand < args.iter().position(|arg| arg == "-s").unwrap());
+    }
+}
+
+#[test]
+fn dovecot_preservation_strategies_use_sync_minus_one() {
+    for strategy in [
+        migration_plan::DovecotMigrationStrategy::FinalPreservationPass,
+        migration_plan::DovecotMigrationStrategy::DestinationAlreadyActive,
+    ] {
+        let mut form = dovecot_form();
+        form.dry_run = false;
+        form.profile.dovecot_strategy = strategy;
+        let (_, args) = form.command(true).unwrap();
+        assert!(args.contains(&"sync".into()));
+        assert!(args.contains(&"-1".into()));
+        assert!(!args.contains(&"backup".into()));
+    }
+}
+
+#[test]
+fn dovecot_source_status_global_options_precede_subcommand() {
+    let form = dovecot_form();
+    let commands = form.dovecot_verification_commands(true);
+    let source_args = &commands[0].1;
+    let mailbox_status = source_args
+        .windows(2)
+        .position(|pair| pair == ["mailbox", "status"])
+        .expect("source verification must query mailbox status");
+
+    for (index, argument) in source_args.iter().enumerate() {
+        if argument == "-o" || argument == "-c" {
+            assert!(
+                index < mailbox_status,
+                "global doveadm option {argument} appeared after mailbox status: {source_args:?}"
+            );
+        }
+    }
+    assert!(!source_args.iter().any(|arg| arg.contains("IMAPC_PASSWORD")));
+    assert!(
+        source_args[..mailbox_status]
+            .windows(2)
+            .any(|pair| pair == ["-o", "imapc_port=993"])
+    );
+    assert!(
+        source_args[..mailbox_status]
+            .windows(2)
+            .any(|pair| pair == ["-o", "ssl_client_require_valid_cert=yes"])
+    );
+}
+
+#[test]
+fn live_dovecot_plan_uses_previous_checkpoint() {
+    let mut form = dovecot_form();
+    form.dry_run = false;
+    let (_, args) = form
+        .command_with_checkpoint(true, Some("AQAAAHm4+Jk="))
+        .unwrap();
+    assert!(args.windows(2).any(|pair| pair == ["-s", "AQAAAHm4+Jk="]));
+}
+
+#[test]
+fn dovecot_state_candidate_accepts_state_and_rejects_diagnostics() {
+    assert_eq!(
+        dovecot_state_candidate("AQAAAHm4+Jk="),
+        Some("AQAAAHm4+Jk=".into())
+    );
+    assert!(dovecot_state_candidate("sync completed successfully").is_none());
+    assert_eq!(
+        dovecot_state_candidate("AQAAAHm4+Jk"),
+        Some("AQAAAHm4+Jk".into())
+    );
+    assert!(dovecot_state_candidate("state-token_v2").is_none());
+    assert!(dovecot_state_candidate("debug-output").is_none());
+    assert!(dovecot_state_candidate("completed").is_none());
+    assert!(dovecot_state_candidate(" short ").is_none());
+    assert!(dovecot_state_candidate(" AQAAAHm4+Jk=").is_none());
+    assert!(dovecot_state_candidate("AQAAAHm4+Jk= ").is_none());
+    assert!(dovecot_state_candidate("deadbeef").is_none());
+    assert!(dovecot_state_candidate("AQAAAA==").is_none());
+    assert_eq!(dovecot_state_candidate("AAAAAA=="), Some("AAAAAA==".into()));
+}
+
+#[test]
+fn plan_snapshot_reference_is_stable_without_exposing_snapshot() {
+    let snapshot = "dry_run = false\nsource_host = \"old.example\"";
+    let reference = plan_snapshot_sha256(snapshot);
+    assert_eq!(reference.len(), 64);
+    assert_eq!(reference, plan_snapshot_sha256(snapshot));
+    assert!(!reference.contains("old.example"));
+    assert_ne!(reference, plan_snapshot_sha256("dry_run = true"));
+}
+
+#[test]
+fn evidence_digest_binds_run_plan_and_evidence_values() {
+    let evidence = core::MailboxEvidence {
+        verification_method: core::VerificationMethod::AggregateEngine,
+        verification_outcome: None,
+        source_messages: 10,
+        destination_messages: 10,
+        source_bytes: 100,
+        destination_bytes: 100,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 2,
+        destination_folders: 2,
+        authoritative: true,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+    };
+    let first = evidence_digest("run-one", "snapshot-one", &evidence);
+    assert_eq!(first, evidence_digest("run-one", "snapshot-one", &evidence));
+    assert_ne!(first, evidence_digest("run-two", "snapshot-one", &evidence));
+    assert_ne!(first, evidence_digest("run-one", "snapshot-two", &evidence));
+    let mut changed = evidence;
+    changed.destination_messages = 9;
+    assert_ne!(first, evidence_digest("run-one", "snapshot-one", &changed));
+}
+
+#[test]
+fn migration_proof_digest_detects_semantic_tampering() {
+    let original = serde_json::json!({
+        "format": "mailswiftsync-project-report",
+        "format_version": 1,
+        "project": { "name": "Example migration" },
+        "mailboxes": [],
+        "runs": []
+    });
+    let proof = with_proof_digest(original).unwrap();
+    let directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("mailswiftsync-proof-{}", uuid::Uuid::new_v4()));
+    credentials::ensure_private_directory(&directory).unwrap();
+    let path = directory.join("proof.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+    assert!(
+        reports::signing::verify_file(&path, None)
+            .unwrap()
+            .contains("Internal checksum verified")
+    );
+    // Signature stripping: an unsigned proof must not satisfy a pinned
+    // signer, even though its plain digest is valid.
+    let error = reports::signing::verify_file(&path, Some(&"11".repeat(32))).unwrap_err();
+    assert!(error.contains("unsigned"), "{error}");
+
+    let mut tampered = proof;
+    tampered["project"]["name"] = "Altered migration".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+    assert!(reports::signing::verify_file(&path, None).is_err());
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn customer_proof_format_is_digest_verifiable() {
+    let proof = with_proof_digest(serde_json::json!({
+        "format": "mailswiftsync-customer-proof",
+        "format_version": 1,
+        "project": { "name": "Customer migration", "phase": "Verification" },
+        "mailboxes": [],
+        "runs": [],
+        "note": "customer-safe"
+    }))
+    .unwrap();
+    let directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!(
+            "mailswiftsync-customer-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+    credentials::ensure_private_directory(&directory).unwrap();
+    let path = directory.join("proof.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+    assert!(
+        reports::signing::verify_file(&path, None)
+            .unwrap()
+            .contains("Internal checksum verified")
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn support_bundle_excludes_topology_and_diagnostic_material() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-support-bundle-{}",
+        uuid::Uuid::new_v4()
+    ));
+    create_private_test_directory(&directory);
+    let state = directory.join("state.db");
+    let output = directory.join("support.json");
+    let store = core::StateStore::open(&state).unwrap();
+    let project = store
+        .create_project(
+            "Acme Corp Exchange Migration",
+            "source.internal",
+            "destination.internal",
+        )
+        .unwrap();
+    let mut first_job = None;
+    for index in 0..2 {
+        let mailbox = format!("user-{index}@example.test");
+        let job = store.add_mailbox(&project.id, &mailbox, &mailbox).unwrap();
+        first_job.get_or_insert(job);
+    }
+    store
+        .insert_run_for_test(
+            &project.id,
+            first_job.as_deref(),
+            "run-provenance",
+            "imapsync",
+        )
+        .unwrap();
+    let mut intent = core::TransferPassIntent::for_test();
+    intent.command = vec![
+        "imapsync".into(),
+        "--host1".into(),
+        "source.internal".into(),
+    ];
+    store
+        .record_transfer_attempt_started("run-provenance", 1, &intent)
+        .unwrap();
+    drop(store);
+
+    headless::export_support_bundle_with_sample_limit(&state, &output, 1).unwrap();
+    let text = std::fs::read_to_string(&output).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["format"], "mailswiftsync-support-bundle");
+    assert!(!text.contains("source.internal"));
+    assert!(!text.contains("destination.internal"));
+    assert!(!text.contains("Acme Corp Exchange Migration"));
+    assert!(value["projects"][0].get("project_name").is_none());
+    assert_eq!(value["redaction"]["project_names"], "excluded");
+    assert_eq!(value["redaction"]["credentials"], "excluded");
+    assert_eq!(value["redaction"]["diagnostic_text"], "excluded");
+    assert_eq!(value["redaction"]["transfer_commands"], "digest_only");
+    let pass = &value["projects"][0]["recent_runs"][0]["transfer_passes"][0];
+    assert_eq!(pass["pass_kind"], "imapsync_sync");
+    assert_eq!(pass["command_sha256"].as_str().unwrap().len(), 64);
+    assert!(pass.get("command").is_none());
+    assert_eq!(value["projects"][0]["mailbox_count"], 2);
+    assert_eq!(value["projects"][0]["mailbox_sample_limit"], 1);
+    assert_eq!(value["projects"][0]["mailboxes_truncated"], true);
+    assert_eq!(
+        value["projects"][0]["mailboxes"].as_array().unwrap().len(),
+        1
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn signed_migration_proof_requires_valid_signature_and_trust_pin() {
+    let original = serde_json::json!({
+        "format": "mailswiftsync-project-report",
+        "format_version": 2,
+        "project": { "name": "Signed migration" },
+        "mailboxes": [],
+        "runs": []
+    });
+    let proof = with_proof_digest(original).unwrap();
+    let directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!(
+            "mailswiftsync-signed-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+    credentials::ensure_private_directory(&directory).unwrap();
+    let path = directory.join("proof.json");
+    let key_path = directory.join("signing-key.pk8");
+    std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+    let key =
+        ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap();
+    std::fs::write(&key_path, key.as_ref()).unwrap();
+    #[cfg(windows)]
+    credentials::restrict_file_permissions(&key_path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(&key_path, permissions).unwrap();
+    }
+    if let Err(error) = reports::signing::sign_file(&path, &key_path, "test-key") {
+        skip_on_windows_hosted_runner!();
+        panic!("proof signing test failed: {error}");
+    }
+    // Re-signing is a supported repair/rotation workflow. The previous
+    // signature must not become part of the newly calculated digest.
+    reports::signing::sign_file(&path, &key_path, "test-key-rotated").unwrap();
+    let signed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let public_key = signed["proof_signature"]["public_key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        reports::signing::verify_file(&path, Some(&public_key))
+            .unwrap()
+            .contains("signature valid")
+    );
+    assert!(reports::signing::verify_file(&path, Some(&"00".repeat(32))).is_err());
+    let mut renamed_signer = signed.clone();
+    renamed_signer["proof_signature"]["key_id"] = "BigImportantAuditor".into();
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&renamed_signer).unwrap(),
+    )
+    .unwrap();
+    assert!(reports::signing::verify_file(&path, None).is_err());
+    let mut tampered = signed;
+    tampered["project"]["name"] = "Altered migration".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+    assert!(reports::signing::verify_file(&path, None).is_err());
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn preflight_plan_storage_uses_an_opaque_digest() {
+    let fingerprint = "imapsync\n--timeout\u{1f}30\ncredential-source1=source-id";
+    let digest = plan_fingerprint_digest(fingerprint);
+    assert_eq!(digest.len(), 64);
+    assert_ne!(digest, fingerprint);
+    assert!(!digest.contains("imapsync"));
+    assert!(!digest.contains("source-id"));
+}
+
+#[test]
+fn local_dovecot_credentials_use_private_config_and_secret_files() {
+    let mut form = dovecot_form();
+    form.profile.dovecot_config = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("Cargo.toml")
+        .to_string_lossy()
+        .into_owned();
+    form.dry_run = false;
+    form.source_password = String::from("top-secret-credential").into();
+    let prepared = form.validated_plan().unwrap().prepared_command().unwrap();
+    let _cleanup = crate::credentials::CleanupGuard::new(prepared.cleanup.clone());
+    let config_index = prepared.args.iter().position(|arg| arg == "-c").unwrap();
+    let runtime_config = &prepared.args[config_index + 1];
+    let contents = std::fs::read_to_string(runtime_config).unwrap();
+    let canonical_base = std::path::PathBuf::from(&form.profile.dovecot_config)
+        .canonicalize()
+        .unwrap();
+    assert!(contents.starts_with(&format!("!include {}\n", canonical_base.display())));
+    assert!(contents.contains("imapc_password = <"));
+    assert!(!contents.contains("top-secret-credential"));
+    let source_file = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("imapc_password = <"))
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(source_file).unwrap(),
+        "top-secret-credential"
+    );
+    assert!(
+        !prepared
+            .args
+            .iter()
+            .any(|arg| arg.contains("top-secret-credential"))
+    );
+    assert!(prepared.env.is_empty());
+    assert!(!prepared.verification.is_empty());
+}
+
+#[test]
+fn imapsync_plan_includes_explicit_throttles() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.max_messages_per_second = 25;
+    form.profile.max_bytes_per_second = 1_048_576;
+    let args = form.args(true);
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--maxmessagespersecond", "25"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--maxbytespersecond", "1048576"])
+    );
+}
+
+#[test]
+fn typed_folder_mapping_is_emitted_and_bound_to_plan_arguments() {
+    let mut form = dovecot_form();
+    form.profile.engine = crate::core::Engine::ImapSync;
+    form.profile.folder_mapping_rules = vec![FolderMappingRule {
+        source: "[Gmail]/Sent Mail".into(),
+        destination: "Sent".into(),
+        exclude: false,
+    }];
+    let args = form.args(true);
+    let mapping = args
+        .windows(2)
+        .find(|window| window[0] == "--f1f2")
+        .expect("typed mapping argument");
+    assert_eq!(mapping[1], "[Gmail]/Sent Mail=Sent");
+    let fingerprint = form.plan_fingerprint();
+    form.profile.folder_mapping_rules[0] = FolderMappingRule {
+        source: "[Gmail]/Sent Mail".into(),
+        destination: "Archive".into(),
+        exclude: false,
+    };
+    assert_ne!(fingerprint, form.plan_fingerprint());
+}
+
+#[test]
+fn typed_folder_mapping_rejects_ambiguous_or_unsafe_names() {
+    let mut form = dovecot_form();
+    form.profile.folder_mapping_rules = vec![FolderMappingRule {
+        source: "INBOX".into(),
+        destination: "Archive".into(),
+        exclude: false,
+    }];
+    assert!(form.validate_for_import().is_ok());
+    form.profile.folder_mapping_rules.push(FolderMappingRule {
+        source: "INBOX".into(),
+        destination: "Sent".into(),
+        exclude: false,
+    });
+    assert!(form.validate_for_import().is_err());
+    form.profile.folder_mapping_rules.truncate(1);
+    form.profile.folder_mapping_rules[0] = FolderMappingRule {
+        source: "bad=folder".into(),
+        destination: String::new(),
+        exclude: true,
+    };
+    assert!(form.validate_for_import().is_err());
+}
+
+#[test]
+fn typed_folder_exclusion_is_anchored_in_engine_arguments() {
+    let mut form = dovecot_form();
+    form.profile.engine = crate::core::Engine::ImapSync;
+    form.profile.folder_mapping_rules = vec![FolderMappingRule {
+        source: "[Gmail]/Spam.*".into(),
+        destination: String::new(),
+        exclude: true,
+    }];
+    let args = form.args(true);
+    let exclusion = args
+        .windows(2)
+        .find(|window| window[0] == "--exclude")
+        .expect("typed exclusion argument");
+    assert_eq!(exclusion[1], r"^(?:\[Gmail\]/Spam\.\*)$");
+}
+
+#[test]
+fn typed_folder_rules_remain_compatible_with_legacy_profiles() {
+    let rule: FolderMappingRule = toml::from_str(
+        r#"
+source = "INBOX"
+destination = "Archive"
+"#,
+    )
+    .expect("legacy folder mapping rule");
+    assert_eq!(rule.source, "INBOX");
+    assert_eq!(rule.destination, "Archive");
+    assert!(!rule.exclude);
+}
+
+#[test]
+fn batch_throttles_are_divided_across_workers() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.max_messages_per_second = 25;
+    form.profile.max_bytes_per_second = 1_048_576;
+    let args = form.args_with_throttle_divisor(true, 4);
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--maxmessagespersecond", "6"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--maxbytespersecond", "262144"])
+    );
+}
+
+#[test]
+fn process_launch_limiter_honors_cancellation() {
+    let limiter = ProcessLaunchLimiter::new(1);
+    let cancel = AtomicBool::new(true);
+    assert!(!limiter.acquire(&cancel));
+}
+
+#[test]
+fn process_launch_limiter_spaces_sequential_starts() {
+    let limiter = ProcessLaunchLimiter::new(20);
+    let cancel = AtomicBool::new(false);
+    assert!(limiter.acquire(&cancel));
+    let started = std::time::Instant::now();
+    assert!(limiter.acquire(&cancel));
+    assert!(started.elapsed() >= Duration::from_millis(35));
+}
+
+#[test]
+fn batch_throttle_rejects_target_below_worker_count() {
+    let mut profile = Profile {
+        max_messages_per_second: 1,
+        ..Profile::default()
+    };
+    assert!(validate_batch_throttle(&profile, 2).is_err());
+    profile.max_messages_per_second = 2;
+    assert!(validate_batch_throttle(&profile, 2).is_ok());
+    profile.max_bytes_per_second = 1;
+    assert!(validate_batch_throttle(&profile, 2).is_err());
+}
+
+#[test]
+fn plan_snapshot_excludes_raw_extra_options() {
+    let mut form = dovecot_form();
+    form.profile.extra_options = "--timeout=30".into();
+    let snapshot = form.plan_snapshot();
+    assert!(snapshot.contains("extra_options_sha256"));
+    let expected = Sha256::digest("--timeout\u{1f}30".as_bytes())
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+    assert!(snapshot.contains(&expected));
+    assert!(!snapshot.contains("--timeout"));
+}
+
+#[test]
+fn plan_snapshot_records_checkpoint_identity_without_checkpoint_value() {
+    let mut form = dovecot_form();
+    form.dry_run = false;
+    let checkpoint = "AQAAAHm4+Jk=";
+    let snapshot = form
+        .plan_snapshot_with_checkpoint(Some(checkpoint))
+        .unwrap();
+    let digest = plan_snapshot_sha256(checkpoint);
+    assert!(snapshot.contains("dovecot_checkpoint_sha256"));
+    assert!(snapshot.contains(&digest));
+    assert!(!snapshot.contains(checkpoint));
+}
+
+#[test]
+fn dry_or_non_dovecot_snapshots_do_not_claim_checkpoint_input() {
+    let mut dovecot = dovecot_form();
+    assert!(
+        !dovecot
+            .plan_snapshot_with_checkpoint(Some("AQAAAHm4+Jk="))
+            .unwrap()
+            .contains("dovecot_checkpoint_sha256")
+    );
+
+    dovecot.dry_run = false;
+    dovecot.profile.engine = core::Engine::ImapSync;
+    assert!(
+        !dovecot
+            .plan_snapshot_with_checkpoint(Some("AQAAAHm4+Jk="))
+            .unwrap()
+            .contains("dovecot_checkpoint_sha256")
+    );
+}
+
+#[test]
+fn durable_batch_config_excludes_raw_extra_options() {
+    let profile = Profile {
+        extra_options: "--debug secret-bearing-value".into(),
+        ..Profile::default()
+    };
+    let config = durable_batch_profile_config(&profile).unwrap();
+    assert!(!config.contains("secret-bearing-value"));
+    assert!(config.contains("extra_options"));
+}
+
+#[test]
+fn durable_single_identity_rejects_edited_plan() {
+    let project = core::Project {
+        id: "project".into(),
+        name: "Pilot".into(),
+        source_endpoint: "old.example".into(),
+        destination_endpoint: "new.example".into(),
+        phase: core::Phase::Preflight,
+    };
+    let mailbox = core::MailboxJob {
+        id: "job".into(),
+        source_mailbox: "alice@example.com".into(),
+        destination_mailbox: "alice@example.com".into(),
+        state: "ready".into(),
+        config: None,
+    };
+    let mut profile = Profile {
+        source_host: "old.example".into(),
+        destination_host: "new.example".into(),
+        source_user: "alice@example.com".into(),
+        destination_user: "alice@example.com".into(),
+        ..Profile::default()
+    };
+    assert!(durable_single_identity_matches(
+        &project, &mailbox, &profile
+    ));
+    profile.destination_host = "other.example".into();
+    assert!(!durable_single_identity_matches(
+        &project, &mailbox, &profile
+    ));
+}
+
+#[test]
+fn dovecot_dry_plan_is_non_mutating() {
+    let form = dovecot_form();
+    let (_, args) = form.command(true).unwrap();
+    assert!(args.windows(2).any(|pair| pair == ["mailbox", "list"]));
+    assert!(!args.contains(&"backup".into()));
+    assert!(!args.contains(&"sync".into()));
+}
+
+#[test]
+fn dovecot_destination_preflight_checks_user_without_opening_mailboxes() {
+    let form = dovecot_form();
+    let commands = form.dovecot_destination_preflight_commands();
+    assert_eq!(commands.len(), 1);
+    assert!(
+        commands[0]
+            .1
+            .windows(2)
+            .any(|pair| pair == ["user", "new-user"])
+    );
+    assert!(
+        !commands[0]
+            .1
+            .windows(2)
+            .any(|pair| pair == ["mailbox", "list"])
+    );
+}
+
+#[test]
+fn plan_fingerprint_binds_credential_references_without_passwords() {
+    let mut first = dovecot_form();
+    first.profile.source_credential_id = "source-prod".into();
+    first.profile.destination_credential_id = "destination-prod".into();
+    let mut second = first.clone();
+    second.profile.source_credential_id = "source-other".into();
+    assert_ne!(first.plan_fingerprint(), second.plan_fingerprint());
+    assert!(!first.plan_fingerprint().contains("secret"));
+    assert!(first.plan_fingerprint().contains("source-prod"));
+    assert!(first.plan_fingerprint().contains("destination-prod"));
+}
+
+#[test]
+fn credential_fingerprint_changes_without_exposing_secret_material() {
+    let mut first = dovecot_form();
+    first.source_password = SecretString::from("source-one");
+    first.destination_password = SecretString::from("destination-one");
+    let mut second = first.clone();
+    second.destination_password = SecretString::from("destination-two");
+
+    assert_ne!(
+        first.credential_fingerprint(),
+        second.credential_fingerprint()
+    );
+    assert!(!first.credential_fingerprint().contains("source-one"));
+    assert!(!first.credential_fingerprint().contains("destination-one"));
+}
+
+#[test]
+fn automatic_oauth_binding_ignores_rotating_access_tokens() {
+    let mut first = Form::default();
+    first.profile.source_host = "imap.example.test".into();
+    first.profile.source_user = "alice@example.test".into();
+    first.profile.source_auth = "oauth2".into();
+    first.profile.source_oauth_refresh_credential_id = "alice-refresh".into();
+    first.profile.destination_host = "imap.destination.test".into();
+    first.profile.destination_user = "alice@destination.test".into();
+    first.profile.destination_auth = "oauth2".into();
+    first.profile.destination_oauth_refresh_credential_id = "alice-destination-refresh".into();
+    // lgtm[rust/hard-coded-cryptographic-value]: Test fixture with non-sensitive data
+    first.source_password = "access-token-a".into();
+    first.destination_password = "destination-token-a".into();
+    let mut second = first.clone();
+    second.source_password = "access-token-b".into();
+    second.destination_password = "destination-token-b".into();
+
+    assert_ne!(
+        first.credential_fingerprint(),
+        second.credential_fingerprint()
+    );
+    assert_eq!(
+        first.credential_binding_fingerprint(),
+        second.credential_binding_fingerprint()
+    );
+
+    second.profile.source_oauth_refresh_credential_id = "other-refresh".into();
+    assert_ne!(
+        first.credential_binding_fingerprint(),
+        second.credential_binding_fingerprint()
+    );
+}
+
+#[test]
+fn dovecot_execution_is_local_only() {
+    let form = dovecot_form();
+    assert!(form.local_doveadm());
+    let (exe, args) = form.command(true).unwrap();
+    assert_eq!(exe, form.profile.doveadm_path);
+    assert!(!args.iter().any(|arg| arg.contains("IMAPC_PASSWORD")));
+    assert!(!args.iter().any(|arg| arg.contains("top-secret-credential")));
+}
+
+#[test]
+fn validation_rejects_zero_ports_with_leading_zeroes() {
+    let mut form = dovecot_form();
+    for value in ["0", "00", "000"] {
+        form.profile.source_port = value.into();
+        assert!(form.validate().unwrap_err().contains("Source IMAP port"));
+        form.profile.source_port.clear();
+        form.profile.destination_port = value.into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("Destination IMAP port")
+        );
+        form.profile.destination_port.clear();
+    }
+}
+
+#[test]
+fn imap_quoted_values_reject_command_injection_controls() {
+    assert_eq!(
+        imap_quote("user@example.test").unwrap(),
+        "\"user@example.test\""
+    );
+    assert!(imap_quote("secret\r\na002 NOOP").is_err());
+}
+
+#[test]
+fn extra_options_preserve_quoted_arguments() {
+    assert_eq!(
+        parse_shell_words("--foo 'two words' \"three four\"").unwrap(),
+        ["--foo", "two words", "three four"]
+    );
+    assert!(parse_shell_words("--broken '").is_err());
+}
+
+#[test]
+fn extra_options_cannot_override_preflighted_connection() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.extra_options = "--host1=attacker.example".into();
+    assert!(form.validate().unwrap_err().contains("controlled"));
+    form.profile.extra_options = "--password2 leaked".into();
+    assert!(form.validate().is_err());
+    form.profile.extra_options = "--sslargs1 SSL_verify_mode=0".into();
+    assert!(form.validate().is_err());
+    form.profile.extra_options = "-delete2".into();
+    assert!(form.validate().is_err());
+    form.profile.extra_options = "--logdir /tmp/elsewhere".into();
+    assert!(form.validate().is_err());
+}
+
+#[test]
+fn extra_options_require_the_safe_engine_allowlist() {
+    let mut form = dovecot_form();
+    form.profile.extra_options = "--nofoldersizes --timeout=30".into();
+    assert!(form.validate().is_ok());
+    form.profile.extra_options = "--nofoldersizes --timeout 30".into();
+    assert!(form.validate().is_ok());
+    form.profile.extra_options = "timeout=30".into();
+    assert!(form.validate().unwrap_err().contains("canonical"));
+    form.profile.extra_options = "--timeout=30".into();
+    assert!(form.validate().is_ok());
+    form.profile.extra_options = "--debug".into();
+    assert!(form.validate().is_ok());
+    form.profile.extra_options = "--debugimap1".into();
+    assert!(
+        form.validate()
+            .unwrap_err()
+            .contains("safe imapsync option allowlist")
+    );
+    form.profile.extra_options = "--debugimap2".into();
+    assert!(
+        form.validate()
+            .unwrap_err()
+            .contains("safe imapsync option allowlist")
+    );
+    form.profile.extra_options = "--debugimap1=1".into();
+    assert!(
+        form.validate()
+            .unwrap_err()
+            .contains("safe imapsync option allowlist")
+    );
+    form.profile.extra_options = "--custom-helper /tmp/helper".into();
+    let error = form.validate().unwrap_err();
+    assert!(error.contains("safe imapsync option allowlist"));
+    form.profile.extra_options = "--pipemess".into();
+    assert!(
+        form.validate()
+            .unwrap_err()
+            .contains("safe imapsync option allowlist")
+    );
+    form.profile.extra_options = "--timeout".into();
+    assert!(form.validate().unwrap_err().contains("requires a value"));
+    form.profile.extra_options = "--timeout=fast".into();
+    assert!(form.validate().unwrap_err().contains("requires an integer"));
+    form.profile.extra_options = "--timeout=0".into();
+    assert!(form.validate().unwrap_err().contains("between 1 and 86400"));
+    form.profile.extra_options = "--errorsmax=100001".into();
+    assert!(
+        form.validate()
+            .unwrap_err()
+            .contains("between 0 and 100000")
+    );
+}
+
+#[test]
+fn equivalent_extra_option_spellings_share_plan_identity() {
+    let mut inline = dovecot_form();
+    inline.profile.engine = core::Engine::ImapSync;
+    inline.profile.extra_options = "--timeout=030".into();
+    let mut separated = inline.clone();
+    separated.profile.extra_options = "--timeout 30".into();
+
+    assert!(inline.validate().is_ok());
+    assert!(separated.validate().is_ok());
+    assert_eq!(inline.args(true), separated.args(true));
+    assert_eq!(inline.plan_snapshot(), separated.plan_snapshot());
+}
+
+#[test]
+fn canonical_extra_options_never_expand_past_the_reparse_limit() {
+    let accepted = "--timeout=1 ".repeat(64);
+    let canonical = crate::extra_options::canonical(&accepted).unwrap();
+    assert_eq!(canonical.len(), 128);
+    assert_eq!(
+        crate::extra_options::canonical(&canonical.join(" ")).unwrap(),
+        canonical
+    );
+
+    let rejected = "--timeout=1 ".repeat(65);
+    assert!(
+        crate::extra_options::canonical(&rejected)
+            .unwrap_err()
+            .contains("expand to more than 128")
+    );
+}
+
+#[test]
+fn command_preparation_rejects_unvalidated_extra_options() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.extra_options = "--timeout nope".into();
+    let error = match form
+        .validated_plan()
+        .and_then(|plan| plan.prepared_command())
+    {
+        Ok(_) => panic!("invalid extra options were prepared"),
+        Err(error) => error,
+    };
+    assert!(error.contains("requires an integer"));
+}
+
+#[test]
+fn incomplete_form_cannot_be_promoted_to_a_validated_execution_plan() {
+    let form = Form::default();
+    let error = match form.validated_plan() {
+        Ok(_) => panic!("an incomplete form produced a command-preparation capability"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("not a valid endpoint"),
+        "unexpected validation error: {error}"
+    );
+}
+
+#[test]
+fn preview_command_rejects_invalid_extra_options_before_rendering() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.extra_options = "--timeout nope".into();
+    let error = form.preview_command().unwrap_err();
+    assert!(error.contains("requires an integer"));
+}
+
+#[test]
+fn validation_bounds_extra_option_input() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.extra_options = "--debug ".repeat(10_000);
+    let error = form.validate().unwrap_err();
+    assert!(error.contains("Extra options exceed"));
+}
+
+#[test]
+fn validation_rejects_imap_command_control_characters() {
+    let mut form = dovecot_form();
+    form.profile.source_user = "user\r\nNOOP".into();
+    assert!(form.validate().unwrap_err().contains("control characters"));
+    form.profile.source_user = "user".into();
+    form.source_password = String::from("secret\nLOGIN injected").into();
+    assert!(form.validate().unwrap_err().contains("control characters"));
+}
+
+#[test]
+fn validation_rejects_invalid_keyring_ids() {
+    let mut form = dovecot_form();
+    form.profile.source_credential_id = "bad\nentry".into();
+    assert!(form.validate().unwrap_err().contains("keyring ID"));
+    form.profile.source_credential_id = "x".repeat(257);
+    assert!(form.validate().unwrap_err().contains("keyring ID"));
+}
+
+#[test]
+fn bulk_headers_allow_credentials_to_be_entered_after_import() {
+    assert!(
+        bulk_import::validate_headers(
+            &[
+                "source_host",
+                "source_user",
+                "destination_host",
+                "destination_user"
+            ]
+            .map(String::from),
+            false,
+        )
+        .is_ok()
+    );
+    assert!(
+        bulk_import::validate_headers(
+            &["source_host", "source_user", "destination_host"].map(String::from),
+            false,
+        )
+        .is_err()
+    );
+    assert!(
+        bulk_import::validate_headers(
+            &[
+                "source_host",
+                "source_user",
+                "destination_host",
+                "destination_user",
+                "extra_options",
+            ]
+            .map(String::from),
+            false,
+        )
+        .unwrap_err()
+        .contains("cannot contain extra_options")
+    );
+    let password_headers = [
+        "source_host",
+        "source_user",
+        "source_password",
+        "destination_host",
+        "destination_user",
+        "destination_password",
+    ]
+    .map(String::from);
+    assert!(
+        bulk_import::validate_headers(&password_headers, false)
+            .unwrap_err()
+            .contains("Plaintext credential columns")
+    );
+    assert!(bulk_import::validate_headers(&password_headers, true).is_ok());
+}
+
+#[test]
+fn official_bulk_template_imports_without_password_columns() {
+    let jobs = bulk_import::read_csv(
+        std::path::Path::new("docs/bulk-migrations-template.csv"),
+        &Form::default(),
+    )
+    .expect("the checked-in bulk template must be importable by default");
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].label, "Example mailbox");
+    assert!(jobs[0].form().source_password.is_empty());
+    assert!(jobs[0].form().destination_password.is_empty());
+    assert_eq!(
+        jobs[0].form().profile.source_credential_id,
+        "source-keyring-id"
+    );
+    assert_eq!(
+        jobs[0].form().profile.destination_credential_id,
+        "destination-keyring-id"
+    );
+}
+
+#[test]
+fn bulk_import_rejects_nonempty_plaintext_password_values_by_default() {
+    let values = HashMap::from([
+        ("source_host".into(), "old.example".into()),
+        ("source_user".into(), "old@example".into()),
+        ("source_password".into(), "secret".into()),
+        ("destination_host".into(), "new.example".into()),
+        ("destination_user".into(), "new@example".into()),
+    ]);
+    let error = match bulk_import::job_from_values(values, &Form::default(), 2, false) {
+        Ok(_) => panic!("plaintext password values must remain opt-in"),
+        Err(error) => error,
+    };
+    assert!(error.contains("Plaintext credential values"));
+}
+
+#[test]
+fn passwordless_bulk_row_is_importable_but_not_runnable() {
+    let mut values = HashMap::new();
+    values.insert("source_host".into(), "old.example".into());
+    values.insert("source_user".into(), "old@example".into());
+    values.insert("destination_host".into(), "new.example".into());
+    values.insert("destination_user".into(), "new@example".into());
+    let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, false).unwrap();
+    assert_eq!(job.state, "imported");
+    assert_eq!(
+        job_state_badge(&job.state, ThemeColors::dark()).0,
+        "○ Imported"
+    );
+    assert!(job.form().source_password.is_empty());
+    assert!(job.form().validate().is_err());
+}
+
+#[test]
+fn bulk_import_preserves_password_whitespace() {
+    let mut values = HashMap::new();
+    values.insert("source_host".into(), "old.example".into());
+    values.insert("source_user".into(), "old@example".into());
+    values.insert("source_password".into(), " Secret123 ".into());
+    values.insert("destination_host".into(), "new.example".into());
+    values.insert("destination_user".into(), "new@example".into());
+    values.insert("destination_password".into(), " Destination! ".into());
+    let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, true).unwrap();
+    assert_eq!(job.form().source_password.as_str(), " Secret123 ");
+    assert_eq!(job.form().destination_password.as_str(), " Destination! ");
+}
+
+#[test]
+fn bulk_import_rejects_oversized_files_before_parsing() {
+    let path = std::env::temp_dir().join(format!(
+        "mailswiftsync-import-limit-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(MAX_BULK_IMPORT_BYTES + 1).unwrap();
+    let error = bulk_import::validate_bulk_import_file(&path).unwrap_err();
+    assert!(error.contains("import file"));
+    assert!(error.contains("limit"));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn xlsx_container_limits_reject_expansion_before_parsing() {
+    assert!(
+        bulk_import::validate_workbook_container_limits(
+            MAX_BULK_IMPORT_ARCHIVE_ENTRIES,
+            MAX_BULK_IMPORT_UNCOMPRESSED_BYTES
+        )
+        .is_ok()
+    );
+    let error = bulk_import::validate_workbook_container_limits(
+        MAX_BULK_IMPORT_ARCHIVE_ENTRIES + 1,
+        MAX_BULK_IMPORT_UNCOMPRESSED_BYTES,
+    )
+    .unwrap_err();
+    assert!(error.contains("entries"));
+    let error = bulk_import::validate_workbook_container_limits(
+        MAX_BULK_IMPORT_ARCHIVE_ENTRIES,
+        MAX_BULK_IMPORT_UNCOMPRESSED_BYTES + 1,
+    )
+    .unwrap_err();
+    assert!(error.contains("expands"));
+}
+
+#[test]
+fn batch_selection_export_excludes_secret_material() {
+    let mut form = Form::default();
+    form.profile.source_host = "source.example".into();
+    form.profile.source_user = "source@example".into();
+    form.profile.destination_host = "destination.example".into();
+    form.profile.destination_user = "destination@example".into();
+    form.source_password = "source-secret".to_owned().into();
+    form.destination_password = "destination-secret".to_owned().into();
+    form.profile.source_credential_id = "source-key".into();
+    let store = core::StateStore::in_memory().unwrap();
+    let jobs = vec![BulkJob::from_form("mailbox".into(), form, "failed".into())];
+    let imported =
+        controller::queue::persist_imported_queue(&store, jobs, &Profile::default()).unwrap();
+    let ids = store.mailbox_ids(&imported.project_id).unwrap();
+    store.set_mailbox_state(&ids[0], "failed").unwrap();
+    let rows =
+        controller::queue::selected_rows(&store, &imported.project_id, |_| true, 10).unwrap();
+    let value = selection_value(&rows);
+    let text = serde_json::to_string(&value).unwrap();
+    assert!(text.contains("source@example"));
+    assert!(text.contains("failed"));
+    assert!(!text.contains("source-secret"));
+    assert!(!text.contains("destination-secret"));
+    assert!(!text.contains("source-key"));
+    assert!(!text.contains("extra_options"));
+}
+
+#[test]
+fn corrupt_or_missing_persisted_batch_plan_fails_closed() {
+    let missing = match decode_persisted_batch_profile(None, "job-1") {
+        Ok(_) => panic!("missing persisted plan must be rejected"),
+        Err(error) => error,
+    };
+    assert!(missing.contains("job-1"));
+    assert!(missing.contains("no migration plan"));
+
+    let corrupt = match decode_persisted_batch_profile(Some("not = valid = toml"), "job-2") {
+        Ok(_) => panic!("corrupt persisted plan must be rejected"),
+        Err(error) => error,
+    };
+    assert!(corrupt.contains("job-2"));
+    assert!(corrupt.contains("is corrupt"));
+}
+
+#[test]
+fn bulk_import_preserves_per_row_keyring_references() {
+    let mut values = HashMap::new();
+    values.insert("source_host".into(), "old.example".into());
+    values.insert("source_user".into(), "old@example".into());
+    values.insert("source_credential_id".into(), "source-alice".into());
+    values.insert("destination_host".into(), "new.example".into());
+    values.insert("destination_user".into(), "new@example".into());
+    values.insert(
+        "destination_credential_id".into(),
+        "destination-alice".into(),
+    );
+    let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, false).unwrap();
+    assert_eq!(job.form().profile.source_credential_id, "source-alice");
+    assert_eq!(
+        job.form().profile.destination_credential_id,
+        "destination-alice"
+    );
+    assert!(job.form().source_password.is_empty());
+    assert!(job.form().destination_password.is_empty());
+
+    let mut base = Form::default();
+    base.profile.source_credential_id = "shared-source".into();
+    base.profile.destination_credential_id = "shared-destination".into();
+    let inherited_values = values
+        .into_iter()
+        .filter(|(key, _)| key != "source_credential_id" && key != "destination_credential_id")
+        .collect();
+    let inherited = bulk_import::job_from_values(inherited_values, &base, 3, false).unwrap();
+    assert_eq!(
+        inherited.form().profile.source_credential_id,
+        "shared-source"
+    );
+    assert_eq!(
+        inherited.form().profile.destination_credential_id,
+        "shared-destination"
+    );
+}
+
+#[test]
+fn bulk_keyring_apply_fills_only_missing_source_references() {
+    let row = |label: &str, user: &str, credential: &str, password: &str| {
+        let mut form = Form::default();
+        form.profile.destination_host = "destination.example".into();
+        form.profile.destination_user = format!("{user}@destination.example");
+        form.profile.source_credential_id = credential.into();
+        form.source_password = String::from(password).into();
+        BulkJob::from_form(label.into(), form, "Ready".into())
+    };
+    let store = core::StateStore::in_memory().unwrap();
+    let imported = controller::queue::persist_imported_queue(
+        &store,
+        vec![
+            row("password", "a", "", "already-present"),
+            row("reference", "b", "existing", ""),
+            row("empty", "c", "", ""),
+        ],
+        &Profile::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        controller::queue::apply_keyring_to_queue(
+            &store,
+            &imported.project_id,
+            "shared-source",
+            true,
+            &imported.session_secrets,
+        )
+        .unwrap(),
+        1
+    );
+    let ids = store.mailbox_ids(&imported.project_id).unwrap();
+    let references = store
+        .queue_plans(&imported.project_id, &ids)
+        .unwrap()
+        .iter()
+        .map(|plan| {
+            controller::queue::job_from_plan(plan, "", None, true)
+                .unwrap()
+                .profile()
+                .source_credential_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(references, ["", "existing", "shared-source"]);
+}
+
+#[test]
+fn verification_report_write_is_atomic_and_private() {
+    let directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("mailswiftsync-report-{}", uuid::Uuid::new_v4()));
+    credentials::ensure_private_directory(&directory).unwrap();
+    let path = directory.join("report.md");
+    write_private_atomic(&path, "report body").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "report body");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn ledger_restore_validates_copy_and_preserves_previous_state() {
+    let directory = std::env::temp_dir().join(format!("mailswiftsync-restore-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let source = directory.join("backup.db");
+    let destination = directory.join("state.db");
+    let source_store = core::StateStore::in_memory().unwrap();
+    source_store
+        .create_project("restore source", "source", "destination")
+        .unwrap();
+    source_store.backup_to(&source).unwrap();
+
+    assert!(restore_ledger(&source, &destination).unwrap().is_none());
+    core::StateStore::open_readonly(&destination).unwrap();
+    std::fs::remove_file(&destination).unwrap();
+    let orphaned_sidecar = PathBuf::from(format!("{}-wal", destination.display()));
+    std::fs::write(&orphaned_sidecar, b"orphaned sqlite sidecar").unwrap();
+    assert!(restore_ledger(&source, &destination).is_err());
+    std::fs::remove_file(orphaned_sidecar).unwrap();
+    assert!(restore_ledger(&source, &destination).unwrap().is_none());
+    std::fs::remove_file(&destination).unwrap();
+
+    let project = core::StateStore::open(&source)
+        .unwrap()
+        .latest_project()
+        .unwrap()
+        .unwrap();
+    let source_connection = rusqlite::Connection::open(&source).unwrap();
+    source_connection
+        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+        .unwrap();
+    source_connection
+        .execute(
+            "UPDATE projects SET name=?1 WHERE id=?2",
+            rusqlite::params!["WAL-visible restore", project.id],
+        )
+        .unwrap();
+    let source_sidecar = PathBuf::from(format!("{}-wal", source.display()));
+    assert!(source_sidecar.exists());
+    let error = restore_ledger(&source, &destination).unwrap_err();
+    assert!(error.contains("live SQLite database with sidecar"));
+    source_connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    drop(source_connection);
+    assert!(!source_sidecar.exists());
+    assert!(restore_ledger(&source, &destination).unwrap().is_none());
+    assert_eq!(
+        core::StateStore::open_readonly(&destination)
+            .unwrap()
+            .latest_project()
+            .unwrap()
+            .unwrap()
+            .name,
+        "WAL-visible restore"
+    );
+    let clean_source = directory.join("standalone-source.db");
+    core::StateStore::open(&source)
+        .unwrap()
+        .backup_to(&clean_source)
+        .unwrap();
+    core::StateStore::in_memory()
+        .unwrap()
+        .backup_to(&destination.with_extension("replacement.db"))
+        .unwrap();
+    for suffix in ["-wal", "-shm"] {
+        std::fs::write(
+            format!("{}{}", destination.display(), suffix),
+            b"old sqlite sidecar",
+        )
+        .unwrap();
+    }
+    let previous = restore_ledger(&clean_source, &destination)
+        .unwrap()
+        .unwrap();
+    for suffix in ["-wal", "-shm"] {
+        assert!(std::path::Path::new(&format!("{}{}", previous.display(), suffix)).exists());
+        assert!(!std::path::Path::new(&format!("{}{}", destination.display(), suffix)).exists());
+    }
+    core::StateStore::open_readonly(&previous).unwrap();
+    core::StateStore::open_readonly(&destination).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn batch_retry_classifier_excludes_authentication_failures() {
+    assert!(is_transient_batch_error("connection reset by peer"));
+    assert!(is_transient_batch_error("operation timed out"));
+    assert!(is_transient_batch_error("server returned 429 rate limit"));
+    assert!(!is_transient_batch_error("mailbox is full: OVERQUOTA"));
+    assert!(!is_transient_batch_error("IMAP authentication failed"));
+    assert!(!is_transient_batch_error(
+        "invalid destination configuration"
+    ));
+}
+
+#[test]
+fn prelaunch_connectivity_uses_bounded_batch_retry_policy() {
+    for error in [
+        "temporary failure in name resolution",
+        "could not connect: connection refused",
+        "TLS handshake unexpected EOF",
+        "IMAP authentication failed: a002 NO [UNAVAILABLE] server busy",
+        "folder inventory failed: IMAP LIST response exceeded the 60-second processing limit",
+        "too many connections",
+    ] {
+        assert!(
+            should_retry_batch_error(error, 0, 3),
+            "expected transient retry for: {error}"
+        );
+        assert!(
+            !should_retry_batch_error(error, 3, 3),
+            "retry budget must be bounded for: {error}"
+        );
+    }
+}
+
+#[test]
+fn retry_policy_honors_provider_retry_contract_for_structured_verdicts() {
+    use crate::core::provider_intelligence::ProviderErrorClassifier;
+    for error in [
+        "[imap=tagged-no] a003 NO [CANNOT] folder name rejected by policy",
+        "[imap=bad] a004 BAD command syntax",
+        "[error=engine-exit] imapsync exited with status 16",
+        "[error=tls] certificate rejected",
+        "[error=dns] no such host",
+    ] {
+        assert_eq!(classify_failure(error), FailureClass::Transport, "{error}");
+        assert!(
+            !ProviderErrorClassifier::classify("generic", error).is_retryable(),
+            "{error}"
+        );
+        assert!(
+            !should_retry_batch_error(error, 0, 3),
+            "non-retryable provider verdict was retried: {error}"
+        );
+    }
+    for error in [
+        "[error=transport] connection reset",
+        "[imap=tagged-no] a003 NO [UNAVAILABLE] server busy",
+    ] {
+        assert!(should_retry_batch_error(error, 0, 3), "{error}");
+    }
+}
+
+#[test]
+fn prelaunch_credentials_and_trust_failures_remain_fail_fast() {
+    for error in [
+        "IMAP authentication failed: invalid credentials",
+        "a002 NO permission denied",
+        "TLS invalid peer certificate: unknown issuer",
+        "TLS certificate SHA-256 pin mismatch",
+    ] {
+        assert!(
+            !should_retry_batch_error(error, 0, 3),
+            "expected permanent prelaunch failure for: {error}"
+        );
+    }
+}
+
+#[test]
+fn capacity_retries_back_off_longer_than_transport_retries() {
+    assert_eq!(
+        classify_failure("too many connections"),
+        FailureClass::Capacity
+    );
+    let transport_delay = transient_retry_delay("connection reset by peer", 0);
+    assert!((Duration::from_secs(10)..=Duration::from_secs(15)).contains(&transport_delay));
+    let capacity_delay = transient_retry_delay("server busy", 0);
+    assert!((Duration::from_secs(5)..=Duration::from_millis(7_500)).contains(&capacity_delay));
+    assert_eq!(
+        transient_retry_delay("server busy", 99),
+        Duration::from_secs(120)
+    );
+    assert_eq!(
+        classified_failure_detail("too many requests"),
+        "[attention_reason=capacity_limited] [class=capacity] too many requests"
+    );
+}
+
+#[test]
+fn provider_rate_limit_recommendation_is_used_and_remains_bounded() {
+    let delay = transient_retry_delay("too many requests", 0);
+    assert!(
+        (Duration::from_secs(60)..=Duration::from_secs(90)).contains(&delay),
+        "rate-limit retry should start from the provider-intelligence recommendation"
+    );
+    assert_eq!(
+        transient_retry_delay("too many requests", 99),
+        Duration::from_secs(120)
+    );
+}
+
+#[test]
+fn batch_retry_scopes_select_only_the_intended_durable_states() {
+    let states = [
+        "ready",
+        "failed",
+        "attention",
+        "delta_required",
+        "verification_difference",
+        "completed",
+        "verified",
+        "verified_with_exceptions",
+    ];
+    assert_eq!(
+        states
+            .iter()
+            .filter(|state| BulkRetryScope::Unresolved.includes(state))
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["ready", "failed", "delta_required", "completed",]
+    );
+    assert_eq!(
+        states
+            .iter()
+            .filter(|state| BulkRetryScope::FailedAttention.includes(state))
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["failed", "attention"]
+    );
+    assert_eq!(
+        states
+            .iter()
+            .filter(|state| BulkRetryScope::DeltaRequired.includes(state))
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["delta_required"]
+    );
+    assert_eq!(
+        states
+            .iter()
+            .filter(|state| BulkRetryScope::VerificationDifference.includes(state))
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["verification_difference"]
+    );
+    assert_eq!(
+        states
+            .iter()
+            .filter(|state| BulkRetryScope::All.includes(state))
+            .count(),
+        states.len()
+    );
+}
+
+#[test]
+fn failure_taxonomy_keeps_operator_actions_distinct() {
+    assert_eq!(
+        classify_failure("cancelled by operator before launch"),
+        FailureClass::Cancellation
+    );
+    assert_eq!(
+        classify_failure("verification evidence is incomplete"),
+        FailureClass::Verification
+    );
+    assert_eq!(
+        classify_failure("AUTHENTICATIONFAILED"),
+        FailureClass::Authentication
+    );
+    assert_eq!(classify_failure("OVERQUOTA"), FailureClass::Quota);
+    assert_eq!(
+        classify_failure("connection reset by peer"),
+        FailureClass::Transport
+    );
+    assert_eq!(
+        classify_failure("message too large for destination"),
+        FailureClass::Message
+    );
+    assert_eq!(
+        classify_failure("unknown option --bad"),
+        FailureClass::Configuration
+    );
+    assert_eq!(
+        classified_failure_detail("OVERQUOTA"),
+        "[attention_reason=capacity_limited] [class=quota] OVERQUOTA"
+    );
+    assert_eq!(
+        classify_failure(
+            "[attention_reason=transport_failed] [class=transport] authentication failed"
+        ),
+        FailureClass::Transport
+    );
+    assert_eq!(
+        classify_failure("[attention_reason=unknown] [class=not-a-class] quota exceeded"),
+        FailureClass::Quota
+    );
+}
+
+#[test]
+fn successful_live_status_never_overclaims_missing_evidence() {
+    assert_eq!(
+        successful_run_status(false, false, Some("verified")),
+        "Migration completed and verified"
+    );
+    assert_eq!(
+        successful_run_status(false, false, Some("delta_required")),
+        "Dovecot synchronization completed with changes pending; repeat the final pass until exit code 0"
+    );
+    assert_eq!(
+        successful_run_status(false, false, None),
+        "Migration completed; verification requires operator review"
+    );
+    assert_eq!(
+        successful_run_status(false, true, None),
+        "Batch transfer completed; review per-mailbox verification results"
+    );
+}
+
+#[test]
+fn bulk_rejects_duplicate_destination_mailboxes() {
+    let mut first = Form::default();
+    first.profile.destination_host = "mail.example".into();
+    first.profile.destination_user = "user@example".into();
+    let mut second = first.clone();
+    second.profile.source_user = "different@example".into();
+    let jobs = vec![
+        BulkJob::from_form("first".into(), first, "Ready".into()),
+        BulkJob::from_form("second".into(), second, "Ready".into()),
+    ];
+    assert!(duplicate_destination(&jobs).unwrap().is_some());
+}
+
+#[test]
+fn duplicate_destination_detection_normalizes_explicit_default_port() {
+    let mut first = Form::default();
+    first.profile.destination_host = "mail.example".into();
+    first.profile.destination_user = "user@example".into();
+    let mut second = first.clone();
+    second.profile.destination_host = "mail.example:993".into();
+    let jobs = vec![
+        BulkJob::from_form("first".into(), first, "Ready".into()),
+        BulkJob::from_form("second".into(), second, "Ready".into()),
+    ];
+    assert!(duplicate_destination(&jobs).unwrap().is_some());
+}
+
+#[test]
+fn duplicate_destination_identity_uses_transport_and_explicit_port() {
+    let mut first = Form::default();
+    first.profile.destination_host = "mail.example".into();
+    first.profile.destination_user = "user@example".into();
+    first.profile.destination_tls = "starttls".into();
+    let mut second = first.clone();
+    second.profile.destination_port = "1993".into();
+    let jobs = vec![
+        BulkJob::from_form("first".into(), first, "Ready".into()),
+        BulkJob::from_form("second".into(), second, "Ready".into()),
+    ];
+    assert!(duplicate_destination(&jobs).unwrap().is_none());
+    assert_eq!(
+        canonical_destination_identity(&jobs[0].form().profile).unwrap(),
+        "endpoint:mail.example:143:user@example"
+    );
+}
+
+#[test]
+fn duplicate_destination_identity_fails_closed_on_malformed_endpoint() {
+    let mut form = Form::default();
+    form.profile.destination_host = "mail.example:not-a-port".into();
+    form.profile.destination_user = "user@example".into();
+    let jobs = vec![BulkJob::from_form("invalid".into(), form, "Ready".into())];
+    assert!(duplicate_destination(&jobs).is_err());
+}
+
+#[test]
+fn duplicate_destination_identity_canonicalizes_hosts_but_preserves_mailbox_case() {
+    let mut first = Form::default();
+    first.profile.destination_host = "MAIL.EXAMPLE.".into();
+    first.profile.destination_user = "User@example".into();
+    let mut second = first.clone();
+    second.profile.destination_host = "mail.example".into();
+    second.profile.destination_user = "user@example".into();
+    assert_ne!(
+        canonical_destination_identity(&first.profile).unwrap(),
+        canonical_destination_identity(&second.profile).unwrap()
+    );
+    assert_eq!(
+        canonical_destination_identity(&first.profile).unwrap(),
+        "endpoint:mail.example:993:User@example"
+    );
+}
+
+#[test]
+fn project_health_counts_group_durable_mailbox_states() {
+    let jobs = vec![
+        core::MailboxJob {
+            id: "one".into(),
+            source_mailbox: "one".into(),
+            destination_mailbox: "one".into(),
+            state: "verified".into(),
+            config: None,
+        },
+        core::MailboxJob {
+            id: "two".into(),
+            source_mailbox: "two".into(),
+            destination_mailbox: "two".into(),
+            state: "attention".into(),
+            config: None,
+        },
+        core::MailboxJob {
+            id: "three".into(),
+            source_mailbox: "three".into(),
+            destination_mailbox: "three".into(),
+            state: "verified".into(),
+            config: None,
+        },
+    ];
+    let counts = project_health_state_counts(&jobs);
+    assert_eq!(counts.get("verified"), Some(&2));
+    assert_eq!(counts.get("attention"), Some(&1));
+    assert!(!needs_operator_review("verified"));
+    assert!(needs_operator_review("verification_difference"));
+}
+
+#[test]
+fn active_run_project_takes_precedence_over_loaded_projects() {
+    assert_eq!(
+        preferred_project_id(
+            Some("active-batch"),
+            Some("selected"),
+            Some("single"),
+            Some("batch"),
+        ),
+        Some("active-batch")
+    );
+    assert_eq!(
+        preferred_project_id(None, Some("selected"), Some("single"), Some("batch")),
+        Some("selected")
+    );
+    assert_eq!(
+        preferred_project_id(None, None, Some("single"), Some("batch")),
+        Some("batch")
+    );
+}
+
+#[test]
+fn active_run_context_rejects_foreign_process_events() {
+    let context = ActiveRunContext {
+        run_id: "parent".into(),
+        project_id: "project".into(),
+        job_id: None,
+        batch_job_ids: vec!["job-a".into(), "job-b".into()],
+        batch_child_run_ids: vec!["child-a".into(), "child-b".into()],
+        batch_child_indices: HashMap::from([("child-a".into(), 0), ("child-b".into(), 1)]),
+        batch_plan_fingerprints: vec!["plan-a".into(), "plan-b".into()],
+        kind: RunKind::Batch,
+        dry_run: true,
+        plan_fingerprint: String::new(),
+        credential_fingerprint: String::new(),
+        source_provider: "generic".into(),
+        destination_provider: "generic".into(),
+    };
+    assert!(context.owns_process("child-a", "job-a"));
+    assert!(context.owns_process("child-b", "job-b"));
+    assert!(context.owns_line("child-a", "job-a"));
+    assert!(context.owns_line("child-b", "job-b"));
+    assert!(context.owns_batch_child("parent", "child-a", "job-a"));
+    assert!(!context.owns_process("child-a", "job-b"));
+    assert!(!context.owns_line("child-a", "job-b"));
+    assert!(!context.owns_process("foreign-child", "job-a"));
+    assert!(!context.owns_line("foreign-child", "job-a"));
+    assert!(!context.owns_process("parent", "job-a"));
+    assert!(!context.owns_batch_child("other-parent", "child-a", "job-a"));
+    assert!(!context.owns_batch_child("parent", "child-a", "job-b"));
+}
+
+#[test]
+fn subprocess_output_reader_survives_invalid_utf8() {
+    let bytes = b"first\n\xff\xfe\nlast\n";
+    let lines = process::read_lossy_lines(std::io::Cursor::new(bytes));
+    assert_eq!(lines, ["first", "��", "last"]);
+}
+
+#[test]
+fn visible_output_retention_is_bounded_without_shifting() {
+    let mut output = BoundedLineBuffer::new();
+    for index in 0..=MAX_VISIBLE_OUTPUT_LINES {
+        push_visible_output(&mut output, index.to_string());
+    }
+
+    assert_eq!(output.len(), MAX_VISIBLE_OUTPUT_LINES);
+    assert_eq!(output.front().map(String::as_str), Some("1"));
+    assert_eq!(
+        output.back().and_then(|line| line.parse::<usize>().ok()),
+        Some(MAX_VISIBLE_OUTPUT_LINES)
+    );
+}
+
+#[test]
+fn diagnostic_buffers_truncate_utf8_and_bound_bytes() {
+    let mut output = BoundedLineBuffer::new();
+    push_visible_output(&mut output, "é".repeat(MAX_DIAGNOSTIC_LINE_BYTES + 1));
+    assert!(output.front().unwrap().len() <= MAX_DIAGNOSTIC_LINE_BYTES);
+    assert!(
+        output
+            .front()
+            .unwrap()
+            .is_char_boundary(output.front().unwrap().len())
+    );
+
+    let tail = Mutex::new(BoundedLineBuffer::new());
+    for _ in 0..100 {
+        record_process_tail(&tail, &"x".repeat(MAX_DIAGNOSTIC_LINE_BYTES));
+    }
+    let tail = tail.lock().unwrap();
+    assert!(tail.bytes() <= MAX_PROCESS_TAIL_BYTES);
+    assert_eq!(tail.bytes(), tail.iter().map(String::len).sum::<usize>());
+    assert!(tail.len() <= MAX_PROCESS_TAIL_LINES);
+}
+
+#[cfg(unix)]
+#[test]
+fn live_dovecot_exit_code_two_is_a_delta_outcome() {
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    let acknowledger = thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+            if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
+                let _ = reply.send(Ok(()));
+            } else if let Event::TransferAttempt { reply, .. } = event {
+                let _ = reply.send(Ok(()));
+            }
+        }
+    });
+    let cancel = AtomicBool::new(false);
+    let args = vec!["-c".into(), "exit 2".into()];
+    let outcome = run_streaming(RunContext {
+        executable: "/bin/sh",
+        args: &args,
+        env: &[],
+        tx: &tx,
+        run_id: "test-run",
+        job_id: "test-job",
+        project_id: "test-project",
+        prefix: "",
+        cancel: &cancel,
+        secrets: &[],
+        timeout: Duration::from_secs(5),
+        dovecot_exit_two_is_delta: true,
+        imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+        diagnostic_logger: None,
+        attempt_number: 1,
+        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        launch_limiter: None,
+    })
+    .unwrap();
+    drop(tx);
+    acknowledger.join().unwrap();
+    assert_eq!(outcome.outcome, StreamOutcome::DeltaRequired);
+}
+
+#[cfg(unix)]
+#[test]
+fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    let acknowledger = thread::spawn(move || {
+        let mut attempts = Vec::new();
+        while let Ok(event) = rx.recv() {
+            match event {
+                Event::ProcessStarted(_, _, _, _, _, _, _, reply) => {
+                    let _ = reply.send(Ok(()));
+                }
+                Event::TransferAttempt {
+                    attempt,
+                    status,
+                    reply,
+                    ..
+                } => {
+                    attempts.push((attempt, status));
+                    let _ = reply.send(Ok(()));
+                }
+                _ => {}
+            }
+        }
+        attempts
+    });
+    let cancel = AtomicBool::new(false);
+    let args = vec![
+            "-c".into(),
+            "printf '%s\\n' 'Host1 Nb folders: 2 folders' 'Host2 Nb folders: 2 folders' 'Host1 Nb messages: 7 messages' 'Host2 Nb messages: 7 messages' 'Host1 Total size: 100 bytes' 'Host2 Total size: 100 bytes' 'The sync looks good, all 7 identified messages in host1 are on host2.' 'Detected 0 errors'".into(),
+        ];
+    let result = run_streaming(RunContext {
+        executable: "/bin/sh",
+        args: &args,
+        env: &[],
+        tx: &tx,
+        run_id: "test-run",
+        job_id: "test-job",
+        project_id: "test-project",
+        prefix: "",
+        cancel: &cancel,
+        secrets: &[],
+        timeout: Duration::from_secs(5),
+        dovecot_exit_two_is_delta: false,
+        imapsync_output_profile: verification::ImapsyncOutputProfile::Packaged2314,
+        diagnostic_logger: None,
+        attempt_number: 1,
+        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        launch_limiter: None,
+    })
+    .unwrap();
+    drop(tx);
+    let attempts = acknowledger.join().unwrap();
+    assert_eq!(attempts.len(), 2, "{attempts:?}");
+    assert!(matches!(
+        &attempts[0],
+        (1, controller::TransferAttemptStatus::Started(intent))
+            if **intent == core::TransferPassIntent::for_test()
+    ));
+    // The finish carries the engine's own counters, never its output.
+    let (
+        1,
+        controller::TransferAttemptStatus::Finished {
+            outcome,
+            completion,
+        },
+    ) = &attempts[1]
+    else {
+        panic!("expected a finished attempt: {attempts:?}");
+    };
+    assert_eq!(*outcome, controller::TransferAttemptOutcome::Completed);
+    let counters = completion.engine_counters.as_ref().unwrap();
+    assert_eq!(
+        (counters.source_messages, counters.destination_messages),
+        (7, 7)
+    );
+    assert_eq!((counters.source_folders, counters.source_bytes), (2, 100));
+    assert_eq!(completion.emitted_state_sha256, None);
+    assert_eq!(result.outcome, StreamOutcome::Completed);
+    let evidence = result.imapsync_evidence.unwrap();
+    assert_eq!(evidence.source_messages, 7);
+    assert_eq!(evidence.destination_messages, 7);
+    assert!(evidence.authoritative);
+}
+
+#[cfg(unix)]
+#[test]
+fn streaming_rejects_evidence_for_an_unknown_imapsync_profile() {
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    let acknowledger = thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+            if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
+                let _ = reply.send(Ok(()));
+            } else if let Event::TransferAttempt { reply, .. } = event {
+                let _ = reply.send(Ok(()));
+            }
+        }
+    });
+    let cancel = AtomicBool::new(false);
+    let args = vec![
+            "-c".into(),
+            "printf '%s\\n' 'Host1 Nb folders: 2 folders' 'Host2 Nb folders: 2 folders' 'Host1 Nb messages: 7 messages' 'Host2 Nb messages: 7 messages' 'Host1 Total size: 100 bytes' 'Host2 Total size: 100 bytes' 'The sync looks good, all 7 identified messages in host1 are on host2.' 'Detected 0 errors'".into(),
+        ];
+    let result = run_streaming(RunContext {
+        executable: "/bin/sh",
+        args: &args,
+        env: &[],
+        tx: &tx,
+        run_id: "test-run",
+        job_id: "test-job",
+        project_id: "test-project",
+        prefix: "",
+        cancel: &cancel,
+        secrets: &[],
+        timeout: Duration::from_secs(5),
+        dovecot_exit_two_is_delta: false,
+        imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+        diagnostic_logger: None,
+        attempt_number: 1,
+        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        launch_limiter: None,
+    })
+    .unwrap();
+    drop(tx);
+    acknowledger.join().unwrap();
+    assert_eq!(result.outcome, StreamOutcome::Completed);
+    assert!(result.imapsync_evidence.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn dry_dovecot_exit_code_two_is_not_a_delta_outcome() {
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    let acknowledger = thread::spawn(move || {
+        let mut saw_transfer_attempt = false;
+        while let Ok(event) = rx.recv() {
+            match event {
+                Event::ProcessStarted(_, _, _, _, _, _, _, reply) => {
+                    let _ = reply.send(Ok(()));
+                }
+                Event::TransferAttempt { reply, .. } => {
+                    saw_transfer_attempt = true;
+                    let _ = reply.send(Ok(()));
+                }
+                _ => {}
+            }
+        }
+        saw_transfer_attempt
+    });
+    let cancel = AtomicBool::new(false);
+    let args = vec!["-c".into(), "exit 2".into()];
+    let outcome = run_streaming(RunContext {
+        executable: "/bin/sh",
+        args: &args,
+        env: &[],
+        tx: &tx,
+        run_id: "test-run",
+        job_id: "test-job",
+        project_id: "test-project",
+        prefix: "",
+        cancel: &cancel,
+        secrets: &[],
+        timeout: Duration::from_secs(5),
+        dovecot_exit_two_is_delta: false,
+        imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+        diagnostic_logger: None,
+        attempt_number: 1,
+        transfer_pass: None,
+        launch_limiter: None,
+    });
+    drop(tx);
+    assert!(!acknowledger.join().unwrap());
+    assert!(outcome.is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn disconnected_process_event_channel_cancels_child_before_returning() {
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    drop(rx);
+    let cancel = AtomicBool::new(false);
+    let args = ["-c".into(), "sleep 30".into()];
+    let outcome = run_streaming(RunContext {
+        executable: "/bin/sh",
+        args: &args,
+        env: &[],
+        tx: &tx,
+        run_id: "test-run",
+        job_id: "test-job",
+        project_id: "test-project",
+        prefix: "",
+        cancel: &cancel,
+        secrets: &[],
+        timeout: Duration::from_secs(5),
+        dovecot_exit_two_is_delta: false,
+        imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+        diagnostic_logger: None,
+        attempt_number: 1,
+        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        launch_limiter: None,
+    });
+
+    let error = outcome.unwrap_err();
+    assert!(error.contains("event channel disconnected"));
+    assert!(cancel.load(Ordering::Relaxed));
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_process_registration_cancels_child_before_returning() {
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    let acknowledger = thread::spawn(move || {
+        if let Ok(Event::ProcessStarted(_, _, _, _, _, _, _, reply)) = rx.recv() {
+            let _ = reply.send(Err("synthetic durable registration rejection".into()));
+        }
+    });
+    let cancel = AtomicBool::new(false);
+    let args = ["-c".into(), "sleep 30".into()];
+    let outcome = run_streaming(RunContext {
+        executable: "/bin/sh",
+        args: &args,
+        env: &[],
+        tx: &tx,
+        run_id: "test-run",
+        job_id: "test-job",
+        project_id: "test-project",
+        prefix: "",
+        cancel: &cancel,
+        secrets: &[],
+        timeout: Duration::from_secs(5),
+        dovecot_exit_two_is_delta: false,
+        imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+        diagnostic_logger: None,
+        attempt_number: 1,
+        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        launch_limiter: None,
+    });
+    drop(tx);
+    acknowledger.join().unwrap();
+    assert!(
+        outcome
+            .unwrap_err()
+            .contains("process registration failed; child cancelled")
+    );
+}
+
+#[test]
+fn cleanup_guard_removes_secret_directory_on_scope_exit() {
+    let directory = create_secret_directory().unwrap();
+    {
+        let _guard = CleanupGuard::new(vec![directory.clone()]);
+        assert!(directory.is_dir());
+    }
+    assert!(!directory.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recorded_process_identity_rejects_start_time_mismatch() {
+    let process = core::ActiveProcess {
+        run_id: "run".into(),
+        job_id: "job".into(),
+        pid: std::process::id(),
+        start_ticks: Some(0),
+        process_group: Some(std::process::id()),
+        session_id: Some(std::process::id()),
+        executable: "test".into(),
+    };
+    assert!(!recorded_process_matches(&process));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn recorded_macos_process_identity_can_be_validated_and_terminated() {
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 30"]);
+    configure_process_group(&mut command);
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    let (start_ticks, process_group, session_id) = process_identity(pid).unwrap();
+    let process = core::ActiveProcess {
+        run_id: "run-macos-identity".into(),
+        job_id: "job-macos-identity".into(),
+        pid,
+        start_ticks: Some(start_ticks),
+        process_group: Some(process_group),
+        session_id: Some(session_id),
+        executable: "sh".into(),
+    };
+    assert!(recorded_process_matches(&process));
+    terminate_recorded_process_group(&process);
+    let status = child.wait().unwrap();
+    assert!(!status.success());
+}
+
+#[test]
+fn imap_preflight_requires_tagged_ok_responses() {
+    assert!(imap_command_succeeded(
+        "* CAPABILITY IMAP4rev1\r\na001 oK done\r\n",
+        "a001"
+    ));
+    assert!(!imap_command_succeeded(
+        "* CAPABILITY IMAP4rev1\r\na001 okay done\r\n",
+        "a001"
+    ));
+    assert!(!imap_command_succeeded(
+        "* CAPABILITY IMAP4rev1\r\na001 NO denied\r\n",
+        "a001"
+    ));
+    assert!(!imap_command_succeeded(
+        "* CAPABILITY IMAP4rev1\r\na001 BAD denied\r\n",
+        "a001"
+    ));
+}
+
+#[test]
+fn removing_secret_options_removes_values_starting_with_dashes() {
+    let mut args = vec![
+        "--password1".into(),
+        "--looks-like-an-option".into(),
+        "--host".into(),
+        "mail".into(),
+    ];
+    remove_option(&mut args, "--password1");
+    assert_eq!(args, ["--host", "mail"]);
+}
+
+#[test]
+fn endpoint_parser_handles_ports_and_ipv6() {
+    assert_eq!(
+        endpoint::parts("mail.example:8143", 993).unwrap(),
+        ("mail.example".into(), 8143)
+    );
+    assert_eq!(
+        endpoint::parts("[2001:db8::1]:993", 143).unwrap(),
+        ("2001:db8::1".into(), 993)
+    );
+    assert!(endpoint::parts("mail.example:0", 993).is_err());
+    assert!(endpoint::parts("[2001:db8::1]garbage", 993).is_err());
+}
+
+#[test]
+fn command_endpoint_helpers_never_reuse_invalid_input() {
+    assert_eq!(
+        command_endpoint_parts("mail.example:0", 993),
+        ("<invalid-endpoint>".into(), 0)
+    );
+    assert_eq!(command_port("000", 993), 0);
+    assert_eq!(command_port("", 993), 993);
+}
+
+#[test]
+fn validation_rejects_malformed_embedded_endpoint_ports() {
+    let mut form = dovecot_form();
+    form.profile.source_host = "source.example:not-a-port".into();
+    assert!(
+        form.validate()
+            .unwrap_err()
+            .contains("Source IMAP host is not a valid endpoint")
+    );
+    form.profile.source_host = "source.example".into();
+    form.profile.destination_host = "destination.example:bad".into();
+    assert!(
+        form.validate()
+            .unwrap_err()
+            .contains("Destination IMAP host is not a valid endpoint")
+    );
+}
+
+#[test]
+fn probe_endpoint_preserves_explicit_ipv6_and_port() {
+    assert_eq!(
+        endpoint_for_probe("[2001:db8::1]", "993").unwrap(),
+        "[2001:db8::1]:993"
+    );
+    assert_eq!(
+        endpoint_for_probe("mail.example", "").unwrap(),
+        "mail.example"
+    );
+    assert!(endpoint_for_probe("mail.example", "0").is_err());
+}
+
+#[test]
+fn imap_default_port_matches_transport_mode() {
+    assert_eq!(default_imap_port("imaps"), 993);
+    assert_eq!(default_imap_port("starttls"), 143);
+    assert_eq!(default_imap_port("plain"), 143);
+    assert_eq!(Form::default().profile.destination_tls, "imaps");
+}
+
+#[test]
+fn imapsync_destination_transport_and_port_are_typed() {
+    let mut form = Form::default();
+    form.profile.source_host = "source.example".into();
+    form.profile.source_user = "source-user".into();
+    form.profile.destination_host = "destination.example".into();
+    form.profile.destination_user = "destination-user".into();
+    form.source_password = String::from("source-secret").into();
+    form.destination_password = String::from("destination-secret").into();
+    form.profile.source_tls = "starttls".into();
+    form.profile.destination_tls = "starttls".into();
+    let args = form.args(true);
+    assert!(args.contains(&"--tls1".into()));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--sslargs1", "SSL_verify_mode=1"])
+    );
+    assert!(args.windows(2).any(|pair| pair == ["--port2", "143"]));
+    assert!(args.contains(&"--tls2".into()));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--sslargs2", "SSL_verify_mode=1"])
+    );
+    assert!(!args.iter().any(|arg| arg.starts_with("--tlsargs")));
+    assert!(!args.iter().any(|arg| arg == "--ssl2"));
+    form.profile.destination_port = "8143".into();
+    let args = form.args(true);
+    assert!(args.windows(2).any(|pair| pair == ["--port2", "8143"]));
+}
+
+#[test]
+fn secret_runtime_isolated_below_xdg_runtime_directory() {
+    assert_eq!(
+        credentials::secret_runtime_base_from(Some(PathBuf::from("/run/user/1000"))),
+        PathBuf::from("/run/user/1000/mailswiftsync")
+    );
+    let fallback = credentials::secret_runtime_base_from(Some(PathBuf::from("")));
+    let temp_dir = std::env::temp_dir();
+    assert_eq!(fallback.parent(), Some(temp_dir.as_path()));
+    #[cfg(unix)]
+    assert!(
+        fallback
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("mailswiftsync-runtime-"))
+    );
+    #[cfg(not(unix))]
+    assert_eq!(
+        fallback.file_name().and_then(|name| name.to_str()),
+        Some("mailswiftsync-runtime")
+    );
+}
+
+#[test]
+fn state_lock_prevents_two_instances_and_releases_on_drop() {
+    let state_path =
+        std::env::temp_dir().join(format!("mailswiftsync-lock-{}.db", uuid::Uuid::new_v4()));
+    let first = acquire_instance_lock(&state_path).unwrap();
+    assert!(
+        acquire_instance_lock(&state_path)
+            .unwrap_err()
+            .contains("project database")
+    );
+    drop(first);
+    let second = acquire_instance_lock(&state_path).unwrap();
+    drop(second);
+    let _ = std::fs::remove_file(state_path.with_extension("lock"));
+}
+
+#[cfg(unix)]
+#[test]
+fn recorded_process_group_termination_stops_orphaned_child() {
+    let mut command = Command::new("sh");
+    command.args(["-c", "trap '' TERM; sleep 30"]);
+    configure_process_group(&mut command);
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    assert!(child.try_wait().unwrap().is_none());
+
+    terminate_process_group_by_pid(pid);
+
+    let status = child.wait().unwrap();
+    assert!(!status.success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn startup_reaps_matching_process_before_recovering_mailbox() {
+    let mut command = Command::new("sh");
+    command.args(["-c", "trap '' TERM; sleep 30"]);
+    configure_process_group(&mut command);
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    let (start_ticks, process_group, session_id) = process_identity(pid).unwrap();
+    let process = core::ActiveProcess {
+        run_id: "run-startup-recovery".into(),
+        job_id: String::new(),
+        pid,
+        start_ticks: Some(start_ticks),
+        process_group: Some(process_group),
+        session_id: Some(session_id),
+        executable: "sh".into(),
+    };
+    let db = core::StateStore::in_memory().unwrap();
+    let project = db.create_project("test", "source", "destination").unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    let mut process = process;
+    process.job_id = job.clone();
+    db.begin_run(&project.id, &job, &process.run_id, "test")
+        .unwrap();
+    db.register_process(&process).unwrap();
+
+    assert!(recorded_process_matches(&process));
+    terminate_recorded_process_group(&process);
+    assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
+    assert_eq!(
+        db.mailbox_state(&job).unwrap().as_deref(),
+        Some("attention")
+    );
+    assert!(db.active_processes().unwrap().is_empty());
+    assert_eq!(
+        db.run_status(&process.run_id).unwrap().as_deref(),
+        Some("abandoned")
+    );
+    assert!(!child.wait().unwrap().success());
+    // The retry is only attempted after the matching process has been
+    // reaped and recovery has changed the mailbox out of `running`.
+    db.begin_run(&project.id, &job, "run-after-reap", "test")
+        .unwrap();
+    db.finish_run_for_mailbox(
+        &project.id,
+        &job,
+        "run-after-reap",
+        "cancelled",
+        "cancelled",
+        "test retry cleanup",
+    )
+    .unwrap();
+}
+
+#[test]
+fn recommended_action_prioritizes_interrupted_work() {
+    assert_eq!(
+        recommended_next_action(core::Phase::Preflight, true, 2, false),
+        "Review Attention items before starting another migration."
+    );
+    assert_eq!(
+        recommended_next_action(core::Phase::Preflight, true, 0, true),
+        "A migration is running — monitor Activity or use Stop migration if you need to halt it."
+    );
+}
+
+#[test]
+fn lifecycle_cannot_advance_when_terminal_durability_is_uncertain() {
+    assert!(terminal_phase_advance_allowed(true, true, false));
+    assert!(!terminal_phase_advance_allowed(true, false, false));
+    assert!(!terminal_phase_advance_allowed(true, true, true));
+    assert!(!terminal_phase_advance_allowed(false, true, false));
+}
+
+#[test]
+fn recommended_action_describes_phase_without_synthetic_readiness() {
+    assert_eq!(
+        recommended_next_action(core::Phase::Discovery, false, 0, false),
+        "Create the project, then run a dry preflight against a test mailbox."
+    );
+    assert_eq!(
+        recommended_next_action(core::Phase::Verification, true, 0, false),
+        "Review evidence for each mailbox and export the verification report."
+    );
+}
+
+#[test]
+fn dovecot_plain_tls_maps_to_dovecot_no() {
+    let mut form = dovecot_form();
+    form.profile.source_tls = "plain".into();
+    let (_, args) = form.command(true).unwrap();
+    assert!(args.iter().any(|arg| arg == "imapc_ssl=no"));
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg == "ssl_client_require_valid_cert=yes")
+    );
+}
+
+#[test]
+fn dovecot_encrypted_source_forces_certificate_validation() {
+    let mut form = dovecot_form();
+    form.profile.source_tls = "starttls".into();
+    form.profile.dovecot_config = "/etc/dovecot/custom.conf".into();
+    form.profile.source_ca_bundle = "/etc/company-ca.pem".into();
+    let (_, args) = form.command(true).unwrap();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-o", "ssl_client_require_valid_cert=yes"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-o", "ssl_client_ca_file=/etc/company-ca.pem"])
+    );
+}
+
+#[test]
+fn imapsync_trust_bundle_is_explicit_and_verification_stays_enabled() {
+    let mut form = Form::default();
+    form.profile.source_ca_bundle = "/etc/company ca.pem".into();
+    form.profile.destination_ca_bundle = "/opt/customer trust/ca.pem".into();
+    let args = form.args(true);
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--sslargs1", "SSL_verify_mode=1"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--sslargs1", "SSL_ca_file=/etc/company ca.pem"])
+    );
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg.contains("SSL_verify_mode=1 SSL_ca_file="))
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--sslargs2", "SSL_verify_mode=1"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| { pair == ["--sslargs2", "SSL_ca_file=/opt/customer trust/ca.pem"] })
+    );
+}
+
+#[test]
+fn dovecot_rejects_unenforced_certificate_pins() {
+    let mut form = dovecot_form();
+    form.profile.source_certificate_pin_sha256 = "ab".repeat(32);
+    let error = form.validate_internal(false).unwrap_err();
+    assert!(error.contains("Certificate pinning is not currently supported"));
+
+    let mut form = dovecot_form();
+    form.profile.destination_certificate_pin_sha256 = "cd".repeat(32);
+    let error = form.validate_internal(false).unwrap_err();
+    assert!(error.contains("Certificate pinning is not currently supported"));
+}
+
+#[test]
+fn trust_settings_change_the_preflight_fingerprint() {
+    let form = Form::default();
+    let original = form.plan_fingerprint();
+    let mut changed = form;
+    changed.profile.source_ca_bundle = "/etc/company-ca.pem".into();
+    assert_ne!(original, changed.plan_fingerprint());
+    changed.profile.source_ca_bundle.clear();
+    changed.profile.destination_certificate_pin_sha256 = "ab".repeat(32);
+    assert_ne!(original, changed.plan_fingerprint());
+}
+
+#[test]
+fn plan_identity_binds_executable_and_trust_bundle_contents() {
+    let executable =
+        std::env::temp_dir().join(format!("mailswiftsync-plan-executable-{}", Uuid::new_v4()));
+    let ca_bundle = std::env::temp_dir().join(format!("mailswiftsync-plan-ca-{}", Uuid::new_v4()));
+    std::fs::write(&executable, b"engine version one").unwrap();
+    std::fs::write(&ca_bundle, b"-----BEGIN CERTIFICATE-----\none").unwrap();
+
+    let mut form = Form::default();
+    form.profile.imapsync_path = executable.to_string_lossy().into_owned();
+    form.profile.source_ca_bundle = ca_bundle.to_string_lossy().into_owned();
+    let original = form.plan_fingerprint();
+    let snapshot = form.plan_snapshot();
+    assert!(snapshot.contains("execution_executable_sha256 = \"sha256:"));
+    assert!(snapshot.contains("source_ca_bundle_sha256 = \"sha256:"));
+
+    std::fs::write(&executable, b"engine version two").unwrap();
+    assert_ne!(original, form.plan_fingerprint());
+    let executable_changed = form.plan_fingerprint();
+
+    std::fs::write(&ca_bundle, b"-----BEGIN CERTIFICATE-----\ntwo").unwrap();
+    assert_ne!(executable_changed, form.plan_fingerprint());
+
+    let _ = std::fs::remove_file(executable);
+    let _ = std::fs::remove_file(ca_bundle);
+}
+
+#[test]
+fn durable_preflight_rejects_same_path_runtime_replacements() {
+    let executable = std::env::temp_dir().join(format!(
+        "mailswiftsync-durable-plan-executable-{}",
+        Uuid::new_v4()
+    ));
+    let ca_bundle =
+        std::env::temp_dir().join(format!("mailswiftsync-durable-plan-ca-{}", Uuid::new_v4()));
+    std::fs::write(&executable, b"engine version one").unwrap();
+    std::fs::write(&ca_bundle, b"trust bundle one").unwrap();
+
+    let mut form = Form::default();
+    form.profile.imapsync_path = executable.to_string_lossy().into_owned();
+    form.profile.source_ca_bundle = ca_bundle.to_string_lossy().into_owned();
+    let planned_digest = plan_fingerprint_digest(&form.plan_fingerprint());
+
+    let store = core::StateStore::in_memory().unwrap();
+    let project = store
+        .create_project("runtime-identity", "source.example", "destination.example")
+        .unwrap();
+    let job = store
+        .add_mailbox(&project.id, "source@example", "destination@example")
+        .unwrap();
+    store.set_preflight_plan(&job, &planned_digest).unwrap();
+
+    std::fs::write(&executable, b"engine version two").unwrap();
+    std::fs::write(&ca_bundle, b"trust bundle two").unwrap();
+    let current_digest = plan_fingerprint_digest(&form.plan_fingerprint());
+    assert_ne!(planned_digest, current_digest);
+    assert_ne!(
+        store.preflight_plan(&job).unwrap().as_deref(),
+        Some(current_digest.as_str())
+    );
+
+    let _ = std::fs::remove_file(executable);
+    let _ = std::fs::remove_file(ca_bundle);
+}
+
+#[test]
+fn plain_source_requires_explicit_live_transport_ack_and_binds_plan() {
+    let mut form = dovecot_form();
+    form.profile.source_tls = "plain".into();
+    assert!(form.requires_insecure_transport_ack());
+    assert!(form.validate().is_err());
+    let without_ack = form.plan_fingerprint();
+    form.profile.allow_insecure_source_transport = true;
+    assert!(!form.requires_insecure_transport_ack());
+    assert!(form.validate().is_ok());
+    assert_ne!(without_ack, form.plan_fingerprint());
+}
+
+#[test]
+fn imapsync_plain_source_disables_implicit_ssl_and_starttls() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.source_tls = "plain".into();
+    let args = engine::imapsync_args(&form.profile, true, 1).unwrap();
+
+    assert!(args.iter().any(|arg| arg == "--nossl1"));
+    assert!(args.iter().any(|arg| arg == "--notls1"));
+    assert!(!args.iter().any(|arg| arg == "--ssl1"));
+    assert!(!args.iter().any(|arg| arg == "--tls1"));
+}
+
+#[test]
+fn imapsync_argument_builder_rejects_invalid_extra_options_without_partial_argv() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.extra_options = "--not-an-allowed-imapsync-option".into();
+    let error = engine::imapsync_args(&form.profile, true, 1).unwrap_err();
+    assert!(error.contains("safe imapsync option allowlist"), "{error}");
+    let preview_error = engine::imapsync_preview_args(&form.profile, true, 1).unwrap_err();
+    assert!(preview_error.contains("safe imapsync option allowlist"));
+    let invalid_fingerprint = form.plan_fingerprint();
+    assert!(invalid_fingerprint.contains("--invalid-extra-options-sha256"));
+    assert!(!invalid_fingerprint.contains("not-an-allowed-imapsync-option"));
+    form.profile.source_host = "other-source.example".into();
+    assert_ne!(invalid_fingerprint, form.plan_fingerprint());
+    form.profile.extra_options.clear();
+    assert_ne!(invalid_fingerprint, form.plan_fingerprint());
+}
+
+#[test]
+fn imapsync_oauth_mode_uses_xoauth2_without_bearer_token_in_preview() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.source_auth = "oauth2".into();
+    form.profile.destination_auth = "oauth2".into();
+    let args = engine::imapsync_preview_args(&form.profile, true, 1).unwrap();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--authmech1", "XOAUTH2"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--authmech2", "XOAUTH2"])
+    );
+    assert!(args.iter().any(|arg| arg == "--oauthaccesstoken1"));
+    assert!(args.iter().any(|arg| arg == "--oauthaccesstoken2"));
+    assert!(!args.iter().any(|arg| arg.contains("access-token")));
+    assert!(
+        !args
+            .iter()
+            .any(|arg| arg == "--password1" || arg == "--password2")
+    );
+}
+
+#[test]
+fn imapsync_argument_builder_never_materializes_runtime_credentials() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    let args = engine::imapsync_args(&form.profile, false, 1).unwrap();
+    assert!(!args.iter().any(|arg| arg.contains("source-secret")));
+    assert!(!args.iter().any(|arg| arg.contains("destination-secret")));
+    assert!(!args.iter().any(|arg| {
+        arg == "--password1"
+            || arg == "--password2"
+            || arg == "--oauthaccesstoken1"
+            || arg == "--oauthaccesstoken2"
+    }));
+}
+
+#[test]
+fn imapsync_oauth_runtime_uses_private_token_files() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.source_auth = "oauth2".into();
+    form.profile.destination_auth = "oauth2".into();
+    form.source_password = String::from("source-access-token").into();
+    form.destination_password = String::from("destination-access-token").into();
+    let prepared = form.validated_plan().unwrap().prepared_command().unwrap();
+    let source_index = prepared
+        .args
+        .iter()
+        .position(|arg| arg == "--oauthaccesstoken1")
+        .unwrap();
+    let destination_index = prepared
+        .args
+        .iter()
+        .position(|arg| arg == "--oauthaccesstoken2")
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&prepared.args[source_index + 1]).unwrap(),
+        "source-access-token"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&prepared.args[destination_index + 1]).unwrap(),
+        "destination-access-token"
+    );
+    assert!(!prepared.args.iter().any(|arg| arg.contains("access-token")));
+}
+
+#[test]
+fn xoauth2_payload_uses_rfc_7628_shape() {
+    let payload = BASE64_STANDARD.decode(xoauth2_payload("user@example.test", "token").as_bytes());
+    assert_eq!(
+        payload.unwrap(),
+        b"user=user@example.test\x01auth=Bearer token\x01\x01"
+    );
+}
+
+#[test]
+fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    let prepared = form.validated_plan().unwrap().prepared_command().unwrap();
+    assert!(!prepared.args.contains(&"--password1".into()));
+    assert!(!prepared.args.contains(&"--password2".into()));
+    let source_index = prepared
+        .args
+        .iter()
+        .position(|arg| arg == "--passfile1")
+        .unwrap();
+    let destination_index = prepared
+        .args
+        .iter()
+        .position(|arg| arg == "--passfile2")
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&prepared.args[source_index + 1]).unwrap(),
+        "secret"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&prepared.args[destination_index + 1]).unwrap(),
+        "unused"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&prepared.args[source_index + 1])
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    assert!(prepared.env.is_empty());
+    assert!(!prepared.args.iter().any(|arg| arg == "secret"));
+    assert!(prepared.args.iter().any(|arg| arg == "--ssl1"));
+    assert!(prepared.args.iter().any(|arg| arg == "--ssl2"));
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|pair| { pair == ["--sslargs1", "SSL_verify_mode=1"] })
+    );
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|pair| { pair == ["--sslargs2", "SSL_verify_mode=1"] })
+    );
+    cleanup_paths(&prepared.cleanup);
+    assert!(!std::path::Path::new(&prepared.args[source_index + 1]).exists());
+}
+
+#[test]
+fn imapsync_summary_becomes_durable_evidence_input() {
+    let lines = [
+        "Host1 Nb folders: 3 folders".into(),
+        "Host2 Nb folders: 3 folders".into(),
+        "Host1 Nb messages: 42 messages".into(),
+        "Host2 Nb messages: 42 messages".into(),
+        "Host1 Total size: 1000 bytes".into(),
+        "Host2 Total size: 1000 bytes".into(),
+        "The sync looks good, all 42 identified messages in host1 are on host2.".into(),
+        "Detected 0 errors".into(),
+    ];
+    let evidence = verification::parse_imapsync_evidence(&lines).unwrap();
+    assert_eq!(evidence.confidence_percent(), 100);
+    assert_eq!(evidence.source_messages, 42);
+}
+
+#[test]
+fn incomplete_imapsync_summary_is_not_evidence() {
+    assert!(verification::parse_imapsync_evidence(&["Detected 0 errors".into()]).is_none());
+}
+
+#[test]
+fn imapsync_parser_ignores_unrelated_detected_lines() {
+    let lines = [
+        "Host1 Nb folders: 1 folders".into(),
+        "Host2 Nb folders: 1 folders".into(),
+        "Host1 Nb messages: 2 messages".into(),
+        "Host2 Nb messages: 2 messages".into(),
+        "Host1 Total size: 100 bytes".into(),
+        "Host2 Total size: 100 bytes".into(),
+        "Detected 17 folders during namespace discovery".into(),
+        "The sync looks good, all 2 identified messages in host1 are on host2.".into(),
+        "Detected 0 errors".into(),
+    ];
+    let evidence = verification::parse_imapsync_evidence(&lines).unwrap();
+    assert_eq!(evidence.failed_messages, 0);
+}
+
+#[test]
+fn dovecot_status_aggregates_mailbox_evidence() {
+    let source = vec![
+        "INBOX messages=10 vsize=100".into(),
+        "Archive messages=2 vsize=50".into(),
+    ];
+    let destination = vec![
+        "INBOX messages=10 vsize=100".into(),
+        "Archive messages=2 vsize=50".into(),
+    ];
+    let evidence = verification::parse_dovecot_evidence(&source, &destination).unwrap();
+    assert_eq!(evidence.source_folders, 2);
+    assert_eq!(evidence.source_messages, 12);
+    assert_eq!(evidence.confidence_percent(), 85);
+}
+
+#[test]
+fn live_auth_proof_requires_matching_plan_and_credentials() {
+    let proof = LiveAuthProof {
+        plan_fingerprint: "plan-a".into(),
+        credential_fingerprint: "credentials-a".into(),
+    };
+
+    assert!(proof.matches("plan-a", "credentials-a"));
+    assert!(!proof.matches("plan-b", "credentials-a"));
+    assert!(!proof.matches("plan-a", "credentials-b"));
+}
+
+#[test]
+fn fresh_imap_authentication_applies_to_encrypted_transports() {
+    let form = dovecot_form();
+    assert!(!fresh_imap_authentication_applies(&form));
+
+    let mut form = Form::default();
+    form.profile.source_tls = "starttls".into();
+    form.profile.destination_tls = "imaps".into();
+    form.dry_run = false;
+    assert!(fresh_imap_authentication_applies(&form));
+    form.profile.destination_tls = "starttls".into();
+    assert!(fresh_imap_authentication_applies(&form));
+    form.profile.source_tls = "plain".into();
+    assert!(!fresh_imap_authentication_applies(&form));
+}
+
+#[test]
+fn ui_scale_cycles_through_readable_operator_presets() {
+    assert_eq!(next_ui_scale(0.90), 1.00);
+    assert_eq!(next_ui_scale(1.10), 1.25);
+    assert_eq!(next_ui_scale(1.50), 2.00);
+    assert_eq!(next_ui_scale(2.00), 0.90);
+}
+
+#[test]
+fn semantic_theme_text_colors_meet_normal_text_contrast_target() {
+    for colors in [ThemeColors::dark(), ThemeColors::light()] {
+        for foreground in [
+            colors.text_primary,
+            colors.text_secondary,
+            colors.info,
+            colors.success,
+            colors.warning,
+            colors.danger,
+            colors.link,
+        ] {
+            assert!(
+                contrast_ratio(foreground, colors.background) >= 4.5,
+                "foreground {:?} does not meet contrast target",
+                foreground
+            );
+        }
+    }
+}
+
+#[test]
+fn password_reveal_is_not_allowed_when_controls_are_locked() {
+    assert!(password_reveal_allowed(true, true));
+    assert!(!password_reveal_allowed(false, true));
+    assert!(!password_reveal_allowed(false, false));
+}
+
+#[test]
+fn displayed_batch_states_map_to_durable_retry_keys() {
+    assert_eq!(display_state_key("Failed"), "failed");
+    assert_eq!(display_state_key("Delta required"), "delta_required");
+    assert_eq!(
+        display_state_key("Verification difference"),
+        "verification_difference"
+    );
+}
+
+#[test]
+fn headless_batch_success_requires_verified_terminal_states() {
+    assert!(is_verified_terminal_state("verified"));
+    assert!(is_verified_terminal_state("verified_with_exceptions"));
+    assert!(!is_verified_terminal_state("ready"));
+    assert!(!is_verified_terminal_state("completed"));
+    assert!(!is_verified_terminal_state("delta_required"));
+}
+
+#[test]
+fn run_status_severity_is_typed_and_independent_of_display_text() {
+    assert_eq!(
+        successful_run_severity(false, false, Some("verified")),
+        StatusSeverity::Success
+    );
+    assert_eq!(
+        successful_run_severity(false, false, Some("delta_required")),
+        StatusSeverity::Warning
+    );
+    assert_eq!(
+        successful_run_severity(false, true, None),
+        StatusSeverity::Warning
+    );
+    assert_eq!(
+        successful_run_severity(true, false, None),
+        StatusSeverity::Success
+    );
+}
+
+#[test]
+fn mailbox_state_badges_are_semantic_and_not_uniform() {
+    assert_eq!(
+        job_state_badge("verified", ThemeColors::dark()).0,
+        "✓ Verified"
+    );
+    assert_eq!(job_state_badge("failed", ThemeColors::dark()).0, "× Failed");
+    assert_ne!(
+        job_state_badge("verified", ThemeColors::dark()).1,
+        job_state_badge("failed", ThemeColors::dark()).1
+    );
+    assert_eq!(
+        job_state_badge("retrying", ThemeColors::dark()).0,
+        "↻ Retrying"
+    );
+}
+
+#[test]
+fn headless_status_is_secret_free_and_reports_durable_mailboxes() {
+    let directory = std::env::temp_dir().join(format!("mailswiftsync-headless-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let state = directory.join("state.db");
+    let db = core::StateStore::open(&state).unwrap();
+    let project = db
+        .create_project_with_mailbox(
+            "headless-status",
+            "source.example",
+            "destination.example",
+            "source-user",
+            "destination-user",
+        )
+        .unwrap()
+        .0;
+    drop(db);
+
+    // Read-only status must remain available while a controller owns the
+    // exclusive application lock.
+    let _writer_lock = acquire_instance_lock(&state).unwrap();
+    let status = headless_status(&state, Some(&project.id)).unwrap();
+    assert_eq!(status.schema_version, core::CURRENT_SCHEMA_VERSION);
+    assert_eq!(status.projects.len(), 1);
+    assert!(!status.projects[0].batch);
+    assert_eq!(status.projects[0].mailboxes.len(), 1);
+    assert_eq!(status.projects[0].mailboxes[0].state, "queued");
+    let serialized = serde_json::to_string(&status).unwrap();
+    assert!(!serialized.contains("password"));
+    let summary = headless::headless_status_summary(&state, Some(&project.id)).unwrap();
+    assert_eq!(summary.projects[0].mailbox_state_counts.total, 1);
+    assert_eq!(summary.projects[0].mailbox_state_counts.ready, 0);
+    assert!(!summary.projects[0].batch);
+    let summary_json = serde_json::to_string(&summary).unwrap();
+    assert!(!summary_json.contains("mailboxes"));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn headless_status_identifies_configured_batch_projects() {
+    let directory =
+        std::env::temp_dir().join(format!("mailswiftsync-headless-batch-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let state = directory.join("state.db");
+    let db = core::StateStore::open(&state).unwrap();
+    let project = db
+        .create_project_with_mailbox_configs(
+            "Acme cutover",
+            "imap.source.example",
+            "imap.destination.example",
+            &[(
+                "source-user".into(),
+                "destination-user".into(),
+                "engine = \"imapsync\"".into(),
+            )],
+        )
+        .unwrap()
+        .0;
+    drop(db);
+
+    let status = headless_status(&state, Some(&project.id)).unwrap();
+    assert!(status.projects[0].batch);
+    let summary = headless::headless_status_summary(&state, Some(&project.id)).unwrap();
+    assert!(summary.projects[0].batch);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn fleet_status_aggregates_every_ledger_under_a_directory() {
+    let root = std::env::temp_dir().join(format!("mailswiftsync-fleet-{}", Uuid::new_v4()));
+    let shard_a = root.join("shard-a");
+    let shard_b = root.join("nested").join("shard-b");
+    create_private_test_directory(&shard_a);
+    create_private_test_directory(&shard_b);
+
+    let state_a = shard_a.join("state.db");
+    let db_a = core::StateStore::open(&state_a).unwrap();
+    db_a.create_project_with_mailbox(
+        "shard-a",
+        "source.example",
+        "destination.example",
+        "user-a",
+        "user-a",
+    )
+    .unwrap();
+    drop(db_a);
+
+    let state_b = shard_b.join("state.db");
+    let db_b = core::StateStore::open(&state_b).unwrap();
+    db_b.create_project_with_mailbox(
+        "shard-b",
+        "source.example",
+        "destination.example",
+        "user-b",
+        "user-b",
+    )
+    .unwrap();
+    drop(db_b);
+
+    // A non-ledger file with the same extension must be reported, not
+    // silently skipped or allowed to abort the whole scan.
+    std::fs::write(root.join("junk.db"), b"not a database").unwrap();
+    // A file with a different extension must never be treated as a
+    // candidate ledger.
+    std::fs::write(root.join("notes.txt"), b"irrelevant").unwrap();
+
+    let fleet = headless::fleet_status(&root).unwrap();
+    assert_eq!(fleet.ledger_count, 2);
+    assert_eq!(fleet.totals.total, 2);
+    assert_eq!(fleet.unreadable.len(), 1);
+    assert_eq!(
+        fleet.unreadable[0].path,
+        root.join("junk.db").display().to_string()
+    );
+    let mut ledger_paths: Vec<_> = fleet
+        .ledgers
+        .iter()
+        .map(|ledger| ledger.path.clone())
+        .collect();
+    ledger_paths.sort();
+    let mut expected = vec![state_a.display().to_string(), state_b.display().to_string()];
+    expected.sort();
+    assert_eq!(ledger_paths, expected);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fleet_status_on_an_empty_directory_reports_zero_ledgers() {
+    let root = std::env::temp_dir().join(format!("mailswiftsync-fleet-empty-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let fleet = headless::fleet_status(&root).unwrap();
+    assert_eq!(fleet.ledger_count, 0);
+    assert_eq!(fleet.totals, core::MailboxStateCounts::default());
+    assert!(fleet.unreadable.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn durable_state_path_never_falls_back_to_temporary_storage() {
+    assert_eq!(
+        persistent_state_path_from(
+            Some(OsString::from("/var/lib/mailswiftsync/state.db")),
+            None,
+        )
+        .unwrap(),
+        PathBuf::from("/var/lib/mailswiftsync/state.db")
+    );
+    assert_eq!(
+        persistent_state_path_from(None, Some(PathBuf::from("/home/operator/.local/share")))
+            .unwrap(),
+        PathBuf::from("/home/operator/.local/share/mailswiftsync/state.db")
+    );
+    let missing_directory = persistent_state_path_from(None, None).unwrap_err();
+    assert!(missing_directory.contains("durable state directory"));
+    let empty_override = persistent_state_path_from(Some(OsString::new()), None).unwrap_err();
+    assert!(empty_override.contains("set but empty"));
+}
