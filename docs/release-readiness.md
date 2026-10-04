@@ -428,19 +428,20 @@ screen-reader checklist are recorded in
   queue-health accounting, a 1,000-row durable state change, the first
   Mailboxes frame through the real App, and the off-thread write of a parsed
   import to the ledger. The latest local release-mode result on 2026-10-04 was
-  25 ms for filtering, 52 ms for select-all, 22 ms for the state change, 97 ms
-  for the Mailboxes first frame, and 1.711 s to write the import; the complete
-  shell's first frame was 45 ms, selected-frame update 0 ms, and search-frame
-  update 26 ms. The same 100k-row CSV import benchmark measured 262 ms and 43
+  7 ms for filtering, 54 ms for select-all, 23 ms for the state change, 100 ms
+  for the Mailboxes first frame, and 2.623 s to write the import; the complete
+  shell's first frame was 48 ms, selected-frame update 1 ms, and search-frame
+  update 8 ms. The same 100k-row CSV import benchmark measured 295 ms and 48
   MiB RSS growth. All scripted budgets passed; the Mailboxes first frame is
-  close to the 100 ms limit. These are
+  at the 100 ms limit. These are
   slower than the earlier in-memory
   baselines (single-digit milliseconds) in exchange for bounded memory and a
   queue that survives restarts unchanged. These are release-mode host
   baselines. Filter results now use SQL counts and viewport paging when no
   explicit selection is active, avoiding a Rust-side vector of every matching
-  row ID; substring matching still scans the SQLite facts table and is not
-  indexed. The script enforces default budgets of 100 ms for filtering, 250
+  row ID; terms of three or more characters use an FTS5 trigram index scoped
+  by the queue-facts project predicate, while shorter or control-character
+  terms retain a literal substring fallback. The script enforces default budgets of 100 ms for filtering, 250
   ms for selection-all, 100 ms for state refresh, 100 ms for the virtualized
   first frame, 5,000 ms for writing the import, and 500 ms for the full shell; qualified host classes may
   override these with the documented `MAILSWIFTSYNC_UI_*_BUDGET_MS`

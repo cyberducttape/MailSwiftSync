@@ -125,7 +125,27 @@ pub struct QueueSelectionSummary {
 const ROW_COLUMNS: &str = "m.rowid,m.id,COALESCE(f.label,''),COALESCE(f.source_host,''),m.source_mailbox,COALESCE(f.destination_host,''),m.destination_mailbox,CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' ELSE m.state END,f.destructive,m.attention_reason,COALESCE(f.policy,'')";
 
 /// Insert or replace one row's facts; the job's own rowid keys them.
-const FACTS_UPSERT: &str = "INSERT OR REPLACE INTO mailbox_queue_facts(job_rowid,job_id,project_id,label,source_host,destination_host,search_key,destructive,policy,state) SELECT rowid,id,project_id,?2,?3,?4,?5,?6,?7,state FROM mailbox_jobs WHERE id=?1";
+const FACTS_UPSERT: &str = "INSERT INTO mailbox_queue_facts(job_rowid,job_id,project_id,label,source_host,destination_host,search_key,destructive,policy,state) SELECT rowid,id,project_id,?2,?3,?4,?5,?6,?7,state FROM mailbox_jobs WHERE id=?1 ON CONFLICT(job_rowid) DO UPDATE SET job_id=excluded.job_id,project_id=excluded.project_id,label=excluded.label,source_host=excluded.source_host,destination_host=excluded.destination_host,search_key=excluded.search_key,destructive=excluded.destructive,policy=excluded.policy,state=excluded.state";
+
+fn queue_search_uses_trigrams(search: &str) -> bool {
+    search.chars().count() >= 3 && !search.chars().any(char::is_control)
+}
+
+fn queue_search_query(search: &str) -> String {
+    if queue_search_uses_trigrams(search) {
+        format!("\"{}\"", search.replace('"', "\"\""))
+    } else {
+        search.to_owned()
+    }
+}
+
+fn queue_search_predicate(search: &str) -> &'static str {
+    if queue_search_uses_trigrams(search) {
+        "f.job_rowid IN (SELECT rowid FROM mailbox_queue_facts_search WHERE search_key MATCH ?2)"
+    } else {
+        "instr(f.search_key,?2)>0"
+    }
+}
 
 fn upsert_facts(
     statement: &mut rusqlite::Statement<'_>,
@@ -240,6 +260,11 @@ impl StateStore {
         rows: &[QueueInsert],
     ) -> rusqlite::Result<Vec<String>> {
         let tx = self.connection.unchecked_transaction()?;
+        // Populate the trigram index in one set-based write after inserting
+        // all facts. Per-row FTS trigger invocation makes large imports
+        // substantially slower; the transaction keeps the brief trigger gap
+        // invisible to every other connection.
+        tx.execute_batch("DROP TRIGGER mailbox_queue_facts_search_insert")?;
         tx.execute(
             "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES(?1,?2,?3,?4,?5)",
             params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
@@ -298,6 +323,18 @@ impl StateStore {
             }
         }
         tx.execute(
+            "INSERT INTO mailbox_queue_facts_search(rowid,search_key)
+             SELECT job_rowid,search_key FROM mailbox_queue_facts WHERE project_id=?1",
+            [&project.id],
+        )?;
+        tx.execute_batch(
+            "CREATE TRIGGER mailbox_queue_facts_search_insert
+             AFTER INSERT ON mailbox_queue_facts BEGIN
+                 INSERT INTO mailbox_queue_facts_search(rowid,search_key)
+                 VALUES(NEW.job_rowid,NEW.search_key);
+             END;",
+        )?;
+        tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created',?2)",
             params![
                 project.id,
@@ -325,11 +362,13 @@ impl StateStore {
         folded_search: &str,
         state: Option<&str>,
     ) -> rusqlite::Result<Vec<i64>> {
+        let search_predicate = queue_search_predicate(folded_search);
+        let search_query = queue_search_query(folded_search);
         let mut statement = self.connection.prepare_cached(&format!(
-            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR instr(f.search_key,?2)>0) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3)) ORDER BY f.job_rowid"
+            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3)) ORDER BY f.job_rowid"
         ))?;
         statement
-            .query_map(params![project_id, folded_search, state], |row| row.get(0))?
+            .query_map(params![project_id, search_query, state], |row| row.get(0))?
             .collect()
     }
 
@@ -341,11 +380,13 @@ impl StateStore {
         folded_search: &str,
         state: Option<&str>,
     ) -> rusqlite::Result<usize> {
+        let search_predicate = queue_search_predicate(folded_search);
+        let search_query = queue_search_query(folded_search);
         self.connection.query_row(
             &format!(
-                "SELECT COUNT(*) FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR instr(f.search_key,?2)>0) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3))"
+                "SELECT COUNT(*) FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3))"
             ),
-            params![project_id, folded_search, state],
+            params![project_id, search_query, state],
             |row| Ok(row.get::<_, i64>(0)? as usize),
         )
     }
@@ -361,14 +402,16 @@ impl StateStore {
         offset: usize,
         limit: usize,
     ) -> rusqlite::Result<Vec<i64>> {
+        let search_predicate = queue_search_predicate(folded_search);
+        let search_query = queue_search_query(folded_search);
         let mut statement = self.connection.prepare_cached(&format!(
-            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR instr(f.search_key,?2)>0) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3)) ORDER BY f.job_rowid LIMIT ?4 OFFSET ?5"
+            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3)) ORDER BY f.job_rowid LIMIT ?4 OFFSET ?5"
         ))?;
         statement
             .query_map(
                 params![
                     project_id,
-                    folded_search,
+                    search_query,
                     state,
                     i64::try_from(limit).unwrap_or(i64::MAX),
                     i64::try_from(offset).unwrap_or(i64::MAX)
@@ -385,9 +428,18 @@ impl StateStore {
         rowid: i64,
         folded_search: &str,
     ) -> rusqlite::Result<bool> {
+        let search_predicate = if queue_search_uses_trigrams(folded_search) {
+            "EXISTS(SELECT 1 FROM mailbox_queue_facts_search WHERE rowid=?2 AND search_key MATCH ?3)"
+        } else {
+            "instr(search_key,?3)>0"
+        };
         self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM mailbox_queue_facts WHERE project_id=?1 AND job_rowid=?2 AND (?3='' OR instr(search_key,?3)>0))",
-            params![project_id, rowid, folded_search],
+            &format!("SELECT EXISTS(SELECT 1 FROM mailbox_queue_facts WHERE project_id=?1 AND job_rowid=?2 AND (?3='' OR {search_predicate}))"),
+            params![
+                project_id,
+                rowid,
+                queue_search_query(folded_search),
+            ],
             |row| row.get(0),
         )
     }
@@ -1008,6 +1060,54 @@ mod tests {
         // "user1" matches user1, user10, user11.
         let matching = store.queue_rowids(&project, "user1", None).unwrap();
         assert_eq!(matching.len(), 3);
+        assert_eq!(store.queue_rowid_count(&project, "user1", None).unwrap(), 3);
+        assert_eq!(store.queue_rowid_count(&project, "us", None).unwrap(), 12);
+        assert_eq!(
+            store
+                .queue_rowids(&project, "user1@example.test", None)
+                .unwrap(),
+            [all[1]]
+        );
+        assert_eq!(
+            store
+                .queue_rowid_page(&project, "user1", None, 1, 2)
+                .unwrap(),
+            matching[1..]
+        );
+        assert!(
+            store
+                .queue_row_matches(&project, all[1], "user1@example.test")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .queue_row_matches(&project, all[2], "user1@example.test")
+                .unwrap()
+        );
+        assert!(
+            store
+                .queue_rowids(&project, "user1\" OR *", None)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_queue_facts SET search_key='renamed@example.test' WHERE job_id=?1",
+                [&ids[1]],
+            )
+            .unwrap();
+        assert!(
+            !store
+                .queue_row_matches(&project, all[1], "user1@example.test")
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .queue_rowids(&project, "renamed@example.test", None)
+                .unwrap(),
+            [all[1]]
+        );
         // A never-admitted row is presented as imported.
         assert_eq!(
             store
@@ -1061,6 +1161,37 @@ mod tests {
             [ids[5].as_str(), ids[0].as_str()]
         );
         assert!(plans[0].config.as_deref().unwrap().contains("user5"));
+    }
+
+    #[test]
+    fn schema_v24_queue_search_index_migration_backfills_existing_facts() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, _) = queue(&store, 3);
+        store
+            .connection
+            .execute_batch(
+                "DROP TRIGGER mailbox_queue_facts_search_insert;
+                 DROP TRIGGER mailbox_queue_facts_search_update;
+                 DROP TRIGGER mailbox_queue_facts_search_delete;
+                 DROP TABLE mailbox_queue_facts_search;
+                 PRAGMA user_version=24;",
+            )
+            .unwrap();
+
+        store.migrate().unwrap();
+        let schema_version: i64 = store
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(schema_version, crate::core::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store
+                .queue_rowids(&project, "user1@example.test", None)
+                .unwrap()
+                .len(),
+            1,
+            "legacy mailbox facts must be included in the new trigram index"
+        );
     }
 
     #[test]

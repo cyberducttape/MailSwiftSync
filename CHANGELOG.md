@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add a project-scoped SQLite FTS5 trigram index for mailbox substring search;
+  use literal-safe indexed queries for terms of three or more characters and
+  preserve the existing fallback for short/control-character queries. Schema
+  v25 rebuilds the index transactionally and maintains it with queue-fact
+  triggers.
 - Reject explicit folder-mapping rules whose destination targets collide after
   case folding, preventing an unannounced merge when provider case semantics
   differ; document that provider-specific normalization remains unqualified.
@@ -57,6 +62,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a project-scoped SQLite FTS5 trigram index for mailbox substring search;
+  terms of three or more characters use literal-safe indexed queries, while
+  short/control-character queries retain the fallback. Schema v25 rebuilds the
+  index transactionally and maintains it with queue-fact triggers.
 - Reject explicit folder targets that collide after case folding, avoiding
   unannounced mailbox merges; provider-specific normalization remains
   unqualified.
@@ -96,7 +105,7 @@ operator distribution archives.
   notifiers bind and claim only that project's lifecycle events, while unscoped
   notifiers retain all-project behavior. Delivery now atomically leases due
   rows, reclaims expired leases after crashes, and fences acknowledgements by
-  lease owner; failed-attempt increments are one atomic update. Schema v24
+  lease owner; failed-attempt increments are one atomic update. The schema
   migration safely unbinds prior queued lifecycle events that may have been
   associated with the wrong project endpoint.
 - Updated disposable 100k-mailbox harness teardown to delegate Dovecot process

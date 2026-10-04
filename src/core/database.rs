@@ -402,8 +402,9 @@ impl StateStore {
         // transaction-bound lifecycle-event outbox trigger; 20 distinguishes
         // mailbox failure events from successful completion events; version
         // 22 distinguishes failed mailbox preflights, version 23 adds
-        // durable proof-ready notifications, and version 24 adds leased,
-        // project-scoped webhook delivery claims.
+        // durable proof-ready notifications, version 24 adds leased,
+        // project-scoped webhook delivery claims, and version 25 adds a
+        // trigram search index over queue facts.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -474,6 +475,9 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);",
             )?;
         Self::migrate_webhook_delivery_leases(&tx)?;
+        if stored_schema_version < 25 {
+            Self::migrate_queue_search_index(&tx)?;
+        }
         Self::create_webhook_outbox_trigger(&tx)?;
         tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_verification_acceptances_job ON verification_acceptances(job_id, id DESC)",
@@ -844,6 +848,39 @@ impl StateStore {
             )?;
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         tx.commit()?;
+        Ok(())
+    }
+
+    fn migrate_queue_search_index(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        tx.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS mailbox_queue_facts_search
+                 USING fts5(search_key, tokenize='trigram');
+             DROP TRIGGER IF EXISTS mailbox_queue_facts_search_insert;
+             DROP TRIGGER IF EXISTS mailbox_queue_facts_search_update;
+             DROP TRIGGER IF EXISTS mailbox_queue_facts_search_delete;
+             CREATE TRIGGER mailbox_queue_facts_search_insert
+             AFTER INSERT ON mailbox_queue_facts BEGIN
+                 INSERT INTO mailbox_queue_facts_search(rowid,search_key)
+                 VALUES(NEW.job_rowid,NEW.search_key);
+             END;
+             CREATE TRIGGER mailbox_queue_facts_search_update
+             AFTER UPDATE OF job_rowid,project_id,search_key ON mailbox_queue_facts BEGIN
+                 DELETE FROM mailbox_queue_facts_search WHERE rowid=OLD.job_rowid;
+                 INSERT INTO mailbox_queue_facts_search(rowid,search_key)
+                 VALUES(NEW.job_rowid,NEW.search_key);
+             END;
+             CREATE TRIGGER mailbox_queue_facts_search_delete
+             AFTER DELETE ON mailbox_queue_facts BEGIN
+                 DELETE FROM mailbox_queue_facts_search WHERE rowid=OLD.job_rowid;
+             END;",
+        )?;
+        tx.execute("DELETE FROM mailbox_queue_facts_search", [])?;
+        tx.execute(
+            "INSERT INTO mailbox_queue_facts_search(rowid,search_key)
+             SELECT job_rowid,search_key
+             FROM mailbox_queue_facts",
+            [],
+        )?;
         Ok(())
     }
 

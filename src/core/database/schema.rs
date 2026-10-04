@@ -300,6 +300,28 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        let queue_search_sql: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='mailbox_queue_facts_search'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let queue_search_columns = connection
+            .prepare("PRAGMA table_info(mailbox_queue_facts_search)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !queue_search_sql.is_some_and(|sql| {
+            let sql = sql
+                .to_ascii_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            sql.contains("using fts5") && sql.contains("tokenize='trigram'")
+        }) || queue_search_columns != ["search_key"]
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         const FOREIGN_KEYS: &[ForeignKeyTable] = &[
             (
                 "mailbox_jobs",
@@ -549,6 +571,38 @@ impl StateStore {
                 && sql.contains("INSERT OR IGNORE INTO webhook_deliveries")
         }) {
             return Err(rusqlite::Error::InvalidQuery);
+        }
+        for (trigger_name, expected) in [
+            (
+                "mailbox_queue_facts_search_insert",
+                "after insert on mailbox_queue_facts",
+            ),
+            (
+                "mailbox_queue_facts_search_update",
+                "after update of job_rowid,project_id,search_key on mailbox_queue_facts",
+            ),
+            (
+                "mailbox_queue_facts_search_delete",
+                "after delete on mailbox_queue_facts",
+            ),
+        ] {
+            let trigger: Option<String> = connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?1",
+                    [trigger_name],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if !trigger.is_some_and(|sql| {
+                let sql = sql
+                    .to_ascii_lowercase()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                sql.contains(expected) && sql.contains("mailbox_queue_facts_search")
+            }) {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
         }
         for (table, expected) in FOREIGN_KEYS {
             let actual = connection
