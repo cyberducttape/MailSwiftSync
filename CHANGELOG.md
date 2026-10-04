@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bound batch scheduler dispatch and worker-report channels by execution
+  concurrency, encoding the one-outstanding-task/report-per-worker limit in
+  channel capacity.
 - Wrap saved profiles in a named, explicitly versioned TOML envelope; continue
   reading legacy bare-profile files through a designated compatibility path and
   reject unknown formats or future versions instead of default-deserializing.
@@ -39,6 +42,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Bounded batch scheduler dispatch and worker-report channels by concurrency so
+  unexpected producer/consumer imbalance cannot grow those queues without
+  limit.
 - Wrapped saved profiles in a named, explicitly versioned TOML envelope while
   preserving a legacy bare-profile migration path; unknown formats and future
   versions now fail explicitly.

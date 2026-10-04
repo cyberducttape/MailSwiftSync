@@ -275,8 +275,12 @@ pub(crate) fn run_batch_schedule<R: AttemptExecutor>(
     mut source: JobSource,
 ) -> ScheduleResult {
     let concurrency = concurrency.max(1);
-    let (dispatch_tx, dispatch_rx) = crossbeam_channel::unbounded::<(MailboxTask, Admission)>();
-    let (report_tx, report_rx) = crossbeam_channel::unbounded::<WorkerReport>();
+    // At most one task per worker is dispatched before the scheduler receives
+    // reports. Keep both sides bounded to encode that invariant in the
+    // channels themselves, even if the dispatch loop changes later.
+    let (dispatch_tx, dispatch_rx) =
+        crossbeam_channel::bounded::<(MailboxTask, Admission)>(concurrency);
+    let (report_tx, report_rx) = crossbeam_channel::bounded::<WorkerReport>(concurrency);
     let workers = (0..concurrency)
         .map(|_| {
             let dispatch_rx = dispatch_rx.clone();
