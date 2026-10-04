@@ -886,7 +886,7 @@ impl Form {
                 &self.profile.destination_rate_tenant,
             ),
         ] {
-            if value.trim().len() > 256 || value.chars().any(char::is_control) {
+            if value.len() > 256 || value.chars().any(char::is_control) {
                 return Err(format!(
                     "{label} must not contain control characters and must be at most 256 bytes."
                 ));
@@ -1705,6 +1705,12 @@ mod tests {
         assert!(form.validate_internal(false).is_ok());
 
         form.profile.source_rate_tenant = "x".repeat(257);
+        assert!(
+            form.validate_internal(false)
+                .unwrap_err()
+                .contains("Source provider tenant scope")
+        );
+        form.profile.source_rate_tenant = " ".repeat(257);
         assert!(
             form.validate_internal(false)
                 .unwrap_err()

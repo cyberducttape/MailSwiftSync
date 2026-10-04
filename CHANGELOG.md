@@ -11,6 +11,8 @@ operator distribution archives.
   are persisted, fingerprinted, and included in run snapshots; blank values
   retain the mailbox-email-domain fallback. This prevents one provider tenant
   spanning multiple email domains from being split into independent limits.
+  Tenant scope inputs are bounded before trimming, including whitespace-only
+  values.
 - Single-mailbox terminal failures now retain canonical source/destination
   provider identities through durable run context. Provider-specific error
   handling is used only when engine output unambiguously identifies the failed
