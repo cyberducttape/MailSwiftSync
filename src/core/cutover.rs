@@ -127,6 +127,11 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         tx.execute("UPDATE projects SET phase='seed' WHERE id=?1", [project_id])?;
+        // Every phase change is audited (and drives lifecycle webhooks).
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed','seed')",
+            [project_id],
+        )?;
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_approved',?2)",
             params![project_id, operator],
@@ -153,6 +158,15 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let stage = parse_stage(&stage_name)?;
+        // Complete is terminal; only `reopen_project` may leave it.
+        let phase: String = tx.query_row(
+            "SELECT phase FROM projects WHERE id=?1",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        if phase == "complete" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let (total, verified): (i64, i64) = tx.query_row("SELECT COUNT(*),COALESCE(SUM(state IN ('verified','verified_with_exceptions')),0) FROM mailbox_jobs WHERE project_id=?1", [project_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         if total == 0 || total != verified {
             return Err(rusqlite::Error::InvalidQuery);
@@ -179,10 +193,12 @@ impl StateStore {
             "UPDATE projects SET phase=?1 WHERE id=?2",
             params![next_phase, project_id],
         )?;
-        if next == CutoverStage::Completed {
+        if phase != next_phase {
+            // `final_delta` publishes `migration.cutover_ready` and
+            // `complete` publishes `migration.completed` via the outbox.
             tx.execute(
-                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed','complete')",
-                [project_id],
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed',?2)",
+                params![project_id, next_phase],
             )?;
         }
         tx.execute(
@@ -261,6 +277,66 @@ mod tests {
                 .unwrap(),
             CutoverStage::Completed
         );
+        assert_eq!(
+            store.project(&project.id).unwrap().unwrap().phase,
+            Phase::Complete
+        );
+        let phase_events = store
+            .connection
+            .prepare("SELECT detail FROM events WHERE project_id=?1 AND kind='phase_changed' ORDER BY id")
+            .unwrap()
+            .query_map([&project.id], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            phase_events,
+            [
+                "preflight",
+                "seed",
+                "catch_up",
+                "final_delta",
+                "verification",
+                "complete"
+            ]
+        );
+        let cutover_ready: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cutover_ready, 1);
+    }
+
+    #[test]
+    fn cutover_cannot_silently_reopen_a_completed_project() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox("cutover", "source", "destination", "a", "a")
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-03T22:00:00Z", None)
+            .unwrap();
+        store.approve_cutover(&project.id, "operator").unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET phase='complete' WHERE id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        assert!(store.advance_cutover(&project.id, None).is_err());
         assert_eq!(
             store.project(&project.id).unwrap().unwrap().phase,
             Phase::Complete
