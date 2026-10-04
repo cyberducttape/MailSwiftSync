@@ -568,11 +568,11 @@ impl App {
             provider_qualified: false,
             proof_ready,
             verification_level: if self.form.engine() == core::Engine::Dovecot {
-                "Level 1 — engine/aggregate evidence"
+                "Level 1 — Aggregate evidence"
             } else if self.form.profile.body_hash_verification {
-                "Level 3 — bounded body-hash evidence"
+                "Level 3 — Bounded content fingerprints"
             } else {
-                "Level 2 — metadata reconciliation"
+                "Level 2 — Per-message metadata reconciliation"
             },
         });
         let colors = self.theme_colors();

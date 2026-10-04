@@ -290,7 +290,7 @@ mod tests {
             provider_pair: "Google Workspace → Microsoft 365",
             provider_qualified: false,
             proof_ready: false,
-            verification_level: "Level 2 — metadata reconciliation",
+            verification_level: "Level 2 — Per-message metadata reconciliation",
         }
     }
 
