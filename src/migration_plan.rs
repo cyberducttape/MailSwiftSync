@@ -33,6 +33,15 @@ use zeroize::Zeroizing;
 
 const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 const MAX_KEYRING_CREDENTIAL_BYTES: usize = 64 * 1024;
+const PROFILE_FORMAT: &str = "mailswiftsync-profile";
+const PROFILE_FORMAT_VERSION: i64 = 1;
+
+#[derive(serde::Serialize)]
+struct SavedProfile<'a> {
+    format: &'static str,
+    format_version: i64,
+    profile: &'a Profile,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DovecotConfigDialect {
@@ -243,23 +252,58 @@ pub(crate) struct Form {
 fn decode_saved_profile(path: &Path, text: &str) -> Result<Profile, String> {
     let raw: toml::Value = toml::from_str(text)
         .map_err(|error| format!("could not decode saved profile {}: {error}", path.display()))?;
-    let remote_execution = raw
+    let profile_value = if raw.get("format").is_some() || raw.get("format_version").is_some() {
+        let format = raw.get("format").and_then(toml::Value::as_str);
+        if format != Some(PROFILE_FORMAT) {
+            return Err(format!(
+                "saved profile {} has an unknown or invalid format identifier",
+                path.display()
+            ));
+        }
+        let version = raw.get("format_version").and_then(toml::Value::as_integer);
+        match version {
+            Some(PROFILE_FORMAT_VERSION) => raw.get("profile").ok_or_else(|| {
+                format!(
+                    "saved profile {} is missing its profile table",
+                    path.display()
+                )
+            })?,
+            Some(version) => {
+                return Err(format!(
+                    "saved profile {} uses unsupported format version {version}",
+                    path.display()
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "saved profile {} has a missing or invalid format version",
+                    path.display()
+                ));
+            }
+        }
+    } else {
+        // Version zero is the historical bare-Profile TOML format. Keep this
+        // explicit migration path so existing installations remain readable.
+        &raw
+    };
+    let remote_execution = profile_value
         .get("dovecot_execution")
         .and_then(toml::Value::as_str)
         .is_some_and(|value| value.eq_ignore_ascii_case("ssh"));
-    let automatic_remote_execution = raw
+    let automatic_remote_execution = profile_value
         .get("dovecot_execution")
         .and_then(toml::Value::as_str)
         .is_some_and(|value| {
             value.eq_ignore_ascii_case("automatic")
                 && !["localhost", "127.0.0.1", "::1"].contains(
-                    &raw.get("destination_host")
+                    &profile_value
+                        .get("destination_host")
                         .and_then(toml::Value::as_str)
                         .unwrap_or_default()
                         .trim(),
                 )
         });
-    let remote_user = raw
+    let remote_user = profile_value
         .get("dovecot_ssh_user")
         .and_then(toml::Value::as_str)
         .is_some_and(|value| !value.trim().is_empty());
@@ -269,7 +313,9 @@ fn decode_saved_profile(path: &Path, text: &str) -> Result<Profile, String> {
             path.display()
         ));
     }
-    raw.try_into()
+    profile_value
+        .clone()
+        .try_into()
         .map_err(|error| format!("could not decode saved profile {}: {error}", path.display()))
 }
 
@@ -409,7 +455,12 @@ impl Form {
         if let Some(parent) = path.parent() {
             credentials::ensure_private_directory(parent).map_err(|e| e.to_string())?;
         }
-        let content = toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?;
+        let content = toml::to_string_pretty(&SavedProfile {
+            format: PROFILE_FORMAT,
+            format_version: PROFILE_FORMAT_VERSION,
+            profile: &self.profile,
+        })
+        .map_err(|e| e.to_string())?;
         write_private_atomic(&path, &content).map_err(|e| e.to_string())
     }
     pub(crate) fn keyring_entry(&self, source: bool) -> Result<Option<Entry>, String> {
@@ -1503,9 +1554,10 @@ pub(crate) struct PreparedCommand {
 #[cfg(test)]
 mod tests {
     use super::{
-        DovecotConfigDialect, Form, MAX_PROFILE_BYTES, OAuthRefreshOutcome,
-        decode_report_run_snapshot, decode_saved_profile, dovecot_config_dialect,
-        persist_rotated_refresh_config_with_retry, validate_certificate_pin,
+        DovecotConfigDialect, Form, MAX_PROFILE_BYTES, OAuthRefreshOutcome, PROFILE_FORMAT,
+        PROFILE_FORMAT_VERSION, Profile, SavedProfile, decode_report_run_snapshot,
+        decode_saved_profile, dovecot_config_dialect, persist_rotated_refresh_config_with_retry,
+        validate_certificate_pin,
     };
     use crate::SecretString;
     use crate::oauth_refresh::OAuthRefreshConfig;
@@ -1609,6 +1661,50 @@ mod tests {
             "dovecot_execution = \"automatic\"\ndestination_host = \"mail.example\"\n",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn saved_profile_envelope_round_trips_and_rejects_unknown_versions() {
+        let profile = Profile::default();
+        let encoded = toml::to_string_pretty(&SavedProfile {
+            format: PROFILE_FORMAT,
+            format_version: PROFILE_FORMAT_VERSION,
+            profile: &profile,
+        })
+        .unwrap();
+        assert!(encoded.contains("format = \"mailswiftsync-profile\""));
+        assert!(encoded.contains("format_version = 1"));
+        let decoded = decode_saved_profile(Path::new("profile.toml"), &encoded).unwrap();
+        assert_eq!(decoded.name, profile.name);
+
+        let error = match decode_saved_profile(
+            Path::new("profile.toml"),
+            "format = \"mailswiftsync-profile\"\nformat_version = 2\n\n[profile]\nname = \"future\"\n",
+        ) {
+            Ok(_) => panic!("future profile version should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("unsupported format version 2"));
+
+        let error = match decode_saved_profile(
+            Path::new("profile.toml"),
+            "format = \"other-profile\"\nformat_version = 1\n\n[profile]\n",
+        ) {
+            Ok(_) => panic!("unknown profile format should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("unknown or invalid format identifier"));
+    }
+
+    #[test]
+    fn bare_legacy_saved_profile_remains_readable() {
+        let profile = Profile {
+            name: "legacy".into(),
+            ..Default::default()
+        };
+        let legacy_toml = toml::to_string_pretty(&profile).unwrap();
+        let decoded = decode_saved_profile(Path::new("profile.toml"), &legacy_toml).unwrap();
+        assert_eq!(decoded.name, "legacy");
     }
 
     #[test]

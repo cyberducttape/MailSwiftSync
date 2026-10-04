@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Wrap saved profiles in a named, explicitly versioned TOML envelope; continue
+  reading legacy bare-profile files through a designated compatibility path and
+  reject unknown formats or future versions instead of default-deserializing.
 - Shell-quote the displayed manual Debian engine-install command and clarify
   that a failed package-manager run may have changed system state; review
   apt/dpkg output before retrying.
@@ -36,6 +39,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Wrapped saved profiles in a named, explicitly versioned TOML envelope while
+  preserving a legacy bare-profile migration path; unknown formats and future
+  versions now fail explicitly.
 - Shell-quote the displayed manual Debian engine-install command and clarify
   that a failed package-manager run may have changed system state; review
   apt/dpkg output before retrying.
