@@ -349,10 +349,14 @@ screen-reader checklist are recorded in
   recursive workspace deletion, and the job hit its 90-minute limit without a
   resource summary. Scale mode now leaves that 100k-file workspace inside the
   disposable container for host teardown, avoiding per-file deletion after
-  verification. Dovecot shutdown is bounded to 10 seconds per server and emits
-  start/end markers. A workflow-level timeout bounds the entire host wait
-  helper and records fallback activation. These changes still need a
-  successful hosted rerun. The earlier repeated Maildir scans have been
+  verification. Run 37174639410 confirms that the incremental transfer, fixture
+  scan, both Dovecot shutdowns, and harness cleanup completed, but the container
+  did not exit and GitHub cancelled the job at 90 minutes before host metrics
+  were recorded. The disposable container now uses Docker's init shim to reap
+  orphaned fixture children and exit with the harness; Dovecot shutdown remains
+  bounded to 10 seconds per server, and the host wait has its own deadline and
+  fallback marker. These changes still need a successful hosted rerun. The
+  earlier repeated Maildir scans have been
   replaced by one pass, which took 1.78 seconds on a synthetic 100,004-file
   Maildir. None of
   these runs qualifies peak memory, 20 GiB mailboxes, Gmail, or Microsoft 365.

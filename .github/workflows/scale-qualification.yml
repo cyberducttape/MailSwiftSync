@@ -30,7 +30,10 @@ jobs:
           summary_file="$RUNNER_TEMP/scale-resource-summary-${GITHUB_RUN_ID}.txt"
           wait_output_file="$RUNNER_TEMP/docker-wait-${GITHUB_RUN_ID}.txt"
           watchdog_marker="$RUNNER_TEMP/scale-watchdog-${GITHUB_RUN_ID}.txt"
-          docker run --detach --name "$container_name" \
+          # The integration harness starts disposable Dovecot processes. Use
+          # Docker's init shim as PID 1 so orphaned fixture children are
+          # reaped and the container exits as soon as the harness shell exits.
+          docker run --detach --init --name "$container_name" \
             --user 0:0 \
             --volume "$PWD/provider-scale-evidence:/provider-evidence" \
             --env MAILSWIFTSYNC_EVIDENCE_OUTPUT=/provider-evidence \

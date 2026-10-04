@@ -110,6 +110,9 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn('printf \'end epoch=%s operation=%s status=%s\\n\'', SCALE_SCRIPT)
         self.assertIn("process_snapshot epoch=", SCALE_SCRIPT)
 
+    def test_100k_scale_container_uses_init_to_reap_fixture_children(self):
+        self.assertIn('docker run --detach --init --name "$container_name"', SCALE_WORKFLOW)
+
     def test_scale_fixture_assertions_scan_maildir_ids_once(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("required_tools+=(python3)", SCALE_SCRIPT)

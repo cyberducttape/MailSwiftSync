@@ -22,6 +22,12 @@ operator distribution archives.
 - Scale-mode cleanup now leaves its 100k-file workspace inside the disposable
   container for host teardown rather than recursively deleting every message
   file after verification; a phase marker records the deliberate skip.
+- The latest 100k scale run completed its incremental transfer, fixture scan,
+  Dovecot shutdowns, and harness cleanup, but the Docker container remained
+  alive until GitHub's 90-minute job timeout. Run the disposable lab with
+  Docker's init shim so orphaned fixture children are reaped and container
+  lifetime follows the harness process; qualification still requires a hosted
+  rerun with retained resource metrics.
 - Signed customer evidence now exposes the immutable migration-plan SHA-256
   and the execution-engine binary SHA-256 when resolved in the plan snapshot;
   the underlying plan and its endpoint or credential-reference details remain
