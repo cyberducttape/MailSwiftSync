@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Separated unattributed batch failures from generic cross-provider discovery:
+  ambiguous diagnostics now use provider-neutral heuristics and universal IMAP
+  codes, and cannot trigger a provider-specific rate-domain cooldown.
 - Extended the critical-module CI coverage gate to collect nightly LLVM branch
   coverage and enforce explicit per-module branch floors alongside line floors;
   the LCOV artifact now supports review of both decision paths and line hits.

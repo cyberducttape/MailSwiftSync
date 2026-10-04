@@ -87,6 +87,9 @@ pub struct ProviderSignal {
 
 /// Longest server-requested wait honored before retrying.
 pub const MAX_SERVER_RETRY_AFTER: Duration = Duration::from_secs(30 * 60);
+/// Internal classifier context for a diagnostic whose endpoint is unknown.
+/// Unlike `generic`, this does not opt into cross-provider signature matching.
+pub(crate) const UNATTRIBUTED_PROVIDER: &str = "unattributed";
 
 /// Documented provider responses, matched case-insensitively. These are
 /// observed wire strings from provider documentation and support articles,
@@ -261,10 +264,11 @@ pub fn provider_signal(error_msg: &str) -> Option<ProviderSignal> {
 pub fn provider_signal_for_provider(provider: &str, error_msg: &str) -> Option<ProviderSignal> {
     let lower = error_msg.to_lowercase();
     for (source, name, pattern, error, remediation) in PROVIDER_SIGNATURES {
-        let provider_matches = provider.eq_ignore_ascii_case("generic")
-            || provider.eq_ignore_ascii_case(source)
-            || (provider.eq_ignore_ascii_case("o365")
-                && source.eq_ignore_ascii_case("microsoft365"));
+        let provider_matches = !provider.eq_ignore_ascii_case(UNATTRIBUTED_PROVIDER)
+            && (provider.eq_ignore_ascii_case("generic")
+                || provider.eq_ignore_ascii_case(source)
+                || (provider.eq_ignore_ascii_case("o365")
+                    && source.eq_ignore_ascii_case("microsoft365")));
         if provider_matches && lower.contains(pattern) {
             return Some(ProviderSignal {
                 source,
@@ -623,6 +627,27 @@ mod tests {
         assert_eq!(
             ProviderErrorClassifier::classify("gmail", "NO [AUTHENTICATIONFAILED] denied"),
             ProviderErrorType::Authentication
+        );
+    }
+
+    #[test]
+    fn unattributed_context_ignores_provider_specific_signatures() {
+        let error = "Too many simultaneous connections";
+        assert_eq!(
+            ProviderErrorClassifier::classify("gmail", error),
+            ProviderErrorType::ConnectionCapacity
+        );
+        assert_ne!(
+            ProviderErrorClassifier::classify(UNATTRIBUTED_PROVIDER, error),
+            ProviderErrorType::ConnectionCapacity
+        );
+        assert!(provider_signal_for_provider(UNATTRIBUTED_PROVIDER, error).is_none());
+        assert_eq!(
+            ProviderErrorClassifier::classify(
+                UNATTRIBUTED_PROVIDER,
+                "NO [UNAVAILABLE] temporary server condition"
+            ),
+            ProviderErrorType::TemporaryProviderFailure
         );
     }
 

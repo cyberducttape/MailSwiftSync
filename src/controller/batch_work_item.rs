@@ -48,7 +48,7 @@ fn provider_for_error(form: &crate::Form, error: &str) -> &'static str {
         // Do not guess the source provider when an engine diagnostic does
         // not identify which endpoint emitted it. Provider-specific
         // signatures stay disabled until side attribution is explicit.
-        _ => "generic",
+        _ => crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER,
     }
 }
 
@@ -1194,7 +1194,10 @@ mod tests {
             provider_for_error(&form, "Host2: rate limited"),
             "microsoft365"
         );
-        assert_eq!(provider_for_error(&form, "rate limited"), "generic");
+        assert_eq!(
+            provider_for_error(&form, "rate limited"),
+            crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
+        );
     }
 
     #[test]

@@ -399,7 +399,7 @@ pub(crate) fn provider_for_sided_error<'a>(
     match crate::controller::rate_domains::failure_sides(error).as_slice() {
         [crate::controller::rate_domains::Side::Source] => source_provider,
         [crate::controller::rate_domains::Side::Destination] => destination_provider,
-        _ => "generic",
+        _ => crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER,
     }
 }
 
@@ -527,7 +527,9 @@ fn classified_failure_detail_internal(
         )
     })
     .unwrap_or_default();
-    let provider_context = if include_provider_context {
+    let provider_context = if include_provider_context
+        && provider != crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
+    {
         format!("[provider={provider}] ")
     } else {
         String::new()
@@ -567,11 +569,11 @@ mod tests {
         );
         assert_eq!(
             super::provider_for_sided_error("gmail", "microsoft365", "server busy"),
-            "generic"
+            crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
         );
         assert_eq!(
             super::provider_for_sided_error("gmail", "microsoft365", "Host1 and Host2 refused"),
-            "generic"
+            crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
         );
     }
 
@@ -630,6 +632,20 @@ mod tests {
         assert_eq!(
             super::classify_failure(&detail),
             super::FailureClass::Capacity
+        );
+    }
+
+    #[test]
+    fn unattributed_batch_failure_does_not_claim_a_provider_signal() {
+        let detail = super::classified_failure_detail_for_provider(
+            crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER,
+            "Too many simultaneous connections",
+        );
+        assert!(!detail.contains("[provider="), "{detail}");
+        assert!(!detail.contains("[signal=gmail:"), "{detail}");
+        assert_eq!(
+            super::classify_failure(&detail),
+            super::FailureClass::Unknown
         );
     }
 

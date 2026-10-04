@@ -427,25 +427,28 @@ impl RateDomainLimiter {
             return Vec::new();
         };
         let path = &admission.path;
-        if !sides.iter().any(|side| {
-            crate::controller::failure::classify_failure_for_provider(
-                path.chain(*side)[0].provider,
-                error,
-            ) == FailureClass::Capacity
-        }) {
+        // If Host1/Host2 cannot attribute a failure, don't test it against
+        // either endpoint's provider vocabulary. Those signatures can imply
+        // capacity for the wrong side and incorrectly cool down both paths.
+        let provider = if sides.len() > 1 {
+            crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
+        } else {
+            path.chain(first_side)[0].provider
+        };
+        let is_capacity =
+            crate::controller::failure::classify_failure_for_provider(provider, error)
+                == FailureClass::Capacity;
+        if !is_capacity {
             return Vec::new();
         }
         let text = control_error_text(error);
-        let server_requested = crate::core::provider_intelligence::provider_signal_for_provider(
-            path.chain(first_side)[0].provider,
-            text,
-        )
-        .and_then(|signal| signal.retry_after);
+        let server_requested =
+            crate::core::provider_intelligence::provider_signal_for_provider(provider, text)
+                .and_then(|signal| signal.retry_after);
         let base = server_requested
             .or_else(|| {
                 crate::core::provider_intelligence::ProviderErrorClassifier::classify(
-                    path.chain(first_side)[0].provider,
-                    text,
+                    provider, text,
                 )
                 .suggested_retry_delay()
             })
@@ -771,10 +774,23 @@ mod tests {
 
         let limiter = Arc::new(RateDomainLimiter::new(4));
         let job = path("alice@a.example", "alice@a.example");
-        let admission = admit(&limiter, &job);
+        let unrelated_job = path(
+            "different-source@example.com",
+            "different-destination@example.com",
+        );
+        let admission = admit(&limiter, &unrelated_job);
         let penalized = limiter.observe_failure(&admission, "Host2: too many requests");
         assert_eq!(penalized.len(), 1);
         assert_eq!(penalized[0].0.side, Some(Side::Destination));
+
+        // A Gmail-only capacity phrase without a Host1/Host2 marker must not
+        // be attributed to either the source or destination rate domain.
+        let admission = admit(&limiter, &job);
+        assert!(
+            limiter
+                .observe_failure(&admission, "Too many simultaneous connections")
+                .is_empty()
+        );
     }
 
     #[test]
