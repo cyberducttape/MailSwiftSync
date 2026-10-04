@@ -8,6 +8,8 @@
   the disposable container from exiting naturally.
 - Generate OAuth test credentials at runtime to avoid fixed cryptographic
   values in the test source and binary.
+- Update the scale-workflow guard test to cover completion-marker teardown and
+  distinct harness/container exit reporting.
 
 All notable changes to MailSwiftSync are documented here. Detailed pre-alpha
 development history is preserved in repository history and is not shipped in
