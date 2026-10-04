@@ -478,7 +478,6 @@ impl StateStore {
         if stored_schema_version < 25 {
             Self::migrate_queue_search_index(&tx)?;
         }
-        Self::create_webhook_outbox_trigger(&tx)?;
         tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_verification_acceptances_job ON verification_acceptances(job_id, id DESC)",
             [],
@@ -922,39 +921,6 @@ impl StateStore {
              CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_project_due ON webhook_deliveries(project_id, endpoint_digest, status, next_attempt_at, created_at);",
         )?;
         Ok(())
-    }
-
-    fn create_webhook_outbox_trigger(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
-        tx.execute_batch(
-            "CREATE TRIGGER IF NOT EXISTS events_webhook_outbox AFTER INSERT ON events
-             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted')
-               OR (NEW.kind='phase_changed' AND NEW.detail IN ('complete','final_delta'))
-             BEGIN
-               INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest)
-               SELECT printf('ledger-event-%lld',NEW.id),NEW.project_id,
-                 CASE
-                   WHEN NEW.kind='run_started' THEN 'migration.started'
-                   WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
-                   WHEN NEW.kind='run_finished' THEN 'mailbox.completed'
-                   WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
-                   WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
-                   ELSE 'mailbox.verification_accepted'
-                 END,
-                 json_object(
-                   'format','mailswiftsync-webhook-event',
-                   'event_id',printf('ledger-event-%lld',NEW.id),
-                   'event_type',CASE
-                     WHEN NEW.kind='run_started' THEN 'migration.started'
-                     WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
-                     WHEN NEW.kind='run_finished' THEN 'mailbox.completed'
-                     WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
-                     WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
-                     ELSE 'mailbox.verification_accepted'
-                   END,
-                   'project_id',NEW.project_id,'run_id',NEW.run_id,'detail',NEW.detail
-                 ),'';
-             END;",
-        )
     }
 
     fn ensure_evidence_counter_constraints(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {

@@ -310,9 +310,9 @@ impl MessageVerification {
             ("source", source_messages, source_fingerprints),
             ("destination", dest_messages, dest_fingerprints),
         ] {
+            // Equal sizes plus one-way containment imply equal key sets.
             if messages.len() != fingerprints.len()
                 || messages.keys().any(|key| !fingerprints.contains_key(key))
-                || fingerprints.keys().any(|key| !messages.contains_key(key))
             {
                 return Err(format!(
                     "content verification requires exact {side} message/fingerprint key coverage"

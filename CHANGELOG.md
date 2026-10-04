@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Send queued lifecycle webhooks with their own outbox event ID, event type,
+  and idempotency key instead of a status-snapshot body hash; scope snapshot
+  event IDs to the endpoint and project so re-pointing an unchanged snapshot at
+  a new endpoint is a new delivery rather than a refused collision. Keep
+  file-sourced webhook signing secrets in their zeroizing container.
+- Record a `phase_changed` audit event for every cutover approval and advance,
+  so `migration.cutover_ready` webhooks are actually published, and refuse to
+  advance a cutover on a project that is already Complete.
+- Refuse unknown organization-policy keys so a misspelled safety setting fails
+  closed instead of falling back to the permissive default.
+- Treat rows in a filtered, paged mailbox view as hidden for batch safety
+  confirmation, since no membership index is kept for that view.
+- Remove the stale version-19 webhook trigger that every open recreated and
+  immediately replaced, and drop duplicate fingerprint-coverage scans.
+
 - Add a project-scoped SQLite FTS5 trigram index for mailbox substring search;
   use literal-safe indexed queries for terms of three or more characters and
   preserve the existing fallback for short/control-character queries. Schema

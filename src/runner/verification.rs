@@ -155,32 +155,7 @@ pub(crate) fn run_imap_message_verification(
         let source_fingerprints = stage.content_fingerprints(core::StagedMessageSide::Source);
         let destination_fingerprints =
             stage.content_fingerprints(core::StagedMessageSide::Destination);
-        if source_fingerprints.len() != source_messages.len()
-            || source_messages
-                .keys()
-                .any(|key| !source_fingerprints.contains_key(key))
-            || source_fingerprints
-                .keys()
-                .any(|key| !source_messages.contains_key(key))
-        {
-            return Err(
-                "body-hash verification refused incomplete or orphaned source content fingerprints"
-                    .into(),
-            );
-        }
-        if destination_fingerprints.len() != destination_messages.len()
-            || destination_messages
-                .keys()
-                .any(|key| !destination_fingerprints.contains_key(key))
-            || destination_fingerprints
-                .keys()
-                .any(|key| !destination_messages.contains_key(key))
-        {
-            return Err(
-                "body-hash verification refused incomplete or orphaned destination content fingerprints"
-                    .into(),
-            );
-        }
+        // The reconciler refuses incomplete or orphaned fingerprint coverage.
         core::MessageVerification::detect_mismatches_with_content_fingerprints(
             job_id,
             run_id,

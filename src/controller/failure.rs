@@ -466,7 +466,7 @@ pub(crate) fn transient_retry_delay_for_provider(
         .or(provider_error.suggested_retry_delay())
         .map_or_else(
             || {
-                if classify_failure_for_provider(provider, error) == FailureClass::Capacity {
+                if typed.class() == FailureClass::Capacity {
                     5_000_u64
                 } else {
                     1_000_u64
