@@ -111,19 +111,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
         with:
+          toolchain: 1.92.0
+          components: llvm-tools-preview
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 2026-10-02 nightly; required by LLVM branch instrumentation
+        with:
+          toolchain: nightly-2026-10-02
           components: llvm-tools-preview
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --version 0.9.1 --locked
-      - name: Generate LCOV report
-        run: cargo llvm-cov --locked --all-targets --all-features --lcov --output-path coverage.lcov
+      - name: Generate stable-toolchain line LCOV report
+        run: cargo +1.92.0 llvm-cov --locked --all-targets --all-features --lcov --output-path coverage.lcov
+      - name: Generate nightly LLVM branch LCOV report
+        run: cargo +nightly-2026-10-02 llvm-cov --locked --all-targets --all-features --branch --lcov --output-path coverage-branches.lcov
       - name: Enforce critical-module floors
-        run: python3 scripts/check-critical-coverage.py coverage.lcov
+        run: python3 scripts/check-critical-coverage.py coverage.lcov --branch-lcov coverage-branches.lcov
       - name: Upload coverage report
         if: always() && hashFiles('coverage.lcov') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: critical-coverage-lcov
-          path: coverage.lcov
+          name: critical-line-and-branch-coverage-lcov
+          path: |
+            coverage.lcov
+            coverage-branches.lcov
           if-no-files-found: error
       - run: cargo build --locked --release --all-features
         env:

@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Extended the critical-module CI coverage gate to collect nightly LLVM branch
+  coverage and enforce explicit per-module branch floors alongside line floors;
+  the LCOV artifact now supports review of both decision paths and line hits.
 - Moved the binary's integration/unit test module out of `main.rs` into a
   dedicated test source file, keeping the production entrypoint compact without
   changing test visibility or behavior.

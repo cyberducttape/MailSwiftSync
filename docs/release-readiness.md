@@ -252,14 +252,16 @@ screen-reader checklist are recorded in
 - Tagged binary publication now depends on a dedicated release quality gate
   covering formatting, shell syntax, strict Clippy, the locked test suite, and
   RustSec auditing in addition to cross-platform compilation.
-- Pull-request CI independently collects LCOV and enforces modest line-coverage
-  floors for safety-critical plan admission, batch attempt handling and
+- Pull-request CI independently collects line and branch LCOV with nightly
+  LLVM instrumentation, and enforces per-module floors for safety-critical
+  plan admission, batch attempt handling and
   lifecycle/scheduling,
   adaptive provider rate domains, provider response classification, durable
   state and schema-integrity proof, evidence projection, recovery, IMAP
   authentication, OAuth, process supervision, and verification code;
   the report is uploaded as an artifact for review rather than reduced to one
-  repository-wide percentage.
+  repository-wide percentage. The branch floors are minimum regression
+  guardrails, not a claim that coverage proves state-machine correctness.
 - The publish job emits a deterministic SHA-256 manifest covering every
   release file, verifies its checksum, and attaches GitHub build provenance to
   that manifest; native code-signing and notarization remain separate gates.
