@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Require exact, bidirectional mailbox-key coverage for forensic content
+  fingerprints; reject equal-count orphan substitutions and never skip a
+  missing fingerprint while comparing a reconciled message pair.
 - Keep the OAuth loopback listener alive after malformed or wrong-state
   callbacks; only a state-verified provider denial terminates authorization.
   Added an end-to-end forged-then-legitimate callback regression test.
@@ -27,6 +30,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Made body-hash verification fail closed on missing or orphaned source or
+  destination fingerprint keys, both at the staged-data boundary and in the
+  comparator itself. Clean metadata pairs can no longer silently bypass
+  forensic content comparison when a fingerprint is absent.
 - Hardened OAuth loopback availability: invalid and wrong-state callback
   requests receive HTTP 400 and are counted while the listener continues
   waiting; a matching-state provider rejection still terminates, and a valid

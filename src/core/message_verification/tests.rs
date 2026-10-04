@@ -222,6 +222,60 @@ fn detects_same_metadata_with_different_content_fingerprints() {
 }
 
 #[test]
+fn content_verification_rejects_equal_count_fingerprint_key_substitution() {
+    let source_key = key("source");
+    let destination_key = key("destination");
+    let orphan_key = key("orphan");
+    let message = ExtractedMessage {
+        message_id: Some("<same@example.test>".into()),
+        uid: Some("1".into()),
+        size_bytes: Some(123),
+        internal_date: Some("2025-01-01".into()),
+    };
+    let source = HashMap::from([(source_key.clone(), message.clone())]);
+    let destination = HashMap::from([(destination_key.clone(), message)]);
+
+    for orphan_source in [true, false] {
+        let source_fingerprints = HashMap::from([(
+            if orphan_source {
+                orphan_key.clone()
+            } else {
+                source_key.clone()
+            },
+            "source-body-hash".to_owned(),
+        )]);
+        let destination_fingerprints = HashMap::from([(
+            if orphan_source {
+                destination_key.clone()
+            } else {
+                orphan_key.clone()
+            },
+            "destination-body-hash".to_owned(),
+        )]);
+        assert_eq!(source_fingerprints.len(), source.len());
+        assert_eq!(destination_fingerprints.len(), destination.len());
+
+        let error = MessageVerification::detect_mismatches_with_content_fingerprints(
+            "job",
+            "run",
+            &source,
+            &destination,
+            &source_fingerprints,
+            &destination_fingerprints,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        let expected_side = if orphan_source {
+            "source"
+        } else {
+            "destination"
+        };
+        assert!(error.contains(expected_side), "{error}");
+        assert!(error.contains("exact"), "{error}");
+    }
+}
+
+#[test]
 fn content_match_does_not_erase_existing_metadata_mismatch() {
     let source_key = key("1");
     let dest_key = key("99");

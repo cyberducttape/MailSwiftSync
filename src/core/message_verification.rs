@@ -306,6 +306,19 @@ impl MessageVerification {
         dest_fingerprints: &HashMap<MailboxMessageKey, String>,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        for (side, messages, fingerprints) in [
+            ("source", source_messages, source_fingerprints),
+            ("destination", dest_messages, dest_fingerprints),
+        ] {
+            if messages.len() != fingerprints.len()
+                || messages.keys().any(|key| !fingerprints.contains_key(key))
+                || fingerprints.keys().any(|key| !messages.contains_key(key))
+            {
+                return Err(format!(
+                    "content verification requires exact {side} message/fingerprint key coverage"
+                ));
+            }
+        }
         let job_context: Arc<str> = Arc::from(job_id);
         let run_context: Arc<str> = Arc::from(run_id);
         let MetadataReconciliation {
@@ -390,7 +403,10 @@ impl MessageVerification {
                 source_fingerprints.get(source_key),
                 dest_fingerprints.get(dest_key),
             ) else {
-                continue;
+                return Err(
+                    "content verification encountered a missing fingerprint after coverage validation"
+                        .into(),
+                );
             };
             if source_fingerprint == destination_fingerprint {
                 continue;
