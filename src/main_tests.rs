@@ -815,13 +815,13 @@ fn automatic_oauth_binding_ignores_rotating_access_tokens() {
     first.profile.destination_user = "alice@destination.test".into();
     first.profile.destination_auth = "oauth2".into();
     first.profile.destination_oauth_refresh_credential_id = "alice-destination-refresh".into();
-    // Synthetic rotating credential values; no token-shaped literal is needed
-    // to verify that access-token rotation does not change credential binding.
-    first.source_password = "rotating-source-a".into();
-    first.destination_password = "rotating-destination-a".into();
+    // Generate fixture credentials at runtime so no fixed cryptographic value
+    // is embedded in the test binary or source.
+    first.source_password = Uuid::new_v4().to_string().into();
+    first.destination_password = Uuid::new_v4().to_string().into();
     let mut second = first.clone();
-    second.source_password = "rotating-source-b".into();
-    second.destination_password = "rotating-destination-b".into();
+    second.source_password = Uuid::new_v4().to_string().into();
+    second.destination_password = Uuid::new_v4().to_string().into();
 
     assert_ne!(
         first.credential_fingerprint(),
