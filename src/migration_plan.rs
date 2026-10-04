@@ -1641,10 +1641,16 @@ mod tests {
         );
         let legacy = snapshot
             .lines()
-            .filter(|line| !line.starts_with("destination_mutation_policy"))
+            .filter(|line| {
+                !line.starts_with("destination_mutation_policy")
+                    && !line.starts_with("source_rate_tenant")
+                    && !line.starts_with("destination_rate_tenant")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let decoded = decode_report_run_snapshot(&legacy).unwrap().unwrap();
+        assert!(decoded.profile.source_rate_tenant.is_empty());
+        assert!(decoded.profile.destination_rate_tenant.is_empty());
         assert_eq!(
             decoded.profile.destination_mutation_policy(),
             "mirror_may_remove_destination_state"

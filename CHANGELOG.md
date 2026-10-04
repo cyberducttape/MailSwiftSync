@@ -12,7 +12,7 @@ operator distribution archives.
   retain the mailbox-email-domain fallback. This prevents one provider tenant
   spanning multiple email domains from being split into independent limits.
   Tenant scope inputs are bounded before trimming, including whitespace-only
-  values.
+  values; snapshots predating the fields retain the documented domain fallback.
 - Single-mailbox terminal failures now retain canonical source/destination
   provider identities through durable run context. Provider-specific error
   handling is used only when engine output unambiguously identifies the failed
