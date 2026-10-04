@@ -239,11 +239,12 @@ fn deliver_webhook_once(
         webhook::endpoint_digest(url).map_err(|error| format!("invalid endpoint: {error}"))?;
     let store = core::StateStore::open(state)
         .map_err(|error| format!("durable outbox is unavailable: {error}"))?;
-    let current_event_id = webhook::event_id(&body);
+    let project_scope = project_id.unwrap_or("all-projects");
+    let current_event_id = webhook::snapshot_event_id(&endpoint_digest, project_scope, &body);
     store
         .enqueue_webhook_delivery(
             &current_event_id,
-            project_id.unwrap_or("all-projects"),
+            project_scope,
             "migration.status_snapshot",
             &body,
             &endpoint_digest,
@@ -262,7 +263,12 @@ fn deliver_webhook_once(
         let Some(delivery) = delivery.into_iter().next() else {
             break;
         };
-        match webhook::post_json(url, &delivery.payload) {
+        match webhook::post_json(
+            url,
+            &delivery.event_id,
+            &delivery.event_type,
+            &delivery.payload,
+        ) {
             Ok(status_code) if (200..300).contains(&status_code) => {
                 store
                     .mark_webhook_delivered(&delivery.event_id, &lease_owner)

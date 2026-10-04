@@ -90,27 +90,32 @@ pub(crate) fn minimal_status_payload(status: serde_json::Value) -> serde_json::V
 /// Rustls transport used by OAuth refresh. Authentication credentials are read
 /// from environment variables, not from the URL itself. Returns the response
 /// status code; the caller decides which codes count as success. This does not
-/// retry — the CLI command this backs is meant to be invoked by the operator's
-/// own automation, which already owns its retry policy.
-pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
+/// retry — the durable outbox owns retry and backoff. `event_id` and
+/// `event_type` identify the queued outbox event so receivers can deduplicate
+/// lifecycle events and status snapshots alike.
+pub(crate) fn post_json(
+    url: &str,
+    event_id: &str,
+    event_type: &str,
+    body: &str,
+) -> Result<u16, String> {
     let url = load_webhook_url(url)?;
     let bearer_token = load_webhook_bearer_token()?;
     let custom_header = load_webhook_custom_header()?;
     let signing_secret = load_webhook_signing_secret()?;
     let parsed_url = parse_https_url(&url)?;
-    let event_id = event_id(body);
 
     let mut request = webhook_client()?
         .post(parsed_url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(reqwest::header::ACCEPT, "application/json")
         .header(reqwest::header::USER_AGENT, "mailswiftsync-notify-webhook")
-        .header("X-MailSwiftSync-Event-Id", &event_id)
-        .header("X-MailSwiftSync-Event-Type", "migration.status_snapshot")
-        .header("Idempotency-Key", &event_id)
+        .header("X-MailSwiftSync-Event-Id", event_id)
+        .header("X-MailSwiftSync-Event-Type", event_type)
+        .header("Idempotency-Key", event_id)
         .body(body.to_owned());
     if let Some(secret) = signing_secret {
-        let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+        let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_str().as_bytes());
         let signature = hmac::sign(&key, body.as_bytes());
         request = request.header(
             "X-MailSwiftSync-Signature",
@@ -147,10 +152,18 @@ pub(crate) fn endpoint_digest(url: &str) -> Result<String, String> {
     Ok(hash_hex(resolved.as_bytes()))
 }
 
-pub(crate) fn event_id(body: &str) -> String {
+/// Idempotency key for a status snapshot. It is scoped to the endpoint and
+/// project scope as well as the body: an unchanged snapshot sent to a newly
+/// configured endpoint is a new delivery, not a collision with the audited
+/// delivery to the previous endpoint.
+pub(crate) fn snapshot_event_id(endpoint_digest: &str, project_scope: &str, body: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
-    digest.update(b"mailswiftsync:webhook:migration.status_snapshot:v1\n");
+    digest.update(b"mailswiftsync:webhook:migration.status_snapshot:v2\n");
+    for part in [endpoint_digest, project_scope] {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
     digest.update(body.as_bytes());
     hex_encode(&digest.finalize())
 }
@@ -269,28 +282,22 @@ fn load_webhook_custom_header() -> Result<Option<(String, SecretString)>, String
 fn load_webhook_signing_secret() -> Result<Option<SecretString>, String> {
     let direct = configured_env("MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET")?;
     let file_path = configured_env("MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE")?;
-    let file_secret = if let Some(path) = file_path {
-        Some(
-            read_secret_file(std::path::Path::new(&path))
-                .map_err(|error| format!("Failed to read webhook signing secret file: {error}"))?
-                .as_str()
-                .to_owned(),
-        )
-    } else {
-        None
-    };
-    match (direct, file_secret) {
-        (None, None) => Ok(None),
-        (Some(_), Some(_)) => Err(
-            "configure only one of MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET and MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE".into(),
-        ),
-        (Some(secret), None) | (None, Some(secret)) => {
-            if secret.is_empty() {
-                return Err("webhook signing secret is configured but empty".into());
-            }
-            Ok(Some(SecretString::from(secret)))
+    let secret = match (direct, file_path) {
+        (None, None) => return Ok(None),
+        (Some(_), Some(_)) => {
+            return Err(
+                "configure only one of MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET and MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE".into(),
+            );
         }
+        (Some(secret), None) => SecretString::from(secret),
+        // Keep file-sourced secrets in their zeroizing container.
+        (None, Some(path)) => read_secret_file(std::path::Path::new(&path))
+            .map_err(|error| format!("Failed to read webhook signing secret file: {error}"))?,
+    };
+    if secret.as_str().is_empty() {
+        return Err("webhook signing secret is configured but empty".into());
     }
+    Ok(Some(secret))
 }
 
 fn configured_env(name: &str) -> Result<Option<String>, String> {
@@ -405,10 +412,17 @@ mod tests {
     }
 
     #[test]
-    fn event_id_is_stable_for_idempotent_delivery_and_changes_with_body() {
-        assert_eq!(event_id("{}"), event_id("{}"));
-        assert_ne!(event_id("{}"), event_id("{\"phase\":\"complete\"}"));
-        assert_eq!(event_id("{}").len(), 64);
+    fn snapshot_event_id_is_stable_and_scoped_to_endpoint_project_and_body() {
+        let endpoint = "a".repeat(64);
+        let id = snapshot_event_id(&endpoint, "project", "{}");
+        assert_eq!(id, snapshot_event_id(&endpoint, "project", "{}"));
+        assert_eq!(id.len(), 64);
+        assert_ne!(
+            id,
+            snapshot_event_id(&endpoint, "project", "{\"phase\":\"complete\"}")
+        );
+        assert_ne!(id, snapshot_event_id(&"b".repeat(64), "project", "{}"));
+        assert_ne!(id, snapshot_event_id(&endpoint, "all-projects", "{}"));
     }
 
     #[test]
@@ -531,8 +545,13 @@ mod tests {
     fn transport_failure_does_not_echo_secret_url_path() {
         // Port 1 on loopback refuses immediately; the error must not reveal
         // the secret-bearing path an operator kept out of process listings.
-        let error = post_json("https://127.0.0.1:1/hooks/secret-token-path", "{}")
-            .expect_err("closed loopback port must fail");
+        let error = post_json(
+            "https://127.0.0.1:1/hooks/secret-token-path",
+            "event",
+            "migration.status_snapshot",
+            "{}",
+        )
+        .expect_err("closed loopback port must fail");
         assert!(error.starts_with("webhook request failed"), "{error}");
         assert!(!error.contains("secret-token-path"), "{error}");
     }
