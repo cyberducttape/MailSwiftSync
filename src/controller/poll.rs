@@ -241,6 +241,8 @@ impl App {
             self.mark_bulk_state_changed();
         }
         if !pending_db_events.is_empty() {
+            let write_started = std::time::Instant::now();
+            let event_count = pending_db_events.len();
             let result = active_run.as_ref().map_or_else(
                 || Err(rusqlite::Error::InvalidQuery),
                 |_| persist_pending_events(&self.store, &pending_db_events),
@@ -248,7 +250,8 @@ impl App {
             if let Err(error) = result {
                 self.durability_recovery_pending = true;
                 durability_errors.push(format!(
-                    "record execution events failed; diagnostics remain queued for retry: {error}"
+                    "record execution events failed; diagnostics remain queued for retry: {error}; sqlite_write_ms={}; event_batch_size={event_count}",
+                    write_started.elapsed().as_millis()
                 ));
                 self.pending_db_events = pending_db_events.clone();
             } else {

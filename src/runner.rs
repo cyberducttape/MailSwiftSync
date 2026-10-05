@@ -46,20 +46,31 @@ pub(crate) fn send_reliable_event(
     tx: &mpsc::SyncSender<crate::Event>,
     mut event: crate::Event,
 ) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + RELIABLE_EVENT_SEND_TIMEOUT;
+    let started = std::time::Instant::now();
+    let deadline = started + RELIABLE_EVENT_SEND_TIMEOUT;
+    let mut full_retries = 0_u64;
     loop {
         match tx.try_send(event) {
             Ok(()) => return Ok(()),
             Err(mpsc::TrySendError::Full(returned)) => {
                 event = returned;
+                full_retries = full_retries.saturating_add(1);
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
-                    return Err("reliable lifecycle event queue remained full".into());
+                    return Err(format!(
+                        "reliable lifecycle event queue remained full; enqueue_wait_ms={}; full_retries={}",
+                        started.elapsed().as_millis(),
+                        full_retries
+                    ));
                 }
                 thread::sleep(remaining.min(Duration::from_millis(10)));
             }
             Err(mpsc::TrySendError::Disconnected(_)) => {
-                return Err("reliable lifecycle event channel disconnected".into());
+                return Err(format!(
+                    "reliable lifecycle event channel disconnected; enqueue_wait_ms={}; full_retries={}",
+                    started.elapsed().as_millis(),
+                    full_retries
+                ));
             }
         }
     }
@@ -705,16 +716,24 @@ mod tests {
     use super::folder_policy::automap_folder_kind;
     use super::{
         RunContext, TerminalEvidenceSource, automap_blocks_live_certification,
-        infer_automap_folder_mapping, message_verification_enabled,
+        configure_process_group, infer_automap_folder_mapping, message_verification_enabled,
         persist_engine_identity_before_launch, process_tail_text, record_process_tail,
         resolve_imapsync_identity, run_streaming, terminal_evidence_source,
-        validate_body_hash_limits, validate_destination_folder_policy,
+        validate_body_hash_limits, validate_destination_folder_policy, wait_with_timeout,
     };
     use crate::{
         BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES, StreamOutcome,
         imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile,
     };
-    use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
+    use std::{
+        collections::HashSet,
+        fs,
+        os::unix::fs::PermissionsExt,
+        process::Command,
+        sync::{atomic::AtomicBool, mpsc},
+        thread,
+        time::Duration,
+    };
 
     fn unsuitable_live_form() -> crate::Form {
         let mut form = crate::Form {
@@ -760,6 +779,19 @@ mod tests {
         let result = super::send_reliable_event(&tx, Event::Finished(Ok(StreamOutcome::Completed)));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("disconnected"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn leader_exit_with_grandchild_is_not_reported_as_clean_completion() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30 & exit 0"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let cancel = AtomicBool::new(false);
+        let result = wait_with_timeout(&mut child, Duration::from_secs(5), &cancel);
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("descendant"), "{error}");
     }
 
     #[test]
