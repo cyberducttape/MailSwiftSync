@@ -1,11 +1,11 @@
 .DEFAULT_GOAL := check
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: check format capability-check documentation-check shell-check script-check evidence-check compatibility clippy fuzz-check test build integration audit release-check
+.PHONY: check format capability-check documentation-check shell-check script-check evidence-check compatibility clippy release-check-build fuzz-check test build integration audit release-check
 
 # Fast local formatting, documentation, script, and static-analysis checks.
 # CI additionally runs platform builds, container integrations, and audits.
-check: format capability-check documentation-check shell-check script-check evidence-check compatibility clippy fuzz-check
+check: format capability-check documentation-check shell-check script-check evidence-check compatibility clippy release-check-build fuzz-check
 
 format:
 	cargo fmt --check
@@ -43,6 +43,11 @@ compatibility:
 
 clippy:
 	cargo clippy --locked --all-targets --all-features -- -D warnings
+
+# Release builds drop `cfg(debug_assertions)` items that debug and test
+# builds keep; type-check the release configuration as CI's builds do.
+release-check-build:
+	cargo check --locked --release --all-features --bin mailswiftsync
 
 # Fuzz targets include library sources by path; a renamed type breaks them
 # without breaking the main crate, so compile them as CI does.

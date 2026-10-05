@@ -4,7 +4,6 @@ const MAX_PROJECT_LIST_ROWS: usize = 10_000;
 const MAX_MAILBOX_PAGE_ROWS: u32 = 1_000;
 const MAX_MAILBOX_STATUS_ROWS: u32 = 100_000;
 
-#[cfg(any(test, debug_assertions))]
 fn durable_mailbox_limit_error() -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -135,7 +134,8 @@ impl StateStore {
         Ok(rows)
     }
 
-    #[cfg(any(test, debug_assertions))]
+    /// Every mailbox ID of a project in queue order, bounded by the durable
+    /// row ceiling (used to materialize a select-all selection).
     pub fn mailbox_ids(&self, project_id: &str) -> rusqlite::Result<Vec<String>> {
         let mut statement = self
             .connection
