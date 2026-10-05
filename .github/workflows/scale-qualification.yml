@@ -64,14 +64,16 @@ jobs:
           started_at="$(date +%s)"
           docker stats --format '{{.MemUsage}}' "$container_name" > "$stats_file" &
           stats_pid=$!
-          harness_status="$(bash scripts/scale-container-completion-wait.sh \
+          # The evidence directory is private to the container user, so the
+          # runner user cannot see the completion marker without sudo.
+          harness_status="$(sudo bash scripts/scale-container-completion-wait.sh \
             "$PWD/provider-scale-evidence/scale-progress.txt" \
             "$watchdog_marker" 3800)"
           finished_at="$(date +%s)"
           kill "$stats_pid" 2>/dev/null || true
-          if [ -f provider-scale-evidence/scale-progress.txt ]; then
+          if sudo test -f provider-scale-evidence/scale-progress.txt; then
             echo 'Scale command progress markers:'
-            cat provider-scale-evidence/scale-progress.txt
+            sudo cat provider-scale-evidence/scale-progress.txt
           fi
           if [ -f "$watchdog_marker" ]; then
             sudo cp "$watchdog_marker" provider-scale-evidence/scale-watchdog.txt

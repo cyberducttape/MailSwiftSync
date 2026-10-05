@@ -7,6 +7,12 @@ from pathlib import Path
 
 
 MEMORY_VALUE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([A-Za-z]*)\s*$")
+# Streaming `docker stats` redraws the screen with ANSI cursor/erase sequences
+# even when redirected to a file.
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Docker reports an unavailable sample (for example after the container
+# stopped) as "--"; it carries no measurement.
+UNAVAILABLE_SAMPLE = re.compile(r"^-+(?:\s*/\s*-+)?$")
 UNIT_MULTIPLIERS = {
     "": 1,
     "B": 1,
@@ -31,11 +37,11 @@ def parse_memory_bytes(value: str) -> int:
 
 
 def peak_memory_bytes(path: Path) -> tuple[int, int]:
-    samples = [
-        parse_memory_bytes(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    samples = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = ANSI_ESCAPE.sub("", raw_line).strip()
+        if line and not UNAVAILABLE_SAMPLE.fullmatch(line):
+            samples.append(parse_memory_bytes(line))
     if not samples:
         raise ValueError("Docker stats produced no memory samples")
     return max(samples), len(samples)

@@ -23,6 +23,18 @@ class DockerMemoryTests(unittest.TestCase):
             samples.write_text("1MiB / 8GiB\n2MiB / 8GiB\n1.5MiB / 8GiB\n", encoding="utf-8")
             self.assertEqual(MODULE.peak_memory_bytes(samples), (2 * 1024**2, 3))
 
+    def test_ignores_terminal_redraw_sequences_and_unavailable_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            samples = Path(directory) / "memory.txt"
+            samples.write_text(
+                "\x1b[2J\x1b[H3.285MiB / 15.61GiB\n"
+                "\x1b[H\x1b[K4MiB / 15.61GiB\n"
+                "-- / --\n"
+                "\x1b[H--\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(MODULE.peak_memory_bytes(samples), (4 * 1024**2, 2))
+
     def test_rejects_missing_or_invalid_samples(self):
         with self.assertRaisesRegex(ValueError, "invalid Docker memory"):
             MODULE.parse_memory_bytes("not memory")

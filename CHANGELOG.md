@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix the scale qualification workflow's false hour-long stall: the host
+  completion watcher ran as the runner user and could not see the marker inside
+  the container-private evidence directory, so a harness that finished in about
+  80 seconds was reported as a 3800-second watchdog timeout. The watcher now
+  runs with access to that directory and fails fast when it cannot read it, and
+  the Docker memory summary ignores terminal redraw sequences and unavailable
+  samples from streaming `docker stats`.
 - Restore the CI build: the OAuth redirect fuzz target still matched the
   removed `RedirectOutcome::Rejected` variant, which failed fuzz compilation
   and skipped the CI test step. `make check` now compiles fuzz targets and runs

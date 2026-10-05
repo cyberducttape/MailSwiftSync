@@ -14,6 +14,16 @@ if ! [[ "$deadline_seconds" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
+progress_directory="$(dirname -- "$progress_file")"
+if [[ -e "$progress_directory" && ! ( -r "$progress_directory" && -x "$progress_directory" ) ]]; then
+  # A marker in an unreadable directory can never be observed; fail now
+  # instead of waiting out the whole deadline.
+  echo "Cannot read the scale progress directory $progress_directory; run this watcher with access to it." >&2
+  printf 'completion_watchdog_unreadable_progress=true\n' > "$watchdog_marker"
+  printf '125\n'
+  exit 0
+fi
+
 deadline=$((SECONDS + deadline_seconds))
 while (( SECONDS < deadline )); do
   if [[ -f "$progress_file" ]]; then
