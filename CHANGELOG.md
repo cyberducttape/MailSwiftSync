@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Record the first completed hosted scale qualification runs (100k small
+  messages and 10k messages / 1 GiB of bodies, both exact metadata matches
+  with peak-memory and wall-clock summaries), and export a second customer
+  proof after the harness's incremental pass so retained evidence covers the
+  post-delta state.
 - Fix the scale qualification workflow's false hour-long stall: the host
   completion watcher ran as the runner user and could not see the marker inside
   the container-private evidence directory, so a harness that finished in about

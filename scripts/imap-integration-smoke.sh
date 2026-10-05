@@ -823,6 +823,20 @@ if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions
 fi
 echo "PASS: incremental orchestration preserved verified terminal state"
 
+# The first proof certifies the initial mirror. Export a second proof from the
+# same ledger after the incremental pass so retained evidence also covers the
+# post-delta state rather than only the pre-delta transfer.
+post_delta_proof="$app_runtime/customer-proof-post-delta.json"
+run_product customer-proof "$state" "$post_delta_proof" \
+  --source-provider generic_imap --destination-provider generic_imap \
+  --source-auth password --destination-auth password --fixture-id packaged-generic-imap \
+  --scenario-ids idempotent-delta
+run_product verify "$post_delta_proof"
+echo "PASS: post-delta customer proof exported and verified"
+if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+  cp -- "$post_delta_proof" "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/customer-proof-post-delta.json"
+fi
+
 destination_maildir="$workspace/destination/mail/$user/Maildir"
 destination_message_ids=""
 fixture_message_ids_file="$workspace/destination-fixture-message-ids.txt"

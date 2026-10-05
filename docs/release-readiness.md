@@ -358,34 +358,32 @@ screen-reader checklist are recorded in
   were recorded. The disposable container now uses Docker's init shim to reap
   orphaned fixture children and exit with the harness; Dovecot shutdown remains
   bounded to 10 seconds per server, and the host wait has its own deadline and
-  fallback marker. These changes still need a successful hosted rerun. The
-  following [run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37179192679)
-  completed seed, incremental delta, fixture scan, and durable exact-metadata
-  reconciliation for 100,016 messages / 28,681,943 bytes with zero differences.
-  Its markers also show both Dovecot stop commands and the disposable workspace
-  handoff completed, but the container stayed alive until the 90-minute workflow
-  timeout. Cleanup now has an explicit disposable-scale mode that delegates
-  fixture-server shutdown to container teardown rather than waiting on processes
-  that may be in uninterruptible filesystem I/O. A new completion marker will
-  distinguish harness cleanup from container exit; this fix still needs a
-  hosted rerun and peak-resource summary.
-  earlier repeated Maildir scans have been
-  replaced by one pass, which took 1.78 seconds on a synthetic 100,004-file
-  Maildir. None of
-  these runs qualifies peak memory, 20 GiB mailboxes, Gmail, or Microsoft 365.
-  This small-message generic-IMAP fixture does not measure peak memory or
-  qualify 20 GiB mailboxes, Gmail, Microsoft 365, or other hosted providers.
-  Manual dispatch now also offers a 10,000-message fixture with exactly 1 GiB
-  of RFC822 body payload, generated in bounded chunks and transferred through
-  the same packaged path. This exercises byte-volume pressure separately from
-  record count; it is not a qualified result until a hosted run completes and
-  retains its throughput, peak-memory, and recovery evidence.
+  fallback marker. Earlier hosted runs that appeared to stall after cleanup were a
+  host-watcher defect: the runner user could not read the container-private
+  progress directory, so a harness that had already written its completion
+  marker was reported as a 3,800-second watchdog timeout. With the watcher
+  given access to that directory, both packaged scenarios completed on hosted
+  `ubuntu-24.04` runners on 2026-10-04 (commit `b058158`):
+
+  | Scenario | Messages | Body payload | Wall clock | Sampled peak container memory | Result | Run |
+  |---|---|---|---|---|---|---|
+  | `100k-small` | 100,016 | 28,681,943 bytes total | 1,045 s | 1,254,130,450 bytes (≈1.17 GiB) | exact metadata match, 0 missing/extra/modified | [37246504219](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37246504219) |
+  | `10k-1g` | 10,016 | 1,075,944,871 bytes total | 90 s | 366,162,739 bytes (≈349 MiB) | exact metadata match, 0 missing/extra/modified | [37246501700](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37246501700) |
+
+  Each run completed seed, incremental delta, fixture Message-ID scan, and
+  harness cleanup, and retained its customer proof, progress markers, and
+  resource summary as a workflow artifact. Wall clock covers the whole
+  containerized harness (fixture generation, both passes, verification, and
+  proof export). These runs exported their proof before the incremental pass;
+  the harness now also exports a post-delta proof. Memory is the aggregate
+  container figure (controller, imapsync, and both Dovecot fixture servers),
+  sampled once per second. These results qualify the packaged generic-IMAP
+  path at these sizes only; they do not qualify 20 GiB mailboxes, Gmail,
+  Microsoft 365, or other hosted providers.
+  The earlier repeated Maildir scans have been replaced by one pass, which
+  took 1.78 seconds on a synthetic 100,004-file Maildir.
   Scale mode disables per-message debug output and allows up to 40 minutes per
-  CLI command within a 90-minute workflow limit. The instrumented workflow
-  samples aggregate container memory once per second and retains peak and wall
-  time, but the cited successful run predates that measurement; no peak-memory
-  result is qualified until an instrumented run completes and retains its
-  resource summary.
+  CLI command within a 90-minute workflow limit.
 - Batch scheduling keeps conservative defaults but exposes explicit global
   worker and process-start ceilings for qualified deployments. The adaptive
   global/provider/tenant/credential/mailbox rate-domain limiter remains the

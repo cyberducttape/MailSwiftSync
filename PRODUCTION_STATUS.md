@@ -235,7 +235,7 @@ new metadata verifier against real accounts.
 - ⏳ Successful live pilots with real data
 - ⏳ Recovery/interruption testing with production accounts
 - ⏳ Provider-specific edge case validation
-- ⚠️ A scheduled/manual packaged-engine lab completed one 100k-message run against disposable generic IMAP (100,016 messages / 28.7 MB, exact metadata reconciliation, zero unresolved differences; live pass 14m10s). This is not a 20 GiB, peak-memory, multi-migration, or hosted-provider qualification; repeatable baselines and Gmail/Microsoft 365 qualification remain outstanding. See [verification envelope](docs/verification-envelope.md) and the [scale run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37139081988).
+- ⚠️ The packaged-engine scale lab completed both hosted generic-IMAP scenarios on 2026-10-04: 100,016 messages / 28.7 MB in 1,045 s (≈1.17 GiB sampled peak container memory) and 10,016 messages / 1.08 GB of bodies in 90 s (≈349 MiB), each with seed, incremental delta, exact metadata reconciliation, and zero unresolved differences. This is not a 20 GiB, multi-migration, or hosted-provider qualification; Gmail/Microsoft 365 qualification remains outstanding. See [release readiness](docs/release-readiness.md) and the [100k run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37246504219) and [1 GiB run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37246501700).
 - ⚠️ CI scheduler stress coverage settles 1,024 synthetic mailbox jobs across 32 tenant domains at 16 workers; this does not exercise concurrent IMAP engines or qualify provider limits.
 
 ---
