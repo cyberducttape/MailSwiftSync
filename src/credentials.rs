@@ -3,6 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -12,12 +13,17 @@ use zeroize::Zeroizing;
 /// Owned secret material. The only string access exposed to callers is
 /// borrowed, so passing a credential through a worker does not silently turn
 /// it into an ordinary `String` allocation.
+///
+/// Clones share one reference-counted, zeroizing allocation: copying a form or
+/// a batch job does not create another memory location holding the credential.
+/// Editing a shared value copies it first (and that copy is zeroized too); the
+/// original is wiped when its last holder drops.
 #[derive(Clone, Default, PartialEq, Eq)]
-pub(crate) struct SecretString(Zeroizing<String>);
+pub(crate) struct SecretString(Arc<Zeroizing<String>>);
 
 impl SecretString {
     pub(crate) fn new(value: String) -> Self {
-        Self(Zeroizing::new(value))
+        Self(Arc::new(Zeroizing::new(value)))
     }
 
     pub(crate) fn as_str(&self) -> &str {
@@ -25,7 +31,7 @@ impl SecretString {
     }
 
     pub(crate) fn as_mut_string(&mut self) -> &mut String {
-        &mut self.0
+        &mut *Arc::make_mut(&mut self.0)
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
@@ -755,6 +761,17 @@ mod tests {
         path::PathBuf,
         time::{Duration, SystemTime},
     };
+
+    #[test]
+    fn secret_clones_share_one_allocation_and_edits_copy_on_write() {
+        let original = SecretString::from("customer-password");
+        let mut edited = original.clone();
+        assert!(std::ptr::eq(original.as_str(), edited.as_str()));
+        edited.as_mut_string().push('!');
+        assert_eq!(original.as_str(), "customer-password");
+        assert_eq!(edited.as_str(), "customer-password!");
+        assert!(!std::ptr::eq(original.as_str(), edited.as_str()));
+    }
 
     #[test]
     fn secret_debug_output_never_contains_material() {

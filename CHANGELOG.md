@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Return a "verification stage is closed" error, instead of panicking, when a
+  finished verification stage is used, so a lifecycle mistake fails the
+  verification rather than the controller.
+- Back `SecretString` with one shared zeroizing allocation: cloning a form,
+  batch job, or worker input no longer creates another memory location holding
+  the credential, and editing a shared value copies it first.
 - Add `scripts/benchmark-verification-scale.sh`, gating metadata-only
   verification at 10k–1M messages per side on peak controller RSS (64 MiB) and
   reconcile throughput, and reporting stage size, peak rollback-journal size,
