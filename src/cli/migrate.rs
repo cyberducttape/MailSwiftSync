@@ -338,3 +338,98 @@ pub(super) fn headless_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         }
     }
 }
+
+const WAVE_USAGE: &str = "Usage: mailswiftsync wave <state.db> list <project-id> | wave <state.db> approve <wave-id> <approver>";
+
+/// List a project's migration waves with derived status, or approve one.
+/// Approval from automation lets a separate approver gate live migration
+/// without opening the GUI.
+pub(super) fn wave_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
+    let values = arguments.collect::<Vec<_>>();
+    let Some(state) = values.first() else {
+        eprintln!("{WAVE_USAGE}");
+        std::process::exit(2);
+    };
+    let Some(text) = values[1..]
+        .iter()
+        .map(|value| value.to_str().map(str::to_owned))
+        .collect::<Option<Vec<_>>>()
+    else {
+        eprintln!("{WAVE_USAGE}\nWave arguments must be valid UTF-8.");
+        std::process::exit(2);
+    };
+    // Validate the request shape before touching (or creating) a ledger.
+    let shape = text.iter().map(String::as_str).collect::<Vec<_>>();
+    if !matches!(shape.as_slice(), ["list", _] | ["approve", _, _]) {
+        eprintln!("{WAVE_USAGE}");
+        std::process::exit(2);
+    }
+    let store = match core::StateStore::open(state) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Migration waves unavailable: {error}");
+            std::process::exit(1);
+        }
+    };
+    let result = match text
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["list", project_id] => store
+            .wave_summaries(project_id)
+            .map_err(|error| error.to_string())
+            .and_then(|waves| {
+                let waves = waves
+                    .iter()
+                    .map(|summary| {
+                        serde_json::json!({
+                            "id": summary.wave.id,
+                            "position": summary.wave.position + 1,
+                            "name": summary.wave.settings.name,
+                            "status": summary.status().as_str(),
+                            "scheduled_at": summary.wave.settings.scheduled_at,
+                            "maintenance_window": summary.wave.settings.maintenance_window,
+                            "concurrency": summary.wave.settings.concurrency,
+                            "approved_by": summary.wave.approved_by,
+                            "approved_at": summary.wave.approved_at,
+                            "mailboxes": summary.members,
+                            "verified": summary.completed,
+                            "migrating": summary.migrating,
+                            "needs_attention": summary.needs_attention,
+                            "catch_up_pending": summary.catch_up_pending,
+                            "waiting": summary.waiting,
+                            "with_evidence": summary.evidenced,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::to_string_pretty(&serde_json::json!({ "waves": waves }))
+                    .map_err(|error| error.to_string())
+            }),
+        ["approve", wave_id, approver] => match store.wave(wave_id) {
+            Ok(Some(wave)) => store
+                .approve_wave(wave_id, approver)
+                .map(|()| {
+                    format!(
+                        "Wave \"{}\" approved; its mailboxes may now migrate live.",
+                        wave.settings.name
+                    )
+                })
+                .map_err(|error| error.to_string()),
+            Ok(None) => Err("no wave with that ID exists in this ledger".to_owned()),
+            Err(error) => Err(error.to_string()),
+        },
+        _ => unreachable!("request shape validated above"),
+    };
+    match result {
+        Ok(message) => {
+            out!("{message}");
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("Migration wave operation failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}

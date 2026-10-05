@@ -52,6 +52,16 @@ const DATA_INVARIANTS: &[(&str, &str)] = &[
          WHERE parent.project_id<>r.project_id",
     ),
     (
+        "every wave member is a mailbox of the wave's project",
+        "SELECT COUNT(*) FROM wave_members m JOIN waves w ON w.id=m.wave_id
+         JOIN mailbox_jobs j ON j.id=m.job_id WHERE j.project_id<>w.project_id",
+    ),
+    (
+        "every wave has at least one member",
+        "SELECT COUNT(*) FROM waves w
+         WHERE NOT EXISTS(SELECT 1 FROM wave_members m WHERE m.wave_id=w.id)",
+    ),
+    (
         "webhook leases exist exactly while a delivery is in flight",
         "SELECT COUNT(*) FROM webhook_deliveries
          WHERE (status='delivering') <> (lease_owner IS NOT NULL AND lease_until IS NOT NULL)",

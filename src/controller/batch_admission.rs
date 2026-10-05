@@ -127,6 +127,18 @@ pub(crate) fn admit_batch_launch(
             retry_scope.label()
         ));
     }
+    if mode.is_live() {
+        // A wave's approval is the operator's go-ahead for its mailboxes;
+        // dry preflights stay allowed so a wave can be proven before approval.
+        let gated = store.unapproved_wave_members(project_id).map_err(|error| {
+            format!("Could not read migration waves; batch was not started: {error}")
+        })?;
+        if let Some(wave) = selected_ids.iter().find_map(|id| gated.get(id)) {
+            return Err(format!(
+                "Live migration blocked: wave \"{wave}\" is not approved. Approve the wave, or delete it, before migrating its mailboxes."
+            ));
+        }
+    }
     let admissions = store
         .batch_admission_states(project_id, &selected_ids)
         .map_err(|error| {
@@ -794,6 +806,55 @@ mod tests {
             "with-secrets",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn live_admission_refuses_members_of_an_unapproved_wave() {
+        let store = crate::core::StateStore::in_memory().unwrap();
+        let (project_id, ids, secrets) = queue(&store, 2);
+        let wave = store
+            .create_wave(
+                &project_id,
+                &crate::core::WaveSettings {
+                    name: "Wave 1 - Accounting".into(),
+                    ..Default::default()
+                },
+                &ids[..1],
+            )
+            .unwrap();
+        let live = |run_id: &str| {
+            admit(
+                &store,
+                &project_id,
+                &SelectionScope::all_matching(),
+                BatchExecutionMode::Live,
+                &secrets,
+                None,
+                run_id,
+            )
+            .err()
+            .unwrap_or_default()
+        };
+        let error = live("gated");
+        assert!(
+            error.contains("Wave 1 - Accounting") && error.contains("not approved"),
+            "{error}"
+        );
+        // A dry preflight may prove the wave before it is approved.
+        assert!(
+            admit(
+                &store,
+                &project_id,
+                &SelectionScope::all_matching(),
+                BatchExecutionMode::Preflight,
+                &secrets,
+                None,
+                "preflight",
+            )
+            .is_ok()
+        );
+        store.approve_wave(&wave.id, "operator").unwrap();
+        assert!(!live("approved").contains("not approved"));
     }
 
     #[test]
