@@ -385,6 +385,20 @@ fn message_id_header_parser_unfolds_continuations() {
 }
 
 #[test]
+fn header_fingerprint_normalizes_selected_headers_and_is_distinct_from_message_id() {
+    let first = super::fetch_parser::header_fingerprint(
+        "From: sender@example.test\r\nSubject:  A   report\r\nDate: Tue, 01 Jan 2030 00:00:00 +0000\r\n",
+    )
+    .unwrap();
+    let second = super::fetch_parser::header_fingerprint(
+        "Date: Tue, 01 Jan 2030 00:00:00 +0000\nSubject: A report\nFrom: sender@example.test\n",
+    )
+    .unwrap();
+    assert_eq!(first, second);
+    assert!(first.starts_with("header-fingerprint:"));
+}
+
+#[test]
 fn folder_failure_details_are_bounded_and_preserved() {
     let failures = (0..17)
         .map(|index| (format!("folder-{index:02}"), format!("failure-{index}")))

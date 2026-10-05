@@ -425,7 +425,10 @@ pub(crate) fn default_doveadm_path() -> String {
 pub(crate) fn default_batch_concurrency() -> usize {
     2
 }
-pub(crate) const MAX_BATCH_CONCURRENCY: usize = 256;
+/// Normal desktop-control-plane ceiling. Higher values require a separately
+/// qualified fleet runner rather than inviting users to multiply IMAP engines
+/// from the GUI.
+pub(crate) const MAX_BATCH_CONCURRENCY: usize = 32;
 pub(crate) const MAX_BATCH_PROCESS_STARTS_PER_SECOND: usize = 100;
 pub(crate) fn default_batch_process_starts_per_second() -> usize {
     2

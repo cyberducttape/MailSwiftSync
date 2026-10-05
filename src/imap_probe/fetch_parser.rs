@@ -40,11 +40,22 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
         );
         match messages.entry(key) {
             Entry::Vacant(entry) => {
-                let message_id = record
+                let header = record
                     .frame
-                    .literal_after(b"BODY[HEADER.FIELDS (MESSAGE-ID)]")
-                    .and_then(|header| parse_message_id_header(&String::from_utf8_lossy(header)))
-                    .filter(|value| !value.is_empty());
+                    .literal_after(
+                        b"BODY[HEADER.FIELDS (MESSAGE-ID FROM TO CC SUBJECT DATE CONTENT-TYPE)]",
+                    )
+                    .or_else(|| {
+                        record
+                            .frame
+                            .literal_after(b"BODY[HEADER.FIELDS (MESSAGE-ID)]")
+                    });
+                let header_text = header.map(|value| String::from_utf8_lossy(value));
+                let message_id = header_text
+                    .as_deref()
+                    .and_then(parse_message_id_header)
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| header_text.as_deref().and_then(header_fingerprint));
                 entry.insert(crate::core::ExtractedMessage {
                     message_id,
                     // UID is already the canonical key; retaining a second
@@ -259,4 +270,66 @@ pub(super) fn parse_message_id_header(body: &str) -> Option<String> {
         }
     }
     message_id.map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Produce a deterministic fallback identity from selected RFC822 headers.
+/// The prefix keeps this value distinct from a real Message-ID and makes the
+/// evidence level visible to callers. Duplicate messages with identical
+/// selected headers remain ambiguous and are handled by the existing multiset
+/// reconciliation.
+pub(super) fn header_fingerprint(body: &str) -> Option<String> {
+    const SELECTED: [&str; 7] = [
+        "from",
+        "to",
+        "cc",
+        "subject",
+        "date",
+        "message-id",
+        "content-type",
+    ];
+    let mut values = HashMap::<&str, String>::new();
+    let mut current: Option<&str> = None;
+    for line in body.lines() {
+        if line.starts_with([' ', '\t']) {
+            if let Some(name) = current {
+                values.entry(name).and_modify(|value| {
+                    value.push(' ');
+                    value.push_str(line.trim());
+                });
+            }
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            current = None;
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let Some(name) = SELECTED.iter().copied().find(|selected| *selected == name) else {
+            current = None;
+            continue;
+        };
+        current = Some(name);
+        values.insert(name, value.split_whitespace().collect::<Vec<_>>().join(" "));
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let canonical = SELECTED
+        .iter()
+        .map(|name| {
+            format!(
+                "{name}:{}",
+                values.get(name).map(String::as_str).unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let digest = Sha256::digest(canonical.as_bytes());
+    Some(format!(
+        "header-fingerprint:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
 }

@@ -1,10 +1,11 @@
 # Scaling large migrations
 
-A single MailSwiftSync batch queue is bounded to 1–256 concurrent workers
+A single MailSwiftSync batch queue is bounded to 1–32 concurrent workers
 (`batch_concurrency`, both for preflight and live migration), with a default of
 2. The upper bound is a qualified-deployment ceiling, not a recommendation:
 most hosted providers rate-limit or temporarily block a source or destination
-account well before hundreds of simultaneous IMAP sessions become useful.
+account well before dozens of simultaneous IMAP sessions become useful. Values
+above 32 require a separately qualified fleet runner.
 The scheduler also applies global, provider, tenant, credential, and mailbox
 rate domains, so increasing the worker setting does not bypass those limits.
 Engine work remains thread/process based; cheap probes and reconciliation are
