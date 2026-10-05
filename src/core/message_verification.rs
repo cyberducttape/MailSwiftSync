@@ -1001,7 +1001,7 @@ impl MessageVerification {
         stage: &MessageMetadataStage,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
-        let connection = stage.connection();
+        let connection = stage.connection()?;
         // One transaction for the whole pass. A durable stage runs with FULL
         // synchronization, so autocommitting each matched-row insert costs a
         // disk sync per message. Reconciliation is reset and recomputed on

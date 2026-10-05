@@ -1131,6 +1131,7 @@ fn staged_fingerprint_lookups_seek_on_mapped_folder_date_and_size() {
     let stage = MessageMetadataStage::open_in_memory().unwrap();
     let mut statement = stage
         .connection()
+        .unwrap()
         .prepare(
             "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM staged_messages WHERE side=?1 AND match_mailbox=?2 AND date_key=?3 AND size_bytes=?4",
         )
@@ -1170,6 +1171,7 @@ fn staged_exact_pair_ranking_uses_compound_side_indexes() {
     ] {
         let plan = stage
             .connection()
+            .unwrap()
             .prepare(sql)
             .unwrap()
             .query_map([], |row| row.get::<_, String>(3))

@@ -360,22 +360,27 @@ impl MessageMetadataStage {
         Ok(())
     }
 
-    fn connection_ref(&self) -> &Connection {
-        self.connection
-            .as_ref()
-            .expect("verification stage is open")
+    /// The open stage connection. Using a stage after `finish` is a
+    /// lifecycle error that must fail the verification, not the controller.
+    fn connection_ref(&self) -> rusqlite::Result<&Connection> {
+        self.connection.as_ref().ok_or_else(|| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISUSE),
+                Some("verification stage is closed".to_owned()),
+            )
+        })
     }
 
     fn initialize(&mut self, durable: bool) -> rusqlite::Result<()> {
         if !durable {
-            self.connection_ref()
+            self.connection_ref()?
                 .execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;")?;
         }
         // Durable stages intentionally leave SQLite's default rollback
         // journal and FULL synchronization untouched. This avoids a runtime
         // PRAGMA mutation that some packaged SQLite builds reject while still
         // retaining crash-safe defaults.
-        self.connection_ref().execute_batch(
+        self.connection_ref()?.execute_batch(
             "CREATE TABLE IF NOT EXISTS staged_messages(
                  side INTEGER NOT NULL CHECK(side IN (0,1)),
                  mailbox TEXT NOT NULL,
@@ -400,13 +405,13 @@ impl MessageMetadataStage {
         // Stages written before cursors recorded the full SELECT snapshot
         // cannot prove their pages still describe the server. They are a
         // disposable cache, so discard them and rescan.
-        let snapshot_cursors: bool = self.connection_ref().query_row(
+        let snapshot_cursors: bool = self.connection_ref()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('stage_cursors') WHERE name='exists_count')",
             [],
             |row| row.get(0),
         )?;
         if !snapshot_cursors {
-            self.connection_ref().execute_batch(
+            self.connection_ref()?.execute_batch(
                 "DROP TABLE stage_cursors;
                  DELETE FROM staged_messages;
                  DELETE FROM stage_fingerprints;
@@ -417,7 +422,7 @@ impl MessageMetadataStage {
             // Ephemeral stages are disposable and may use an in-memory temp
             // store. Durable stages must not mutate connection settings: the
             // packaged engine can expose a read-only SQLite wrapper.
-            self.connection_ref()
+            self.connection_ref()?
                 .execute_batch("PRAGMA temp_store=MEMORY;")?;
         }
         Ok(())
@@ -428,7 +433,7 @@ impl MessageMetadataStage {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let existing: Option<String> = self
-            .connection_ref()
+            .connection_ref()?
             .query_row(
                 "SELECT value FROM stage_metadata WHERE key='identity'",
                 [],
@@ -436,7 +441,7 @@ impl MessageMetadataStage {
             )
             .optional()?;
         if existing.as_deref() != Some(identity) {
-            let tx = self.connection_ref().unchecked_transaction()?;
+            let tx = self.connection_ref()?.unchecked_transaction()?;
             tx.execute("DELETE FROM staged_messages", [])?;
             tx.execute("DELETE FROM stage_fingerprints", [])?;
             tx.execute("DELETE FROM stage_cursors", [])?;
@@ -452,7 +457,7 @@ impl MessageMetadataStage {
 
     fn load_content_fingerprints(&mut self) -> rusqlite::Result<()> {
         let mut statement = self
-            .connection_ref()
+            .connection_ref()?
             .prepare("SELECT side,mailbox,uidvalidity,uid,fingerprint FROM stage_fingerprints")?;
         let rows = statement.query_map([], |row| {
             let side: i64 = row.get(0)?;
@@ -503,7 +508,7 @@ impl MessageMetadataStage {
             return Err("body fingerprint did not have a matching staged message".to_owned());
         }
         let tx = self
-            .connection_ref()
+            .connection()?
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         // HashMap iteration order is randomized. Persist each fetched page in
@@ -581,19 +586,19 @@ impl MessageMetadataStage {
             .retain(|(fingerprint_side, key), _| {
                 *fingerprint_side != side || key.mailbox.as_ref() != mailbox
             });
-        self.connection_ref()
+        self.connection()?
             .execute(
                 "DELETE FROM staged_messages WHERE side=?1 AND mailbox=?2",
                 params![side.as_i64(), mailbox],
             )
             .map_err(|e| e.to_string())?;
-        self.connection_ref()
+        self.connection()?
             .execute(
                 "DELETE FROM stage_fingerprints WHERE side=?1 AND mailbox=?2",
                 params![side.as_i64(), mailbox],
             )
             .map_err(|e| e.to_string())?;
-        self.connection_ref()
+        self.connection()?
             .execute(
                 "DELETE FROM stage_cursors WHERE side=?1 AND mailbox=?2",
                 params![side.as_i64(), mailbox],
@@ -620,7 +625,7 @@ impl MessageMetadataStage {
     ) -> Result<Option<u64>, String> {
         let (uidvalidity, uidnext, exists) = snapshot.to_sql().map_err(|e| e.to_string())?;
         let cursor: Option<(i64, i64, i64, i64)> = self
-            .connection_ref()
+            .connection()?
             .query_row(
                 "SELECT uidvalidity,uidnext,exists_count,last_uid FROM stage_cursors WHERE side=?1 AND mailbox=?2",
                 params![side.as_i64(), mailbox],
@@ -637,7 +642,7 @@ impl MessageMetadataStage {
             // its cursor. Discard that uncheckpointed tail so it is fetched
             // exactly once after restart (including its body fingerprints).
             let tx = self
-                .connection_ref()
+                .connection()?
                 .unchecked_transaction()
                 .map_err(|e| e.to_string())?;
             for table in ["staged_messages", "stage_fingerprints"] {
@@ -657,7 +662,7 @@ impl MessageMetadataStage {
             return Ok(Some(last_uid));
         }
         let tx = self
-            .connection_ref()
+            .connection()?
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         for table in ["staged_messages", "stage_fingerprints", "stage_cursors"] {
@@ -696,7 +701,7 @@ impl MessageMetadataStage {
     /// Every folder's verification cursor with its staged row count. Folder
     /// names stay in process; callers persist only digests of them.
     pub(crate) fn folder_cursors(&self) -> rusqlite::Result<Vec<FolderCursor>> {
-        let mut statement = self.connection_ref().prepare(
+        let mut statement = self.connection_ref()?.prepare(
             "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity) FROM stage_cursors c ORDER BY c.side,c.mailbox",
         )?;
         statement
@@ -756,7 +761,7 @@ impl MessageMetadataStage {
     ) -> Result<(), String> {
         let (uidvalidity, uidnext, exists) = snapshot.to_sql().map_err(|e| e.to_string())?;
         let updated = self
-            .connection_ref()
+            .connection()?
             .execute(
                 "UPDATE stage_cursors SET last_uid=?6,completed=?7 WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uidnext=?4 AND exists_count=?5",
                 params![
@@ -779,7 +784,7 @@ impl MessageMetadataStage {
     }
 
     pub(crate) fn reset_reconciliation(&mut self) -> Result<(), String> {
-        self.connection_ref()
+        self.connection()?
             .execute_batch(
                 "DROP TABLE IF EXISTS staged_matched;
                  DROP TABLE IF EXISTS staged_folder_mapping;
@@ -790,7 +795,7 @@ impl MessageMetadataStage {
     }
 
     pub(crate) fn count(&self, side: StagedMessageSide) -> rusqlite::Result<u64> {
-        self.connection_ref().query_row(
+        self.connection_ref()?.query_row(
             "SELECT COUNT(*) FROM staged_messages WHERE side=?1",
             [side.as_i64()],
             |row| {
@@ -806,7 +811,7 @@ impl MessageMetadataStage {
         mailbox: &str,
         uidvalidity: u64,
     ) -> rusqlite::Result<u64> {
-        self.connection_ref().query_row(
+        self.connection_ref()?.query_row(
             "SELECT COUNT(*) FROM staged_messages WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3",
             params![side.as_i64(), mailbox, sqlite_i64(uidvalidity)?],
             |row| {
@@ -817,7 +822,7 @@ impl MessageMetadataStage {
     }
 
     pub(crate) fn sum_bytes(&self, side: StagedMessageSide) -> rusqlite::Result<u64> {
-        self.connection_ref().query_row(
+        self.connection_ref()?.query_row(
             "SELECT COALESCE(SUM(size_bytes), 0) FROM staged_messages WHERE side=?1",
             [side.as_i64()],
             |row| {
@@ -848,14 +853,14 @@ impl MessageMetadataStage {
             "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages WHERE side=?1 AND rowid>?2 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=staged_messages.side AND m.mailbox=staged_messages.mailbox AND m.uidvalidity=staged_messages.uidvalidity AND m.uid=staged_messages.uid){condition_id}{condition_metadata} ORDER BY rowid LIMIT {}",
             super::message_staging::STAGE_BATCH_SIZE
         );
-        self.connection_ref()
+        self.connection_ref()?
             .prepare(&sql)?
             .query_map(params![side.as_i64(), after_rowid], staged_message_from_row)?
             .collect()
     }
 
-    pub(crate) fn connection(&self) -> &Connection {
-        self.connection_ref()
+    pub(crate) fn connection(&self) -> Result<&Connection, String> {
+        self.connection_ref().map_err(|error| error.to_string())
     }
 
     pub(crate) fn content_fingerprints(
@@ -873,7 +878,7 @@ impl MessageMetadataStage {
         &self,
         side: StagedMessageSide,
     ) -> rusqlite::Result<ExtractedMessages> {
-        let mut statement = self.connection_ref().prepare(
+        let mut statement = self.connection_ref()?.prepare(
             "SELECT mailbox,uidvalidity,uid,message_id,internal_date,size_bytes FROM staged_messages WHERE side=?1 ORDER BY rowid",
         )?;
         let rows = statement.query_map([side.as_i64()], |row| {
@@ -1067,7 +1072,7 @@ mod tests {
             stage.all_messages(StagedMessageSide::Source).unwrap(),
             messages
         );
-        stage.connection().execute_batch("CREATE TABLE staged_matched(side INTEGER,mailbox TEXT,uidvalidity INTEGER,uid TEXT,PRIMARY KEY(side,mailbox,uidvalidity,uid));").unwrap();
+        stage.connection().unwrap().execute_batch("CREATE TABLE staged_matched(side INTEGER,mailbox TEXT,uidvalidity INTEGER,uid TEXT,PRIMARY KEY(side,mailbox,uidvalidity,uid));").unwrap();
         let batch = stage
             .batch(StagedMessageSide::Source, 0, true, true)
             .unwrap();
@@ -1194,6 +1199,23 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn using_a_finished_stage_is_an_error_not_a_panic() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage.finish().unwrap();
+        let error = stage.all_messages(StagedMessageSide::Source).unwrap_err();
+        assert!(
+            error.to_string().contains("verification stage is closed"),
+            "{error}"
+        );
+        assert!(
+            stage
+                .insert_messages(StagedMessageSide::Source, &ExtractedMessages::new())
+                .is_err()
+        );
+        assert!(stage.connection().is_err());
     }
 
     #[test]
