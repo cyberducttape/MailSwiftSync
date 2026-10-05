@@ -1,0 +1,134 @@
+name: Live provider smoke
+
+# Manually dispatched smoke run against operator-owned Google Workspace and
+# Microsoft 365 test tenants: dry pilot, interruption + recovery into a
+# separate destination mailbox, and a live pilot, using the packaged runtime
+# image (pinned imapsync 2.314). It proves OAuth refresh, live transfer, and
+# recovery against real providers. It is NOT release qualification: the
+# smoke proofs it retains cannot satisfy scripts/verify-evidence-gate.sh.
+#
+# Secrets live in the `live-providers` environment. Each *_REFRESH_CONFIG is
+# the JSON written by
+#   mailswiftsync oauth-authorize ... <keyring-id>
+#   mailswiftsync oauth-export-refresh-config <keyring-id> <file>
+# Use dedicated test mailboxes only; the destination mailboxes are written to.
+on:
+  workflow_dispatch:
+    inputs:
+      direction:
+        description: Provider pair to exercise
+        required: true
+        type: choice
+        options:
+          - gmail-to-microsoft365
+          - microsoft365-to-gmail
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two runs against the same test mailboxes would interfere.
+  group: live-provider-smoke
+  cancel-in-progress: false
+
+jobs:
+  provider-smoke:
+    name: Live provider smoke (${{ github.event.inputs.direction }})
+    runs-on: ubuntu-24.04
+    environment: live-providers
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the distributed runtime image
+        run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:provider .
+      - name: Stage OAuth refresh configurations
+        env:
+          DIRECTION: ${{ github.event.inputs.direction }}
+          GOOGLE_PRIMARY_USER: ${{ secrets.GOOGLE_PRIMARY_USER }}
+          GOOGLE_PRIMARY_REFRESH_CONFIG: ${{ secrets.GOOGLE_PRIMARY_REFRESH_CONFIG }}
+          GOOGLE_RECOVERY_USER: ${{ secrets.GOOGLE_RECOVERY_USER }}
+          GOOGLE_RECOVERY_REFRESH_CONFIG: ${{ secrets.GOOGLE_RECOVERY_REFRESH_CONFIG }}
+          M365_PRIMARY_USER: ${{ secrets.M365_PRIMARY_USER }}
+          M365_PRIMARY_REFRESH_CONFIG: ${{ secrets.M365_PRIMARY_REFRESH_CONFIG }}
+          M365_RECOVERY_USER: ${{ secrets.M365_RECOVERY_USER }}
+          M365_RECOVERY_REFRESH_CONFIG: ${{ secrets.M365_RECOVERY_REFRESH_CONFIG }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secrets="$RUNNER_TEMP/provider-secrets"
+          mkdir -p "$secrets"
+          case "$DIRECTION" in
+            gmail-to-microsoft365)
+              provider=gmail
+              source_prefix=GOOGLE_PRIMARY; source_endpoint=imap.gmail.com:993
+              dest_prefix=M365_PRIMARY; dest_endpoint=outlook.office365.com:993
+              recovery_prefix=M365_RECOVERY ;;
+            microsoft365-to-gmail)
+              provider=m365
+              source_prefix=M365_PRIMARY; source_endpoint=outlook.office365.com:993
+              dest_prefix=GOOGLE_PRIMARY; dest_endpoint=imap.gmail.com:993
+              recovery_prefix=GOOGLE_RECOVERY ;;
+            *) echo "Unknown direction: $DIRECTION" >&2; exit 2 ;;
+          esac
+          for role in source dest recovery; do
+            prefix_var="${role}_prefix"; prefix="${!prefix_var}"
+            user_var="${prefix}_USER"; config_var="${prefix}_REFRESH_CONFIG"
+            if [[ -z "${!user_var:-}" || -z "${!config_var:-}" ]]; then
+              echo "Missing secret ${user_var} or ${config_var} in the live-providers environment" >&2
+              exit 1
+            fi
+            printf '%s' "${!config_var}" > "$secrets/${role}-refresh.json"
+            printf '%s\n' "${!user_var}" > "$secrets/${role}-user"
+          done
+          {
+            printf 'provider=%s\n' "$provider"
+            printf 'source_endpoint=%s\n' "$source_endpoint"
+            printf 'dest_endpoint=%s\n' "$dest_endpoint"
+          } > "$secrets/pair.env"
+          mkdir -p provider-smoke-evidence
+          sudo chown -R 0:0 "$secrets" provider-smoke-evidence
+      - name: Run provider smoke harness in the packaged image
+        run: |
+          set -euo pipefail
+          docker run --rm --user 0:0 \
+            --volume "$PWD:/work:ro" \
+            --volume "$RUNNER_TEMP/provider-secrets:/secrets" \
+            --volume "$PWD/provider-smoke-evidence:/evidence" \
+            --entrypoint /bin/bash mailswiftsync:provider -euo pipefail -c '
+              source /secrets/pair.env
+              # Exchange each refresh configuration through the product refresh
+              # client. Tokens are written to owner-only files, never printed.
+              for role in source dest recovery; do
+                mailswiftsync oauth-access-token \
+                  "/secrets/${role}-refresh.json" "/secrets/${role}-token"
+              done
+              export MAILSWIFTSYNC_PROVIDER_BINARY=/usr/local/bin/mailswiftsync
+              export MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT="$source_endpoint"
+              export MAILSWIFTSYNC_PROVIDER_SOURCE_USER="$(cat /secrets/source-user)"
+              export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET=/secrets/source-token
+              export MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT="$dest_endpoint"
+              export MAILSWIFTSYNC_PROVIDER_DEST_USER="$(cat /secrets/dest-user)"
+              export MAILSWIFTSYNC_PROVIDER_DEST_SECRET=/secrets/dest-token
+              export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT="$dest_endpoint"
+              export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER="$(cat /secrets/recovery-user)"
+              export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET=/secrets/recovery-token
+              export MAILSWIFTSYNC_EVIDENCE_OUTPUT=/evidence
+              bash /work/scripts/provider-integration-test.sh "$provider"
+            '
+      - name: Remove staged credentials
+        if: always()
+        run: sudo rm -rf "$RUNNER_TEMP/provider-secrets"
+      - name: Restore artifact ownership for upload
+        if: always()
+        run: |
+          if [ -d provider-smoke-evidence ]; then
+            sudo chown -R "$(id -u):$(id -g)" provider-smoke-evidence
+            chmod -R u+rwX,go-rwx provider-smoke-evidence
+          fi
+      - name: Upload smoke proofs (credential-free)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-provider-smoke-${{ github.event.inputs.direction }}
+          path: provider-smoke-evidence
+          if-no-files-found: warn

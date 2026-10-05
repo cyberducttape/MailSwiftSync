@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a manually dispatched **Live provider smoke** workflow that runs the
+  provider dry pilot, interruption/recovery, and live pilot against operator
+  Google Workspace and Microsoft 365 test tenants in the packaged runtime image,
+  and two CLI commands it relies on: `oauth-export-refresh-config` (export a
+  keyring-stored refresh configuration to an owner-only file for automation)
+  and `oauth-access-token` (exchange that file for an access token through the
+  product refresh client, never printing either token).
 - Add `scripts/atspi-accessibility-audit.py`, which audits the running app's
   Linux AT-SPI tree (what Orca reads) for unnamed interactive controls, and
   record a pass across every workspace view and dialog (388 controls, none

@@ -239,11 +239,61 @@ For each tested provider, maintain:
 
 ## Automation
 
-For CI/CD, consider:
-- Using disposable test accounts (temporary API-created accounts, auto-deleted after test)
-- Storing credentials in GitHub Secrets (not committed)
-- Running provider tests on a schedule (not on every push, due to rate limits)
-- Publishing evidence artifacts alongside releases
+The **Live provider smoke** workflow (`.github/workflows/provider-smoke.yml`,
+manual dispatch) runs this guide's dry pilot, interruption/recovery, and live
+pilot against Google Workspace and Microsoft 365 test tenants in the packaged
+runtime image. Its proofs are smoke artifacts, not release qualification.
+
+### One-time setup
+
+1. **Test mailboxes.** Create four dedicated mailboxes that hold no real data:
+   two in Google Workspace (`primary`, `recovery`) and two in Microsoft 365
+   (`primary`, `recovery`). Each direction migrates from one tenant's
+   `primary` into the other tenant's `primary`, and the recovery phase writes
+   into the destination tenant's `recovery` mailbox. Enable IMAP for all four.
+2. **Seed the source mailboxes.** Put at least a few messages in two or three
+   folders (labels on Google) in both `primary` mailboxes; the harness migrates
+   whatever is present and does not seed.
+3. **OAuth clients.** Register one OAuth client per tenant as described in
+   [OAUTH_SETUP.md](../OAUTH_SETUP.md) (Google: `https://mail.google.com/`
+   scope, desktop client; Microsoft: delegated `IMAP.AccessAsUser.All` and
+   `offline_access`, public client with an `http://localhost` redirect).
+4. **Authorize and export each mailbox** on a workstation with an OS keyring,
+   signing in as that mailbox:
+
+   ```bash
+   mailswiftsync oauth-authorize google ci-google-primary --client-id <id> \
+     --client-secret-file <secret-file> --login-hint <google-primary-address>
+   mailswiftsync oauth-export-refresh-config ci-google-primary google-primary.json
+   # repeat for ci-google-recovery, and for Microsoft:
+   mailswiftsync oauth-authorize microsoft ci-m365-primary --client-id <id> \
+     --tenant <tenant-id-or-domain> --login-hint <m365-primary-address>
+   mailswiftsync oauth-export-refresh-config ci-m365-primary m365-primary.json
+   ```
+
+5. **GitHub environment.** Create a repository environment named
+   `live-providers` (optionally with required reviewers) and add eight
+   secrets; paste each exported JSON file's contents as its `_REFRESH_CONFIG`
+   value, then delete the files:
+
+   | Secret | Value |
+   |---|---|
+   | `GOOGLE_PRIMARY_USER` / `GOOGLE_PRIMARY_REFRESH_CONFIG` | Google primary address / its exported JSON |
+   | `GOOGLE_RECOVERY_USER` / `GOOGLE_RECOVERY_REFRESH_CONFIG` | Google recovery address / its exported JSON |
+   | `M365_PRIMARY_USER` / `M365_PRIMARY_REFRESH_CONFIG` | Microsoft primary address / its exported JSON |
+   | `M365_RECOVERY_USER` / `M365_RECOVERY_REFRESH_CONFIG` | Microsoft recovery address / its exported JSON |
+
+6. **Run** *Actions → Live provider smoke → Run workflow* for
+   `gmail-to-microsoft365` and `microsoft365-to-gmail`. The job exchanges each
+   refresh configuration for a short-lived access token with
+   `mailswiftsync oauth-access-token` (never printed), runs the harness, deletes
+   the staged credentials, and uploads credential-free smoke proofs.
+
+Microsoft rotates refresh tokens on use and expires unused ones after about
+90 days; the job can only rewrite its temporary copy, so re-export and update
+the `M365_*_REFRESH_CONFIG` secrets if a run reports `invalid_grant`. Run the
+workflow manually or on a schedule, never on every push, because both
+providers rate-limit IMAP.
 
 ## When Qualification Is Complete
 
