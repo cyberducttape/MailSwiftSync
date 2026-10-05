@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Restore the CI build: the OAuth redirect fuzz target still matched the
+  removed `RedirectOutcome::Rejected` variant, which failed fuzz compilation
+  and skipped the CI test step. `make check` now compiles fuzz targets and runs
+  the scale-harness and proof-signature script tests that CI runs.
+- Count an expired webhook delivery lease as a failed attempt, so a payload
+  that repeatedly crashes its worker dead-letters instead of being reclaimed
+  indefinitely.
+- Fix a Windows-only unused import in the engine installer tests.
 - Send queued lifecycle webhooks with their own outbox event ID, event type,
   and idempotency key instead of a status-snapshot body hash; scope snapshot
   event IDs to the endpoint and project so re-pointing an unchanged snapshot at

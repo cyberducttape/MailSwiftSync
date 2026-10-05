@@ -379,8 +379,8 @@ pub(crate) fn install(
 #[cfg(test)]
 mod tests {
     use super::{
-        Artifact, DEBIAN_PACKAGE, InstallMethod, InstallPlan, InstallProgress,
-        manual_package_command, plan_for, sha256_hex, store_verified, unpack_windows_engine,
+        Artifact, DEBIAN_PACKAGE, InstallMethod, InstallPlan, InstallProgress, plan_for,
+        sha256_hex, store_verified, unpack_windows_engine,
     };
     use std::io::Write;
 
@@ -419,6 +419,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn manual_package_command_shell_quotes_package_path() {
+        use super::manual_package_command;
         let package = std::path::Path::new("/tmp/dir with 'quote'/$() ;/imapsync.deb");
         assert_eq!(
             manual_package_command(package),
