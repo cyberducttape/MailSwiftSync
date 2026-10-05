@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `scripts/atspi-accessibility-audit.py`, which audits the running app's
+  Linux AT-SPI tree (what Orca reads) for unnamed interactive controls, and
+  record a pass across every workspace view and dialog (388 controls, none
+  unnamed) in the accessibility evidence.
 - Present the Overview lifecycle in operator language (Add accounts → Test &
   review risks → Run pilot → Migrate → Catch up → Final sync → Verify results →
   Finish & export proof) instead of internal phase names, and replace "Begin in

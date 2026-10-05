@@ -49,6 +49,45 @@ State is never communicated by colour alone: status badges pair a glyph and
 text, the maintenance-window check pairs ✓ / ! / ✕ / ○ with words, and the
 lifecycle uses ✔ / ▶ / step numbers.
 
+## Linux AT-SPI tree audit (2026-10-05)
+
+`scripts/atspi-accessibility-audit.py <pid>` walks the running application's
+accessibility tree on the Linux AT-SPI bus, which is the tree Orca reads
+(AccessKit → AT-SPI). It fails on any interactive control (button, toggle,
+check box, radio, combo box, entry, password, spin button, slider, link, menu
+item, list item, tab) without an accessible name. AccessKit publishes the tree
+only while the bus reports `ScreenReaderEnabled`, so the audit was run with
+that flag set and then restored.
+
+Environment: Ubuntu 26.04, KDE Plasma (Wayland session, app on XWayland),
+AT-SPI2 2.60.4, Orca 50.2 installed; debug build at commit `dd32af1` with the
+debug demo scene (`MAILSWIFTSYNC_DEBUG_DEMO=1`).
+
+| Scene | Interactive controls | Unnamed | Result |
+|---|---|---|---|
+| Overview | 23 | 0 | pass |
+| Plan | 27 | 0 | pass |
+| Plan (Google Workspace → Microsoft 365 accounts) | 25 | 0 | pass |
+| Mailboxes (12 demo rows) | 25 | 0 | pass |
+| Activity | 13 | 0 | pass |
+| Activity (running operation telemetry) | 17 | 0 | pass |
+| Verification | 22 | 0 | pass |
+| Settings dialog | 39 | 0 | pass |
+| Projects dialog | 31 | 0 | pass |
+| Keyring dialog | 61 | 0 | pass |
+| Engine dialog | 34 | 0 | pass |
+| Advanced options dialog | 42 | 0 | pass |
+| Command preview dialog | 29 | 0 | pass |
+
+Observation: Mailboxes exposes five unnamed, childless nodes with AT-SPI role
+`unknown` directly under the window (likely egui hover regions for table row
+backgrounds). They are not interactive and Orca skips unnamed generic leaves,
+but they should be given a presentation role when egui allows it.
+
+This is machine evidence that every control Orca can reach is named; it is not
+the manual pass below, which must still judge reading order, announcements,
+focus movement, and operating every workflow by keyboard.
+
 ## Manual screen-reader passes (required before stable release)
 
 Record one row per platform. Use a release build, a clean profile, and the
