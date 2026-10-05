@@ -32,7 +32,13 @@ concurrency independently on either source or destination. They do not reduce
 the global batch worker ceiling, so unrelated domains may use available workers
 while a narrower domain remains capped. If aliases configure the same provider
 at multiple limits, the strictest value wins. `google`, `google_workspace`,
-and `o365` are accepted aliases for canonical provider names. These local
+and `o365` are accepted aliases for canonical provider names (`gmail`,
+`microsoft365`, `generic`). An endpoint is `gmail` or `microsoft365` only when
+its hostname is, or is a subdomain of, that provider's documented IMAP domain
+(`gmail.com`/`googlemail.com`; `office365.com`/`outlook.com`/
+`exchange.microsoft.com`); every other endpoint, including self-hosted Dovecot,
+is `generic`. A `dovecot` provider key is refused with a hint to use
+`generic`. These local
 safety ceilings are not provider quota discovery: live provider limits,
 credential semantics, RBAC, and centrally administered policy distribution
 still require qualification or future control-plane work.

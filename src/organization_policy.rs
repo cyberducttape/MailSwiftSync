@@ -44,7 +44,7 @@ pub(crate) struct OrganizationPolicy {
     /// Optional organization-wide upper bound for concurrent workers.
     pub(crate) max_concurrency: Option<usize>,
     /// Provider-specific tenant ceilings. Keys accept the canonical provider
-    /// names (`gmail`, `microsoft365`, `dovecot`, `generic`) plus documented
+    /// names (`gmail`, `microsoft365`, `generic`) plus documented
     /// aliases such as `google` and `o365`.
     pub(crate) providers: BTreeMap<String, OrganizationProviderPolicy>,
 }
@@ -152,12 +152,7 @@ impl OrganizationPolicy {
             ));
         }
         for (configured_provider, provider_policy) in &self.providers {
-            canonical_provider_key(configured_provider).ok_or_else(|| {
-                format!(
-                    "Organization policy has unsupported provider {:?}; use gmail, microsoft365, dovecot, or generic.",
-                    configured_provider
-                )
-            })?;
+            canonical_provider_key(configured_provider)?;
             for (field, maximum) in [
                 ("max_concurrency", provider_policy.max_concurrency),
                 (
@@ -185,12 +180,7 @@ impl OrganizationPolicy {
     pub(crate) fn provider_rate_ceilings(&self) -> Result<ProviderRateCeilings, String> {
         let mut ceilings = ProviderRateCeilings::default();
         for (configured_provider, provider_policy) in &self.providers {
-            let provider = canonical_provider_key(configured_provider).ok_or_else(|| {
-                format!(
-                    "Organization policy has unsupported provider {:?}; use gmail, microsoft365, dovecot, or generic.",
-                    configured_provider
-                )
-            })?;
+            let provider = canonical_provider_key(configured_provider)?;
             for (field, target, maximum) in [
                 (
                     "max_concurrency",
@@ -229,13 +219,21 @@ impl OrganizationPolicy {
     }
 }
 
-fn canonical_provider_key(value: &str) -> Option<&'static str> {
+/// Resolve a policy provider key to the identity `canonical_provider` assigns
+/// endpoints. A key that no endpoint can ever carry is refused rather than
+/// silently configuring a ceiling that never applies.
+fn canonical_provider_key(value: &str) -> Result<&'static str, String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "gmail" | "google" | "google_workspace" | "google-workspace" => Some("gmail"),
-        "microsoft365" | "microsoft_365" | "microsoft" | "o365" => Some("microsoft365"),
-        "dovecot" => Some("dovecot"),
-        "generic" | "generic_imap" | "generic-imap" => Some("generic"),
-        _ => None,
+        "gmail" | "google" | "google_workspace" | "google-workspace" => Ok("gmail"),
+        "microsoft365" | "microsoft_365" | "microsoft" | "o365" => Ok("microsoft365"),
+        "generic" | "generic_imap" | "generic-imap" => Ok("generic"),
+        "dovecot" => Err(
+            "Organization policy provider \"dovecot\" is no longer supported: Dovecot is server software, not a provider identity, so self-hosted Dovecot endpoints are \"generic\". Move these ceilings to [providers.generic]."
+                .into(),
+        ),
+        _ => Err(format!(
+            "Organization policy has unsupported provider {value:?}; use gmail, microsoft365, or generic."
+        )),
     }
 }
 
@@ -368,5 +366,24 @@ mod tests {
             toml::from_str("require_tls = true\n[providers.google]\nmax_concurrency = 2\n")
                 .unwrap();
         assert!(policy.require_tls);
+    }
+
+    #[test]
+    fn dovecot_provider_key_is_refused_with_a_migration_hint() {
+        let policy = OrganizationPolicy {
+            providers: [(
+                "dovecot".into(),
+                super::OrganizationProviderPolicy {
+                    max_concurrency: Some(2),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..OrganizationPolicy::default()
+        };
+        let error = policy.provider_rate_ceilings().unwrap_err();
+        assert!(error.contains("[providers.generic]"), "{error}");
+        assert!(policy.check_form(&Form::default()).is_err());
     }
 }

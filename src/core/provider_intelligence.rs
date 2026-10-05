@@ -308,30 +308,52 @@ fn suggested_backoff(lower: &str) -> Option<Duration> {
 /// Classify provider errors from error messages.
 pub struct ProviderErrorClassifier;
 
-/// Map an endpoint hostname to the provider vocabulary used by controller
-/// policy. Unknown hosts remain `generic`; this function never invents
-/// undocumented quota behavior.
-pub fn canonical_provider(host: &str) -> &'static str {
-    let host = host
-        .trim()
-        .trim_start_matches('[')
-        .split(']')
-        .next()
-        .unwrap_or(host)
-        .to_ascii_lowercase();
-    if host.contains("gmail") || host.contains("googlemail") {
-        "gmail"
-    } else if host.contains("outlook")
-        || host.contains("office365")
-        || host.contains("microsoft")
-        || host.contains("onmicrosoft")
-    {
-        "microsoft365"
-    } else if host.contains("dovecot") {
-        "dovecot"
-    } else {
-        "generic"
+/// Documented IMAP DNS domains for each provider. A host matches only when it
+/// equals a domain or ends in `.` + domain, so look-alike names such as
+/// `notgmail.example.com` or `outlook-proxy.example.net` stay generic.
+const PROVIDER_DOMAINS: &[(&str, &[&str])] = &[
+    ("gmail", &["gmail.com", "googlemail.com"]),
+    (
+        "microsoft365",
+        &["office365.com", "outlook.com", "exchange.microsoft.com"],
+    ),
+];
+
+/// Map an endpoint (`host`, `host:port`, or `[ipv6]:port`) to the provider
+/// vocabulary used by controller policy. Identity comes only from a whole-label
+/// match against a provider's documented IMAP domains; everything else,
+/// including self-hosted servers such as Dovecot (server software, not a
+/// provider), is `generic`. This never invents undocumented quota behavior.
+pub fn canonical_provider(endpoint: &str) -> &'static str {
+    let endpoint = endpoint.trim();
+    // IP literals never identify a hosted provider.
+    if endpoint.starts_with('[') {
+        return "generic";
     }
+    let host = match endpoint.split_once(':') {
+        Some((host, port))
+            if !port.contains(':') && port.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            host
+        }
+        Some(_) => return "generic",
+        None => endpoint,
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return "generic";
+    }
+    PROVIDER_DOMAINS
+        .iter()
+        .find(|(_, domains)| {
+            domains.iter().any(|domain| {
+                host == *domain
+                    || host
+                        .strip_suffix(domain)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            })
+        })
+        .map_or("generic", |(provider, _)| provider)
 }
 
 impl ProviderErrorClassifier {
@@ -552,10 +574,42 @@ mod tests {
 
     #[test]
     fn endpoint_provider_identity_is_conservative_and_canonical() {
-        assert_eq!(canonical_provider("imap.gmail.com"), "gmail");
-        assert_eq!(canonical_provider("outlook.office365.com"), "microsoft365");
-        assert_eq!(canonical_provider("[2001:db8::1]:993"), "generic");
-        assert_eq!(canonical_provider("imap.example.test"), "generic");
+        for (endpoint, provider) in [
+            ("imap.gmail.com", "gmail"),
+            ("IMAP.Gmail.com.", "gmail"),
+            ("imap.gmail.com:993", "gmail"),
+            ("imap.googlemail.com", "gmail"),
+            ("outlook.office365.com", "microsoft365"),
+            ("outlook.office365.com:993", "microsoft365"),
+            ("imap-mail.outlook.com", "microsoft365"),
+            ("mail.exchange.microsoft.com", "microsoft365"),
+            ("[2001:db8::1]:993", "generic"),
+            ("2001:db8::1", "generic"),
+            ("imap.example.test", "generic"),
+            ("", "generic"),
+        ] {
+            assert_eq!(canonical_provider(endpoint), provider, "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn look_alike_hosts_do_not_borrow_provider_identity() {
+        for endpoint in [
+            "notgmail.example.com",
+            "gmail-backup.someprovider.net",
+            "gmail.com.attacker.example",
+            "imap.notgmail.com",
+            "microsoft-mail.example.org",
+            "outlook-proxy.hostingcompany.com",
+            "myoutlook.com",
+            "tenant.onmicrosoft.com",
+            "office365.com.example.net",
+            // Dovecot is server software, not a provider identity.
+            "dovecot.example.com",
+            "imap.dovecot.example.com:993",
+        ] {
+            assert_eq!(canonical_provider(endpoint), "generic", "{endpoint}");
+        }
     }
 
     #[test]
