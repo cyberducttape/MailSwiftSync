@@ -387,7 +387,21 @@ screen-reader checklist are recorded in
   the Maildir fixtures. Scale runs now also retain
   `process-memory-peaks.txt`, which records the peak summed RSS per process
   name and the peak cgroup anonymous versus file (page-cache) memory, so the
-  controller's own share is reported separately.
+  controller's own share is reported separately. Hosted runs on 2026-10-05
+  (commit `f5eb85b`) attribute it as follows:
+
+  | Scenario | Container (docker stats) | Process memory (cgroup anon) | Page cache (cgroup file) | imapsync (`perl`) | Dovecot `imap` | MailSwiftSync |
+  |---|---|---|---|---|---|---|
+  | `100k-small` ([run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37254315384)) | 1,265 MB | 531 MB | 1,145 MB | 451 MiB | 78 MiB | 29 MiB |
+  | `10k-1g` ([run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37254317846)) | 370 MB | 219 MB | 2,240 MB | 195 MiB | 18 MiB | 25 MiB |
+
+  The controller is about 2% of the container figure and matches the local
+  verification benchmark below. Process memory is dominated by imapsync,
+  which held about 4.7 KB per message for one 100k-message folder; the rest of
+  the container figure is reclaimable kernel page cache from fixture and
+  Maildir writes. Size migration nodes by engine memory per concurrent job
+  (imapsync grows with the largest folder's message count), not by controller
+  memory.
 
   The controller's metadata-only verification path is measured independently
   by `scripts/benchmark-verification-scale.sh` (durable FULL-synchronous stage,
