@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Identify Gmail and Microsoft 365 endpoints only by whole-label DNS matches
+  against their documented IMAP domains (with the port stripped) instead of
+  substring matching, so look-alike hosts such as `notgmail.example.com`,
+  `outlook-proxy.example.net`, or `dovecot.example.com` no longer inherit
+  provider-specific failure classification, rate domains, or remediation.
+  Dovecot is server software, not a provider; self-hosted Dovecot endpoints are
+  `generic`, and an organization-policy `[providers.dovecot]` key is refused
+  with a hint to use `[providers.generic]`.
+- Fix the Fedora RPM lifecycle check: install documentation despite the image's
+  `nodocs` default and assert removal by file rather than bash's hashed path.
 - Build an RPM with the same payload as the Debian package for x86_64 and
   aarch64 releases, verify its contents and weak engine dependencies, sign its
   checksum with the release key, and install/run/remove it on Fedora in CI.

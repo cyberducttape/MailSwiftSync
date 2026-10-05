@@ -93,7 +93,7 @@ jobs:
               test -f /usr/share/doc/mailswiftsync/INSTALL.md
               test -f /usr/share/bash-completion/completions/mailswiftsync
               dnf -y -q remove mailswiftsync
-              ! command -v mailswiftsync
+              test ! -e /usr/bin/mailswiftsync
             '
       - name: Publish runnable test inventory
         if: always()
