@@ -22,6 +22,17 @@ struct FilterKey {
     page_matches: bool,
 }
 
+/// Durable, queue-wide facts for the command center.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QueueFleetFacts {
+    /// Messages placed at the destination by runs with durable evidence.
+    pub(crate) messages: u64,
+    pub(crate) bytes: u64,
+    /// Mailboxes those totals cover.
+    pub(crate) evidenced: usize,
+    pub(crate) hosts: Vec<String>,
+}
+
 #[derive(Default)]
 pub(crate) struct MailboxQueue {
     project_id: Option<String>,
@@ -45,6 +56,8 @@ pub(crate) struct MailboxQueue {
     /// this session. Live admission requires an unchanged binding.
     pub(crate) preflight_credentials: HashMap<String, String>,
     summary: Option<(u64, BulkQueueSummary)>,
+    /// Command-center facts, recomputed only when the queue generation moves.
+    fleet: Option<(u64, QueueFleetFacts)>,
 }
 
 impl MailboxQueue {
@@ -92,6 +105,7 @@ impl MailboxQueue {
         self.filter_error = None;
         self.visible_paged = false;
         self.summary = None;
+        self.fleet = None;
     }
 
     /// One row's durable state changed. Cached data for it is dropped; the
@@ -243,7 +257,9 @@ impl MailboxQueue {
             };
             for plan in plans {
                 let presented = self.transient.get(&plan.id).map(String::as_str);
-                let matches = presented == Some(state);
+                let matches = presented.is_some_and(|presented| {
+                    crate::core::state_filter_members(state).contains(&presented)
+                });
                 let matches_search = if matches && self.visible.binary_search(&plan.rowid).is_err()
                 {
                     match store.queue_row_matches(&project_id, plan.rowid, &key.folded_search) {
@@ -418,6 +434,37 @@ impl MailboxQueue {
         Some(row)
     }
 
+    /// Verified transfer totals and the queue's endpoint hosts, cached per
+    /// generation so the command center does not rescan 100k rows a frame.
+    /// Changes whenever durable queue state may have changed; read models
+    /// keyed by it are recomputed only when it moves.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn fleet_facts(&mut self, store: &StateStore) -> Result<QueueFleetFacts, String> {
+        if let Some((generation, facts)) = &self.fleet
+            && *generation == self.generation
+        {
+            return Ok(facts.clone());
+        }
+        let Some(project_id) = self.project_id.clone() else {
+            return Ok(QueueFleetFacts::default());
+        };
+        let read = |error: rusqlite::Error| format!("Could not read migration totals: {error}");
+        let (messages, bytes, evidenced) =
+            store.queue_transfer_totals(&project_id).map_err(read)?;
+        let hosts = store.queue_endpoint_hosts(&project_id).map_err(read)?;
+        let facts = QueueFleetFacts {
+            messages,
+            bytes,
+            evidenced,
+            hosts,
+        };
+        self.fleet = Some((self.generation, facts.clone()));
+        Ok(facts)
+    }
+
     /// Queue health counts, with claimed rows counted by presented state.
     pub(crate) fn summary(&mut self, store: &StateStore) -> Result<BulkQueueSummary, String> {
         if let Some((generation, summary)) = self.summary
@@ -571,6 +618,51 @@ mod tests {
             queue.visible_page(&store, 0..20).unwrap(),
             expected_attention
         );
+    }
+
+    #[test]
+    fn command_center_buckets_and_their_filters_select_the_same_rows() {
+        let store = StateStore::in_memory().unwrap();
+        let mut queue = imported(&store, 8);
+        let project_id = queue.project_id().unwrap().to_owned();
+        let ids = store.mailbox_ids(&project_id).unwrap();
+        for (id, state) in ids.iter().zip([
+            "attention",
+            "failed",
+            "verification_difference",
+            "verified",
+            "verified_with_exceptions",
+            "running",
+            "delta_required",
+        ]) {
+            store.force_mailbox_state(id, state).unwrap();
+        }
+        // The running row is presented as retrying after provider pushback.
+        queue.set_transient(&ids[5], "retrying");
+        queue.invalidate();
+        let counts = queue.summary(&store).unwrap().command_center();
+        assert_eq!(
+            (
+                counts.needs_attention,
+                counts.completed,
+                counts.retrying,
+                counts.migrating,
+                counts.waiting,
+                counts.total
+            ),
+            (3, 2, 1, 0, 2, 8)
+        );
+        for (filter, expected) in [
+            ("needs_attention", counts.needs_attention),
+            ("completed", counts.completed),
+            ("retrying", counts.retrying),
+            ("migrating", counts.migrating),
+            ("waiting", counts.waiting),
+        ] {
+            queue.retry_filter();
+            queue.refresh_filter(&store, "", filter).unwrap();
+            assert_eq!(queue.visible().len(), expected, "{filter}");
+        }
     }
 
     #[test]

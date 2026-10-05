@@ -24,6 +24,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "notify-webhook",
     "supervise",
     "cutover",
+    "wave",
     "headless",
     "oauth-authorize",
     "oauth-export-refresh-config",

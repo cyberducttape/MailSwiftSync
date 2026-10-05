@@ -47,6 +47,7 @@ mod run_queries;
 mod runs;
 mod state;
 mod transfer_passes;
+mod waves;
 mod webhook_outbox;
 pub use capabilities::{NamespaceEntry, NamespaceInfo, ServerCapabilities};
 pub(crate) use cutover::CutoverStage;
@@ -67,7 +68,7 @@ pub use models::{
     MailboxStateCounts, MailboxStatusPage, Project, ProjectListItem, RunListItem, RunSummary,
 };
 pub use policy::destination_identity_from_parts;
-pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts};
+pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts, state_filter_members};
 pub use recovery_queue::{RecoveryGroup, RecoveryRow};
 pub(crate) use state::valid_mailbox_transition;
 pub use state::{AttentionReason, MailboxState, Phase};
@@ -75,7 +76,8 @@ pub use transfer_passes::{
     EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
     TransferPassIntent, TransferPassRecord, folder_digest, sha256_hex,
 };
-pub const CURRENT_SCHEMA_VERSION: i64 = 25;
+pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
+pub const CURRENT_SCHEMA_VERSION: i64 = 26;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

@@ -396,3 +396,17 @@ fn oauth_export_refuses_to_overwrite_an_existing_file() {
     assert_eq!(std::fs::read_to_string(&existing).unwrap(), "keep");
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn wave_command_refuses_malformed_requests_before_opening_a_ledger() {
+    for arguments in [
+        &["wave"][..],
+        &["wave", "state.db"][..],
+        &["wave", "state.db", "approve", "wave-id"][..],
+        &["wave", "state.db", "rename", "wave-id", "x"][..],
+    ] {
+        let output = run(arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+    }
+}

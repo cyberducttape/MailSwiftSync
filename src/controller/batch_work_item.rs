@@ -180,6 +180,8 @@ fn report_cooldowns(tx: &mpsc::SyncSender<Event>, penalized: Vec<(DomainKey, std
     for (domain, until) in penalized {
         let _ = tx.try_send(Event::ProviderCooldown {
             domain: domain.label(),
+            provider: domain.provider(),
+            endpoint: domain.endpoint().map(str::to_owned),
             until,
         });
     }
