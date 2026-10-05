@@ -20,6 +20,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+use uuid::Uuid;
 
 pub(crate) const QUALIFIED_IMAPSYNC_VERSION: &str = "2.314";
 
@@ -173,7 +174,14 @@ pub(crate) fn store_verified<R: Read>(
         ));
     }
     let final_path = directory.join(artifact.file_name);
-    let partial_path = directory.join(format!(".{}.partial", artifact.file_name));
+    // A UUID prevents concurrent installer processes from sharing/truncating
+    // one predictable partial file. The verified artifact is still published
+    // only by the final atomic rename below.
+    let partial_path = directory.join(format!(
+        ".{}.{}.partial",
+        artifact.file_name,
+        Uuid::new_v4()
+    ));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -464,7 +472,16 @@ mod tests {
             store_verified(&tampered, &b"substituted"[..], None, &directory, |_| {}).unwrap_err();
         assert!(error.contains("SHA-256"), "{error}");
         assert!(!directory.join("tampered.bin").exists());
-        assert!(!directory.join(".tampered.bin.partial").exists());
+        assert!(
+            !std::fs::read_dir(&directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".tampered.bin.")
+                    && entry.file_name().to_string_lossy().ends_with(".partial"))
+        );
 
         let bounded = Artifact {
             file_name: "large.bin",
