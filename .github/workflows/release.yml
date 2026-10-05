@@ -98,11 +98,12 @@ jobs:
           if-no-files-found: error
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
-      - name: Enforce 100k-row scale budgets
+      - name: Enforce 100k-row and 1M-message verification scale budgets
         run: |
           scripts/benchmark-import-scale.sh
           scripts/benchmark-ui-scale.sh
           scripts/benchmark-reload-scale.sh
+          scripts/benchmark-verification-scale.sh
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies

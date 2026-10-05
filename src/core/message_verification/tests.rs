@@ -1508,17 +1508,22 @@ fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
 
 /// Reconciliation on a durable (FULL-synchronous) stage, as live
 /// verification uses. Opt-in: `cargo test --release durable_stage_reconciliation_benchmark -- --ignored --nocapture`.
-/// Set `MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES` to scale the per-side row count.
+/// Set `MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES` to scale the per-side row
+/// count; run each size in its own process so peak RSS is per size
+/// (`scripts/benchmark-verification-scale.sh` does this). Rows are staged in
+/// fetch-sized pages, as the live IMAP adapter does, so the benchmark's own
+/// input does not dominate the measured process memory.
 #[test]
 #[ignore = "opt-in durable-stage reconciliation benchmark"]
 fn durable_stage_reconciliation_benchmark() {
+    const PAGE: usize = 5_000;
     let messages = std::env::var("MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(20_000);
     assert!(messages > 0, "benchmark size must be positive");
-    let build = |side: &str| {
-        (0..messages)
+    let page = |side: &str, range: std::ops::Range<usize>| {
+        range
             .map(|index| {
                 let size = if side == "d" && index % 50 == 0 { 2 } else { 1 };
                 (
@@ -1538,14 +1543,64 @@ fn durable_stage_reconciliation_benchmark() {
     builder.create(&directory).unwrap();
     #[cfg(unix)]
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let mut stage =
-        MessageMetadataStage::open_durable(directory.join("stage.sqlite"), "bench").unwrap();
-    stage
-        .insert_messages(StagedMessageSide::Source, &build("s"))
-        .unwrap();
-    stage
-        .insert_messages(StagedMessageSide::Destination, &build("d"))
-        .unwrap();
+    let database = directory.join("stage.sqlite");
+    let files_bytes = || -> u64 {
+        std::fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(|entry| entry.ok()?.metadata().ok())
+            .map(|metadata| metadata.len())
+            .sum()
+    };
+    let rss_start = bench_memory_kib("VmRSS:");
+    let cpu_start = bench_cpu_seconds();
+    let mut stage = MessageMetadataStage::open_durable(database, "bench").unwrap();
+    let staging_started = std::time::Instant::now();
+    for (side, label) in [
+        (StagedMessageSide::Source, "s"),
+        (StagedMessageSide::Destination, "d"),
+    ] {
+        let mut start = 0;
+        while start < messages {
+            let end = (start + PAGE).min(messages);
+            stage
+                .insert_messages(side, &page(label, start..end))
+                .unwrap();
+            start = end;
+        }
+    }
+    let staging_ms = staging_started.elapsed().as_millis();
+    let rss_after_staging = bench_memory_kib("VmRSS:");
+    let stage_bytes = files_bytes();
+    // Sample the stage directory while reconciliation runs: the rollback
+    // journal's peak size is the transient disk cost of one transaction.
+    let sampling = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let sampler = {
+        let sampling = std::sync::Arc::clone(&sampling);
+        let directory = directory.clone();
+        std::thread::spawn(move || {
+            let (mut peak_total, mut peak_journal) = (0_u64, 0_u64);
+            loop {
+                let running = sampling.load(std::sync::atomic::Ordering::Relaxed);
+                let mut total = 0;
+                for entry in std::fs::read_dir(&directory)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                {
+                    let length = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+                    total += length;
+                    if entry.file_name().to_string_lossy().ends_with("-journal") {
+                        peak_journal = peak_journal.max(length);
+                    }
+                }
+                peak_total = peak_total.max(total);
+                if !running {
+                    return (peak_total, peak_journal);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        })
+    };
     let started = std::time::Instant::now();
     let (_, summary) = MessageVerification::detect_mismatches_from_stage(
         "job-bench",
@@ -1554,12 +1609,52 @@ fn durable_stage_reconciliation_benchmark() {
         &HashMap::new(),
     )
     .unwrap();
-    let elapsed = started.elapsed().as_millis();
+    let reconcile_ms = started.elapsed().as_millis();
+    sampling.store(false, std::sync::atomic::Ordering::Relaxed);
+    let (peak_stage_bytes, peak_journal_bytes) = sampler.join().unwrap();
+    let final_stage_bytes = files_bytes();
+    let cpu_seconds = bench_cpu_seconds() - cpu_start;
     assert_eq!(summary.total_source, messages as u64);
+    let rate = |count: usize, millis: u128| (count as f64 * 1_000.0 / millis.max(1) as f64) as u64;
     eprintln!(
-        "durable-stage reconciliation messages={messages} elapsed_ms={elapsed} changed={}",
+        "verification-scale messages_per_side={messages} staging_ms={staging_ms} staging_rows_per_sec={} reconcile_ms={reconcile_ms} reconcile_messages_per_sec={} cpu_seconds={cpu_seconds:.1} peak_rss_mib={} rss_start_mib={} rss_after_staging_mib={} stage_bytes_after_staging={stage_bytes} peak_stage_bytes_during_reconcile={peak_stage_bytes} peak_journal_bytes={peak_journal_bytes} stage_bytes_after_reconcile={final_stage_bytes} changed={}",
+        rate(messages * 2, staging_ms),
+        rate(messages, reconcile_ms),
+        bench_memory_kib("VmHWM:") / 1024,
+        rss_start / 1024,
+        rss_after_staging / 1024,
         summary.changed_count
     );
     drop(stage);
     let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Linux `/proc/self/status` memory field in KiB; 0 where unavailable.
+fn bench_memory_kib(field: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find(|line| line.starts_with(field))?
+                .split_whitespace()
+                .nth(1)?
+                .parse()
+                .ok()
+        })
+        .unwrap_or(0)
+}
+
+/// User plus system CPU seconds consumed by this process.
+fn bench_cpu_seconds() -> f64 {
+    #[cfg(unix)]
+    {
+        // SAFETY: getrusage writes only into the zeroed struct we pass.
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } == 0 {
+            let seconds = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1e6;
+            return seconds(usage.ru_utime) + seconds(usage.ru_stime);
+        }
+    }
+    0.0
 }

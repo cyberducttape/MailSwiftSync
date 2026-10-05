@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add `scripts/benchmark-verification-scale.sh`, gating metadata-only
+  verification at 10k–1M messages per side on peak controller RSS (64 MiB) and
+  reconcile throughput, and reporting stage size, peak rollback-journal size,
+  staging rate, and CPU time; run it in the release workflow. Measured peak
+  controller RSS is 15–28 MiB across that range.
+- Record per-process peak RSS and cgroup anonymous versus page-cache memory in
+  scale runs (`process-memory-peaks.txt`) so container memory is attributed to
+  the controller, imapsync, and Dovecot separately.
 - Identify Gmail and Microsoft 365 endpoints only by whole-label DNS matches
   against their documented IMAP domains (with the port stripped) instead of
   substring matching, so look-alike hosts such as `notgmail.example.com`,

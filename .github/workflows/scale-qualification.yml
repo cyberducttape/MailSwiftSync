@@ -75,6 +75,10 @@ jobs:
             echo 'Scale command progress markers:'
             sudo cat provider-scale-evidence/scale-progress.txt
           fi
+          if sudo test -f provider-scale-evidence/process-memory-peaks.txt; then
+            echo 'Per-process memory attribution:'
+            sudo cat provider-scale-evidence/process-memory-peaks.txt
+          fi
           if [ -f "$watchdog_marker" ]; then
             sudo cp "$watchdog_marker" provider-scale-evidence/scale-watchdog.txt
             sudo chown 10001:10001 provider-scale-evidence/scale-watchdog.txt

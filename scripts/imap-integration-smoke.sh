@@ -266,6 +266,10 @@ cleanup() {
       status=1
     fi
   fi
+  if [[ -n "${memory_sampler_pid:-}" ]]; then
+    kill "$memory_sampler_pid" 2>/dev/null || true
+    wait "$memory_sampler_pid" 2>/dev/null || true
+  fi
   if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
     printf 'harness_cleanup_complete=true exit_status=%s\n' "$status" \
       >> "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/scale-progress.txt"
@@ -523,6 +527,15 @@ done
 # Optional end-to-end scale qualification. Keep the ordinary smoke path quick;
 # the dedicated scale workflow opts into 100k real RFC822 messages in one
 # mailbox and then exercises the same packaged transfer and verifier path.
+memory_sampler_pid=""
+if (( scale_messages > 0 )) && [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+  # Attribute container memory to the controller, imapsync, and Dovecot, and
+  # separate process memory from page cache, for the scale evidence.
+  python3 "$script_dir/process-memory-sampler.py" \
+    "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/process-memory-peaks.txt" 1 &
+  memory_sampler_pid=$!
+fi
+
 if (( scale_messages > 0 )); then
   echo "Generating $scale_messages scale messages in the source mailbox"
   if (( scale_total_body_bytes > 0 )); then

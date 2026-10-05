@@ -382,6 +382,39 @@ screen-reader checklist are recorded in
   sampled once per second. These results qualify the packaged generic-IMAP
   path at these sizes only; they do not qualify 20 GiB mailboxes, Gmail,
   Microsoft 365, or other hosted providers.
+  The container memory figure is aggregate cgroup usage: the controller,
+  imapsync, both Dovecot fixture servers, and active page cache from writing
+  the Maildir fixtures. Scale runs now also retain
+  `process-memory-peaks.txt`, which records the peak summed RSS per process
+  name and the peak cgroup anonymous versus file (page-cache) memory, so the
+  controller's own share is reported separately.
+
+  The controller's metadata-only verification path is measured independently
+  by `scripts/benchmark-verification-scale.sh` (durable FULL-synchronous stage,
+  rows staged in 5,000-message pages as the live IMAP adapter does, each size
+  in its own process). Local release build, Linux x86_64, 2026-10-04:
+
+  | Messages per side | Peak controller RSS | Stage after staging | Peak stage during reconcile | Peak rollback journal | Staging rows/s | Reconcile msg/s | CPU s |
+  |---|---|---|---|---|---|---|---|
+  | 10,000 | 15 MiB | 5.8 MB | — | — | 186,915 | 81,967 | 0.2 |
+  | 100,000 | 17 MiB | 61 MB | 102 MB | 9.7 MB | 174,064 | 76,804 | 2.4 |
+  | 250,000 | 18 MiB | 156 MB | — | — | 156,838 | 73,014 | 6.8 |
+  | 500,000 | 21 MiB | 315 MB | — | — | 165,562 | 73,152 | 12.9 |
+  | 1,000,000 | 28 MiB | 633 MB | 1,055 MB | 101 MB | 111,856 | 72,061 | 26.6 |
+
+  Controller memory is effectively flat in message count; the scaling cost is
+  private stage disk (about 475 bytes per message per side, plus about 50%
+  transient during reconciliation). The release workflow gates every size at
+  64 MiB peak RSS and 20,000 reconciled messages/s.
+
+  Reconciliation deliberately runs as one transaction on the private,
+  per-verification stage. Measured at 1M messages per side, its rollback
+  journal peaks near 100 MB (about 10% of the stage), an interruption loses at
+  most about 18 seconds of recomputable work, and no other connection shares
+  the stage, so lock duration has no contender. Most transient growth is the
+  intermediate ranking tables, which chunked commits would not reduce; a
+  chunked/generation model is therefore not adopted unless a larger
+  qualification shows the journal or lost work becoming material.
   The earlier repeated Maildir scans have been replaced by one pass, which
   took 1.78 seconds on a synthetic 100,004-file Maildir.
   Scale mode disables per-message debug output and allows up to 40 minutes per

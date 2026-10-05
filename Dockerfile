@@ -60,6 +60,7 @@ COPY --from=builder /build/target/release/mailswiftsync /usr/local/bin/mailswift
 COPY scripts/imap-integration-smoke.sh /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
 COPY scripts/maildir-fixture-scan.py /usr/local/lib/mailswiftsync/maildir-fixture-scan.py
 COPY scripts/generate-scale-maildir.py /usr/local/lib/mailswiftsync/generate-scale-maildir.py
+COPY scripts/process-memory-sampler.py /usr/local/lib/mailswiftsync/process-memory-sampler.py
 COPY scripts/controller-recovery-smoke.sh /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
 COPY scripts/controller-chaos-smoke.sh /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
 COPY scripts/engine-storage-fault-smoke.sh /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh

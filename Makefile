@@ -27,6 +27,7 @@ script-check:
 	python3 tests/release_bundle_layout_test.py
 	python3 tests/provider_integration_harness_test.py
 	python3 tests/docker_memory_test.py
+	python3 tests/process_memory_sampler_test.py
 	python3 tests/scale_maildir_test.py
 	python3 tests/scale_docker_wait_test.py
 
