@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Build an RPM with the same payload as the Debian package for x86_64 and
+  aarch64 releases, verify its contents and weak engine dependencies, sign its
+  checksum with the release key, and install/run/remove it on Fedora in CI.
 - Record the first completed hosted scale qualification runs (100k small
   messages and 10k messages / 1 GiB of bodies, both exact metadata matches
   with peak-memory and wall-clock summaries), and export a second customer

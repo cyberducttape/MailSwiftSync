@@ -77,8 +77,23 @@ sudo dpkg -i mailswiftsync_*.deb
 ```
 
 The package installs the MailSwiftSync binary, documentation, and man page.
-It does not bundle imapsync or Dovecot; follow the engine steps below. APT repository metadata, RPM packages, and cross-architecture Debian
-builds remain release work.
+It does not bundle imapsync or Dovecot; follow the engine steps below.
+
+## Install the RPM package
+
+Linux release artifacts also include a host-architecture `.rpm` package
+(x86_64 and aarch64) with the same contents as the Debian package. Verify and
+install it with:
+
+```bash
+sha256sum -c mailswiftsync-*.rpm.sha256
+gpg --verify mailswiftsync-*.rpm.sha256.asc mailswiftsync-*.rpm.sha256
+sudo dnf install ./mailswiftsync-*.rpm
+```
+
+imapsync and Dovecot are weak dependencies (`Suggests`), never installed
+implicitly. Signed APT and RPM repository metadata remain release work; until
+then, install the verified package files directly.
 
 ## Configure the migration engine
 
@@ -120,9 +135,9 @@ unattended production approval. Encrypted imapsync runs include independent
 message-level reconciliation (metadata by default, optional bounded body
 hashing); it has not yet been qualified against live providers. Provider OAuth
 consent and secret-safe remote Dovecot execution are not included yet. Portable release archives are signed when the release signing
-environment is configured; Linux releases include a signed Debian package,
-while RPM and native Windows/macOS installer packages are not currently
-published.
+environment is configured; Linux releases include signed-checksum Debian and RPM
+packages for x86_64 and aarch64, while native Windows/macOS installer packages
+are not currently published.
 
 On macOS, process identity checks are deliberately conservative. If the
 native process query cannot prove that a recorded child is the expected

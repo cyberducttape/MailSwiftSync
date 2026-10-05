@@ -79,6 +79,18 @@ jobs:
           scripts/verify-deb-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.deb' -print -quit)"
           MAILSWIFTSYNC_PACKAGE_BINARY=target/debug/mailswiftsync scripts/package-rpm.sh "$RUNNER_TEMP/packages"
           scripts/verify-rpm-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.rpm' -print -quit)"
+      - name: Install, run, and remove the RPM on Fedora
+        run: |
+          # fedora:42, pinned by image-index digest.
+          docker run --rm --volume "$RUNNER_TEMP/packages:/packages:ro" \
+            fedora@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814 \
+            bash -euo pipefail -c '
+              dnf -y -q install --setopt=install_weak_deps=False /packages/*.rpm
+              mailswiftsync --version
+              test -f /usr/share/man/man1/mailswiftsync.1.gz
+              dnf -y -q remove mailswiftsync
+              ! command -v mailswiftsync
+            '
       - name: Publish runnable test inventory
         if: always()
         shell: bash

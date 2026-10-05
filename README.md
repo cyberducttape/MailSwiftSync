@@ -72,7 +72,7 @@ counts, exception counts, and aggregate missing/extra/modified message totals.
 
 ## Project status
 
-MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, bounded metadata-level reconciliation, and explicitly opt-in bounded body-content proof for encrypted imapsync runs are available today. Treat credential delivery, provider qualification, packaged installers, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured. Linux releases also include a signed Debian package; RPM and native Windows/macOS installers are not currently shipped.
+MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, bounded metadata-level reconciliation, and explicitly opt-in bounded body-content proof for encrypted imapsync runs are available today. Treat credential delivery, provider qualification, packaged installers, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured. Linux releases also include Debian and RPM packages (x86_64 and aarch64) with signed checksums; native Windows/macOS installers are not currently shipped.
 
 Stable components (implementation status; not a production-support claim):
 
@@ -194,9 +194,9 @@ cargo run --release
 Linux packaging targets for a stable release are tracked in the repository's
 release-readiness plan: signed Debian/Ubuntu and RHEL-family repositories,
 x86_64/ARM64 builds, shell completions, and deterministic upgrade/uninstall
-behavior. The alpha release provides a signed Debian package for the Linux
-host architecture, portable archives, and the pinned container image; RPM and
-APT repository metadata remain future release work.
+behavior. The alpha release provides Debian and RPM packages with signed checksums for
+x86_64 and aarch64, portable archives, and the pinned container image; signed
+APT and RPM repository metadata remain future release work.
 
 If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable** in the **imapsync options** card on the **Plan** page. Begin with **Dry run / preflight** checked and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
 
