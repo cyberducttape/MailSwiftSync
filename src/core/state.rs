@@ -2,6 +2,37 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Discrete operator-facing migration states. These are deliberately not a
+/// percentage or probability: a project is either ready, blocked, verified,
+/// or requires a concrete operator decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OperationalState {
+    Ready,
+    ReadyWithWarnings,
+    Blocked,
+    Migrated,
+    Verified,
+    VerifiedWithExceptions,
+    CutoverReady,
+    NeedsAttention,
+}
+
+impl OperationalState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "READY",
+            Self::ReadyWithWarnings => "READY WITH WARNINGS",
+            Self::Blocked => "BLOCKED",
+            Self::Migrated => "MIGRATED",
+            Self::Verified => "VERIFIED",
+            Self::VerifiedWithExceptions => "VERIFIED WITH EXCEPTIONS",
+            Self::CutoverReady => "CUTOVER READY",
+            Self::NeedsAttention => "NEEDS ATTENTION",
+        }
+    }
+}
+
 /// Durable operator-review categories. These stable wire values let reports,
 /// automation, and future UI versions classify a row without parsing human
 /// facing run output.

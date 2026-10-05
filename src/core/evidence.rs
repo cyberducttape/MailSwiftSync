@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{AttentionReason, MailboxJob, Project, RunSummary};
+use super::{AttentionReason, MailboxJob, OperationalState, Phase, Project, RunSummary};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Canonical durable verification record consumed by persistence, lifecycle
@@ -183,6 +183,19 @@ impl VerificationOutcome {
         }
     }
 
+    pub fn is_exception(self) -> bool {
+        matches!(
+            self,
+            Self::ProbableMatch
+                | Self::Ambiguous
+                | Self::Missing
+                | Self::Changed
+                | Self::Unexpected
+                | Self::Incomplete
+                | Self::Failed
+        )
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
             "exact_body_match" => Self::ExactBodyMatch,
@@ -328,6 +341,80 @@ pub struct ProjectReportSnapshot {
     /// Whether any run of the project, not only a recent one, is queued or
     /// running. A batch parent can be older than its newest children.
     pub has_active_runs: bool,
+}
+
+impl ProjectReportSnapshot {
+    /// Return the stable operator-facing state for this consistent snapshot.
+    ///
+    /// Ordering is intentional: attention and blocking conditions take
+    /// precedence over positive phase labels, while verification exceptions
+    /// remain visible instead of being collapsed into `VERIFIED`.
+    pub fn operational_state(&self) -> OperationalState {
+        let has_attention = self
+            .mailboxes
+            .iter()
+            .any(|mailbox| mailbox.attention_reason.is_some());
+        if has_attention || self.project.phase == Phase::Attention {
+            return OperationalState::NeedsAttention;
+        }
+
+        let has_blocking_mailbox = self.mailboxes.iter().any(|mailbox| {
+            matches!(
+                mailbox.job.state.as_str(),
+                "failed" | "cancelled" | "verification_difference" | "attention"
+            )
+        });
+        if has_blocking_mailbox {
+            return OperationalState::Blocked;
+        }
+
+        let verified = self
+            .mailboxes
+            .iter()
+            .filter(|mailbox| mailbox.job.state == "verified")
+            .count();
+        let verified_with_exceptions = self
+            .mailboxes
+            .iter()
+            .filter(|mailbox| mailbox.job.state == "verified_with_exceptions")
+            .count();
+        let evidence_exceptions = self.mailboxes.iter().any(|mailbox| {
+            mailbox
+                .evidence
+                .as_ref()
+                .is_some_and(|(_, evidence, _)| evidence.verification_outcome().is_exception())
+        });
+        let total = self.mailboxes.len();
+        if total > 0 && verified + verified_with_exceptions == total {
+            if verified_with_exceptions > 0 || evidence_exceptions {
+                return OperationalState::VerifiedWithExceptions;
+            }
+            return OperationalState::Verified;
+        }
+
+        if self.has_active_runs {
+            return OperationalState::Migrated;
+        }
+
+        match self.project.phase {
+            Phase::Complete => OperationalState::Verified,
+            Phase::Preflight | Phase::Discovery | Phase::Pilot => {
+                if self
+                    .mailboxes
+                    .iter()
+                    .any(|mailbox| mailbox.evidence.is_none())
+                {
+                    OperationalState::Ready
+                } else {
+                    OperationalState::ReadyWithWarnings
+                }
+            }
+            Phase::Seed | Phase::CatchUp | Phase::FinalDelta | Phase::Verification => {
+                OperationalState::Migrated
+            }
+            Phase::Attention => OperationalState::NeedsAttention,
+        }
+    }
 }
 
 /// The strongest claim supported by the current verifier adapter.
@@ -528,8 +615,65 @@ impl VerificationEvidence {
 
 #[cfg(test)]
 mod tests {
-    use super::{MailboxEvidence, ReportMailboxSnapshot, VerificationMethod, VerificationOutcome};
-    use crate::core::MailboxJob;
+    use super::{
+        MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot, VerificationMethod,
+        VerificationOutcome,
+    };
+    use crate::core::{MailboxJob, OperationalState, Phase, Project};
+
+    fn project_snapshot(state: &str, phase: Phase) -> ProjectReportSnapshot {
+        ProjectReportSnapshot {
+            project: Project {
+                id: "project".into(),
+                name: "Migration".into(),
+                source_endpoint: "source".into(),
+                destination_endpoint: "destination".into(),
+                phase,
+            },
+            mailboxes: vec![ReportMailboxSnapshot {
+                job: MailboxJob {
+                    id: "mailbox".into(),
+                    source_mailbox: "source".into(),
+                    destination_mailbox: "destination".into(),
+                    state: state.into(),
+                    config: None,
+                },
+                attention_reason: None,
+                acceptance: None,
+                evidence: None,
+            }],
+            runs: Vec::new(),
+            has_active_runs: false,
+        }
+    }
+
+    #[test]
+    fn operational_state_uses_discrete_verified_labels() {
+        assert_eq!(
+            project_snapshot("verified", Phase::Verification).operational_state(),
+            OperationalState::Verified
+        );
+        assert_eq!(
+            project_snapshot("verified_with_exceptions", Phase::Verification).operational_state(),
+            OperationalState::VerifiedWithExceptions
+        );
+        assert_eq!(
+            OperationalState::VerifiedWithExceptions.as_str(),
+            "VERIFIED WITH EXCEPTIONS"
+        );
+    }
+
+    #[test]
+    fn operational_state_prioritizes_attention_over_phase() {
+        let mut snapshot = project_snapshot("failed", Phase::Complete);
+        snapshot.has_active_runs = true;
+        assert_eq!(snapshot.operational_state(), OperationalState::Blocked);
+        snapshot.mailboxes[0].attention_reason = Some(crate::core::AttentionReason::Interrupted);
+        assert_eq!(
+            snapshot.operational_state(),
+            OperationalState::NeedsAttention
+        );
+    }
 
     fn missing_evidence() -> MailboxEvidence {
         MailboxEvidence {
