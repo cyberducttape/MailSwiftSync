@@ -28,7 +28,7 @@ impl App {
         // disappear from a safety confirmation.
         let mut builder = BatchActionPlanBuilder::new(
             retry_scope,
-            self.form.profile.batch_concurrency,
+            self.effective_batch_profile().batch_concurrency,
             execution_mode,
         );
         if let Some(project_id) = self.queue.project_id() {
@@ -547,8 +547,30 @@ impl App {
                     if review_clicked || actions_clicked {
                         self.bulk_inspector_open = !self.bulk_inspector_open;
                     }
+                    if ui
+                        .small_button(
+                            self.language
+                                .message("ui.wave-create-button")
+                                .replace("{}", &self.bulk_selection_count().to_string()),
+                        )
+                        .clicked()
+                    {
+                        self.waves.creating = true;
+                        self.waves.message = None;
+                    }
                 }
             });
+            self.wave_create_form(ui);
+            if let Some(wave) = self.selected_wave() {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.wave-selection-active")
+                            .replace("{}", &wave.settings.name),
+                    )
+                    .color(self.theme_colors().info),
+                );
+            }
             if hidden_selected > 0 {
                 ui.label(
                     RichText::new(

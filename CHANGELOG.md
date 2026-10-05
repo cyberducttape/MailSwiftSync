@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add migration waves (schema v26): named, ordered, approvable subsets of a
+  project's mailboxes with a planned start, maintenance window, and
+  concurrency ceiling. Status, progress, evidence coverage, and cutover
+  readiness are derived from member mailboxes. Live admission refuses members
+  of an unapproved wave (dry preflights stay allowed); a selected wave runs
+  with its concurrency (never above the plan's) and launches only inside its
+  window. Waves are created from a Mailboxes selection, approved and selected
+  from Overview, and listed or approved headlessly with `mailswiftsync wave`.
 - Add a migration command center to Overview for mailbox queues: operator
   buckets (completed, migrating, paused for retry, needs attention, waiting)
   that open exactly the rows they count, transferred totals, average speed,
@@ -167,7 +175,7 @@ operator distribution archives.
 
 - Added a project-scoped SQLite FTS5 trigram index for mailbox substring search;
   terms of three or more characters use literal-safe indexed queries, while
-  short/control-character queries retain the fallback. Schema v25 rebuilds the
+  short/control-character queries retain the fallback. The schema migration rebuilds the
   index transactionally and maintains it with queue-fact triggers.
 - Reject explicit folder targets that collide after case folding, avoiding
   unannounced mailbox merges; provider-specific normalization remains

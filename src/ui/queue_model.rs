@@ -436,6 +436,12 @@ impl MailboxQueue {
 
     /// Verified transfer totals and the queue's endpoint hosts, cached per
     /// generation so the command center does not rescan 100k rows a frame.
+    /// Changes whenever durable queue state may have changed; read models
+    /// keyed by it are recomputed only when it moves.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) fn fleet_facts(&mut self, store: &StateStore) -> Result<QueueFleetFacts, String> {
         if let Some((generation, facts)) = &self.fleet
             && *generation == self.generation

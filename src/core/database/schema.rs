@@ -41,6 +41,25 @@ impl StateStore {
                 ],
             ),
             (
+                "waves",
+                &[
+                    ("id", "TEXT", false, 1),
+                    ("project_id", "TEXT", true, 0),
+                    ("name", "TEXT", true, 0),
+                    ("position", "INTEGER", true, 0),
+                    ("scheduled_at", "TEXT", false, 0),
+                    ("maintenance_window", "TEXT", false, 0),
+                    ("concurrency", "INTEGER", false, 0),
+                    ("approved_by", "TEXT", false, 0),
+                    ("approved_at", "TEXT", false, 0),
+                    ("created_at", "TEXT", true, 0),
+                ],
+            ),
+            (
+                "wave_members",
+                &[("job_id", "TEXT", false, 1), ("wave_id", "TEXT", true, 0)],
+            ),
+            (
                 "cutover_workflows",
                 &[
                     ("project_id", "TEXT", false, 1),
@@ -354,6 +373,31 @@ impl StateStore {
                     "NO ACTION",
                     "NONE",
                 )],
+            ),
+            (
+                "waves",
+                &[(
+                    "projects",
+                    "project_id",
+                    "id",
+                    "NO ACTION",
+                    "NO ACTION",
+                    "NONE",
+                )],
+            ),
+            (
+                "wave_members",
+                &[
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    ("waves", "wave_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                ],
             ),
             (
                 "cutover_workflows",
@@ -723,6 +767,7 @@ impl StateStore {
             ),
             ("one_running_run_per_job", &["job_id"], true, true),
             ("one_active_run_per_job", &["job_id"], true, true),
+            ("idx_wave_members_wave", &["wave_id"], false, false),
         ];
         const INDEX_TABLES: &[(&str, &str)] = &[
             ("idx_mailbox_jobs_project_state", "mailbox_jobs"),
@@ -745,6 +790,7 @@ impl StateStore {
             ("idx_mailbox_jobs_project_queue", "mailbox_jobs"),
             ("one_running_run_per_job", "runs"),
             ("one_active_run_per_job", "runs"),
+            ("idx_wave_members_wave", "wave_members"),
         ];
         for &(index, expected_columns, expected_unique, expected_partial) in INDEX_SIGNATURES {
             let expected_table = INDEX_TABLES
@@ -947,6 +993,14 @@ impl StateStore {
 
     pub(super) fn validate_schema_constraints(connection: &Connection) -> rusqlite::Result<()> {
         const REQUIRED_CHECKS: &[(&str, &[&str])] = &[
+            (
+                "waves",
+                &[
+                    "length(name)between1and120",
+                    "position>=0",
+                    "concurrencyisnullorconcurrency>=1",
+                ],
+            ),
             (
                 "evidence",
                 &[

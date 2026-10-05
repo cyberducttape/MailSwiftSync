@@ -207,6 +207,32 @@ pub(crate) fn demo_data(app: &mut App) {
             let _ = app.store.force_attention_reason(id, reason);
         }
     }
+    // Two waves: an approved pilot and a draft department wave, so the
+    // Overview waves card shows both lifecycle states.
+    for (name, members, window, concurrency, approve) in [
+        ("Pilot", 0..3, None, Some(2), true),
+        (
+            "Wave 1 – Accounting",
+            3..8,
+            Some("22:00-04:00@Sat,Sun"),
+            Some(4),
+            false,
+        ),
+    ] {
+        if let Ok(wave) = app.store.create_wave(
+            &imported.project_id,
+            &crate::core::WaveSettings {
+                name: name.into(),
+                scheduled_at: Some("Sat 22:00".into()),
+                maintenance_window: window.map(str::to_owned),
+                concurrency,
+            },
+            &ids[members],
+        ) && approve
+        {
+            let _ = app.store.approve_wave(&wave.id, "pilot.lead");
+        }
+    }
     app.queue.attach(imported.project_id, imported.len);
     // Leave credentials empty in the debug scene. The demo must never create
     // or assign credential-like material, even ephemerally.

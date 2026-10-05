@@ -13,6 +13,7 @@ mod batch_sheet;
 mod bootstrap_failure;
 mod command_center;
 mod confidence;
+pub(crate) mod waves;
 // Release-mode tests still use the deterministic debug scenes for the
 // accessibility and scale audits. Keep these fixtures out of production
 // binaries while making them available whenever the test harness is built.

@@ -113,6 +113,8 @@ impl App {
         if has_bulk_jobs {
             self.command_center_card(ui, batch_summary);
             ui.add_space(16.0);
+            self.waves_card(ui);
+            ui.add_space(16.0);
         }
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());

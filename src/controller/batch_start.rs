@@ -52,6 +52,21 @@ impl App {
         self.pending_batch_evidence.clear();
         self.pending_batch_mismatches.clear();
         self.pending_batch_checkpoints.clear();
+        // A selected wave launches only inside its maintenance window.
+        if live
+            && let Some(wave) = self.selected_wave()
+            && let Some(window) = wave.settings.maintenance_window.as_deref()
+            && crate::maintenance_window::MaintenanceWindow::parse(window)
+                .is_ok_and(|window| !window.contains_now())
+        {
+            self.bulk_message = self
+                .language
+                .message("ui.wave-outside-window")
+                .replace("{wave}", &wave.settings.name)
+                .replace("{window}", window);
+            return;
+        }
+        let batch_profile = self.effective_batch_profile();
         let run_id = uuid::Uuid::new_v4().to_string();
         let selection_scope = self.bulk_selection_scope();
         let loader = match crate::controller::queue::ledger_job_loader(
@@ -60,7 +75,7 @@ impl App {
                 .clone()
                 .filter(|_| self.persistence_available),
             &project_id,
-            self.form.profile.clone(),
+            batch_profile.clone(),
             self.queue.session_secrets.clone(),
             mode.is_preflight(),
         ) {
@@ -76,7 +91,7 @@ impl App {
             selection_scope: &selection_scope,
             retry_scope: self.bulk_retry_scope,
             mode,
-            fallback_profile: &self.form.profile,
+            fallback_profile: &batch_profile,
             expected_credential_fingerprints: &self.queue.preflight_credentials,
             session_secrets: &self.queue.session_secrets,
             expected_action_plan_hash: self
@@ -96,11 +111,11 @@ impl App {
         let selected_job_ids = prepared.selected_job_ids.clone();
         let job_count = selected_job_ids.len();
         let concurrency =
-            crate::migration_plan::effective_batch_concurrency(self.form.profile.batch_concurrency);
+            crate::migration_plan::effective_batch_concurrency(batch_profile.batch_concurrency);
         self.selected_project_id = Some(project_id.clone());
         self.bulk_live_run = live;
         self.run_id = Some(run_id.clone());
-        self.locked_profile = Some(self.form.profile.clone());
+        self.locked_profile = Some(batch_profile.clone());
         self.active_run = Some(admission.active_run);
         // Admission recorded the children as durably queued.
         self.mark_bulk_jobs_changed();

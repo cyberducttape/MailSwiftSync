@@ -66,9 +66,14 @@ pub(crate) struct App {
     pub(crate) queue: crate::ui::queue_model::MailboxQueue,
     /// Recovery workspace view state (groups, open group, page).
     pub(crate) recovery: crate::ui::recovery::RecoveryState,
+    pub(crate) waves: crate::ui::waves::WaveUi,
     pub(crate) settings_open: bool,
     pub(crate) bulk_search: String,
     pub(crate) bulk_state_filter: String,
+    /// The wave whose members were selected with "Select wave", with that
+    /// member set. Its concurrency and maintenance window apply only while
+    /// the explicit selection is still exactly those members.
+    pub(crate) bulk_wave: Option<(crate::core::Wave, std::collections::HashSet<String>)>,
     pub(crate) bulk_selected_ids: HashSet<String>,
     /// Compact representation for selecting the entire loaded queue. In this
     /// mode `bulk_selected_ids` is not populated; it stores only exclusions.
@@ -322,6 +327,30 @@ impl App {
         } else {
             self.bulk_selected_ids.contains(job_id)
         }
+    }
+
+    /// The selected wave, if the current selection is still exactly its
+    /// members (an edited selection no longer runs as that wave).
+    pub(crate) fn selected_wave(&self) -> Option<&crate::core::Wave> {
+        let (wave, members) = self.bulk_wave.as_ref()?;
+        (!self.bulk_all_selected && self.bulk_selected_ids == *members).then_some(wave)
+    }
+
+    /// The plan a batch runs with: the operator's plan, with a selected
+    /// wave's concurrency applied as a ceiling (never raised). Used for the
+    /// confirmed action plan, admission, the job loader, the worker count,
+    /// and the recorded run snapshot, so they all agree.
+    pub(crate) fn effective_batch_profile(&self) -> crate::Profile {
+        let mut profile = self.form.profile.clone();
+        if let Some(limit) = self
+            .selected_wave()
+            .and_then(|wave| wave.settings.concurrency)
+        {
+            let current =
+                crate::migration_plan::effective_batch_concurrency(profile.batch_concurrency);
+            profile.batch_concurrency = current.min(limit as usize);
+        }
+        profile
     }
 
     pub(crate) fn clear_bulk_selection(&mut self) {

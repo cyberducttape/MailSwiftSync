@@ -414,8 +414,9 @@ impl StateStore {
         // mailbox failure events from successful completion events; version
         // 22 distinguishes failed mailbox preflights, version 23 adds
         // durable proof-ready notifications, version 24 adds leased,
-        // project-scoped webhook delivery claims, and version 25 adds a
-        // trigram search index over queue facts.
+        // project-scoped webhook delivery claims, version 25 adds a trigram
+        // search index over queue facts, and version 26 adds migration waves
+        // (named, approvable mailbox subsets with schedule and concurrency).
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -454,6 +455,9 @@ impl StateStore {
         Self::prepare_legacy_mailbox_jobs(&tx)?;
         tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS waves (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 120), position INTEGER NOT NULL CHECK(position >= 0), scheduled_at TEXT, maintenance_window TEXT, concurrency INTEGER CHECK(concurrency IS NULL OR concurrency >= 1), approved_by TEXT, approved_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id, name), UNIQUE(project_id, position));
+                 CREATE TABLE IF NOT EXISTS wave_members (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), wave_id TEXT NOT NULL REFERENCES waves(id));
+                 CREATE INDEX IF NOT EXISTS idx_wave_members_wave ON wave_members(wave_id);
                  CREATE TABLE IF NOT EXISTS cutover_workflows (project_id TEXT PRIMARY KEY REFERENCES projects(id), stage TEXT NOT NULL CHECK(stage IN ('seed','catch_up','final_delta','verification','completed')), scheduled_at TEXT NOT NULL, maintenance_window TEXT, approved_by TEXT, approved_at TEXT, external_confirmation TEXT);
                  CREATE TABLE IF NOT EXISTS batch_plans (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), config TEXT NOT NULL);
                  CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT, batch_plan_id TEXT REFERENCES batch_plans(id), row_overrides TEXT);
