@@ -121,6 +121,19 @@ pub struct TransferPassRecord {
     pub verification_outcome: Option<String>,
     pub verified_at: Option<String>,
     pub folders: Vec<TransferPassFolder>,
+    /// Last durable, content-free engine progress observed for this attempt.
+    pub progress: Option<TransferProgressSnapshot>,
+}
+
+/// Recovery-facing progress. `skipped` is optional because imapsync does not
+/// emit a provider-independent skipped counter; `unresolved` is the engine's
+/// remaining-work count when it reports one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct TransferProgressSnapshot {
+    pub copied: u64,
+    pub bytes_copied: u64,
+    pub skipped: Option<u64>,
+    pub unresolved: Option<u64>,
 }
 
 /// Project-scoped digest of a mailbox folder name. Equal names on both
@@ -362,6 +375,7 @@ impl StateStore {
                     verification_outcome: row.get(17)?,
                     verified_at: row.get(18)?,
                     folders: Vec::new(),
+                    progress: None,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -369,6 +383,38 @@ impl StateStore {
             "SELECT side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete FROM transfer_pass_folders WHERE run_id=?1 AND attempt=?2 ORDER BY side,folder_digest",
         )?;
         for record in &mut records {
+            let progress_json: Option<String> = self.connection.query_row(
+                "SELECT detail FROM events WHERE run_id=?1 AND kind='transfer_progress_checkpoint' AND detail LIKE ?2 ORDER BY id DESC LIMIT 1",
+                params![run_id, format!("%\"attempt\":{}%", record.attempt)],
+                |row| row.get(0),
+            ).optional()?;
+            record.progress = progress_json.and_then(|detail| {
+                let value: serde_json::Value = serde_json::from_str(&detail).ok()?;
+                let progress = value.get("progress")?;
+                Some(TransferProgressSnapshot {
+                    copied: progress.get("messages_copied")?.as_u64()?,
+                    bytes_copied: progress.get("bytes_copied")?.as_u64()?,
+                    skipped: progress
+                        .get("source_messages")
+                        .and_then(serde_json::Value::as_u64)
+                        .zip(
+                            progress
+                                .get("messages_left")
+                                .and_then(serde_json::Value::as_u64),
+                        )
+                        .map(|(source, left)| {
+                            source.saturating_sub(left).saturating_sub(
+                                progress
+                                    .get("messages_copied")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0),
+                            )
+                        }),
+                    unresolved: progress
+                        .get("messages_left")
+                        .and_then(serde_json::Value::as_u64),
+                })
+            });
             record.folders = folders
                 .query_map(params![run_id, record.attempt], |row| {
                     Ok(TransferPassFolder {

@@ -54,9 +54,10 @@ pub(crate) use cutover::CutoverStage;
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{
-    EvidenceScope, MailboxAssurance, MailboxEvidence, ProjectReportSnapshot, ReportMailboxPage,
-    ReportMailboxSnapshot, ReportRunSnapshot, VerificationAcceptance, VerificationEvidence,
-    VerificationMethod, VerificationOutcome,
+    EvidenceDimensionStatus, EvidenceScope, MailboxAssurance, MailboxEvidence,
+    ProjectReportSnapshot, ReportMailboxPage, ReportMailboxSnapshot, ReportRunSnapshot,
+    VerificationAcceptance, VerificationDimensions, VerificationEvidence, VerificationMethod,
+    VerificationOutcome,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 pub(crate) use message_staging::{
@@ -72,9 +73,10 @@ pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts, state_filter
 pub use recovery_queue::{RecoveryGroup, RecoveryRow};
 pub(crate) use state::valid_mailbox_transition;
 pub use state::{AttentionReason, MailboxState, Phase};
+#[allow(unused_imports)]
 pub use transfer_passes::{
     EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
-    TransferPassIntent, TransferPassRecord, folder_digest, sha256_hex,
+    TransferPassIntent, TransferPassRecord, TransferProgressSnapshot, folder_digest, sha256_hex,
 };
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
 pub const CURRENT_SCHEMA_VERSION: i64 = 26;

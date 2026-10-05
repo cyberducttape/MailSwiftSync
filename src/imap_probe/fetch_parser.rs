@@ -110,6 +110,38 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
     })
 }
 
+/// State returned by an IMAP FETCH `FLAGS KEYWORDS` request.  This is kept
+/// separate from the message identity record so older metadata reconciliation
+/// remains wire-compatible while callers can explicitly opt into mailbox
+/// fidelity checks.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FetchMessageState {
+    pub(super) flags: Vec<String>,
+    pub(super) keywords: Vec<String>,
+}
+
+#[cfg(test)]
+pub(super) fn parse_message_fetch_state_response_bytes(
+    response: &[u8],
+) -> Result<HashMap<String, FetchMessageState>, String> {
+    let mut states = HashMap::new();
+    for record in fetch_records(response) {
+        let record = record?;
+        let uid = fetch_number(&record.protocol_text, "UID")
+            .ok_or_else(|| "IMAP state FETCH record omitted UID".to_owned())?
+            .to_string();
+        let state = FetchMessageState {
+            flags: fetch_atom_list(&record.protocol_text, "FLAGS"),
+            keywords: fetch_atom_list(&record.protocol_text, "KEYWORDS"),
+        };
+        if states.insert(uid.clone(), state).is_some() {
+            return Err(format!("duplicate state FETCH UID {uid}"));
+        }
+    }
+    Ok(states)
+}
+
 #[derive(Debug)]
 pub(super) struct BodyHashPage {
     pub(super) fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
@@ -173,6 +205,25 @@ fn fetch_quoted(text: &str, field: &str) -> Option<String> {
         .strip_prefix('"')?;
     let end = value.find('"')?;
     Some(value[..end].to_owned())
+}
+
+#[cfg(test)]
+fn fetch_atom_list(text: &str, field: &str) -> Vec<String> {
+    let Some(offset) = find_item(text, field) else {
+        return Vec::new();
+    };
+    let value = text[offset..].trim_start();
+    let Some(value) = value.strip_prefix('(') else {
+        return Vec::new();
+    };
+    let Some(end) = value.find(')') else {
+        return Vec::new();
+    };
+    value[..end]
+        .split_whitespace()
+        .filter(|atom| *atom != "NIL")
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Return the offset just past a whole FETCH item name. The name must start

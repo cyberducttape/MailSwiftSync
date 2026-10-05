@@ -1,4 +1,6 @@
-use super::fetch_parser::parse_message_fetch_body_hashes_response_bytes;
+use super::fetch_parser::{
+    parse_message_fetch_body_hashes_response_bytes, parse_message_fetch_state_response_bytes,
+};
 use super::{
     ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
     MailboxFetchError, MessageFetchBudget, MessageStateBudget, StateReservation,
@@ -362,6 +364,16 @@ fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
     );
     let second = &messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "9")];
     assert_eq!(second.message_id, None);
+}
+
+#[test]
+fn fetch_parser_extracts_system_flags_and_custom_keywords() {
+    let response = b"* 1 FETCH (UID 5 FLAGS (\\Seen \\Answered) KEYWORDS ($Forwarded team-blue))\r\n* 2 FETCH (UID 9 FLAGS () KEYWORDS NIL)\r\nv002 OK FETCH completed\r\n";
+    let states = parse_message_fetch_state_response_bytes(response).unwrap();
+    assert_eq!(states["5"].flags, ["\\Seen", "\\Answered"]);
+    assert_eq!(states["5"].keywords, ["$Forwarded", "team-blue"]);
+    assert!(states["9"].flags.is_empty());
+    assert!(states["9"].keywords.is_empty());
 }
 
 #[test]

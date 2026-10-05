@@ -41,6 +41,72 @@ pub struct VerificationEvidence {
 
 pub type MailboxEvidence = VerificationEvidence;
 
+/// Independent evidence dimensions.  These are intentionally not collapsed
+/// into `VerificationOutcome`: an exact message reconciliation does not prove
+/// that flags, ACLs, or provider-specific mailbox state survived.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EvidenceDimensionStatus {
+    Pass,
+    Warning,
+    NotVerified,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationDimensions {
+    pub message_presence: EvidenceDimensionStatus,
+    pub body_integrity: EvidenceDimensionStatus,
+    pub internal_dates: EvidenceDimensionStatus,
+    pub system_flags: EvidenceDimensionStatus,
+    pub custom_keywords: EvidenceDimensionStatus,
+    pub folder_subscriptions: EvidenceDimensionStatus,
+    pub folder_mapping: EvidenceDimensionStatus,
+    pub acls: EvidenceDimensionStatus,
+    pub quota_capacity: EvidenceDimensionStatus,
+    pub special_use: EvidenceDimensionStatus,
+    pub gmail_labels: EvidenceDimensionStatus,
+}
+
+#[allow(dead_code)]
+impl VerificationEvidence {
+    /// Return the dimensions established by this verifier.  Unsupported
+    /// mailbox state is explicit so an exact message result cannot be read as
+    /// a claim of complete mailbox fidelity.
+    pub fn dimensions(&self) -> VerificationDimensions {
+        let exact = self.is_exact_match();
+        VerificationDimensions {
+            message_presence: if exact {
+                EvidenceDimensionStatus::Pass
+            } else {
+                EvidenceDimensionStatus::Warning
+            },
+            body_integrity: if self.verification_method == VerificationMethod::BodyHash && exact {
+                EvidenceDimensionStatus::Pass
+            } else {
+                EvidenceDimensionStatus::NotVerified
+            },
+            internal_dates: if exact {
+                EvidenceDimensionStatus::Pass
+            } else {
+                EvidenceDimensionStatus::Warning
+            },
+            system_flags: EvidenceDimensionStatus::NotVerified,
+            custom_keywords: EvidenceDimensionStatus::Warning,
+            folder_subscriptions: EvidenceDimensionStatus::NotVerified,
+            folder_mapping: if exact {
+                EvidenceDimensionStatus::Pass
+            } else {
+                EvidenceDimensionStatus::Warning
+            },
+            acls: EvidenceDimensionStatus::NotVerified,
+            quota_capacity: EvidenceDimensionStatus::NotVerified,
+            special_use: EvidenceDimensionStatus::NotVerified,
+            gmail_labels: EvidenceDimensionStatus::NotVerified,
+        }
+    }
+}
+
 /// Verification adapter that produced the persisted evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerificationMethod {

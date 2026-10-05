@@ -777,7 +777,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             page_number = page_number.saturating_add(1);
             let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
             let command = format!(
-                "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]{body_field})\r\n"
+                "{tag} UID FETCH {uid_set} (UID FLAGS KEYWORDS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]{body_field})\r\n"
             );
             write_imap_command(
                 stream,
