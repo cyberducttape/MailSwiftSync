@@ -26,6 +26,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "cutover",
     "headless",
     "oauth-authorize",
+    "oauth-export-refresh-config",
+    "oauth-access-token",
     "recovery-guidance",
     "doctor",
     "install-engine",

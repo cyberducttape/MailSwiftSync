@@ -256,3 +256,129 @@ pub(super) fn oauth_authorize_dispatch(arguments: std::env::ArgsOs) -> eframe::R
         }
     }
 }
+
+const OAUTH_ACCESS_TOKEN_USAGE: &str =
+    "Usage: mailswiftsync oauth-access-token <refresh-config.json> <access-token-out>";
+const OAUTH_EXPORT_USAGE: &str =
+    "Usage: mailswiftsync oauth-export-refresh-config <keyring-id> <refresh-config-out.json>";
+
+/// Exchange an owner-only refresh-configuration file for a short-lived access
+/// token, using the same refresh client as live launches. Intended for
+/// automation that cannot reach an OS keyring (for example CI qualification
+/// jobs). Neither token is ever printed. When the provider rotates the
+/// refresh token, the configuration file is rewritten in place so later
+/// exchanges in the same job keep working.
+pub(super) fn oauth_access_token_command(
+    mut arguments: impl Iterator<Item = OsString>,
+) -> Result<String, (i32, String)> {
+    let usage = || (2, OAUTH_ACCESS_TOKEN_USAGE.to_owned());
+    let (Some(config_path), Some(output_path), None) =
+        (arguments.next(), arguments.next(), arguments.next())
+    else {
+        return Err(usage());
+    };
+    let config_path = PathBuf::from(config_path);
+    let output_path = PathBuf::from(output_path);
+    let stored = read_secret_file(&config_path)
+        .map_err(|error| (1, format!("OAuth refresh configuration file: {error}")))?;
+    let config =
+        crate::oauth_refresh::decode_refresh_config(stored.as_str()).map_err(|error| (1, error))?;
+    let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
+        .map_err(|error| (1, format!("OAuth access token refresh failed: {error}")))?;
+    crate::atomic_artifact::write_private_atomic(&output_path, refreshed.access_token.as_str())
+        .map_err(|error| (1, format!("could not write the access token file: {error}")))?;
+    let mut message = format!(
+        "Wrote a fresh access token to the owner-only file{}.",
+        refreshed
+            .expires_in
+            .map(|seconds| format!("; it expires in {seconds} seconds"))
+            .unwrap_or_default()
+    );
+    if let Some(rotated) = refreshed.refresh_token {
+        let rotated_config = crate::oauth_refresh::OAuthRefreshConfig {
+            refresh_token: rotated,
+            ..config
+        };
+        crate::atomic_artifact::write_private_atomic(
+            &config_path,
+            &crate::oauth_refresh::encode_refresh_config(&rotated_config),
+        )
+        .map_err(|error| {
+            (
+                1,
+                format!(
+                    "the provider rotated the refresh token but the configuration file could not be updated: {error}"
+                ),
+            )
+        })?;
+        message.push_str(" The provider rotated the refresh token; the configuration file was updated, so re-export it to any external secret store that holds the old value.");
+    }
+    Ok(message)
+}
+
+/// Write the OAuth refresh configuration stored by `oauth-authorize` to an
+/// owner-only file so an operator can provision automation that has no OS
+/// keyring. The file holds a refresh token and client secret; treat it as a
+/// credential and delete it once it is stored in the target secret manager.
+pub(super) fn oauth_export_refresh_config_command(
+    mut arguments: impl Iterator<Item = OsString>,
+) -> Result<String, (i32, String)> {
+    let usage = || (2, OAUTH_EXPORT_USAGE.to_owned());
+    let (Some(keyring_id), Some(output_path), None) =
+        (arguments.next(), arguments.next(), arguments.next())
+    else {
+        return Err(usage());
+    };
+    let keyring_id = keyring_id
+        .into_string()
+        .map_err(|_| (2, "keyring ID must be valid UTF-8".to_owned()))?;
+    crate::oauth_authorize::validate_keyring_id(&keyring_id).map_err(|error| (2, error))?;
+    let output_path = PathBuf::from(output_path);
+    if std::fs::symlink_metadata(&output_path).is_ok() {
+        return Err((
+            1,
+            "refusing to overwrite an existing file with a credential; choose a new path"
+                .to_owned(),
+        ));
+    }
+    let entry = keyring::Entry::new(crate::Form::OAUTH_REFRESH_KEYRING_SERVICE, &keyring_id)
+        .map_err(|error| (1, format!("could not open the OS keyring entry: {error}")))?;
+    let stored = zeroize::Zeroizing::new(entry.get_password().map_err(|error| {
+        (
+            1,
+            format!("could not read the OAuth refresh configuration from the OS keyring: {error}"),
+        )
+    })?);
+    // Validate before exporting so a corrupt entry is not provisioned.
+    crate::oauth_refresh::decode_refresh_config(&stored).map_err(|error| (1, error))?;
+    crate::atomic_artifact::write_private_atomic(&output_path, &stored).map_err(|error| {
+        (
+            1,
+            format!("could not write the configuration file: {error}"),
+        )
+    })?;
+    Ok("Exported the OAuth refresh configuration to an owner-only file. It contains a refresh token and client secret: store it in your secret manager, then delete the file.".to_owned())
+}
+
+pub(super) fn oauth_access_token_dispatch(arguments: std::env::ArgsOs) -> eframe::Result<()> {
+    report_command(oauth_access_token_command(arguments))
+}
+
+pub(super) fn oauth_export_refresh_config_dispatch(
+    arguments: std::env::ArgsOs,
+) -> eframe::Result<()> {
+    report_command(oauth_export_refresh_config_command(arguments))
+}
+
+fn report_command(result: Result<String, (i32, String)>) -> eframe::Result<()> {
+    match result {
+        Ok(message) => {
+            out!("{message}");
+            Ok(())
+        }
+        Err((code, message)) => {
+            eprintln!("{message}");
+            std::process::exit(code);
+        }
+    }
+}

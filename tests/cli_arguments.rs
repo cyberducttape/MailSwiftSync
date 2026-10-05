@@ -319,3 +319,80 @@ fn engine_does_not_inherit_controller_environment_secrets() {
         "allowlisted PATH was missing"
     );
 }
+
+fn private_directory(name: &str) -> PathBuf {
+    let directory =
+        std::env::temp_dir().join(format!("mailswiftsync-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir(&directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    directory
+}
+
+#[test]
+fn oauth_token_commands_refuse_malformed_arguments() {
+    for arguments in [
+        &["oauth-access-token"][..],
+        &["oauth-access-token", "config.json"][..],
+        &["oauth-access-token", "a", "b", "c"][..],
+        &["oauth-export-refresh-config"][..],
+        &["oauth-export-refresh-config", "id"][..],
+    ] {
+        let output = run(arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn oauth_access_token_failure_writes_nothing_and_never_echoes_secrets() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = private_directory("access-token");
+    let config = directory.join("refresh.json");
+    std::fs::write(
+        &config,
+        r#"{"token_endpoint":"https://127.0.0.1:1/token","client_id":"client","client_secret":"client-secret-value","refresh_token":"refresh-token-value"}"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let token = directory.join("access-token");
+    let output = run(&[
+        "oauth-access-token",
+        config.to_str().unwrap(),
+        token.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(all.contains("refresh failed"), "{all}");
+    assert!(!all.contains("refresh-token-value") && !all.contains("client-secret-value"));
+    assert!(
+        !token.exists(),
+        "a failed exchange must not leave a token file"
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn oauth_export_refuses_to_overwrite_an_existing_file() {
+    let directory = private_directory("export");
+    let existing = directory.join("existing.json");
+    std::fs::write(&existing, "keep").unwrap();
+    let output = run(&[
+        "oauth-export-refresh-config",
+        "ci-source",
+        existing.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to overwrite"));
+    assert_eq!(std::fs::read_to_string(&existing).unwrap(), "keep");
+    std::fs::remove_dir_all(directory).unwrap();
+}
