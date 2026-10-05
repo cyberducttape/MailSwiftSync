@@ -34,7 +34,7 @@ crossbeam-channel = "0.5"
 crc32fast = "1.5"
 sha2 = "0.11"
 # Same parser epaint uses; validates system fallback fonts before egui would panic on them.
-skrifa = "0.42"
+skrifa = "0.47"
 zeroize = "1.8"
 zip = { version = "8.6", default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
