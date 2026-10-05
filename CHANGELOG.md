@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Deduplicate persisted batch plans by SHA-256 of their content rather than by
+  allocation pointer, so equal plans persist once however callers allocate
+  them.
+- Add `validate_internal_invariants` (integrity check plus search-index,
+  queue-projection, cross-project reference, and webhook-lease invariants),
+  refuse to restore a ledger that violates it, and test it after injected
+  failures at each write boundary of import, phase changes, outbox events,
+  cutover planning, and webhook outcomes.
 - Return a "verification stage is closed" error, instead of panicking, when a
   finished verification stage is used, so a lifecycle mistake fails the
   verification rather than the controller.

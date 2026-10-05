@@ -82,6 +82,30 @@ External-engine transfer progress is checkpointed as bounded, content-free JSON 
 
 System name resolution for authenticated IMAP probes runs in a short-lived internal helper process because the platform `getaddrinfo`/`ToSocketAddrs` call cannot be cancelled safely in-process. The parent caps concurrent resolver helpers at 16, applies the existing per-probe DNS deadline, and kills/reaps the helper on timeout or cancellation; a stuck system resolver therefore cannot permanently occupy a reusable worker thread. The helper starts with a resolver-specific allowlist (including `LOCALDOMAIN` and `RES_OPTIONS` where configured, but excluding unrelated credentials) and returns at most 64 socket addresses. Connection attempts then use staggered IPv4/IPv6 racing under a separate overall deadline. This bounds MailSwiftSync-owned resolver resources, but cannot guarantee that every platform resolver implementation will return within the deadline absent process termination support from the OS.
 
+## Ledger invariants
+
+The SQLite ledger is validated at two levels.
+`validate_schema_layout`/`validate_schema_constraints` prove its shape: tables,
+columns, indexes, triggers, CHECK constraints, and `foreign_key_check`.
+`validate_internal_invariants` (`src/core/database/invariants.rs`) adds
+`integrity_check` and the data-level invariants that shape cannot express:
+
+- the FTS5 search index has exactly one row per queue fact, with the same key;
+- each queue fact projects its job's rowid, id, project, and state;
+- every batch plan is used by a mailbox in its own project, and no mailbox
+  references another project's plan (plans are deduplicated by content digest);
+- every run's mailbox and parent run belong to the run's project;
+- webhook leases exist exactly while a delivery is `delivering`.
+
+Restore refuses a ledger that violates any of these. Tests inject an aborting
+trigger at each write boundary of batch import, phase changes, outbox-producing
+events, cutover planning, and webhook outcomes, then require the failed
+operation to leave no partial rows and every invariant intact. Optimizations
+that temporarily drop a trigger (the set-based search-index rebuild during
+import) must do so inside the same transaction so a failure restores it.
+When adding a derived table, trigger, or cross-table reference, add its
+invariant to `DATA_INVARIANTS` and a failure-injection case.
+
 ## Migration phases
 
 `Discovery → Preflight → Pilot → Seed → Catch-up → Final delta → Verification → Complete`

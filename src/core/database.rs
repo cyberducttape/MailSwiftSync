@@ -1,5 +1,6 @@
 use super::*;
 mod files;
+mod invariants;
 mod schema;
 use files::{
     create_private_database_file, database_identity, remove_created_database_file,
@@ -372,6 +373,16 @@ impl StateStore {
             }
             Self::validate_schema_layout(&destination_connection)?;
             Self::validate_schema_constraints(&destination_connection)?;
+            // Never install a ledger whose derived data (search index, queue
+            // projections, cross-project references) is inconsistent.
+            Self::validate_internal_invariants_on(&destination_connection).map_err(
+                |violations| {
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                        Some(format!("ledger invariants violated: {violations}")),
+                    )
+                },
+            )?;
             Ok(())
         })();
         drop(destination_connection);

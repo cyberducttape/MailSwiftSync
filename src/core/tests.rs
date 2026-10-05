@@ -1862,6 +1862,52 @@ fn snapshot_rejects_a_structurally_valid_non_ledger() {
 }
 
 #[test]
+fn snapshot_refuses_a_ledger_with_inconsistent_derived_data() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-snapshot-invariants-{}",
+        Uuid::new_v4()
+    ));
+    create_private_test_directory(&directory);
+    let source = directory.join("source.db");
+    let destination = directory.join("snapshot.db");
+    let store = StateStore::open(&source).unwrap();
+    let row = QueueInsert {
+        source_mailbox: "user@example.test".into(),
+        destination_mailbox: "user@example.test".into(),
+        destination_identity: "user@example.test".into(),
+        config: "destination_host = \"new.example\"\n".into(),
+        batch_plan_config: None,
+        row_overrides: None,
+        facts: QueueRowFacts {
+            label: "Row".into(),
+            source_host: "old.example".into(),
+            destination_host: "new.example".into(),
+            search_key: "row user@example.test".into(),
+            destructive: false,
+            policy: "additive".into(),
+        },
+    };
+    store
+        .create_batch_queue("queue", "old.example", "new.example", &[row])
+        .unwrap();
+    // A search index out of step with the queue is structurally valid SQLite
+    // but must not be installed as a restored ledger.
+    store
+        .connection
+        .execute("DELETE FROM mailbox_queue_facts_search", [])
+        .unwrap();
+    drop(store);
+
+    let error = StateStore::snapshot_to(&source, &destination).unwrap_err();
+    assert!(
+        error.to_string().contains("ledger invariants violated"),
+        "{error}"
+    );
+    assert!(!destination.exists());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn snapshot_repairs_dirty_current_schema_before_copying() {
     let directory =
         std::env::temp_dir().join(format!("mailswiftsync-snapshot-repair-{}", Uuid::new_v4()));
