@@ -598,7 +598,7 @@ impl App {
             .count();
         crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(self.language.text("Ready to migrate"));
+                ui.heading(self.language.message("ui.ready-to-migrate"));
                 ui.label(
                     RichText::new(if blocked > 0 {
                         format!("{blocked} blocker(s)")
@@ -666,7 +666,7 @@ impl App {
                     navigate = Some(finding.destination);
                 }
             }
-            egui::CollapsingHeader::new(self.language.text("Advanced readiness details"))
+            egui::CollapsingHeader::new(self.language.message("ui.advanced-readiness-details"))
                 .default_open(false)
                 .show(ui, |ui| {
                     for section in [

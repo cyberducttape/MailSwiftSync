@@ -588,7 +588,7 @@ mod tests {
         let plan = build_batch_action_plan(
             rows.iter().copied(),
             BulkRetryScope::Unresolved,
-            99,
+            crate::migration_plan::MAX_BATCH_CONCURRENCY,
             BatchExecutionMode::Live,
         );
         assert_eq!(plan.explicit_selection_count, 3);
@@ -596,7 +596,10 @@ mod tests {
         assert_eq!(plan.eligible_count, 1);
         assert_eq!(plan.blocked_count, 2);
         assert_eq!(plan.destructive_count, 1);
-        assert_eq!(plan.concurrency, 99);
+        assert_eq!(
+            plan.concurrency,
+            crate::migration_plan::MAX_BATCH_CONCURRENCY
+        );
         assert_eq!(plan.blocked_reasons.len(), 2);
         assert!(!plan.identity_hash.is_empty());
     }

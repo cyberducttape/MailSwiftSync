@@ -777,7 +777,13 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             page_number = page_number.saturating_add(1);
             let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
             let command = format!(
-                "{tag} UID FETCH {uid_set} (UID FLAGS KEYWORDS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO CC SUBJECT DATE CONTENT-TYPE)]{body_field})\r\n"
+                // RFC 3501 exposes system flags through FLAGS. KEYWORDS is
+                // not a portable FETCH data item; Dovecot (and other
+                // standards-compliant servers) may reject the whole command
+                // instead of returning an empty keyword set. Custom keyword
+                // verification remains explicitly unverified until it has a
+                // capability-gated protocol path.
+                "{tag} UID FETCH {uid_set} (UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO CC SUBJECT DATE CONTENT-TYPE)]{body_field})\r\n"
             );
             write_imap_command(
                 stream,
