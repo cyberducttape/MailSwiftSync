@@ -129,20 +129,36 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let lease_modifier = format!("+{} seconds", WEBHOOK_DELIVERY_LEASE_SECONDS);
-        let mut statement = self.connection.prepare(
+        let tx = self.connection.unchecked_transaction()?;
+        // An expired lease means a worker crashed or hung without recording
+        // an outcome. Count that as a failed attempt so a payload that
+        // repeatedly crashes its worker eventually dead-letters instead of
+        // being reclaimed forever.
+        tx.execute(
+            "UPDATE webhook_deliveries
+             SET attempts=attempts+1,
+                 status=CASE WHEN attempts+1>=?3 THEN 'dead_letter' ELSE 'queued' END,
+                 last_error='delivery lease expired before an outcome was recorded',
+                 next_attempt_at=CURRENT_TIMESTAMP,
+                 lease_owner=NULL,lease_until=NULL
+             WHERE endpoint_digest=?1
+               AND (?2 IS NULL OR project_id=?2)
+               AND status='delivering' AND lease_until<=CURRENT_TIMESTAMP",
+            params![endpoint_digest, project_id, i64::from(MAX_WEBHOOK_ATTEMPTS)],
+        )?;
+        let mut statement = tx.prepare(
             "UPDATE webhook_deliveries
              SET status='delivering',lease_owner=?3,lease_until=datetime('now',?4)
              WHERE event_id IN (
                 SELECT event_id FROM webhook_deliveries
                 WHERE endpoint_digest=?1
                   AND (?2 IS NULL OR project_id=?2)
-                  AND ((status='queued' AND next_attempt_at<=CURRENT_TIMESTAMP)
-                       OR (status='delivering' AND lease_until<=CURRENT_TIMESTAMP))
+                  AND status='queued' AND next_attempt_at<=CURRENT_TIMESTAMP
                 ORDER BY created_at,event_id LIMIT ?5
              )
              RETURNING event_id,project_id,event_type,payload,endpoint_digest,attempts,status,last_error",
         )?;
-        statement
+        let claimed = statement
             .query_map(
                 params![
                     endpoint_digest,
@@ -165,7 +181,10 @@ impl StateStore {
                     })
                 },
             )?
-            .collect()
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        tx.commit()?;
+        Ok(claimed)
     }
 
     pub(crate) fn mark_webhook_delivered(
@@ -473,6 +492,48 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        close_test_store(store);
+        remove_test_directory(&directory).unwrap();
+    }
+
+    #[test]
+    fn repeatedly_expired_leases_count_as_attempts_and_dead_letter() {
+        let (store, directory) = test_store();
+        let digest = "d".repeat(64);
+        store
+            .enqueue_webhook_delivery("event", "project", "mailbox.completed", "{}", &digest)
+            .unwrap();
+        for attempt in 1..=MAX_WEBHOOK_ATTEMPTS {
+            let claimed = store
+                .claim_webhook_deliveries(&digest, None, "crashing-worker", 10)
+                .unwrap();
+            assert_eq!(claimed.len(), 1, "attempt {attempt}");
+            assert_eq!(claimed[0].attempts, attempt - 1);
+            // The worker crashes without recording an outcome.
+            store
+                .connection
+                .execute(
+                    "UPDATE webhook_deliveries SET lease_until=datetime('now','-1 second') WHERE event_id='event'",
+                    [],
+                )
+                .unwrap();
+        }
+        assert!(
+            store
+                .claim_webhook_deliveries(&digest, None, "crashing-worker", 10)
+                .unwrap()
+                .is_empty()
+        );
+        let (status, attempts): (String, i64) = store
+            .connection
+            .query_row(
+                "SELECT status,attempts FROM webhook_deliveries WHERE event_id='event'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "dead_letter");
+        assert_eq!(attempts, i64::from(MAX_WEBHOOK_ATTEMPTS));
         close_test_store(store);
         remove_test_directory(&directory).unwrap();
     }
