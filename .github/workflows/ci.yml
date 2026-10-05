@@ -45,6 +45,8 @@ jobs:
         run: python3 tests/docker_memory_test.py
       - name: Test scale process-memory attribution
         run: python3 tests/process_memory_sampler_test.py
+      - name: Test critical-module coverage aggregation
+        run: python3 tests/check_critical_coverage_test.py
       - name: Test byte-volume scale fixture generation
         run: python3 tests/scale_maildir_test.py
       - name: Test scale container watchdog

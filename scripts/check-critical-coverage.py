@@ -98,6 +98,31 @@ def parse_lcov(path: Path) -> dict[str, tuple[int, int, int, int]]:
     return coverage
 
 
+def module_coverage(
+    coverage: dict[str, tuple[int, int, int, int]], filename: str
+) -> tuple[int, int, int, int] | None:
+    """Aggregate a module root and its submodule directory.
+
+    `src/x.rs` covers `src/x.rs` plus `src/x/**.rs`, excluding test files, so
+    splitting a critical module into submodules keeps the same code under the
+    same floor instead of measuring only the (now tiny) root file.
+    """
+    directory = filename[: -len(".rs")] + "/"
+    records = [
+        record
+        for name, record in coverage.items()
+        if name == filename
+        or (
+            name.startswith(directory)
+            and not name.endswith("tests.rs")
+            and "/tests/" not in name[len(directory) - 1 :]
+        )
+    ]
+    if filename not in coverage:
+        return None
+    return tuple(sum(values) for values in zip(*records))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("lcov", type=Path, help="stable-toolchain line coverage LCOV")
@@ -112,21 +137,23 @@ def main() -> int:
     branch_coverage = parse_lcov(args.branch_lcov)
     failed = False
     for filename, minimum in CRITICAL_FILES.items():
-        if filename not in coverage:
+        record = module_coverage(coverage, filename)
+        if record is None:
             print(f"FAIL {filename}: no LCOV record", file=sys.stderr)
             failed = True
             continue
-        hit, lines, _, _ = coverage[filename]
+        hit, lines, _, _ = record
         percent = 100.0 if lines == 0 else 100.0 * hit / lines
         status = "PASS" if percent >= minimum else "FAIL"
         print(f"{status} {filename}: {percent:.2f}% (required {minimum:.2f}%)")
         failed |= percent < minimum
     for filename, minimum in CRITICAL_BRANCHES.items():
-        if filename not in branch_coverage:
+        record = module_coverage(branch_coverage, filename)
+        if record is None:
             print(f"FAIL {filename}: no LCOV record for branch coverage", file=sys.stderr)
             failed = True
             continue
-        _, _, hit, branches = branch_coverage[filename]
+        _, _, hit, branches = record
         if branches == 0:
             print(f"FAIL {filename}: no branch data in LCOV report", file=sys.stderr)
             failed = True
