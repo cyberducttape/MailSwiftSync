@@ -169,6 +169,10 @@ pub(crate) enum Event {
     /// mailbox, credential, tenant, provider, or all providers).
     ProviderCooldown {
         domain: String,
+        /// Canonical provider (`global` when every provider is paused).
+        provider: &'static str,
+        /// `host:port` of the paused domain; `None` for the global domain.
+        endpoint: Option<String>,
         until: std::time::Instant,
     },
     /// Verification results for the transfer attempt they examined.

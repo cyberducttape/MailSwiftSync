@@ -210,6 +210,10 @@ pub(crate) struct BulkQueueSummary {
     pub(crate) preflight: usize,
     pub(crate) ready: usize,
     pub(crate) running: usize,
+    /// Transferred, awaiting verification.
+    pub(crate) completed: usize,
+    /// Presented as retrying after a transient or provider-capacity failure.
+    pub(crate) retrying: usize,
     pub(crate) verified: usize,
     pub(crate) failed: usize,
     pub(crate) attention: usize,
@@ -228,11 +232,16 @@ impl BulkQueueSummary {
                 summary.imported += count;
                 continue;
             }
+            if state.eq_ignore_ascii_case("retrying") {
+                summary.retrying += count;
+                continue;
+            }
             match core::MailboxState::parse_ascii_case_insensitive(state) {
                 Some(core::MailboxState::Queued) => summary.queued += count,
                 Some(core::MailboxState::Preflight) => summary.preflight += count,
                 Some(core::MailboxState::Ready) => summary.ready += count,
                 Some(core::MailboxState::Running) => summary.running += count,
+                Some(core::MailboxState::Completed) => summary.completed += count,
                 Some(state) if state.is_verified() => summary.verified += count,
                 Some(core::MailboxState::Failed) => summary.failed += count,
                 Some(core::MailboxState::Attention) => summary.attention += count,
@@ -249,32 +258,21 @@ impl BulkQueueSummary {
 
     #[cfg(test)]
     pub(crate) fn from_jobs(jobs: &[BulkJob]) -> Self {
-        let mut summary = Self {
-            total: jobs.len(),
-            ..Self::default()
-        };
-        for job in jobs {
-            if job.state.eq_ignore_ascii_case("imported") {
-                summary.imported += 1;
-                continue;
-            }
-            match core::MailboxState::parse_ascii_case_insensitive(&job.state) {
-                Some(core::MailboxState::Queued) => summary.queued += 1,
-                Some(core::MailboxState::Preflight) => summary.preflight += 1,
-                Some(core::MailboxState::Ready) => summary.ready += 1,
-                Some(core::MailboxState::Running) => summary.running += 1,
-                Some(state) if state.is_verified() => summary.verified += 1,
-                Some(core::MailboxState::Failed) => summary.failed += 1,
-                Some(core::MailboxState::Attention) => summary.attention += 1,
-                Some(core::MailboxState::Cancelled) => summary.cancelled += 1,
-                Some(core::MailboxState::DeltaRequired) => summary.delta_required += 1,
-                Some(core::MailboxState::VerificationDifference) => {
-                    summary.verification_difference += 1;
-                }
-                _ => {}
-            }
+        Self::from_state_counts(jobs.iter().map(|job| (job.state.as_str(), 1)))
+    }
+
+    /// The command center's operator buckets. Each row lands in exactly one
+    /// bucket; the groups mirror `core::STATE_GROUPS` so a bucket's
+    /// drill-down filter selects the rows it counts.
+    pub(crate) fn command_center(self) -> CommandCenterCounts {
+        CommandCenterCounts {
+            total: self.total,
+            completed: self.verified,
+            migrating: self.queued + self.preflight + self.running + self.completed,
+            retrying: self.retrying,
+            needs_attention: self.attention + self.failed + self.verification_difference,
+            waiting: self.imported + self.ready + self.delta_required + self.cancelled,
         }
-        summary
     }
 
     pub(crate) fn unresolved(self) -> usize {
@@ -284,6 +282,16 @@ impl BulkQueueSummary {
             + self.delta_required
             + self.verification_difference
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CommandCenterCounts {
+    pub(crate) total: usize,
+    pub(crate) completed: usize,
+    pub(crate) migrating: usize,
+    pub(crate) retrying: usize,
+    pub(crate) needs_attention: usize,
+    pub(crate) waiting: usize,
 }
 
 /// Whether a queue row is admitted: explicitly selected and, by its durable
@@ -300,6 +308,54 @@ pub(crate) fn batch_row_admitted(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_state_lands_in_exactly_one_command_center_bucket_matching_its_filter_group() {
+        use super::BulkQueueSummary;
+        let states = [
+            "imported",
+            "queued",
+            "preflight",
+            "ready",
+            "running",
+            "completed",
+            "retrying",
+            "verified",
+            "verified_with_exceptions",
+            "failed",
+            "cancelled",
+            "attention",
+            "delta_required",
+            "verification_difference",
+        ];
+        for state in states {
+            let counts =
+                BulkQueueSummary::from_state_counts([(state, 1)].into_iter()).command_center();
+            let buckets = [
+                ("completed", counts.completed),
+                ("migrating", counts.migrating),
+                ("retrying", counts.retrying),
+                ("needs_attention", counts.needs_attention),
+                ("waiting", counts.waiting),
+            ];
+            let hits = buckets
+                .iter()
+                .filter(|(_, count)| *count == 1)
+                .collect::<Vec<_>>();
+            assert_eq!(counts.total, 1, "{state}");
+            assert_eq!(
+                hits.len(),
+                1,
+                "{state} must land in exactly one bucket: {buckets:?}"
+            );
+            // The bucket's drill-down filter must select this state.
+            let bucket = hits[0].0;
+            assert!(
+                crate::core::state_filter_members(bucket).contains(&state),
+                "{state} is counted in {bucket} but its filter would not show it"
+            );
+        }
+    }
+
     use super::{
         BatchActionPlanBuilder, BatchActionRow, BatchExecutionMode, BatchStartBlock,
         BatchStartContext, BatchStartDecision, BulkJob, BulkQueueSummary, BulkRetryScope,
@@ -388,6 +444,8 @@ mod tests {
                 preflight: 0,
                 ready: 1,
                 running: 1,
+                completed: 0,
+                retrying: 0,
                 verified: 2,
                 failed: 1,
                 attention: 1,

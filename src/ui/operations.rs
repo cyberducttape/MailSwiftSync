@@ -43,7 +43,7 @@ pub(crate) fn format_estimate(duration: Duration) -> String {
     }
 }
 
-fn compact_count(value: u64) -> String {
+pub(crate) fn compact_count(value: u64) -> String {
     match value {
         0..1_000 => value.to_string(),
         1_000..1_000_000 => format!("{:.1}K", value as f64 / 1_000.0),
@@ -52,7 +52,7 @@ fn compact_count(value: u64) -> String {
 }
 
 /// Finish time on the local wall clock for an estimate.
-fn finish_clock(eta: Duration) -> String {
+pub(crate) fn format_finish_clock(eta: Duration) -> String {
     chrono::TimeDelta::from_std(eta)
         .ok()
         .and_then(|delta| chrono::Local::now().checked_add_signed(delta))
@@ -60,10 +60,10 @@ fn finish_clock(eta: Duration) -> String {
         .unwrap_or_default()
 }
 
-struct RunScope {
-    total: usize,
-    finished: usize,
-    running: usize,
+pub(crate) struct RunScope {
+    pub(crate) total: usize,
+    pub(crate) finished: usize,
+    pub(crate) running: usize,
 }
 
 impl App {
@@ -82,7 +82,7 @@ impl App {
             })
     }
 
-    fn run_scope(&self) -> RunScope {
+    pub(crate) fn run_scope(&self) -> RunScope {
         let telemetry = &self.run_telemetry;
         // Queue state covers mailboxes still authenticating; telemetry covers
         // engines already reporting. Either alone can lag the other.
@@ -182,7 +182,7 @@ impl App {
                         &eta.map(|eta| {
                             self.language
                                 .text("Finishes around {}")
-                                .replace("{}", &finish_clock(eta))
+                                .replace("{}", &format_finish_clock(eta))
                         })
                         .unwrap_or_else(|| {
                             self.language

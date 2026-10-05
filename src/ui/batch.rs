@@ -28,7 +28,7 @@ impl App {
         // disappear from a safety confirmation.
         let mut builder = BatchActionPlanBuilder::new(
             retry_scope,
-            self.form.profile.batch_concurrency,
+            self.effective_batch_profile().batch_concurrency,
             execution_mode,
         );
         if let Some(project_id) = self.queue.project_id() {
@@ -406,32 +406,42 @@ impl App {
                     ),
                     &field_label,
                 );
+                // One list drives both the options and the selected label, so
+                // a filter set elsewhere (a command-center bucket) is named.
+                let state_options: [(&str, &str); 14] = [
+                    ("all", self.language.text("All states")),
+                    (
+                        "needs_attention",
+                        self.language.message("ui.bucket-needs-attention"),
+                    ),
+                    ("retrying", self.language.message("ui.bucket-retrying")),
+                    ("migrating", self.language.message("ui.bucket-migrating")),
+                    ("waiting", self.language.message("ui.bucket-waiting")),
+                    ("completed", self.language.message("ui.bucket-completed")),
+                    ("imported", self.language.text("Imported")),
+                    ("ready", self.language.text("Ready")),
+                    ("attention", self.language.text("Attention")),
+                    ("failed", self.language.text("Failed")),
+                    ("delta_required", self.language.text("Delta required")),
+                    (
+                        "verification_difference",
+                        self.language.message("ui.state-verification-difference"),
+                    ),
+                    ("verified", self.language.text("Verified")),
+                    (
+                        "verified_with_exceptions",
+                        self.language.text("Verified with exceptions"),
+                    ),
+                ];
+                let selected_label = state_options
+                    .iter()
+                    .find(|(value, _)| *value == self.bulk_state_filter)
+                    .map_or(self.bulk_state_filter.as_str(), |(_, label)| label);
                 let state_filter = egui::ComboBox::from_id_salt("mailbox_state_filter")
-                    .selected_text(self.language.text(match self.bulk_state_filter.as_str() {
-                        "imported" => "Imported",
-                        "attention" => "Attention",
-                        "failed" => "Failed",
-                        "delta_required" => "Delta required",
-                        "verified" | "verified_with_exceptions" => "Verified",
-                        "ready" => "Ready",
-                        _ => "All states",
-                    }))
+                    .selected_text(selected_label.to_owned())
                     .show_ui(ui, |ui| {
-                        for (value, label) in [
-                            ("all", "All states"),
-                            ("imported", "Imported"),
-                            ("ready", "Ready"),
-                            ("attention", "Attention"),
-                            ("failed", "Failed"),
-                            ("delta_required", "Delta required"),
-                            ("verified", "Verified"),
-                            ("verified_with_exceptions", "Verified with exceptions"),
-                        ] {
-                            ui.selectable_value(
-                                &mut self.bulk_state_filter,
-                                value.into(),
-                                self.language.text(label),
-                            );
+                        for (value, label) in state_options {
+                            ui.selectable_value(&mut self.bulk_state_filter, value.into(), label);
                         }
                     });
                 crate::ui::name_control(
@@ -537,8 +547,30 @@ impl App {
                     if review_clicked || actions_clicked {
                         self.bulk_inspector_open = !self.bulk_inspector_open;
                     }
+                    if ui
+                        .small_button(
+                            self.language
+                                .message("ui.wave-create-button")
+                                .replace("{}", &self.bulk_selection_count().to_string()),
+                        )
+                        .clicked()
+                    {
+                        self.waves.creating = true;
+                        self.waves.message = None;
+                    }
                 }
             });
+            self.wave_create_form(ui);
+            if let Some(wave) = self.selected_wave() {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.wave-selection-active")
+                            .replace("{}", &wave.settings.name),
+                    )
+                    .color(self.theme_colors().info),
+                );
+            }
             if hidden_selected > 0 {
                 ui.label(
                     RichText::new(

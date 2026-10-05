@@ -92,6 +92,20 @@ impl DomainKey {
     pub(crate) fn level(&self) -> DomainLevel {
         self.level
     }
+
+    /// Canonical provider of this domain (`global` for the global domain).
+    pub(crate) fn provider(&self) -> &'static str {
+        self.provider
+    }
+
+    /// The `host:port` endpoint this domain belongs to; `None` for global.
+    pub(crate) fn endpoint(&self) -> Option<&str> {
+        match self.level {
+            DomainLevel::Global => None,
+            DomainLevel::Provider => Some(self.scope.as_str()),
+            _ => self.scope.rsplit_once(" @ ").map(|(_, endpoint)| endpoint),
+        }
+    }
 }
 
 /// The ordered domains one job must be admitted through: global first, then
