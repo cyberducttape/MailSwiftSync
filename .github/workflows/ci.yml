@@ -71,6 +71,14 @@ jobs:
       - name: Compile libFuzzer targets
         run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
       - run: cargo test --locked --all-targets --all-features
+      - name: Build and verify Linux packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends rpm
+          MAILSWIFTSYNC_PACKAGE_BINARY=target/debug/mailswiftsync scripts/package-deb.sh "$RUNNER_TEMP/packages"
+          scripts/verify-deb-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.deb' -print -quit)"
+          MAILSWIFTSYNC_PACKAGE_BINARY=target/debug/mailswiftsync scripts/package-rpm.sh "$RUNNER_TEMP/packages"
+          scripts/verify-rpm-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.rpm' -print -quit)"
       - name: Publish runnable test inventory
         if: always()
         shell: bash
