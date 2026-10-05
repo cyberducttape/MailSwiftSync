@@ -1,11 +1,11 @@
 .DEFAULT_GOAL := check
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: check format capability-check documentation-check shell-check script-check evidence-check compatibility clippy test build integration audit release-check
+.PHONY: check format capability-check documentation-check shell-check script-check evidence-check compatibility clippy fuzz-check test build integration audit release-check
 
 # Fast local formatting, documentation, script, and static-analysis checks.
 # CI additionally runs platform builds, container integrations, and audits.
-check: format capability-check documentation-check shell-check script-check evidence-check compatibility clippy
+check: format capability-check documentation-check shell-check script-check evidence-check compatibility clippy fuzz-check
 
 format:
 	cargo fmt --check
@@ -26,10 +26,14 @@ script-check:
 	bash tests/release-channel.sh
 	python3 tests/release_bundle_layout_test.py
 	python3 tests/provider_integration_harness_test.py
+	python3 tests/docker_memory_test.py
+	python3 tests/scale_maildir_test.py
+	python3 tests/scale_docker_wait_test.py
 
 evidence-check:
 	python3 tests/provider_evidence_generator_test.py
 	python3 tests/provider_evidence_schema_test.py
+	python3 tests/provider_proof_signature_test.py
 	python3 tests/verify_evidence_gate_test.py
 
 compatibility:
@@ -37,6 +41,11 @@ compatibility:
 
 clippy:
 	cargo clippy --locked --all-targets --all-features -- -D warnings
+
+# Fuzz targets include library sources by path; a renamed type breaks them
+# without breaking the main crate, so compile them as CI does.
+fuzz-check:
+	cargo check --locked --manifest-path fuzz/Cargo.toml --bins
 
 test:
 	cargo test --locked --all-targets --all-features

@@ -11,7 +11,8 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
             assert!(!code.is_empty());
             assert!(code.len() <= 4096);
         }
-        oauth_redirect::RedirectOutcome::Rejected(_)
+        oauth_redirect::RedirectOutcome::ProviderRejected(_)
+        | oauth_redirect::RedirectOutcome::InvalidCallback(_)
         | oauth_redirect::RedirectOutcome::Unrelated => {}
     }
 });
