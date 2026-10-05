@@ -583,67 +583,122 @@ impl App {
         });
         let colors = self.theme_colors();
         let mut navigate = None;
+        let blocked = findings
+            .iter()
+            .filter(|finding| finding.state == ConfidenceState::Blocked)
+            .count();
+        let unresolved = findings
+            .iter()
+            .filter(|finding| {
+                matches!(
+                    finding.state,
+                    ConfidenceState::Warning | ConfidenceState::Unknown
+                )
+            })
+            .count();
         crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(self.language.text("Migration confidence"));
+                ui.heading(self.language.text("Ready to migrate"));
                 ui.label(
-                    RichText::new(
-                        self.language
-                            .text("Evidence-based readiness · no percentage score"),
-                    )
+                    RichText::new(if blocked > 0 {
+                        format!("{blocked} blocker(s)")
+                    } else if unresolved > 0 {
+                        format!("{unresolved} check(s) need review")
+                    } else {
+                        "All checks established".to_owned()
+                    })
                     .small()
-                    .color(colors.text_secondary),
+                    .color(if blocked > 0 {
+                        colors.danger
+                    } else if unresolved > 0 {
+                        colors.warning
+                    } else {
+                        colors.success
+                    }),
                 );
             });
             ui.label(
-                RichText::new(self.language.text("Each finding reflects observed evidence. Unknown means not established—not passed."))
-                    .small()
-                    .color(colors.text_secondary),
+                RichText::new(
+                    self.language
+                        .text("A simple go/no-go view. Unknown means not established—not passed."),
+                )
+                .small()
+                .color(colors.text_secondary),
             );
-            for section in [
-                ConfidenceSection::Transfer,
-                ConfidenceSection::Verification,
-                ConfidenceSection::ProviderQualification,
-                ConfidenceSection::Cutover,
-            ] {
-                let (title, default_open) = match section {
-                    ConfidenceSection::Transfer => ("Transfer readiness", true),
-                    ConfidenceSection::Verification => ("Verification readiness", false),
-                    ConfidenceSection::ProviderQualification => ("Provider qualification", false),
-                    ConfidenceSection::Cutover => ("Cutover", false),
-                };
-                egui::CollapsingHeader::new(self.language.text(title))
-                    .default_open(default_open)
-                    .show(ui, |ui| {
-                        for finding in findings.iter().filter(|finding| finding.section == section) {
-                            let (symbol, color, state_text) = match finding.state {
-                                ConfidenceState::Ready => ("✓", colors.success, "Established"),
-                                ConfidenceState::Blocked => ("■", colors.danger, "Blocked"),
-                                ConfidenceState::Warning => ("!", colors.warning, "Warning"),
-                                ConfidenceState::Unknown => ("?", colors.text_secondary, "Unknown"),
-                            };
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(symbol).strong().color(color));
-                                ui.label(RichText::new(self.language.text(finding.label)).strong());
-                                ui.label(RichText::new(self.language.text(state_text)).color(color));
-                                ui.label(
-                                    self.language
-                                        .lookup(&finding.evidence)
-                                        .unwrap_or(&finding.evidence)
-                                        .to_owned(),
-                                );
-                                let action = ui.small_button(self.language.text(finding.remediation));
-                                if action.on_hover_text(self.language.text(finding.consequence)).clicked() {
-                                    navigate = Some(finding.destination);
-                                }
-                            });
-                            if finding.requires_preflight {
-                                ui.label(RichText::new(self.language.text("Changing this finding's inputs requires another preflight before live execution."))
-                                    .small().italics().color(colors.text_secondary));
-                            }
-                        }
-                    });
+            ui.add_space(6.0);
+            egui::Grid::new("overview_readiness_summary")
+                .num_columns(2)
+                .spacing([24.0, 5.0])
+                .show(ui, |ui| {
+                    for finding in findings.iter().filter(|finding| {
+                        matches!(
+                            finding.section,
+                            ConfidenceSection::Transfer
+                                | ConfidenceSection::Verification
+                                | ConfidenceSection::ProviderQualification
+                        )
+                    }) {
+                        let (symbol, color, label) = match finding.state {
+                            ConfidenceState::Ready => ("✓", colors.success, "Ready"),
+                            ConfidenceState::Blocked => ("!", colors.danger, "Blocked"),
+                            ConfidenceState::Warning => ("⚠", colors.warning, "Review"),
+                            ConfidenceState::Unknown => ("?", colors.text_secondary, "Unknown"),
+                        };
+                        ui.label(RichText::new(format!("{symbol} {}", finding.label)).strong());
+                        ui.label(RichText::new(label).color(color));
+                        ui.end_row();
+                    }
+                });
+            let primary = findings
+                .iter()
+                .find(|finding| finding.state == ConfidenceState::Blocked)
+                .or_else(|| {
+                    findings
+                        .iter()
+                        .find(|finding| finding.state != ConfidenceState::Ready)
+                });
+            if let Some(finding) = primary {
+                if ui
+                    .button(self.language.text(finding.remediation))
+                    .on_hover_text(self.language.text(finding.consequence))
+                    .clicked()
+                {
+                    navigate = Some(finding.destination);
+                }
             }
+            egui::CollapsingHeader::new(self.language.text("Advanced readiness details"))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for section in [
+                        ConfidenceSection::Transfer,
+                        ConfidenceSection::Verification,
+                        ConfidenceSection::ProviderQualification,
+                        ConfidenceSection::Cutover,
+                    ] {
+                        let title = match section {
+                            ConfidenceSection::Transfer => "Transfer readiness",
+                            ConfidenceSection::Verification => "Verification readiness",
+                            ConfidenceSection::ProviderQualification => "Provider qualification",
+                            ConfidenceSection::Cutover => "Cutover",
+                        };
+                        egui::CollapsingHeader::new(self.language.text(title)).show(ui, |ui| {
+                            for finding in
+                                findings.iter().filter(|finding| finding.section == section)
+                            {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new(finding.label).strong());
+                                    ui.label(&finding.evidence);
+                                    if ui
+                                        .small_button(self.language.text(finding.remediation))
+                                        .clicked()
+                                    {
+                                        navigate = Some(finding.destination);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                });
         });
         if let Some(destination) = navigate {
             self.active_view = destination;
