@@ -657,9 +657,15 @@ impl App {
                             );
                         }
                     }
-                    Event::ProviderCooldown { domain, until } => {
+                    Event::ProviderCooldown {
+                        domain,
+                        provider,
+                        endpoint,
+                        until,
+                    } => {
                         if active_run.is_some() {
-                            self.run_telemetry.record_cooldown(&domain, until);
+                            self.run_telemetry
+                                .record_cooldown(&domain, provider, endpoint, until);
                         }
                     }
                     Event::Finished(r) => {

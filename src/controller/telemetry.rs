@@ -34,6 +34,16 @@ pub(crate) struct RetryNote {
     pub(crate) failure_class: &'static str,
 }
 
+/// One rate domain paused after provider pushback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CooldownNote {
+    pub(crate) until: Instant,
+    /// Canonical provider; `global` pauses every provider.
+    pub(crate) provider: &'static str,
+    /// `host:port` of the paused domain; `None` for the global domain.
+    pub(crate) endpoint: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FailureNote {
     /// `None` for a single-mailbox run.
@@ -66,7 +76,7 @@ pub(crate) struct RunTelemetry {
     /// (time, cumulative bytes, cumulative messages) across all jobs.
     samples: VecDeque<(Instant, u64, u64)>,
     retries: HashMap<String, RetryNote>,
-    cooldowns: BTreeMap<String, Instant>,
+    cooldowns: BTreeMap<String, CooldownNote>,
     completions: Vec<Instant>,
     latest_failure: Option<FailureNote>,
 }
@@ -130,9 +140,22 @@ impl RunTelemetry {
         self.retries.insert(job_id.to_owned(), note);
     }
 
-    pub(crate) fn record_cooldown(&mut self, endpoint: &str, until: Instant) {
-        let entry = self.cooldowns.entry(endpoint.to_owned()).or_insert(until);
-        *entry = (*entry).max(until);
+    pub(crate) fn record_cooldown(
+        &mut self,
+        label: &str,
+        provider: &'static str,
+        endpoint: Option<String>,
+        until: Instant,
+    ) {
+        let entry = self
+            .cooldowns
+            .entry(label.to_owned())
+            .or_insert_with(|| CooldownNote {
+                until,
+                provider,
+                endpoint,
+            });
+        entry.until = entry.until.max(until);
     }
 
     pub(crate) fn record_job_finished(
@@ -308,8 +331,16 @@ impl RunTelemetry {
     pub(crate) fn active_cooldowns(&self, now: Instant) -> Vec<(&str, Duration)> {
         self.cooldowns
             .iter()
-            .filter(|(_, until)| **until > now)
-            .map(|(endpoint, until)| (endpoint.as_str(), until.saturating_duration_since(now)))
+            .filter(|(_, note)| note.until > now)
+            .map(|(label, note)| (label.as_str(), note.until.saturating_duration_since(now)))
+            .collect()
+    }
+
+    /// Paused domains still counting down, for per-provider health.
+    pub(crate) fn active_cooldown_notes(&self, now: Instant) -> Vec<&CooldownNote> {
+        self.cooldowns
+            .values()
+            .filter(|note| note.until > now)
             .collect()
     }
 
@@ -321,7 +352,7 @@ impl RunTelemetry {
     /// repainting while idle input would otherwise freeze the countdowns.
     pub(crate) fn has_live_countdowns(&self, now: Instant) -> bool {
         self.retries.values().any(|note| note.retry_at > now)
-            || self.cooldowns.values().any(|until| *until > now)
+            || self.cooldowns.values().any(|note| note.until > now)
     }
 }
 
@@ -415,7 +446,12 @@ mod tests {
                 failure_class: "capacity",
             },
         );
-        telemetry.record_cooldown("src:993|dst:993", start + Duration::from_secs(60));
+        telemetry.record_cooldown(
+            "source provider src:993",
+            "generic",
+            Some("src:993".into()),
+            start + Duration::from_secs(60),
+        );
         assert_eq!(telemetry.pending_retries(start).len(), 1);
         assert_eq!(telemetry.active_cooldowns(start)[0].1.as_secs(), 60);
         assert!(telemetry.has_live_countdowns(start));

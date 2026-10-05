@@ -11,6 +11,7 @@ mod batch_filter;
 mod batch_queue;
 mod batch_sheet;
 mod bootstrap_failure;
+mod command_center;
 mod confidence;
 // Release-mode tests still use the deterministic debug scenes for the
 // accessibility and scale audits. Keep these fixtures out of production

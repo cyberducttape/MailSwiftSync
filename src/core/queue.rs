@@ -26,6 +26,42 @@ use uuid::Uuid;
 const EFFECTIVE_STATE: &str = "CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' ELSE m.state END";
 const MAX_IDS_PER_QUERY: usize = 500;
 
+/// Operator-facing groups of effective mailbox states. The command center
+/// counts rows into these buckets and the mailbox filter accepts the same
+/// names, so a bucket's count and its drill-down always agree.
+const STATE_GROUPS: &[(&str, &[&str])] = &[
+    ("completed", &["verified", "verified_with_exceptions"]),
+    (
+        "migrating",
+        &["queued", "preflight", "running", "completed"],
+    ),
+    (
+        "needs_attention",
+        &["attention", "failed", "verification_difference"],
+    ),
+    (
+        "waiting",
+        &["imported", "ready", "delta_required", "cancelled"],
+    ),
+];
+
+/// Effective states matched by a state filter: a group's members, or the
+/// single named state.
+pub fn state_filter_members(filter: &str) -> Vec<&str> {
+    STATE_GROUPS
+        .iter()
+        .find(|(name, _)| *name == filter)
+        .map_or_else(|| vec![filter], |(_, members)| members.to_vec())
+}
+
+/// Bind value for a state filter: a JSON array of member states, matched in
+/// SQL with `IN (SELECT value FROM json_each(?))`.
+fn state_filter_json(state: Option<&str>) -> Option<String> {
+    state.map(|state| {
+        serde_json::to_string(&state_filter_members(state)).unwrap_or_else(|_| "[]".to_owned())
+    })
+}
+
 /// Secret-free facts the controller derives from a row's plan.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueueRowFacts {
@@ -366,6 +402,40 @@ impl StateStore {
         )
     }
 
+    /// Messages and bytes placed at the destination across the project's
+    /// mailboxes with durable evidence, plus how many mailboxes that covers.
+    /// Evidence is recorded per terminal run, so this is verified progress,
+    /// not live in-flight transfer.
+    pub fn queue_transfer_totals(&self, project_id: &str) -> rusqlite::Result<(u64, u64, usize)> {
+        self.connection.query_row(
+            "SELECT COALESCE(SUM(e.destination_messages),0),COALESCE(SUM(e.destination_bytes),0),COUNT(*)
+             FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1",
+            [project_id],
+            |row| {
+                Ok((
+                    u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                    u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                    usize::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                ))
+            },
+        )
+    }
+
+    /// Distinct source and destination hosts in a queue, for per-provider
+    /// health. Bounded: a queue rarely spans more than a handful of servers.
+    pub fn queue_endpoint_hosts(&self, project_id: &str) -> rusqlite::Result<Vec<String>> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT host FROM (
+                 SELECT source_host AS host FROM mailbox_queue_facts WHERE project_id=?1
+                 UNION
+                 SELECT destination_host FROM mailbox_queue_facts WHERE project_id=?1
+             ) WHERE host<>'' ORDER BY host LIMIT 64",
+        )?;
+        statement
+            .query_map([project_id], |row| row.get(0))?
+            .collect()
+    }
+
     /// Row IDs matching a folded search and an optional effective state, in
     /// queue order. This is the queue's virtual-row index: eight bytes per
     /// matching row, with row contents fetched only for what is on screen.
@@ -378,10 +448,13 @@ impl StateStore {
         let search_predicate = queue_search_predicate(folded_search);
         let search_query = queue_search_query(folded_search);
         let mut statement = self.connection.prepare_cached(&format!(
-            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3)) ORDER BY f.job_rowid"
+            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3)))) ORDER BY f.job_rowid"
         ))?;
         statement
-            .query_map(params![project_id, search_query, state], |row| row.get(0))?
+            .query_map(
+                params![project_id, search_query, state_filter_json(state)],
+                |row| row.get(0),
+            )?
             .collect()
     }
 
@@ -397,9 +470,9 @@ impl StateStore {
         let search_query = queue_search_query(folded_search);
         self.connection.query_row(
             &format!(
-                "SELECT COUNT(*) FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3))"
+                "SELECT COUNT(*) FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3))))"
             ),
-            params![project_id, search_query, state],
+            params![project_id, search_query, state_filter_json(state)],
             |row| Ok(row.get::<_, i64>(0)? as usize),
         )
     }
@@ -418,14 +491,14 @@ impl StateStore {
         let search_predicate = queue_search_predicate(folded_search);
         let search_query = queue_search_query(folded_search);
         let mut statement = self.connection.prepare_cached(&format!(
-            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE}=?3)) ORDER BY f.job_rowid LIMIT ?4 OFFSET ?5"
+            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3)))) ORDER BY f.job_rowid LIMIT ?4 OFFSET ?5"
         ))?;
         statement
             .query_map(
                 params![
                     project_id,
                     search_query,
-                    state,
+                    state_filter_json(state),
                     i64::try_from(limit).unwrap_or(i64::MAX),
                     i64::try_from(offset).unwrap_or(i64::MAX)
                 ],

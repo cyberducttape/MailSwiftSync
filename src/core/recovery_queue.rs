@@ -28,6 +28,10 @@ pub struct RecoveryRow {
     pub last_attempt_outcome: Option<String>,
     /// Latest bounded engine-progress checkpoint, if one was durably seen.
     pub last_progress_checkpoint: Option<String>,
+    /// Durable history of what was already tried: recorded runs and the
+    /// engine transfer attempts they executed (automatic retries included).
+    pub runs: u32,
+    pub transfer_attempts: u32,
 }
 
 fn reason_value(reason: Option<AttentionReason>) -> Option<&'static str> {
@@ -70,6 +74,8 @@ impl StateStore {
                     (SELECT r.finished_at FROM runs r WHERE r.job_id=m.id ORDER BY r.started_at DESC,r.rowid DESC LIMIT 1),
                     (SELECT tp.outcome FROM transfer_passes tp JOIN runs r ON r.id=tp.run_id WHERE r.job_id=m.id ORDER BY tp.started_at DESC,tp.rowid DESC LIMIT 1)
                     ,(SELECT e.detail FROM events e WHERE e.kind='transfer_progress_checkpoint' AND e.run_id IN (SELECT r.id FROM runs r WHERE r.job_id=m.id) ORDER BY e.created_at DESC,e.id DESC LIMIT 1)
+                    ,(SELECT COUNT(*) FROM runs r WHERE r.job_id=m.id)
+                    ,(SELECT COUNT(*) FROM transfer_passes tp JOIN runs r ON r.id=tp.run_id WHERE r.job_id=m.id)
              FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid
              WHERE m.project_id=?1 AND m.state=?2 AND m.attention_reason IS ?3 AND m.rowid>?4
              ORDER BY m.rowid LIMIT ?5",
@@ -96,6 +102,9 @@ impl StateStore {
                         last_run_finished_at: row.get(6)?,
                         last_attempt_outcome: row.get(7)?,
                         last_progress_checkpoint: row.get(8)?,
+                        runs: u32::try_from(row.get::<_, i64>(9)?).unwrap_or(u32::MAX),
+                        transfer_attempts: u32::try_from(row.get::<_, i64>(10)?)
+                            .unwrap_or(u32::MAX),
                     })
                 },
             )?

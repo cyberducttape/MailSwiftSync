@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Add a migration command center to Overview for mailbox queues: operator
+  buckets (completed, migrating, paused for retry, needs attention, waiting)
+  that open exactly the rows they count, transferred totals, average speed,
+  projected finish, and per-provider health that marks Google Workspace,
+  Microsoft 365, or an individual self-hosted server as throttled while its
+  launches are paused. Count `completed` and `retrying` rows, which previously
+  fell out of every queue-health bucket.
+- Structure Recovery as why it stopped, what MailSwiftSync already tried
+  (including each mailbox's run and transfer-attempt history), and what to do,
+  with a one-click retry that re-proves the group through a fresh dry
+  preflight, or runs the final catch-up for delta-required mailboxes behind the
+  normal live confirmation. The command center's attention bucket opens it.
+- The mailbox state filter accepts the command-center groups and names any
+  active filter, instead of showing "All states" for filters it did not list.
 - Add a manually dispatched **Live provider smoke** workflow that runs the
   provider dry pilot, interruption/recovery, and live pilot against operator
   Google Workspace and Microsoft 365 test tenants in the packaged runtime image,

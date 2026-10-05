@@ -123,7 +123,9 @@ pub(crate) fn telemetry_demo(app: &mut App) {
         },
     );
     app.run_telemetry.record_cooldown(
-        "imap.source.example:993 → imap.destination.example:993",
+        "source tenant source.example @ imap.source.example:993",
+        "generic",
+        Some("imap.source.example:993".into()),
         now + Duration::from_secs(95),
     );
     app.run_telemetry.record_job_finished(

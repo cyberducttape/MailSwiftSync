@@ -47,6 +47,33 @@ fn recommended_action(group: &RecoveryGroup) -> &'static str {
     }
 }
 
+/// What MailSwiftSync already did about a group's failure before handing it
+/// to the operator, by its durable reason.
+fn already_tried(group: &RecoveryGroup) -> &'static str {
+    match group.reason {
+        Some(
+            AttentionReason::TransportFailed
+            | AttentionReason::CapacityLimited
+            | AttentionReason::Interrupted,
+        ) => "ui.recovery-tried-transient",
+        Some(
+            AttentionReason::AuthenticationFailed
+            | AttentionReason::ConfigurationInvalid
+            | AttentionReason::PolicyBlocked
+            | AttentionReason::MessageRejected,
+        ) => "ui.recovery-tried-not-retried",
+        Some(AttentionReason::VerificationDifference | AttentionReason::VerificationIncomplete) => {
+            "ui.recovery-tried-verification"
+        }
+        Some(AttentionReason::ProcessIdentityUnverified) => "ui.recovery-tried-process",
+        Some(AttentionReason::Unknown) | None => match group.state.as_str() {
+            "delta_required" => "ui.recovery-tried-delta",
+            "cancelled" => "ui.recovery-tried-cancelled",
+            _ => "ui.recovery-tried-unclassified",
+        },
+    }
+}
+
 fn reviews_evidence(group: &RecoveryGroup) -> bool {
     group.state == "verification_difference"
         || matches!(
@@ -243,6 +270,7 @@ impl App {
         let mut select = None;
         let mut review = None;
         let mut remediate = None;
+        let mut retry = None;
         for group in &groups {
             let key: GroupKey = (group.state.clone(), group.reason);
             let expanded = self.recovery.expanded.as_ref() == Some(&key);
@@ -265,15 +293,15 @@ impl App {
                         colors.warning,
                     );
                 });
+                let (consequence, remediation_label, remediation_view) = remediation(group);
+                crate::ui::section_label(ui, self.language.message("ui.recovery-why"));
+                ui.label(self.language.text(consequence));
+                crate::ui::section_label(ui, self.language.message("ui.recovery-tried"));
+                ui.label(self.language.message(already_tried(group)));
+                crate::ui::section_label(ui, self.language.message("ui.recovery-what-to-do"));
                 if let Some(reason) = group.reason {
                     ui.label(self.language.text(reason.recommended_action()));
                 }
-                let (consequence, remediation_label, remediation_view) = remediation(group);
-                ui.label(
-                    RichText::new(self.language.text(consequence))
-                        .small()
-                        .color(colors.text_secondary),
-                );
                 let extra = recommended_action(group);
                 if !extra.is_empty() {
                     ui.label(self.language.message(extra));
@@ -310,6 +338,28 @@ impl App {
                     if select_button.clicked() {
                         select = Some(group.clone());
                     }
+                    let retry_button = ui
+                        .add_enabled(
+                            selectable && !self.running(),
+                            egui::Button::new(
+                                self.language
+                                    .message(if group.state == "delta_required" {
+                                        "ui.recovery-run-delta"
+                                    } else {
+                                        "ui.recovery-retry-preflight"
+                                    })
+                                    .replace("{}", &group.count.to_string()),
+                            ),
+                        )
+                        .on_hover_text(self.language.message(if group.state == "delta_required" {
+                            "ui.recovery-run-delta-hint"
+                        } else {
+                            "ui.recovery-retry-hint"
+                        }))
+                        .on_disabled_hover_text(self.language.message("ui.recovery-queue-only"));
+                    if retry_button.clicked() {
+                        retry = Some(group.clone());
+                    }
                     if ui.button(self.language.text(remediation_label)).clicked() {
                         remediate = Some(remediation_view);
                     }
@@ -341,6 +391,22 @@ impl App {
         if let Some(group) = select {
             self.select_recovery_group(&project_id, &group);
         }
+        if let Some(group) = retry {
+            // Retrying means re-proving the mailboxes with a fresh dry
+            // preflight; live migration still requires that preflight to
+            // match, and goes through the normal confirmation.
+            self.select_recovery_group(&project_id, &group);
+            if group.state == "delta_required" {
+                // A completed bulk transfer waiting for its catch-up pass:
+                // run the final delta, behind the normal live confirmation.
+                self.bulk_mode = crate::controller::BatchExecutionMode::Live;
+                self.bulk_retry_scope = crate::controller::BulkRetryScope::DeltaRequired;
+            } else {
+                self.bulk_mode = crate::controller::BatchExecutionMode::Preflight;
+                self.bulk_retry_scope = crate::controller::BulkRetryScope::All;
+            }
+            self.start_bulk();
+        }
         if let Some(reason) = review {
             self.verification_attention_reason = reason;
             self.verification_offset = 0;
@@ -371,6 +437,16 @@ impl App {
                 None => self.language.message("ui.recovery-no-attempt").to_owned(),
             };
             ui.label(RichText::new(attempt).small());
+            ui.label(
+                RichText::new(
+                    self.language
+                        .message("ui.recovery-row-history")
+                        .replace("{runs}", &row.runs.to_string())
+                        .replace("{attempts}", &row.transfer_attempts.to_string()),
+                )
+                .small()
+                .color(colors.text_secondary),
+            );
             if let Some(detail) = &row.last_run_detail {
                 ui.add(
                     egui::Label::new(RichText::new(detail).small().color(colors.text_secondary))
