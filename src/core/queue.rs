@@ -270,18 +270,31 @@ impl StateStore {
             params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
         )?;
         let mut ids = Vec::with_capacity(rows.len());
+        // Plans are deduplicated by content digest, so equal plans persist
+        // once however callers allocate them. The allocation pointer is only
+        // a cache in front of the digest: rows usually share one `Arc`, and
+        // hashing each row's full plan text would dominate large imports.
         let mut plan_ids = std::collections::HashMap::<*const (), String>::new();
+        let mut plan_ids_by_digest = std::collections::HashMap::<String, String>::new();
         for config in rows.iter().filter_map(|row| row.batch_plan_config.as_ref()) {
-            let identity = Arc::as_ptr(config) as *const ();
-            if plan_ids.contains_key(&identity) {
+            let allocation = Arc::as_ptr(config) as *const ();
+            if plan_ids.contains_key(&allocation) {
                 continue;
             }
-            let id = Uuid::new_v4().to_string();
-            tx.execute(
-                "INSERT INTO batch_plans(id,project_id,config) VALUES(?1,?2,?3)",
-                params![id, project.id, config.as_ref()],
-            )?;
-            plan_ids.insert(identity, id);
+            let digest = super::sha256_hex(config.as_bytes());
+            let id = match plan_ids_by_digest.get(&digest) {
+                Some(id) => id.clone(),
+                None => {
+                    let id = Uuid::new_v4().to_string();
+                    tx.execute(
+                        "INSERT INTO batch_plans(id,project_id,config) VALUES(?1,?2,?3)",
+                        params![id, project.id, config.as_ref()],
+                    )?;
+                    plan_ids_by_digest.insert(digest, id.clone());
+                    id
+                }
+            };
+            plan_ids.insert(allocation, id);
         }
         {
             let mut insert = tx.prepare(
@@ -966,6 +979,46 @@ mod tests {
             .create_batch_queue("queue", "old.example", "new.example", &rows)
             .unwrap();
         (project.id, ids)
+    }
+
+    #[test]
+    fn equal_plans_in_separate_allocations_persist_once() {
+        let store = StateStore::in_memory().unwrap();
+        let rows = [
+            ("shared immutable plan", 0),
+            ("shared immutable plan", 1),
+            ("different plan", 2),
+        ]
+        .into_iter()
+        .map(|(plan, index)| {
+            let mut row = insert(index, false);
+            row.config.clear();
+            // A fresh allocation per row: identity must come from content.
+            row.batch_plan_config = Some(Arc::<str>::from(plan));
+            row
+        })
+        .collect::<Vec<_>>();
+        let (project, ids) = store
+            .create_batch_queue("queue", "old.example", "new.example", &rows)
+            .unwrap();
+        let plans: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM batch_plans WHERE project_id=?1",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(plans, 2);
+        let shared: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(DISTINCT batch_plan_id) FROM mailbox_jobs WHERE id IN (?1,?2)",
+                [&ids[0], &ids[1]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(shared, 1);
     }
 
     #[test]
