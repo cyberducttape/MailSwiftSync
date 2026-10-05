@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Present the Overview lifecycle in operator language (Add accounts → Test &
+  review risks → Run pilot → Migrate → Catch up → Final sync → Verify results →
+  Finish & export proof) instead of internal phase names, and replace "Begin in
+  Discovery" guidance with plain wording, in English and German.
+- Split `cli.rs`, `runner.rs`, `core/message_verification.rs`, and
+  `migration_plan.rs` into responsibility-focused submodules without behavior
+  changes; critical-module coverage floors now cover each split module's
+  submodules.
 - Deduplicate persisted batch plans by SHA-256 of their content rather than by
   allocation pointer, so equal plans persist once however callers allocate
   them.

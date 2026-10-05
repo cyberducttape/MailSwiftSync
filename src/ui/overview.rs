@@ -791,9 +791,10 @@ impl App {
                 ui.label(RichText::new(self.language.message("ui.mailswiftsync-guides-every-migration-through-a-reviewed-preflight-before-an-48ba765ba1")).color(colors.text_secondary));
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(self.language.text(
-                        "Begin in Discovery by choosing the source, destination, and account access.",
-                    ))
+                    RichText::new(
+                        self.language
+                            .text("Start by choosing the source, destination, and account access."),
+                    )
                     .color(colors.text_secondary),
                 );
                 ui.horizontal(|ui| {
@@ -1040,7 +1041,7 @@ impl App {
         };
         let current_index = LIFECYCLE
             .iter()
-            .position(|(phase, _)| *phase == current)
+            .position(|(phase, _, _)| *phase == current)
             .unwrap_or(usize::MAX);
         ui.horizontal(|ui| {
             crate::ui::section_label(ui, self.language.message("ui.migration-lifecycle"));
@@ -1064,9 +1065,9 @@ impl App {
         let steps = LIFECYCLE
             .iter()
             .enumerate()
-            .map(|(index, (phase, detail_key))| {
+            .map(|(index, (_, title_key, detail_key))| {
                 (
-                    self.language.text(crate::ui::format_phase_name(*phase)),
+                    self.language.message(title_key),
                     Some(self.language.message(detail_key)),
                     step_state(index, current_index),
                 )
@@ -1129,15 +1130,50 @@ impl App {
     }
 }
 
-const LIFECYCLE: [(core::Phase, &str); 8] = [
-    (core::Phase::Discovery, "ui.phase-action-prepare"),
-    (core::Phase::Preflight, "ui.phase-action-preflight"),
-    (core::Phase::Pilot, "ui.phase-action-pilot"),
-    (core::Phase::Seed, "ui.phase-action-seed"),
-    (core::Phase::CatchUp, "ui.phase-action-catch-up"),
-    (core::Phase::FinalDelta, "ui.phase-action-cutover"),
-    (core::Phase::Verification, "ui.phase-action-verify"),
-    (core::Phase::Complete, "ui.phase-action-complete"),
+/// The operator workflow, in lifecycle order. Titles use operator language
+/// ("Import accounts", "Final sync") rather than internal phase names; the
+/// detail line names the concrete action for that step.
+const LIFECYCLE: [(core::Phase, &str, &str); 8] = [
+    (
+        core::Phase::Discovery,
+        "ui.workflow-step-prepare",
+        "ui.phase-action-prepare",
+    ),
+    (
+        core::Phase::Preflight,
+        "ui.workflow-step-preflight",
+        "ui.phase-action-preflight",
+    ),
+    (
+        core::Phase::Pilot,
+        "ui.workflow-step-pilot",
+        "ui.phase-action-pilot",
+    ),
+    (
+        core::Phase::Seed,
+        "ui.workflow-step-seed",
+        "ui.phase-action-seed",
+    ),
+    (
+        core::Phase::CatchUp,
+        "ui.workflow-step-catch-up",
+        "ui.phase-action-catch-up",
+    ),
+    (
+        core::Phase::FinalDelta,
+        "ui.workflow-step-cutover",
+        "ui.phase-action-cutover",
+    ),
+    (
+        core::Phase::Verification,
+        "ui.workflow-step-verify",
+        "ui.phase-action-verify",
+    ),
+    (
+        core::Phase::Complete,
+        "ui.workflow-step-complete",
+        "ui.phase-action-complete",
+    ),
 ];
 
 /// What the Overview's single primary button does.
@@ -1194,6 +1230,36 @@ fn step_state(index: usize, current: usize) -> crate::ui::StepState {
 #[cfg(test)]
 mod tests {
     use super::{LIFECYCLE, OverviewPrimary, OverviewPrimaryInputs, overview_primary};
+
+    #[test]
+    fn workflow_steps_use_operator_language_in_every_locale() {
+        let internal = [
+            "Discovery",
+            "Preflight",
+            "Seed",
+            "Final delta",
+            "FinalDelta",
+            "Catch-up",
+        ];
+        for language in [
+            crate::ui::language::UiLanguage::English,
+            crate::ui::language::UiLanguage::German,
+        ] {
+            for (_, title_key, detail_key) in LIFECYCLE {
+                let title = language.message(title_key);
+                assert!(!title.is_empty() && title != title_key, "{title_key}");
+                assert!(!language.message(detail_key).is_empty(), "{detail_key}");
+                assert!(
+                    !internal.contains(&title),
+                    "{title_key} shows internal phase name {title:?}"
+                );
+            }
+        }
+        assert_eq!(
+            crate::ui::language::UiLanguage::English.message(LIFECYCLE[0].1),
+            "Add accounts"
+        );
+    }
     use crate::core::Phase;
 
     fn inputs() -> OverviewPrimaryInputs {
@@ -1210,7 +1276,7 @@ mod tests {
 
     #[test]
     fn lifecycle_uses_every_durable_phase_once_in_order() {
-        let phases: Vec<_> = LIFECYCLE.iter().map(|(phase, _)| *phase).collect();
+        let phases: Vec<_> = LIFECYCLE.iter().map(|(phase, _, _)| *phase).collect();
         assert_eq!(
             phases,
             [
