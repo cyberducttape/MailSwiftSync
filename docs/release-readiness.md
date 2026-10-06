@@ -235,6 +235,11 @@ screen-reader checklist are recorded in
   simultaneous real-engine resource measurements remain release evidence to
   collect; the existing 100k single-engine result must not be generalized to
   that matrix.
+- The [release upgrade and provider-failure matrix](release-upgrade-validation.md)
+  defines the binary-produced 0.8→0.9→RC→1.0 persistence campaign and the
+  real-provider throttling, quota, token-expiry, disconnect, folder-limit,
+  large-message, and suspended-account cases. Current legacy-schema tests and
+  generic fixtures do not satisfy those release or provider evidence gates.
 - Headless `status` and `recover` commands expose secret-free durable state and
   reuse the GUI's fail-closed process recovery path. They are control-plane
   primitives, and `headless preflight|live` now drives the existing controller
