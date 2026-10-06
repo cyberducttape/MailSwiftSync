@@ -904,16 +904,12 @@ impl App {
             summary.total > 0,
             false,
         );
-        let workflow_index = match phase {
-            crate::core::Phase::Discovery => 0,
-            crate::core::Phase::Preflight => 2,
-            crate::core::Phase::Pilot | crate::core::Phase::Seed => 3,
-            crate::core::Phase::CatchUp => 4,
-            crate::core::Phase::FinalDelta => 5,
-            crate::core::Phase::Verification => 6,
-            crate::core::Phase::Complete => 7,
-            crate::core::Phase::Attention => 1,
-        };
+        // Same steps and labels as the Overview lifecycle; Attention has no
+        // current step.
+        let workflow_index = crate::ui::overview::LIFECYCLE
+            .iter()
+            .position(|(step, _, _)| *step == phase)
+            .unwrap_or(usize::MAX);
         crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
                 crate::ui::section_label(ui, self.language.text("Migration workflow"));
@@ -926,23 +922,13 @@ impl App {
             });
             ui.label(RichText::new(self.language.text(next.text)).color(colors.text_secondary));
             ui.horizontal_wrapped(|ui| {
-                for (index, label) in [
-                    "1 Import",
-                    "2 Resolve blockers",
-                    "3 Preflight",
-                    "4 Pilot / seed",
-                    "5 Catch-up",
-                    "6 Final delta",
-                    "7 Verify",
-                    "8 Deliver proof",
-                ]
-                .into_iter()
-                .enumerate()
+                for (index, (_, title_key, _)) in crate::ui::overview::LIFECYCLE.iter().enumerate()
                 {
+                    let label = format!("{} {}", index + 1, self.language.message(title_key));
                     let active = index == workflow_index;
-                    ui.label(RichText::new(self.language.text(label)).color(if active {
+                    ui.label(RichText::new(label).color(if active {
                         colors.info
-                    } else if index < workflow_index {
+                    } else if workflow_index != usize::MAX && index < workflow_index {
                         colors.success
                     } else {
                         colors.text_secondary

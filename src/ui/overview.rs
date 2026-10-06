@@ -1194,7 +1194,7 @@ impl App {
 /// The operator workflow, in lifecycle order. Titles use operator language
 /// ("Import accounts", "Final sync") rather than internal phase names; the
 /// detail line names the concrete action for that step.
-const LIFECYCLE: [(core::Phase, &str, &str); 8] = [
+pub(crate) const LIFECYCLE: [(core::Phase, &str, &str); 8] = [
     (
         core::Phase::Discovery,
         "ui.workflow-step-prepare",

@@ -25,7 +25,7 @@ mod keyring_ops;
 mod language;
 mod operations;
 mod output;
-mod overview;
+pub(crate) mod overview;
 mod plan;
 mod qualification;
 pub(crate) mod queue_model;
