@@ -317,6 +317,10 @@ impl PendingAuthorization {
                 &policy.oauth.allowed_domains,
                 "OAuth authorization",
             )?;
+            // The browser owns the eventual authorization connection and
+            // performs its own DNS resolution. This check protects the
+            // hand-off boundary, while the authorization-code token exchange
+            // separately pins its HTTP connection to the checked addresses.
         }
         let pkce = new_pkce()?;
         let state = new_state()?;

@@ -67,8 +67,11 @@ it is read and enforced when the endpoint is validated and before delivery.
 OAuth authorization and token endpoints are restricted to the built-in Google
 and Microsoft hosts by default. All resolved addresses are checked for global
 unicast egress; token HTTP connections are pinned to the checked DNS
-answers. Set `allow_custom_endpoints = true` only for reviewed enterprise
-providers, and use `allowed_domains` to limit the approved host boundary.
+answers. Interactive authorization is handed to the operator's browser after
+the check; browser DNS, certificate validation, and connection pinning are
+outside MailSwiftSync's transport boundary. Set `allow_custom_endpoints = true`
+only for reviewed enterprise providers, and use `allowed_domains` to limit the
+approved host boundary.
 
 Tenant scheduling scope can be set separately for source and destination in
 Migration plan → Advanced options. For batch imports, `source_rate_tenant` and

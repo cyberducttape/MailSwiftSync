@@ -97,9 +97,11 @@ impl Default for OrganizationPolicy {
 }
 
 /// Resolve an HTTPS endpoint through the bounded resolver and validate every
-/// returned address before a caller opens a connection or browser session.
-/// HTTP clients should pin themselves to the returned set to avoid a second
-/// DNS answer bypassing the policy.
+/// returned address before a caller opens a connection. HTTP clients should
+/// pin themselves to the returned set to avoid a second DNS answer bypassing
+/// the policy. A caller handing the URL to an external browser can only
+/// validate before browser launch; the browser's subsequent DNS and TLS
+/// connection are outside this process's pinning boundary.
 pub(crate) fn resolve_policy_checked_https_target(
     url: &reqwest::Url,
     allow_private_networks: bool,
