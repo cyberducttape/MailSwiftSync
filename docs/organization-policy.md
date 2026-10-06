@@ -32,9 +32,9 @@ allowed_domains = ["accounts.google.com", "oauth2.googleapis.com", "login.micros
 
 The policy is read when preflight is assessed and is rechecked immediately
 before batch admission. A malformed, unreadable, group/world-accessible, or
-otherwise invalid policy blocks the operation. Missing policy means the
-backwards-compatible permissive defaults; it does not create an organization
-policy by itself.
+otherwise invalid policy blocks the operation. Missing policy uses the
+production-safe defaults above; weakening that baseline requires an explicit
+organization policy.
 
 Provider entries may cap provider-endpoint, per-tenant, and per-credential
 concurrency independently on either source or destination. They do not reduce

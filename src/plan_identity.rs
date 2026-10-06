@@ -6,9 +6,30 @@
 
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::UNIX_EPOCH,
 };
+
+const MAX_EXECUTABLE_IDENTITY_CACHE: usize = 64;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ExecutableFileKey {
+    path: PathBuf,
+    size: u64,
+    modified_nanos: Option<u128>,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed_nanos: i64,
+}
+
+static EXECUTABLE_IDENTITY_CACHE: OnceLock<Mutex<HashMap<ExecutableFileKey, String>>> =
+    OnceLock::new();
 
 pub(crate) fn snapshot_sha256(snapshot: &str) -> String {
     let digest = Sha256::digest(snapshot.as_bytes());
@@ -47,7 +68,7 @@ fn resolve_executable(executable: &str) -> Option<PathBuf> {
     None
 }
 
-fn file_content_identity(path: &Path) -> String {
+fn file_content_identity_uncached(path: &Path) -> String {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) => return format!("unavailable:{:?}", error.kind()),
@@ -72,19 +93,77 @@ fn file_content_identity(path: &Path) -> String {
     format!("sha256:{}", hex)
 }
 
+fn executable_file_key(path: &Path) -> Option<ExecutableFileKey> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    Some(ExecutableFileKey {
+        path: path.to_path_buf(),
+        size: metadata.len(),
+        modified_nanos,
+        #[cfg(unix)]
+        device: {
+            use std::os::unix::fs::MetadataExt;
+            metadata.dev()
+        },
+        #[cfg(unix)]
+        inode: {
+            use std::os::unix::fs::MetadataExt;
+            metadata.ino()
+        },
+        #[cfg(unix)]
+        changed_nanos: {
+            use std::os::unix::fs::MetadataExt;
+            metadata
+                .ctime()
+                .saturating_mul(1_000_000_000)
+                .saturating_add(metadata.ctime_nsec())
+        },
+    })
+}
+
+fn cached_executable_content_identity(path: &Path) -> String {
+    let Some(key) = executable_file_key(path) else {
+        return file_content_identity_uncached(path);
+    };
+    let cache = EXECUTABLE_IDENTITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(identity) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        return identity;
+    }
+    let identity = file_content_identity_uncached(path);
+    if identity.starts_with("sha256:") {
+        let mut entries = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if entries.len() >= MAX_EXECUTABLE_IDENTITY_CACHE {
+            entries.clear();
+        }
+        entries.insert(key, identity.clone());
+    }
+    identity
+}
+
 pub(crate) fn configured_file_content_identity(path: &str) -> String {
     let path = path.trim();
     if path.is_empty() {
         "none".into()
     } else {
-        file_content_identity(Path::new(path))
+        file_content_identity_uncached(Path::new(path))
     }
 }
 
 pub(crate) fn executable_content_identity(executable: &str) -> String {
     resolve_executable(executable)
         .as_deref()
-        .map(file_content_identity)
+        .map(cached_executable_content_identity)
         .unwrap_or_else(|| "unresolved".into())
 }
 
@@ -97,7 +176,9 @@ pub(crate) fn revalidate_executable(
 ) -> Result<PathBuf, String> {
     let path = resolve_executable(executable)
         .ok_or_else(|| format!("could not resolve executable {executable:?} before launch"))?;
-    let actual_identity = file_content_identity(&path);
+    // Do not use the admission cache here: this is the final TOCTOU check
+    // immediately before spawn and must read the current file contents.
+    let actual_identity = file_content_identity_uncached(&path);
     if !expected_identity.starts_with("sha256:") || !actual_identity.starts_with("sha256:") {
         return Err(format!(
             "executable identity is unavailable before launch: expected {expected_identity}, found {actual_identity}"

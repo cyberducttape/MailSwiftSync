@@ -62,8 +62,8 @@ pub(crate) struct ProviderRateCeilings {
 pub(crate) struct OrganizationPolicy {
     /// Require encrypted source and destination transport.
     pub(crate) require_tls: bool,
-    /// Defaults to true for backwards-compatible installations; set false
-    /// alongside `require_tls` to make the intent explicit in policy files.
+    /// Defaults to false; enabling plaintext IMAP is an explicit compatibility
+    /// exception for legacy servers.
     pub(crate) allow_plain_imap: bool,
     /// Whether plans that can remove destination-only state are permitted.
     pub(crate) allow_destination_deletion: bool,
@@ -84,11 +84,11 @@ pub(crate) struct OrganizationPolicy {
 impl Default for OrganizationPolicy {
     fn default() -> Self {
         Self {
-            require_tls: false,
-            allow_plain_imap: true,
-            allow_destination_deletion: true,
-            minimum_verification: "aggregate".into(),
-            max_concurrency: None,
+            require_tls: true,
+            allow_plain_imap: false,
+            allow_destination_deletion: false,
+            minimum_verification: "metadata".into(),
+            max_concurrency: Some(8),
             providers: BTreeMap::new(),
             webhooks: OrganizationWebhookPolicy::default(),
             oauth: OrganizationOAuthPolicy::default(),
@@ -234,7 +234,7 @@ impl OrganizationPolicy {
             })
     }
 
-    /// Missing policy is the explicit permissive default. A present but
+    /// Missing policy uses the production-safe baseline. A present but
     /// malformed policy fails closed rather than silently weakening policy.
     pub(crate) fn load() -> Result<Self, String> {
         let path = Self::path()?;
@@ -403,6 +403,16 @@ fn canonical_provider_key(value: &str) -> Result<&'static str, String> {
 mod tests {
     use super::OrganizationPolicy;
     use crate::{Form, core};
+
+    #[test]
+    fn default_policy_uses_production_safe_baseline() {
+        let policy = OrganizationPolicy::default();
+        assert!(policy.require_tls);
+        assert!(!policy.allow_plain_imap);
+        assert!(!policy.allow_destination_deletion);
+        assert_eq!(policy.minimum_verification, "metadata");
+        assert_eq!(policy.max_concurrency, Some(8));
+    }
 
     #[test]
     fn policy_rejects_plain_transport_and_destructive_plans() {

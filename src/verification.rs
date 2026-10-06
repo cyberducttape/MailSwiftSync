@@ -10,7 +10,7 @@ const SUPPORTED_IMAPSYNC_VERSION: &str = "2.314";
 
 pub(crate) fn unqualified_imapsync_message(version: &str) -> String {
     format!(
-        "[verification] Engine {version} is not qualified for MailSwiftSync verification. Transfer may work, but MailSwiftSync cannot provide trusted migration evidence from this version. Qualified version: {SUPPORTED_IMAPSYNC_VERSION}"
+        "[verification] TRANSFER ONLY — NOT PRODUCTION VERIFIED: engine {version} is not qualified for MailSwiftSync verification. Transfer may work, but MailSwiftSync cannot provide trusted migration evidence from this version. Qualified version: {SUPPORTED_IMAPSYNC_VERSION}"
     )
 }
 
@@ -352,7 +352,7 @@ mod tests {
     fn unqualified_engine_message_names_the_trusted_version() {
         assert_eq!(
             unqualified_imapsync_message("2.315"),
-            "[verification] Engine 2.315 is not qualified for MailSwiftSync verification. Transfer may work, but MailSwiftSync cannot provide trusted migration evidence from this version. Qualified version: 2.314"
+            "[verification] TRANSFER ONLY — NOT PRODUCTION VERIFIED: engine 2.315 is not qualified for MailSwiftSync verification. Transfer may work, but MailSwiftSync cannot provide trusted migration evidence from this version. Qualified version: 2.314"
         );
     }
 
