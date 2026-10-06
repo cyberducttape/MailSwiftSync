@@ -50,6 +50,8 @@ pub(crate) const WINDOWS_PORTABLE: Artifact = Artifact {
 const WINDOWS_ARCHIVE_ROOT: &str = "imapsync_2.314/";
 const WINDOWS_EXECUTABLE: &str = "imapsync.exe";
 const DEBIAN_EXECUTABLE: &str = "/usr/bin/imapsync";
+const MAX_ENGINE_ARCHIVE_FILES: usize = 4_096;
+const MAX_ENGINE_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InstallMethod {
@@ -267,10 +269,58 @@ pub(crate) fn fetch_verified(
 /// Unpack only the engine directory of the verified Windows zip, rejecting
 /// any entry whose path would escape the destination.
 pub(crate) fn unpack_windows_engine(archive: &Path, destination: &Path) -> Result<PathBuf, String> {
+    unpack_windows_engine_with_limits(
+        archive,
+        destination,
+        MAX_ENGINE_ARCHIVE_FILES,
+        MAX_ENGINE_UNPACKED_BYTES,
+    )
+}
+
+fn unpack_windows_engine_with_limits(
+    archive: &Path,
+    destination: &Path,
+    max_files: usize,
+    max_unpacked_bytes: u64,
+) -> Result<PathBuf, String> {
     let file = std::fs::File::open(archive)
         .map_err(|error| format!("could not open {}: {error}", archive.display()))?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|error| format!("the engine archive is not a valid zip: {error}"))?;
+    if zip.len() > max_files {
+        return Err(format!(
+            "the engine archive contains {} entries; the limit is {max_files}",
+            zip.len()
+        ));
+    }
+
+    // Inspect every entry before creating anything in the destination. This
+    // keeps a rejected archive from leaving a partially extracted engine and
+    // bounds both metadata amplification and decompression output.
+    let mut unpacked_bytes = 0_u64;
+    for index in 0..zip.len() {
+        let entry = zip
+            .by_index(index)
+            .map_err(|error| format!("could not inspect the engine archive: {error}"))?;
+        let Some(relative) = entry.enclosed_name() else {
+            return Err(format!("unsafe path in engine archive: {}", entry.name()));
+        };
+        let Ok(inside) = relative.strip_prefix(WINDOWS_ARCHIVE_ROOT.trim_end_matches('/')) else {
+            continue;
+        };
+        if inside.as_os_str().is_empty() || entry.is_dir() {
+            continue;
+        }
+        unpacked_bytes = unpacked_bytes
+            .checked_add(entry.size())
+            .ok_or_else(|| "the engine archive unpacked-size budget overflowed".to_owned())?;
+        if unpacked_bytes > max_unpacked_bytes {
+            return Err(format!(
+                "the engine archive expands to {unpacked_bytes} bytes; the limit is {max_unpacked_bytes} bytes"
+            ));
+        }
+    }
+
     let mut executable = None;
     for index in 0..zip.len() {
         let mut entry = zip
@@ -555,6 +605,27 @@ mod tests {
         assert_eq!(executable, destination.join("imapsync.exe"));
         assert!(destination.join("FAQ.d/FAQ.txt").exists());
         assert!(!destination.join("unrelated").exists());
+
+        assert!(
+            super::unpack_windows_engine_with_limits(
+                &archive,
+                &directory.join("too-many"),
+                1,
+                super::MAX_ENGINE_UNPACKED_BYTES,
+            )
+            .unwrap_err()
+            .contains("entries")
+        );
+        assert!(
+            super::unpack_windows_engine_with_limits(
+                &archive,
+                &directory.join("too-large"),
+                super::MAX_ENGINE_ARCHIVE_FILES,
+                4,
+            )
+            .unwrap_err()
+            .contains("expands")
+        );
 
         let hostile = directory.join("hostile.zip");
         {
