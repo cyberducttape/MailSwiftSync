@@ -9,6 +9,7 @@ Administrators can place an owner-only file at:
 Example:
 
 ```toml
+profile = "production" # production, compatibility, or lab
 require_tls = true
 allow_plain_imap = false
 allow_destination_deletion = false
@@ -35,6 +36,15 @@ before batch admission. A malformed, unreadable, group/world-accessible, or
 otherwise invalid policy blocks the operation. Missing policy uses the
 production-safe defaults above; weakening that baseline requires an explicit
 organization policy.
+
+`production` is the default administrative profile. It requires TLS, forbids
+destination deletion, requires metadata or body verification, requires bounded
+concurrency, rejects non-global webhook/OAuth egress, and permits only the
+built-in OAuth hosts. Use `compatibility` for an explicitly acknowledged
+legacy exception or `lab` for controlled testing; those profiles allow the
+individual policy settings to express their weaker behavior. The profile is
+stored alongside the individual settings so policy review shows which
+exception class was selected.
 
 Provider entries may cap provider-endpoint, per-tenant, and per-credential
 concurrency independently on either source or destination. They do not reduce

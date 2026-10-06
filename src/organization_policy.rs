@@ -60,6 +60,10 @@ pub(crate) struct ProviderRateCeilings {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct OrganizationPolicy {
+    /// `production`, `compatibility`, or `lab`. Production is the default and
+    /// rejects attempts to weaken the baseline below.
+    #[serde(default = "default_policy_profile")]
+    pub(crate) profile: String,
     /// Require encrypted source and destination transport.
     pub(crate) require_tls: bool,
     /// Defaults to false; enabling plaintext IMAP is an explicit compatibility
@@ -84,6 +88,7 @@ pub(crate) struct OrganizationPolicy {
 impl Default for OrganizationPolicy {
     fn default() -> Self {
         Self {
+            profile: default_policy_profile(),
             require_tls: true,
             allow_plain_imap: false,
             allow_destination_deletion: false,
@@ -94,6 +99,10 @@ impl Default for OrganizationPolicy {
             oauth: OrganizationOAuthPolicy::default(),
         }
     }
+}
+
+fn default_policy_profile() -> String {
+    "production".into()
 }
 
 /// Resolve an HTTPS endpoint through the bounded resolver and validate every
@@ -280,6 +289,37 @@ impl OrganizationPolicy {
     }
 
     pub(crate) fn check(&self, profile: &Profile) -> Result<(), String> {
+        let policy_profile = self.profile.trim().to_ascii_lowercase();
+        if !matches!(
+            policy_profile.as_str(),
+            "production" | "compatibility" | "lab"
+        ) {
+            return Err(format!(
+                "Organization policy has unsupported profile {:?}; use production, compatibility, or lab.",
+                self.profile
+            ));
+        }
+        if policy_profile == "production"
+            && (!self.require_tls
+                || self.allow_plain_imap
+                || self.allow_destination_deletion
+                || !matches!(
+                    self.minimum_verification
+                        .trim()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "metadata" | "body"
+                )
+                || self.max_concurrency.is_none()
+                || self.webhooks.allow_private_networks
+                || self.oauth.allow_private_networks
+                || self.oauth.allow_custom_endpoints)
+        {
+            return Err(
+                "Organization policy profile production requires TLS, no destination deletion, metadata-or-body verification, bounded concurrency, public webhook/OAuth egress, and built-in OAuth endpoints; select compatibility or lab to acknowledge weaker behavior."
+                    .into(),
+            );
+        }
         let source_plain = profile.source_tls.eq_ignore_ascii_case("plain");
         let destination_plain = profile.destination_tls.eq_ignore_ascii_case("plain");
         if (self.require_tls || !self.allow_plain_imap) && (source_plain || destination_plain) {
@@ -432,11 +472,42 @@ mod tests {
     #[test]
     fn default_policy_uses_production_safe_baseline() {
         let policy = OrganizationPolicy::default();
+        assert_eq!(policy.profile, "production");
         assert!(policy.require_tls);
         assert!(!policy.allow_plain_imap);
         assert!(!policy.allow_destination_deletion);
         assert_eq!(policy.minimum_verification, "metadata");
         assert_eq!(policy.max_concurrency, Some(8));
+    }
+
+    #[test]
+    fn production_profile_rejects_weakening_without_explicit_compatibility() {
+        let policy = OrganizationPolicy {
+            allow_destination_deletion: true,
+            ..OrganizationPolicy::default()
+        };
+        let error = policy.check_form(&Form::default()).unwrap_err();
+        assert!(error.contains("profile production"), "{error}");
+
+        let policy = OrganizationPolicy {
+            profile: "compatibility".into(),
+            allow_destination_deletion: true,
+            ..OrganizationPolicy::default()
+        };
+        assert!(policy.check_form(&Form::default()).is_ok());
+    }
+
+    #[test]
+    fn policy_profile_names_are_fail_closed() {
+        let policy = OrganizationPolicy {
+            profile: "operator-test".into(),
+            ..OrganizationPolicy::default()
+        };
+        let error = policy.check_form(&Form::default()).unwrap_err();
+        assert!(
+            error.contains("production, compatibility, or lab"),
+            "{error}"
+        );
     }
 
     #[test]
