@@ -408,6 +408,22 @@ impl App {
                 }
                 match mailbox.evidence.as_ref() {
                     Some((_, evidence, _)) => {
+                        let confidence = verification_confidence_key(evidence);
+                        ui.heading(self.language.message(if assurance.transfer_completed {
+                            "ui.transfer-complete"
+                        } else {
+                            "ui.transfer-incomplete"
+                        }));
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(self.language.message("ui.transfer-status")).strong(),
+                            );
+                            ui.label(self.language.message(if assurance.transfer_completed {
+                                "ui.completed-4ddb3e96"
+                            } else {
+                                "ui.not-complete"
+                            }));
+                        });
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(self.language.message("ui.recorded-evidence-level"))
@@ -417,6 +433,28 @@ impl App {
                                 evidence.verification_method(),
                                 evidence.verification_outcome(),
                             )));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(self.language.message("ui.confidence")).strong(),
+                            );
+                            ui.label(self.language.message(confidence));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(self.language.message("ui.body-equality")).strong(),
+                            );
+                            ui.label(self.language.message(
+                                if evidence.evidence_scope()
+                                    == crate::core::EvidenceScope::BodyHashed
+                                    && evidence.verification_outcome()
+                                        == crate::core::VerificationOutcome::ExactBodyMatch
+                                {
+                                    "ui.confirmed"
+                                } else {
+                                    "ui.not-verified"
+                                },
+                            ));
                         });
                         ui.label(self.language.message("ui.durable-mailbox-reconciliation"));
                         ui.label(
@@ -631,9 +669,30 @@ fn verification_level_key(
     }
 }
 
+fn verification_confidence_key(evidence: &crate::core::MailboxEvidence) -> &'static str {
+    if matches!(
+        evidence.verification_outcome(),
+        crate::core::VerificationOutcome::ExactBodyMatch
+            | crate::core::VerificationOutcome::ExactMetadataMatch
+    ) && evidence.missing_count() == 0
+        && evidence.extra_count() == 0
+        && evidence.modified_count() == 0
+    {
+        if matches!(
+            evidence.verification_method(),
+            crate::core::VerificationMethod::MetadataReconciliation
+                | crate::core::VerificationMethod::BodyHash
+        ) {
+            return "ui.confidence-high";
+        }
+        return "ui.confidence-limited";
+    }
+    "ui.confidence-review"
+}
+
 #[cfg(test)]
 mod tests {
-    use super::verification_level_key;
+    use super::{verification_confidence_key, verification_level_key};
     use crate::core::{VerificationMethod, VerificationOutcome};
 
     #[test]
@@ -672,6 +731,34 @@ mod tests {
                 VerificationOutcome::Incomplete
             ),
             "ui.verification-incomplete-no-level"
+        );
+    }
+
+    #[test]
+    fn confidence_requires_exact_message_level_evidence_without_differences() {
+        let evidence = crate::core::MailboxEvidence {
+            verification_method: VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+            source_messages: 10,
+            destination_messages: 10,
+            source_bytes: 100,
+            destination_bytes: 100,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+        };
+        assert_eq!(verification_confidence_key(&evidence), "ui.confidence-high");
+        let mut changed = evidence.clone();
+        changed.modified_messages = 1;
+        assert_eq!(
+            verification_confidence_key(&changed),
+            "ui.confidence-review"
         );
     }
 }
