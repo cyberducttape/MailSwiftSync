@@ -201,6 +201,15 @@ fn read_bounded_response(response: &mut Response) -> Result<(), String> {
 }
 
 fn parse_https_url(url: &str) -> Result<reqwest::Url, String> {
+    let policy = crate::organization_policy::OrganizationPolicy::load()
+        .map_err(|error| format!("webhook organization policy is unavailable: {error}"))?;
+    parse_https_url_with_policy(url, &policy.webhooks)
+}
+
+fn parse_https_url_with_policy(
+    url: &str,
+    policy: &crate::organization_policy::OrganizationWebhookPolicy,
+) -> Result<reqwest::Url, String> {
     if url.chars().any(char::is_control) {
         return Err("the webhook URL cannot contain control characters".into());
     }
@@ -222,7 +231,71 @@ fn parse_https_url(url: &str) -> Result<reqwest::Url, String> {
             "webhook URL credentials must be supplied through headers or environment files".into(),
         );
     }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "the webhook URL is missing a host".to_owned())?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if !policy.allowed_domains.is_empty()
+        && !policy
+            .allowed_domains
+            .iter()
+            .any(|allowed| webhook_domain_matches(&host, allowed))
+    {
+        return Err(format!(
+            "webhook host {host:?} is outside the organization allowed_domains policy"
+        ));
+    }
+    if !policy.allow_private_networks && is_private_webhook_host(&host) {
+        return Err(
+            "private, loopback, link-local, and local-only webhook targets are disabled by organization policy"
+                .into(),
+        );
+    }
     Ok(parsed)
+}
+
+fn webhook_domain_matches(host: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim().trim_end_matches('.').to_ascii_lowercase();
+    if pattern.is_empty() {
+        return false;
+    }
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        host.ends_with(&format!(".{suffix}")) && host != suffix
+    } else {
+        host == pattern
+    }
+}
+
+fn is_private_webhook_host(host: &str) -> bool {
+    use std::net::IpAddr;
+    if let Ok(address) = host.parse::<IpAddr>() {
+        return match address {
+            IpAddr::V4(address) => {
+                address.is_private()
+                    || address.is_loopback()
+                    || address.is_link_local()
+                    || address.is_unspecified()
+                    || address.is_multicast()
+                    || address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1])
+                    || address.octets()[0] == 192 && address.octets()[1] == 0
+                    || address.octets()[0] == 198 && (18..=19).contains(&address.octets()[1])
+            }
+            IpAddr::V6(address) => {
+                address.is_loopback()
+                    || address.is_unspecified()
+                    || address.is_multicast()
+                    || (address.segments()[0] & 0xfe00) == 0xfc00
+                    || (address.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+    }
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host.ends_with(".lan")
+        || host.ends_with(".home.arpa")
 }
 
 /// Resolve the command-line URL, allowing operators to keep secret-bearing
@@ -498,6 +571,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_private_webhook_targets_by_default() {
+        for url in [
+            "https://127.0.0.1/hook",
+            "https://10.0.0.4/hook",
+            "https://169.254.169.254/latest",
+            "https://service.internal/hook",
+        ] {
+            assert!(
+                parse_https_url_with_policy(url, &Default::default()).is_err(),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn webhook_policy_supports_private_opt_in_and_domain_allowlists() {
+        let policy = crate::organization_policy::OrganizationWebhookPolicy {
+            allow_private_networks: true,
+            allowed_domains: vec!["*.example.com".into()],
+        };
+        assert!(parse_https_url_with_policy("https://hooks.example.com", &policy).is_ok());
+        assert!(parse_https_url_with_policy("https://example.com", &policy).is_err());
+        assert!(parse_https_url_with_policy("https://hooks.other.test", &policy).is_err());
+    }
+
+    #[test]
     fn rejects_header_injection() {
         assert!(validate_header_name("X-Test\r\nInjected: yes").is_err());
         assert!(validate_header_value("safe\nInjected: yes").is_err());
@@ -543,16 +642,16 @@ mod tests {
 
     #[test]
     fn transport_failure_does_not_echo_secret_url_path() {
-        // Port 1 on loopback refuses immediately; the error must not reveal
-        // the secret-bearing path an operator kept out of process listings.
+        // Private targets are rejected before any request; the error must not
+        // reveal the secret-bearing path an operator kept out of process listings.
         let error = post_json(
             "https://127.0.0.1:1/hooks/secret-token-path",
             "event",
             "migration.status_snapshot",
             "{}",
         )
-        .expect_err("closed loopback port must fail");
-        assert!(error.starts_with("webhook request failed"), "{error}");
+        .expect_err("private loopback target must fail closed");
+        assert!(error.contains("private"), "{error}");
         assert!(!error.contains("secret-token-path"), "{error}");
     }
 }

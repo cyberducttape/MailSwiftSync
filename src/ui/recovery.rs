@@ -235,6 +235,13 @@ impl App {
             self.language.message("ui.recovery"),
             self.language.message("ui.recovery-subtitle"),
         );
+        crate::ui::card(ui, |ui| {
+            ui.label(
+                RichText::new(self.language.message("ui.recovery-resume-boundary"))
+                    .color(colors.info),
+            );
+        });
+        ui.add_space(8.0);
         if self.process_review_required {
             crate::ui::card(ui, |ui| {
                 ui.label(

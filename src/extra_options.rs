@@ -48,10 +48,6 @@ pub(crate) fn canonical(extra_options: &str) -> Result<Vec<String>, String> {
             kind: OptionType::Boolean,
         },
         OptionSpec {
-            name: "debug",
-            kind: OptionType::Boolean,
-        },
-        OptionSpec {
             name: "maxlinelength",
             kind: OptionType::Integer {
                 min: 1,

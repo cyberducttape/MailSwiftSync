@@ -19,6 +19,10 @@ max_concurrency = 10
 max_concurrency = 8
 max_concurrency_per_tenant = 4
 max_concurrency_per_credential = 2
+
+[webhooks]
+allow_private_networks = false
+allowed_domains = ["*.example.com"]
 ```
 
 The policy is read when preflight is assessed and is rechecked immediately
@@ -42,6 +46,14 @@ is `generic`. A `dovecot` provider key is refused with a hint to use
 safety ceilings are not provider quota discovery: live provider limits,
 credential semantics, RBAC, and centrally administered policy distribution
 still require qualification or future control-plane work.
+
+Webhook delivery is restricted independently from migration plans because the
+payload can contain customer-sensitive operational metadata. Private,
+loopback, link-local, and local-only hostname targets are rejected by default.
+Set `allow_private_networks = true` only for a deliberately controlled local
+receiver. When `allowed_domains` is non-empty, the webhook host must match an
+exact entry or a `*.example.com` subdomain pattern. Keep this file owner-only;
+it is read and enforced when the endpoint is validated and before delivery.
 
 Tenant scheduling scope can be set separately for source and destination in
 Migration plan → Advanced options. For batch imports, `source_rate_tenant` and

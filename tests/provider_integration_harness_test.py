@@ -62,7 +62,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn('timeout --kill-after=15s "$command_timeout" "$binary" "$@"', SCALE_SCRIPT)
         self.assertNotIn('timeout --foreground', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30"', SCALE_SCRIPT)
-        self.assertIn('extra_options="--timeout=30 --debug"', SCALE_SCRIPT)
+        self.assertNotIn('extra_options="--timeout=30 --debug"', SCALE_SCRIPT)
 
     def test_smoke_timeouts_manage_engine_process_groups(self):
         self.assertIn('timeout --kill-after=15s 300 "$binary" "$@"', STORAGE_FAULT_SCRIPT)

@@ -22,6 +22,16 @@ pub(crate) struct OrganizationProviderPolicy {
     pub(crate) max_concurrency_per_credential: Option<usize>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct OrganizationWebhookPolicy {
+    /// Permit literal private, loopback, link-local, or local-only webhook targets.
+    pub(crate) allow_private_networks: bool,
+    /// Optional host boundary. When non-empty, webhook hosts must match one entry.
+    /// A `*.example.com` entry matches subdomains, but not `example.com` itself.
+    pub(crate) allowed_domains: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderRateCeilings {
     pub(crate) provider: BTreeMap<String, usize>,
@@ -47,6 +57,8 @@ pub(crate) struct OrganizationPolicy {
     /// names (`gmail`, `microsoft365`, `generic`) plus documented
     /// aliases such as `google` and `o365`.
     pub(crate) providers: BTreeMap<String, OrganizationProviderPolicy>,
+    /// Egress restrictions for credential-free but customer-sensitive webhooks.
+    pub(crate) webhooks: OrganizationWebhookPolicy,
 }
 
 impl Default for OrganizationPolicy {
@@ -58,6 +70,7 @@ impl Default for OrganizationPolicy {
             minimum_verification: "aggregate".into(),
             max_concurrency: None,
             providers: BTreeMap::new(),
+            webhooks: OrganizationWebhookPolicy::default(),
         }
     }
 }

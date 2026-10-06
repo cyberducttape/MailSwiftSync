@@ -239,7 +239,7 @@ mod tests {
             "Body proof is resource-intensive. The run will stop rather than exceed either byte bound; successful evidence is labeled BodyHash.",
             "Maximum body bytes per message",
             "Maximum body bytes per verification",
-            "The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.",
+            "The Extra imapsync options field accepts only the documented safe tuning allowlist. Debug output is unavailable here because it may contain customer-sensitive protocol data. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.",
             "Selected mailbox scope remains explicit while this drawer is open.",
             "Choose migration engine",
             "How should this migration run?",

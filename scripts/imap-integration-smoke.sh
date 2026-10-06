@@ -580,7 +580,7 @@ fi
 app_runtime="$XDG_RUNTIME_DIR"
 state="$app_runtime/state.db"
 diagnostic_dir="$app_runtime/diagnostics"
-extra_options="--timeout=30 --debug"
+extra_options="--timeout=30"
 if (( scale_messages > 0 )); then
   # Avoid per-message debug output contaminating the measured scale run.
   extra_options="--timeout=30"

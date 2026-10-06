@@ -927,7 +927,7 @@ fn extra_options_require_the_safe_engine_allowlist() {
     form.profile.extra_options = "--timeout=30".into();
     assert!(form.validate().is_ok());
     form.profile.extra_options = "--debug".into();
-    assert!(form.validate().is_ok());
+    assert!(form.validate().is_err());
     form.profile.extra_options = "--debugimap1".into();
     assert!(
         form.validate()
