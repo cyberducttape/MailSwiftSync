@@ -492,6 +492,16 @@ pub(crate) fn verify_certificate_file(
     {
         return Err("Migration certificate is not marked durably complete.".into());
     }
+    let Some(signature) = value.get("proof_signature") else {
+        return Err("Migration certificate is unsigned; an Ed25519 signature is required.".into());
+    };
+    if signature
+        .get("algorithm")
+        .and_then(serde_json::Value::as_str)
+        != Some("Ed25519")
+    {
+        return Err("Migration certificate must use an Ed25519 signature.".into());
+    }
     verify_file(path, trusted_public_key)
 }
 

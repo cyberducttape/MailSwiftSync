@@ -331,6 +331,32 @@ fn customer_proof_format_is_digest_verifiable() {
 }
 
 #[test]
+fn migration_certificate_verification_requires_an_ed25519_signature() {
+    let proof = with_proof_digest(serde_json::json!({
+        "format": "mailswiftsync-customer-proof",
+        "format_version": 1,
+        "artifact_role": "signed_migration_certificate",
+        "certificate": { "type": "authenticated_durable_migration_evidence" },
+        "completion_claim": { "status": "durably_complete" },
+        "mailboxes": []
+    }))
+    .unwrap();
+    let directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!(
+            "mailswiftsync-certificate-{}",
+            uuid::Uuid::new_v4()
+        ));
+    credentials::ensure_private_directory(&directory).unwrap();
+    let path = directory.join("certificate.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+    let error = reports::signing::verify_certificate_file(&path, None).unwrap_err();
+    assert!(error.contains("unsigned"), "{error}");
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn support_bundle_excludes_topology_and_diagnostic_material() {
     let directory = std::env::temp_dir().join(format!(
         "mailswiftsync-support-bundle-{}",
