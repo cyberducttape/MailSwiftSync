@@ -455,6 +455,46 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
     ))
 }
 
+/// Verify both the cryptographic proof and the certificate role. A valid
+/// customer proof is not automatically a migration certificate.
+pub(crate) fn verify_certificate_file(
+    path: &Path,
+    trusted_public_key: Option<&str>,
+) -> Result<String, String> {
+    let text = read_proof_file(path)?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("Invalid migration certificate JSON: {error}"))?;
+    if value.get("format").and_then(serde_json::Value::as_str)
+        != Some("mailswiftsync-customer-proof")
+    {
+        return Err("Migration certificate must use the customer-proof format.".into());
+    }
+    if value
+        .get("artifact_role")
+        .and_then(serde_json::Value::as_str)
+        != Some("signed_migration_certificate")
+    {
+        return Err("Artifact is not a signed migration certificate.".into());
+    }
+    if value
+        .get("certificate")
+        .and_then(|certificate| certificate.get("type"))
+        .and_then(serde_json::Value::as_str)
+        != Some("authenticated_durable_migration_evidence")
+    {
+        return Err("Migration certificate metadata is missing or unsupported.".into());
+    }
+    if value
+        .get("completion_claim")
+        .and_then(|claim| claim.get("status"))
+        .and_then(serde_json::Value::as_str)
+        != Some("durably_complete")
+    {
+        return Err("Migration certificate is not marked durably complete.".into());
+    }
+    verify_file(path, trusted_public_key)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::read_private_signing_key;

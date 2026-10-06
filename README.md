@@ -286,6 +286,16 @@ mailswiftsync sign path/to/mailswiftsync-project-report.json path/to/operator-ke
 mailswiftsync verify path/to/mailswiftsync-project-report.json <public-key-hex>
 ```
 
+For a completed project, `mailswiftsync certificate` emits a signed
+Migration Certificate containing the migration ID, customer, engine and plan
+hashes, mailbox totals, aggregate message totals, verification level, and
+exception count. Verify the certificate as a certificate—not merely as a
+generic proof—with:
+
+```bash
+mailswiftsync verify-certificate migration.mssproof <public-key-hex>
+```
+
 Unsigned reports remain supported as integrity-only artifacts when no key is given. With a pinned public key, `verify` fails on an unsigned report, so removing a signature cannot pass as a verified one. The public key is embedded for portability, but a trust pin is required to establish that the signer is the expected operator or organization.
 
 Run manifests also retain the engine version reported by `imapsync` or

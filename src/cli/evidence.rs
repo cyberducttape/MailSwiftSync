@@ -106,6 +106,41 @@ pub(super) fn verify_command(mut arguments: std::env::ArgsOs) -> eframe::Result<
     }
 }
 
+pub(super) fn verify_certificate_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
+    let Some(path) = arguments.next() else {
+        eprintln!(
+            "Usage: mailswiftsync verify-certificate <migration.mssproof> [trusted-public-key-hex]"
+        );
+        std::process::exit(2);
+    };
+    let trusted_public_key = match parse_trusted_public_key_argument(arguments.next()) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("Migration certificate verification refused: {error}");
+            std::process::exit(2);
+        }
+    };
+    if arguments.next().is_some() {
+        eprintln!(
+            "Usage: mailswiftsync verify-certificate <migration.mssproof> [trusted-public-key-hex]"
+        );
+        std::process::exit(2);
+    }
+    match crate::reports::signing::verify_certificate_file(
+        std::path::Path::new(&path),
+        trusted_public_key.as_deref(),
+    ) {
+        Ok(message) => {
+            out!("Migration certificate verified: {message}");
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("Migration certificate verification failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub(super) fn sign_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let (Some(report), Some(signing_key), key_id) = (
         arguments.next(),

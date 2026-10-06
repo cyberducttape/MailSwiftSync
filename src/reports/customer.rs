@@ -4,6 +4,7 @@ use crate::{
     core,
     reports::integrity::{evidence_digest, with_proof_digest},
 };
+use std::collections::BTreeSet;
 use std::path::Path;
 
 fn execution_executable_sha256(plan_snapshot: &str) -> Option<String> {
@@ -120,6 +121,85 @@ pub(crate) fn export_from_store_with_options_and_identity(
     if unmatched_count_unknown {
         message_counts["unmatched"] = serde_json::Value::Null;
     }
+    let plan_hashes = snapshot
+        .mailboxes
+        .iter()
+        .filter_map(|mailbox| {
+            mailbox
+                .evidence
+                .as_ref()
+                .and_then(|(_, _, plan)| plan.as_deref())
+                .map(crate::plan_identity::snapshot_sha256)
+        })
+        .collect::<BTreeSet<_>>();
+    let plan_sha256 = (plan_hashes.len() == 1).then(|| plan_hashes.into_iter().next().unwrap());
+    let engine_identities = snapshot
+        .runs
+        .iter()
+        .map(|run| {
+            run.engine_version
+                .clone()
+                .unwrap_or_else(|| run.run.engine.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    let engine =
+        (engine_identities.len() == 1).then(|| engine_identities.into_iter().next().unwrap());
+    let engine_hashes = snapshot
+        .mailboxes
+        .iter()
+        .filter_map(|mailbox| {
+            mailbox
+                .evidence
+                .as_ref()
+                .and_then(|(_, _, plan)| plan.as_deref())
+                .and_then(execution_executable_sha256)
+        })
+        .collect::<BTreeSet<_>>();
+    let engine_sha256 =
+        (engine_hashes.len() == 1).then(|| engine_hashes.into_iter().next().unwrap());
+    let verification_levels = snapshot
+        .mailboxes
+        .iter()
+        .filter_map(|mailbox| {
+            mailbox
+                .evidence
+                .as_ref()
+                .map(|(_, value, _)| match value.verification_method {
+                    core::VerificationMethod::MetadataReconciliation => {
+                        "Level 2 — Message Metadata Reconciliation"
+                    }
+                    core::VerificationMethod::BodyHash => "Level 3 — Bounded Content Fingerprints",
+                    core::VerificationMethod::AggregateEngine
+                    | core::VerificationMethod::NativeDovecot => "Level 1 — Aggregate Evidence",
+                })
+        })
+        .collect::<BTreeSet<_>>();
+    let verification_level =
+        (verification_levels.len() == 1).then(|| verification_levels.into_iter().next().unwrap());
+    let mailboxes_transferred = snapshot
+        .mailboxes
+        .iter()
+        .filter(|mailbox| {
+            matches!(
+                mailbox.job.state.as_str(),
+                "completed"
+                    | "verified"
+                    | "verified_with_exceptions"
+                    | "delta_required"
+                    | "verification_difference"
+            )
+        })
+        .count();
+    let mailboxes_verified = snapshot
+        .mailboxes
+        .iter()
+        .filter(|mailbox| {
+            matches!(
+                mailbox.job.state.as_str(),
+                "verified" | "verified_with_exceptions"
+            )
+        })
+        .count();
     let project = snapshot.project;
     let mailboxes = snapshot
         .mailboxes
@@ -205,6 +285,26 @@ pub(crate) fn export_from_store_with_options_and_identity(
         "format_version": 1,
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
+        "migration_id": project.id.clone(),
+        "customer": project.name.clone(),
+        "engine": engine,
+        "engine_sha256": engine_sha256,
+        "plan_sha256": plan_sha256,
+        "source_provider": provider_identity.map(|identity| identity.source_provider.clone()),
+        "destination_provider": provider_identity
+            .map(|identity| identity.destination_provider.clone()),
+        "certificate_summary": {
+            "mailboxes_planned": total_mailboxes,
+            "mailboxes_transferred": mailboxes_transferred,
+            "mailboxes_verified": mailboxes_verified,
+            "source_messages": message_counts["source"],
+            "destination_messages": message_counts["destination"],
+            "missing": message_counts["missing"],
+            "extra": message_counts["extra"],
+            "modified": message_counts["modified"],
+            "exceptions": mailbox_exceptions,
+            "verification_level": verification_level,
+        },
         "completion_claim": {
             "status": if durably_complete { "durably_complete" } else { "incomplete" },
             "durable_project_phase": format!("{:?}", project.phase),

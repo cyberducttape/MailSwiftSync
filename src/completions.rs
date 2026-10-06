@@ -7,6 +7,7 @@
 /// Public commands, in help order.
 pub(crate) const COMMANDS: &[&str] = &[
     "verify",
+    "verify-certificate",
     "sign",
     "certificate",
     "migrateaudit",
