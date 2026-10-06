@@ -166,11 +166,11 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 .as_ref()
                 .map(|(_, value, _)| match value.verification_method {
                     core::VerificationMethod::MetadataReconciliation => {
-                        "Level 2 — Message Metadata Reconciliation"
+                        "Level 2 — Per-message metadata reconciliation"
                     }
-                    core::VerificationMethod::BodyHash => "Level 3 — Bounded Content Fingerprints",
+                    core::VerificationMethod::BodyHash => "Level 3 — Bounded content fingerprints",
                     core::VerificationMethod::AggregateEngine
-                    | core::VerificationMethod::NativeDovecot => "Level 1 — Aggregate Evidence",
+                    | core::VerificationMethod::NativeDovecot => "Level 1 — Aggregate evidence",
                 })
         })
         .collect::<BTreeSet<_>>();
