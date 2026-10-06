@@ -657,14 +657,13 @@ impl App {
                         .iter()
                         .find(|finding| finding.state != ConfidenceState::Ready)
                 });
-            if let Some(finding) = primary {
-                if ui
+            if let Some(finding) = primary
+                && ui
                     .button(self.language.text(finding.remediation))
                     .on_hover_text(self.language.text(finding.consequence))
                     .clicked()
-                {
-                    navigate = Some(finding.destination);
-                }
+            {
+                navigate = Some(finding.destination);
             }
             egui::CollapsingHeader::new(self.language.message("ui.advanced-readiness-details"))
                 .default_open(false)

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// or requires a concrete operator decision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[allow(dead_code)]
 pub enum OperationalState {
     Ready,
     ReadyWithWarnings,
@@ -19,6 +20,7 @@ pub enum OperationalState {
 }
 
 impl OperationalState {
+    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ready => "READY",
@@ -29,6 +31,31 @@ impl OperationalState {
             Self::VerifiedWithExceptions => "VERIFIED WITH EXCEPTIONS",
             Self::CutoverReady => "CUTOVER READY",
             Self::NeedsAttention => "NEEDS ATTENTION",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OperationalState;
+
+    #[test]
+    fn operational_state_labels_are_stable() {
+        let states = [
+            (OperationalState::Ready, "READY"),
+            (OperationalState::ReadyWithWarnings, "READY WITH WARNINGS"),
+            (OperationalState::Blocked, "BLOCKED"),
+            (OperationalState::Migrated, "MIGRATED"),
+            (OperationalState::Verified, "VERIFIED"),
+            (
+                OperationalState::VerifiedWithExceptions,
+                "VERIFIED WITH EXCEPTIONS",
+            ),
+            (OperationalState::CutoverReady, "CUTOVER READY"),
+            (OperationalState::NeedsAttention, "NEEDS ATTENTION"),
+        ];
+        for (state, label) in states {
+            assert_eq!(state.as_str(), label);
         }
     }
 }

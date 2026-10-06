@@ -183,6 +183,7 @@ impl VerificationOutcome {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_exception(self) -> bool {
         matches!(
             self,
@@ -349,6 +350,7 @@ impl ProjectReportSnapshot {
     /// Ordering is intentional: attention and blocking conditions take
     /// precedence over positive phase labels, while verification exceptions
     /// remain visible instead of being collapsed into `VERIFIED`.
+    #[allow(dead_code)]
     pub fn operational_state(&self) -> OperationalState {
         let has_attention = self
             .mailboxes
@@ -661,6 +663,24 @@ mod tests {
             OperationalState::VerifiedWithExceptions.as_str(),
             "VERIFIED WITH EXCEPTIONS"
         );
+    }
+
+    #[test]
+    fn verification_outcome_exception_policy_covers_every_outcome() {
+        let outcomes = [
+            (VerificationOutcome::ExactBodyMatch, false),
+            (VerificationOutcome::ExactMetadataMatch, false),
+            (VerificationOutcome::ProbableMatch, true),
+            (VerificationOutcome::Ambiguous, true),
+            (VerificationOutcome::Missing, true),
+            (VerificationOutcome::Changed, true),
+            (VerificationOutcome::Unexpected, true),
+            (VerificationOutcome::Incomplete, true),
+            (VerificationOutcome::Failed, true),
+        ];
+        for (outcome, expected) in outcomes {
+            assert_eq!(outcome.is_exception(), expected);
+        }
     }
 
     #[test]
