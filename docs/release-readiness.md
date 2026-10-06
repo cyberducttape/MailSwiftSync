@@ -229,6 +229,12 @@ screen-reader checklist are recorded in
   disk-full/corruption chaos gap; the engine-side half (the transfer itself
   running out of destination space) is covered by
   `scripts/engine-storage-fault-smoke.sh`, described above.
+- The [durability and concurrency validation plan](durability-and-concurrency-validation.md)
+  distinguishes process-loss testing from hypervisor power-loss testing and
+  defines the real-engine 1/4/8/16-worker matrix. VM power-cut campaigns and
+  simultaneous real-engine resource measurements remain release evidence to
+  collect; the existing 100k single-engine result must not be generalized to
+  that matrix.
 - Headless `status` and `recover` commands expose secret-free durable state and
   reuse the GUI's fail-closed process recovery path. They are control-plane
   primitives, and `headless preflight|live` now drives the existing controller
