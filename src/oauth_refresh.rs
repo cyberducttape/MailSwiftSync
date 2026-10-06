@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io::Read,
+    net::SocketAddr,
     sync::{Mutex, OnceLock},
     time::Duration,
 };
@@ -26,8 +27,6 @@ const MAX_REFRESH_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const REFRESH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_TOTAL_BUDGET: Duration = Duration::from_secs(30);
-
-static OAUTH_HTTP_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 
 pub(crate) struct RefreshRequest<'a> {
     pub(crate) token_endpoint: &'a str,
@@ -233,7 +232,21 @@ pub(crate) fn post_token_request(
         .host_str()
         .ok_or_else(|| "the OAuth token endpoint is missing a host".to_owned())?
         .to_owned();
-    let client = oauth_http_client().map_err(|error| format!("{host}: {error}"))?;
+    let policy = crate::organization_policy::OrganizationPolicy::load()
+        .map_err(|error| format!("OAuth organization policy is unavailable: {error}"))?;
+    crate::organization_policy::validate_oauth_endpoint_policy(
+        &endpoint,
+        &policy.oauth,
+        "OAuth token",
+    )?;
+    let addresses = crate::organization_policy::resolve_policy_checked_https_target(
+        &endpoint,
+        policy.oauth.allow_private_networks,
+        &policy.oauth.allowed_domains,
+        "OAuth token",
+    )?;
+    let client =
+        oauth_http_client(&host, &addresses).map_err(|error| format!("{host}: {error}"))?;
     let mut response = client
         .post(endpoint)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -322,19 +335,18 @@ fn redact_token_text(text: &str, form: &[(&str, &str)]) -> Zeroizing<String> {
     redacted
 }
 
-fn oauth_http_client() -> Result<&'static reqwest::blocking::Client, String> {
-    match OAUTH_HTTP_CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .use_rustls_tls()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(REFRESH_CONNECT_TIMEOUT)
-            .timeout(REFRESH_TOTAL_BUDGET)
-            .build()
-            .map_err(|error| format!("could not build HTTPS client: {error}"))
-    }) {
-        Ok(client) => Ok(client),
-        Err(error) => Err(error.clone()),
-    }
+fn oauth_http_client(
+    host: &str,
+    addresses: &[SocketAddr],
+) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .use_rustls_tls()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(REFRESH_CONNECT_TIMEOUT)
+        .timeout(REFRESH_TOTAL_BUDGET)
+        .resolve_to_addrs(host, addresses)
+        .build()
+        .map_err(|error| format!("could not build HTTPS client: {error}"))
 }
 
 fn parse_token_response(

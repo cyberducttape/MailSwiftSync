@@ -163,6 +163,13 @@ pub(crate) fn provider_profile(
                 "the OAuth {name} endpoint must not contain user information"
             ));
         }
+        let policy = crate::organization_policy::OrganizationPolicy::load()
+            .map_err(|error| format!("OAuth organization policy is unavailable: {error}"))?;
+        crate::organization_policy::validate_oauth_endpoint_policy(
+            &url,
+            &policy.oauth,
+            &format!("OAuth {name}"),
+        )?;
     }
     if profile.scope.trim().is_empty() || profile.scope.chars().any(char::is_control) {
         return Err("the OAuth scope must be non-empty and contain no control characters".into());
@@ -298,6 +305,19 @@ impl PendingAuthorization {
             return Err("the OAuth login hint must not contain control characters".into());
         }
         let profile = provider_profile(provider, overrides)?;
+        #[cfg(not(test))]
+        {
+            let policy = crate::organization_policy::OrganizationPolicy::load()
+                .map_err(|error| format!("OAuth organization policy is unavailable: {error}"))?;
+            let authorize_url = reqwest::Url::parse(&profile.authorize_endpoint)
+                .map_err(|error| format!("invalid OAuth authorization endpoint: {error}"))?;
+            crate::organization_policy::resolve_policy_checked_https_target(
+                &authorize_url,
+                policy.oauth.allow_private_networks,
+                &policy.oauth.allowed_domains,
+                "OAuth authorization",
+            )?;
+        }
         let pkce = new_pkce()?;
         let state = new_state()?;
         let listener = RedirectListener::bind(profile.redirect_host)?;

@@ -23,6 +23,11 @@ max_concurrency_per_credential = 2
 [webhooks]
 allow_private_networks = false
 allowed_domains = ["*.example.com"]
+
+[oauth]
+allow_custom_endpoints = false
+allow_private_networks = false
+allowed_domains = ["accounts.google.com", "oauth2.googleapis.com", "login.microsoftonline.com"]
 ```
 
 The policy is read when preflight is assessed and is rechecked immediately
@@ -57,6 +62,12 @@ re-resolved to bypass the check during the request. Set
 receiver. When `allowed_domains` is non-empty, the webhook host must match an
 exact entry or a `*.example.com` subdomain pattern. Keep this file owner-only;
 it is read and enforced when the endpoint is validated and before delivery.
+
+OAuth authorization and token endpoints are restricted to the built-in Google
+and Microsoft hosts by default. All resolved addresses are checked for private
+or local destinations; token HTTP connections are pinned to the checked DNS
+answers. Set `allow_custom_endpoints = true` only for reviewed enterprise
+providers, and use `allowed_domains` to limit the approved host boundary.
 
 Tenant scheduling scope can be set separately for source and destination in
 Migration plan → Advanced options. For batch imports, `source_rate_tenant` and

@@ -7,7 +7,12 @@
 
 use crate::{Form, Profile};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 // Unknown keys are refused: a misspelled safety key (`require_tsl`) must not
 // silently fall back to the permissive default.
@@ -30,6 +35,18 @@ pub(crate) struct OrganizationWebhookPolicy {
     pub(crate) allow_private_networks: bool,
     /// Optional host boundary. When non-empty, webhook hosts must match one entry.
     /// A `*.example.com` entry matches subdomains, but not `example.com` itself.
+    pub(crate) allowed_domains: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct OrganizationOAuthPolicy {
+    /// Permit provider profiles or endpoint overrides outside the built-in
+    /// Google and Microsoft endpoint set.
+    pub(crate) allow_custom_endpoints: bool,
+    /// Permit OAuth endpoints that resolve to private or local addresses.
+    pub(crate) allow_private_networks: bool,
+    /// Optional host boundary for custom OAuth endpoints.
     pub(crate) allowed_domains: Vec<String>,
 }
 
@@ -60,6 +77,8 @@ pub(crate) struct OrganizationPolicy {
     pub(crate) providers: BTreeMap<String, OrganizationProviderPolicy>,
     /// Egress restrictions for credential-free but customer-sensitive webhooks.
     pub(crate) webhooks: OrganizationWebhookPolicy,
+    /// Egress restrictions for OAuth endpoints carrying authorization material.
+    pub(crate) oauth: OrganizationOAuthPolicy,
 }
 
 impl Default for OrganizationPolicy {
@@ -72,6 +91,135 @@ impl Default for OrganizationPolicy {
             max_concurrency: None,
             providers: BTreeMap::new(),
             webhooks: OrganizationWebhookPolicy::default(),
+            oauth: OrganizationOAuthPolicy::default(),
+        }
+    }
+}
+
+/// Resolve an HTTPS endpoint through the bounded resolver and validate every
+/// returned address before a caller opens a connection or browser session.
+/// HTTP clients should pin themselves to the returned set to avoid a second
+/// DNS answer bypassing the policy.
+pub(crate) fn resolve_policy_checked_https_target(
+    url: &reqwest::Url,
+    allow_private_networks: bool,
+    allowed_domains: &[String],
+    label: &str,
+) -> Result<Vec<SocketAddr>, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("the {label} endpoint is missing a host"))?;
+    validate_endpoint_host(url, allow_private_networks, allowed_domains, label)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| format!("the {label} endpoint is missing a port"))?;
+    let addresses = match host.parse::<IpAddr>() {
+        Ok(address) => vec![SocketAddr::new(address, port)],
+        Err(_) => crate::imap_probe::resolve_dns_with_deadline(
+            &format!("{host}:{port}"),
+            Instant::now() + Duration::from_secs(10),
+            &|| false,
+        )
+        .map_err(|error| format!("could not resolve {label} endpoint host: {error}"))?,
+    };
+    if addresses.is_empty() {
+        return Err(format!("{label} endpoint host resolved to no addresses"));
+    }
+    if !allow_private_networks && addresses.iter().any(|address| is_private_ip(address.ip())) {
+        return Err(format!(
+            "{label} endpoint host resolves to a private, loopback, link-local, or local-only address disabled by organization policy"
+        ));
+    }
+    Ok(addresses)
+}
+
+fn validate_endpoint_host(
+    url: &reqwest::Url,
+    allow_private_networks: bool,
+    allowed_domains: &[String],
+    label: &str,
+) -> Result<(), String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("the {label} endpoint is missing a host"))?;
+    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+    if !allowed_domains.is_empty()
+        && !allowed_domains
+            .iter()
+            .any(|allowed| policy_domain_matches(&normalized_host, allowed))
+    {
+        return Err(format!(
+            "{label} endpoint host {normalized_host:?} is outside the organization allowed_domains policy"
+        ));
+    }
+    if !allow_private_networks && host.parse::<IpAddr>().is_ok_and(is_private_ip) {
+        return Err(format!(
+            "{label} endpoint host resolves to a private, loopback, link-local, or local-only address disabled by organization policy"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_oauth_endpoint_policy(
+    url: &reqwest::Url,
+    policy: &OrganizationOAuthPolicy,
+    label: &str,
+) -> Result<(), String> {
+    validate_endpoint_host(
+        url,
+        policy.allow_private_networks,
+        &policy.allowed_domains,
+        label,
+    )?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("the {label} endpoint is missing a host"))?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if !policy.allow_custom_endpoints
+        && !matches!(
+            host.as_str(),
+            "accounts.google.com" | "oauth2.googleapis.com" | "login.microsoftonline.com"
+        )
+    {
+        return Err(format!(
+            "{label} endpoint host {host:?} is not an approved built-in provider endpoint; enable oauth.allow_custom_endpoints for reviewed custom OAuth"
+        ));
+    }
+    Ok(())
+}
+
+fn policy_domain_matches(host: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim().trim_end_matches('.').to_ascii_lowercase();
+    if pattern.is_empty() {
+        return false;
+    }
+    pattern
+        .strip_prefix("*.")
+        .map_or(host == pattern, |suffix| {
+            host.ends_with(&format!(".{suffix}")) && host != suffix
+        })
+}
+
+fn is_private_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1])
+                || address.octets()[0] == 192 && address.octets()[1] == 0
+                || address.octets()[0] == 198 && (18..=19).contains(&address.octets()[1])
+        }
+        IpAddr::V6(address) => {
+            address.to_ipv4().is_some()
+                || address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || (address.segments()[0] & 0xfe00) == 0xfc00
+                || (address.segments()[0] & 0xffc0) == 0xfe80
         }
     }
 }
@@ -380,6 +528,27 @@ mod tests {
             toml::from_str("require_tls = true\n[providers.google]\nmax_concurrency = 2\n")
                 .unwrap();
         assert!(policy.require_tls);
+    }
+
+    #[test]
+    fn oauth_policy_allows_only_built_in_hosts_by_default() {
+        let policy = OrganizationPolicy::default();
+        let built_in = reqwest::Url::parse("https://oauth2.googleapis.com/token").unwrap();
+        let custom = reqwest::Url::parse("https://oauth.example.test/token").unwrap();
+        super::validate_oauth_endpoint_policy(&built_in, &policy.oauth, "OAuth token").unwrap();
+        let error = super::validate_oauth_endpoint_policy(&custom, &policy.oauth, "OAuth token")
+            .unwrap_err();
+        assert!(error.contains("allow_custom_endpoints"), "{error}");
+    }
+
+    #[test]
+    fn oauth_policy_rejects_literal_private_targets_without_opt_in() {
+        let mut policy = OrganizationPolicy::default();
+        policy.oauth.allow_custom_endpoints = true;
+        let private = reqwest::Url::parse("https://127.0.0.1/token").unwrap();
+        let error = super::validate_oauth_endpoint_policy(&private, &policy.oauth, "OAuth token")
+            .unwrap_err();
+        assert!(error.contains("private"), "{error}");
     }
 
     #[test]

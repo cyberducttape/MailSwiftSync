@@ -158,6 +158,14 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     } else {
         None
     };
+    let launch_executable = if let Some(transfer_pass) = transfer_pass {
+        crate::plan_identity::revalidate_executable(executable, &transfer_pass.executable_identity)?
+    } else {
+        std::path::PathBuf::from(executable)
+    };
+    if launch_executable.to_string_lossy() != executable {
+        command = execution_command(&launch_executable.to_string_lossy(), args, env)?;
+    }
     let mut child = spawn_retrying_busy_executable(&mut command)
         .map_err(|error| format!("could not start {executable}: {error}"))?;
     if let (Some((limiter, path)), Some(admitted_at)) = (launch_limiter, launch_admitted_at) {

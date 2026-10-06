@@ -37,7 +37,7 @@ use ring::hmac;
 use std::{
     io::Read,
     net::{IpAddr, SocketAddr},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use zeroize::Zeroizing;
 
@@ -275,28 +275,15 @@ fn resolve_webhook_target(
     url: &reqwest::Url,
     policy: &crate::organization_policy::OrganizationWebhookPolicy,
 ) -> Result<Vec<SocketAddr>, String> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| "the webhook URL is missing a host".to_owned())?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| "the webhook URL is missing a port".to_owned())?;
-    let addresses = match host.parse::<IpAddr>() {
-        Ok(address) => vec![SocketAddr::new(address, port)],
-        Err(_) => crate::imap_probe::resolve_dns_with_deadline(
-            &format!("{host}:{port}"),
-            Instant::now() + WEBHOOK_CONNECT_TIMEOUT,
-            &|| false,
-        )
-        .map_err(|error| format!("could not resolve webhook host: {error}"))?,
-    };
-    if addresses.is_empty() {
-        return Err("webhook host resolved to no addresses".into());
-    }
-    validate_webhook_addresses(&addresses, policy)?;
-    Ok(addresses)
+    crate::organization_policy::resolve_policy_checked_https_target(
+        url,
+        policy.allow_private_networks,
+        &policy.allowed_domains,
+        "webhook",
+    )
 }
 
+#[cfg(test)]
 fn validate_webhook_addresses(
     addresses: &[SocketAddr],
     policy: &crate::organization_policy::OrganizationWebhookPolicy,
