@@ -26,5 +26,8 @@ Hardened execution:
 The profile does not sandbox imapsync or doveadm. The local operator and the
 verified engine remain part of the trust boundary, and the hardened profile
 does not replace executable SHA-256 provenance or the final pre-launch
-revalidation check. `compatibility` is the default profile and can be selected
+revalidation check. A same-UID local actor can still replace a verified file
+in the small open/hash/close-to-spawn window; descriptor-based `fexecve` or
+platform-specific equivalents would be required to eliminate that race
+completely. `compatibility` is the default profile and can be selected
 explicitly with `--execution-profile compatibility`.

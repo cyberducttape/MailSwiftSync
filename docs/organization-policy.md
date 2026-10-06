@@ -53,9 +53,10 @@ credential semantics, RBAC, and centrally administered policy distribution
 still require qualification or future control-plane work.
 
 Webhook delivery is restricted independently from migration plans because the
-payload can contain customer-sensitive operational metadata. Private,
-loopback, link-local, and local-only hostname targets, including every private
-address returned by DNS for a public-looking hostname, are rejected by default.
+payload can contain customer-sensitive operational metadata. Non-public,
+reserved, loopback, link-local, and local-only hostname targets, including
+every non-global address returned by DNS for a public-looking hostname, are
+rejected by default.
 Delivery uses the bounded, policy-checked address set so a DNS answer cannot be
 re-resolved to bypass the check during the request. Set
 `allow_private_networks = true` only for a deliberately controlled local
@@ -64,8 +65,8 @@ exact entry or a `*.example.com` subdomain pattern. Keep this file owner-only;
 it is read and enforced when the endpoint is validated and before delivery.
 
 OAuth authorization and token endpoints are restricted to the built-in Google
-and Microsoft hosts by default. All resolved addresses are checked for private
-or local destinations; token HTTP connections are pinned to the checked DNS
+and Microsoft hosts by default. All resolved addresses are checked for global
+unicast egress; token HTTP connections are pinned to the checked DNS
 answers. Set `allow_custom_endpoints = true` only for reviewed enterprise
 providers, and use `allowed_domains` to limit the approved host boundary.
 

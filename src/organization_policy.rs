@@ -30,8 +30,8 @@ pub(crate) struct OrganizationProviderPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct OrganizationWebhookPolicy {
-    /// Permit private, loopback, link-local, or local-only webhook targets,
-    /// including addresses returned by DNS.
+    /// Permit non-public, reserved, loopback, link-local, or local-only
+    /// webhook targets, including addresses returned by DNS.
     pub(crate) allow_private_networks: bool,
     /// Optional host boundary. When non-empty, webhook hosts must match one entry.
     /// A `*.example.com` entry matches subdomains, but not `example.com` itself.
@@ -44,7 +44,7 @@ pub(crate) struct OrganizationOAuthPolicy {
     /// Permit provider profiles or endpoint overrides outside the built-in
     /// Google and Microsoft endpoint set.
     pub(crate) allow_custom_endpoints: bool,
-    /// Permit OAuth endpoints that resolve to private or local addresses.
+    /// Permit OAuth endpoints that resolve to non-public or local addresses.
     pub(crate) allow_private_networks: bool,
     /// Optional host boundary for custom OAuth endpoints.
     pub(crate) allowed_domains: Vec<String>,
@@ -125,9 +125,13 @@ pub(crate) fn resolve_policy_checked_https_target(
     if addresses.is_empty() {
         return Err(format!("{label} endpoint host resolved to no addresses"));
     }
-    if !allow_private_networks && addresses.iter().any(|address| is_private_ip(address.ip())) {
+    if !allow_private_networks
+        && addresses
+            .iter()
+            .any(|address| !is_allowed_public_egress(address.ip()))
+    {
         return Err(format!(
-            "{label} endpoint host resolves to a private, loopback, link-local, or local-only address disabled by organization policy"
+            "{label} endpoint host resolves to a non-public or local-only address disabled by organization policy"
         ));
     }
     Ok(addresses)
@@ -152,9 +156,13 @@ fn validate_endpoint_host(
             "{label} endpoint host {normalized_host:?} is outside the organization allowed_domains policy"
         ));
     }
-    if !allow_private_networks && host.parse::<IpAddr>().is_ok_and(is_private_ip) {
+    if !allow_private_networks
+        && host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| !is_allowed_public_egress(address))
+    {
         return Err(format!(
-            "{label} endpoint host resolves to a private, loopback, link-local, or local-only address disabled by organization policy"
+            "{label} endpoint host resolves to a non-public or local-only address disabled by organization policy"
         ));
     }
     Ok(())
@@ -201,25 +209,40 @@ fn policy_domain_matches(host: &str, pattern: &str) -> bool {
         })
 }
 
-fn is_private_ip(address: IpAddr) -> bool {
+/// Return true only for globally routable unicast addresses. SSRF policy is
+/// intentionally an allowlist: documentation, benchmarking, special-use,
+/// and reserved ranges are not safe just because they are not RFC1918.
+pub(crate) fn is_allowed_public_egress(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
-            address.is_private()
-                || address.is_loopback()
-                || address.is_link_local()
-                || address.is_unspecified()
-                || address.is_multicast()
-                || address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1])
-                || address.octets()[0] == 192 && address.octets()[1] == 0
-                || address.octets()[0] == 198 && (18..=19).contains(&address.octets()[1])
+            let [first, second, third, _] = address.octets();
+            first != 0
+                && first < 224
+                && !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_unspecified()
+                && !address.is_multicast()
+                && !(first == 100 && (64..=127).contains(&second))
+                && !(first == 192 && second == 0)
+                && !(first == 192 && second == 0 && third == 2)
+                && !(first == 192 && second == 88 && third == 99)
+                && !(first == 198 && (18..=19).contains(&second))
+                && !(first == 198 && second == 51 && third == 100)
+                && !(first == 203 && second == 0 && third == 113)
         }
         IpAddr::V6(address) => {
-            address.to_ipv4().is_some()
-                || address.is_loopback()
-                || address.is_unspecified()
-                || address.is_multicast()
-                || (address.segments()[0] & 0xfe00) == 0xfc00
-                || (address.segments()[0] & 0xffc0) == 0xfe80
+            let segments = address.segments();
+            let is_global_unicast_prefix = (segments[0] & 0xe000) == 0x2000;
+            is_global_unicast_prefix
+                && address.to_ipv4().is_none()
+                && !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_multicast()
+                && (segments[0] != 0x2001 || segments[1] != 0x0db8)
+                && !(segments[0] == 0x2001 && segments[1] == 0x0000)
+                && !(segments[0] == 0x2001 && segments[1] == 0x0002)
+                && !(segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010)
         }
     }
 }
@@ -558,7 +581,25 @@ mod tests {
         let private = reqwest::Url::parse("https://127.0.0.1/token").unwrap();
         let error = super::validate_oauth_endpoint_policy(&private, &policy.oauth, "OAuth token")
             .unwrap_err();
-        assert!(error.contains("private"), "{error}");
+        assert!(error.contains("non-public"), "{error}");
+    }
+
+    #[test]
+    fn public_egress_rejects_documentation_and_reserved_ranges() {
+        for address in [
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "240.0.0.1",
+            "2001:db8::1",
+        ] {
+            let address = address.parse().unwrap();
+            assert!(!super::is_allowed_public_egress(address), "{address}");
+        }
+        for address in ["1.1.1.1", "2606:4700:4700::1111"] {
+            let address = address.parse().unwrap();
+            assert!(super::is_allowed_public_egress(address), "{address}");
+        }
     }
 
     #[test]

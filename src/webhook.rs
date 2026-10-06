@@ -262,10 +262,14 @@ fn parse_https_url_with_policy(
             "webhook host {host:?} is outside the organization allowed_domains policy"
         ));
     }
-    if !policy.allow_private_networks && is_private_webhook_host(&host) {
+    if !policy.allow_private_networks
+        && (is_local_only_webhook_host(&host)
+            || host.parse::<IpAddr>().is_ok_and(|address| {
+                !crate::organization_policy::is_allowed_public_egress(address)
+            }))
+    {
         return Err(
-            "private, loopback, link-local, and local-only webhook targets are disabled by organization policy"
-                .into(),
+            "non-public or local-only webhook targets are disabled by organization policy".into(),
         );
     }
     Ok(parsed)
@@ -291,10 +295,10 @@ fn validate_webhook_addresses(
     if !policy.allow_private_networks
         && addresses
             .iter()
-            .any(|address| is_private_webhook_ip(address.ip()))
+            .any(|address| !crate::organization_policy::is_allowed_public_egress(address.ip()))
     {
         return Err(
-            "webhook host resolves to a private, loopback, link-local, or local-only address disabled by organization policy".into(),
+            "webhook host resolves to a non-public or local-only address disabled by organization policy".into(),
         );
     }
     Ok(())
@@ -312,39 +316,13 @@ fn webhook_domain_matches(host: &str, pattern: &str) -> bool {
     }
 }
 
-fn is_private_webhook_host(host: &str) -> bool {
-    if let Ok(address) = host.parse::<IpAddr>() {
-        return is_private_webhook_ip(address);
-    }
+fn is_local_only_webhook_host(host: &str) -> bool {
     host == "localhost"
         || host.ends_with(".localhost")
         || host.ends_with(".local")
         || host.ends_with(".internal")
         || host.ends_with(".lan")
         || host.ends_with(".home.arpa")
-}
-
-fn is_private_webhook_ip(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            address.is_private()
-                || address.is_loopback()
-                || address.is_link_local()
-                || address.is_unspecified()
-                || address.is_multicast()
-                || address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1])
-                || address.octets()[0] == 192 && address.octets()[1] == 0
-                || address.octets()[0] == 198 && (18..=19).contains(&address.octets()[1])
-        }
-        IpAddr::V6(address) => {
-            address.to_ipv4().is_some()
-                || address.is_loopback()
-                || address.is_unspecified()
-                || address.is_multicast()
-                || (address.segments()[0] & 0xfe00) == 0xfc00
-                || (address.segments()[0] & 0xffc0) == 0xfe80
-        }
-    }
 }
 
 /// Resolve the command-line URL, allowing operators to keep secret-bearing
@@ -528,7 +506,7 @@ mod tests {
 
     #[test]
     fn webhook_resolution_rejects_private_addresses_from_dns() {
-        let public = SocketAddr::from(([203, 0, 113, 10], 443));
+        let public = SocketAddr::from(([1, 1, 1, 1], 443));
         let private = SocketAddr::from(([169, 254, 169, 254], 443));
         let error =
             validate_webhook_addresses(&[public, private], &Default::default()).unwrap_err();
@@ -707,7 +685,7 @@ mod tests {
             "{}",
         )
         .expect_err("private loopback target must fail closed");
-        assert!(error.contains("private"), "{error}");
+        assert!(error.contains("non-public"), "{error}");
         assert!(!error.contains("secret-token-path"), "{error}");
     }
 }
