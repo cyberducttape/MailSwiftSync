@@ -5,7 +5,7 @@ use std::{
     process::{Child, Command},
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -22,6 +22,32 @@ use crate::{core, credentials::SecretString};
 const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
 const MAX_CAPTURED_OUTPUT_LINES: usize = 8 * 1024;
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EngineExecutionProfile {
+    Compatibility,
+    Hardened,
+}
+
+static ENGINE_EXECUTION_PROFILE: AtomicU8 = AtomicU8::new(0);
+
+pub(crate) fn set_engine_execution_profile(profile: EngineExecutionProfile) {
+    ENGINE_EXECUTION_PROFILE.store(
+        match profile {
+            EngineExecutionProfile::Compatibility => 0,
+            EngineExecutionProfile::Hardened => 1,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+pub(crate) fn engine_execution_profile() -> EngineExecutionProfile {
+    if ENGINE_EXECUTION_PROFILE.load(Ordering::Relaxed) == 1 {
+        EngineExecutionProfile::Hardened
+    } else {
+        EngineExecutionProfile::Compatibility
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct CapturedOutput {
@@ -1037,7 +1063,60 @@ const DNS_ENVIRONMENT_ALLOWLIST: &[&str] = &[
 /// Start an engine (or the launcher that becomes it) from an empty
 /// environment plus the allowlist above.
 pub(crate) fn apply_engine_environment(command: &mut Command) {
-    apply_environment_allowlist(command, ENGINE_ENVIRONMENT_ALLOWLIST);
+    if engine_execution_profile() == EngineExecutionProfile::Hardened {
+        apply_environment_allowlist(command, HARDENED_ENGINE_ENVIRONMENT_ALLOWLIST);
+        command.env("PATH", hardened_engine_path());
+    } else {
+        apply_environment_allowlist(command, ENGINE_ENVIRONMENT_ALLOWLIST);
+    }
+}
+
+const HARDENED_ENGINE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "TZ",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+];
+
+#[cfg(unix)]
+fn hardened_engine_path() -> &'static str {
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+}
+
+#[cfg(windows)]
+fn hardened_engine_path() -> String {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    format!(
+        "{};{};{}",
+        std::path::PathBuf::from(&root).join("System32").display(),
+        std::path::PathBuf::from(&root).display(),
+        std::path::PathBuf::from(&root)
+            .join("System32\\Wbem")
+            .display()
+    )
 }
 
 /// Start the internal system-DNS helper with only settings that affect the
@@ -1223,5 +1302,31 @@ pub(crate) fn recorded_process_is_gone(process: &core::ActiveProcess) -> bool {
     {
         let _ = process;
         false
+    }
+}
+
+#[cfg(test)]
+mod execution_profile_tests {
+    use super::*;
+
+    #[test]
+    fn hardened_engine_environment_removes_perl_and_inherited_ca_overrides() {
+        set_engine_execution_profile(EngineExecutionProfile::Hardened);
+        let mut command = Command::new("imapsync");
+        command
+            .env("PERL5LIB", "/untrusted/perl")
+            .env("SSL_CERT_FILE", "/untrusted/ca.pem")
+            .env("SSL_CERT_DIR", "/untrusted/ca.d");
+        apply_engine_environment(&mut command);
+        let names = command
+            .get_envs()
+            .filter_map(|(name, value)| value.map(|_| name.to_string_lossy().into_owned()))
+            .collect::<std::collections::HashSet<_>>();
+        assert!(names.contains("PATH"));
+        assert!(!names.contains("PERL5LIB"));
+        assert!(!names.contains("PERL_LOCAL_LIB_ROOT"));
+        assert!(!names.contains("SSL_CERT_FILE"));
+        assert!(!names.contains("SSL_CERT_DIR"));
+        set_engine_execution_profile(EngineExecutionProfile::Compatibility);
     }
 }

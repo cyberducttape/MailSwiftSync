@@ -43,7 +43,7 @@ pub(crate) fn fingerprint_digest(fingerprint: &str) -> String {
     snapshot_sha256(fingerprint)
 }
 
-fn resolve_executable(executable: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_executable(executable: &str) -> Option<PathBuf> {
     let executable = Path::new(executable.trim());
     if executable.is_absolute() || executable.components().count() > 1 {
         return executable

@@ -72,16 +72,18 @@ pub(super) fn execution_command(
 ) -> Result<Command, String> {
     let current_executable = std::env::current_exe()
         .map_err(|error| format!("could not locate MailSwiftSync launcher: {error}"))?;
+    let launch_executable = hardened_executable_path(executable)?;
     let mut command = Command::new(current_executable);
     // The launcher becomes the engine, so it starts from the same minimal
     // environment the engine may see.
     crate::process::apply_engine_environment(&mut command);
+    let engine_env = filtered_engine_env(env);
     command
         .arg("--internal-launcher")
-        .arg(executable)
+        .arg(&launch_executable)
         .arg("--")
         .args(args)
-        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
+        .envs(engine_env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -97,16 +99,43 @@ pub(super) fn execution_command(
     args: &[String],
     env: &[(String, SecretString)],
 ) -> Result<Command, String> {
-    let mut command = Command::new(executable);
+    let launch_executable = hardened_executable_path(executable)?;
+    let mut command = Command::new(launch_executable);
     crate::process::apply_engine_environment(&mut command);
+    let engine_env = filtered_engine_env(env);
     command
         .args(args)
-        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
+        .envs(engine_env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
     Ok(command)
+}
+
+fn hardened_executable_path(executable: &str) -> Result<String, String> {
+    if crate::process::engine_execution_profile()
+        != crate::process::EngineExecutionProfile::Hardened
+    {
+        return Ok(executable.to_owned());
+    }
+    crate::plan_identity::resolve_executable(executable)
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("hardened execution could not resolve executable {executable:?}"))
+}
+
+fn filtered_engine_env<'a>(
+    env: &'a [(String, SecretString)],
+) -> impl Iterator<Item = (&'a String, &'a str)> + 'a {
+    env.iter().filter_map(|(key, value)| {
+        let blocked = crate::process::engine_execution_profile()
+            == crate::process::EngineExecutionProfile::Hardened
+            && matches!(
+                key.to_ascii_uppercase().as_str(),
+                "PATH" | "PERL5LIB" | "PERL_LOCAL_LIB_ROOT" | "SSL_CERT_FILE" | "SSL_CERT_DIR"
+            );
+        (!blocked).then_some((key, value.as_str()))
+    })
 }
 
 pub(super) fn release_engine(

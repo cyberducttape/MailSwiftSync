@@ -61,7 +61,7 @@ const ACKNOWLEDGE_DESTINATION_LOSS: &str = "--acknowledge-destination-loss";
 pub(crate) fn run() -> eframe::Result<()> {
     let mut arguments = std::env::args_os();
     let _program = arguments.next();
-    let Some(command) = arguments.next() else {
+    let Some(mut command) = arguments.next() else {
         #[allow(unused_mut)]
         let mut inner_size = [1200.0, 820.0];
         #[cfg(debug_assertions)]
@@ -97,6 +97,28 @@ pub(crate) fn run() -> eframe::Result<()> {
             }),
         );
     };
+    if command == std::ffi::OsStr::new("--execution-profile") {
+        let Some(profile) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync --execution-profile compatibility|hardened <command>");
+            std::process::exit(2);
+        };
+        match profile.to_str() {
+            Some("compatibility") => crate::process::set_engine_execution_profile(
+                crate::process::EngineExecutionProfile::Compatibility,
+            ),
+            Some("hardened") => crate::process::set_engine_execution_profile(
+                crate::process::EngineExecutionProfile::Hardened,
+            ),
+            _ => {
+                eprintln!("execution profile must be compatibility or hardened");
+                std::process::exit(2);
+            }
+        }
+        command = arguments.next().unwrap_or_else(|| {
+            eprintln!("Usage: mailswiftsync --execution-profile compatibility|hardened <command>");
+            std::process::exit(2);
+        });
+    }
     if command == std::ffi::OsStr::new("--internal-launcher") {
         std::process::exit(crate::runner::run_internal_launcher(arguments.collect()));
     }
@@ -221,7 +243,7 @@ fn print_cli_help() {
     );
     out!("  verify-certificate <file> [trusted-key]  Verify a signed migration certificate");
     out!(
-        "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
+        "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n  --execution-profile <name>    Use compatibility (default) or hardened engine environment\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
     );
     out!(
         "\nReport export:\n  post-report-state <state> <output> [project-id]  Export a durable-snapshot post-migration report"
