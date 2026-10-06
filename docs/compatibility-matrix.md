@@ -59,3 +59,29 @@ Minimum test cases for every row:
 Until this matrix contains representative tested rows, the product should be
 described as a technical preview rather than a generally supported migration
 service.
+
+## Required hosted-provider qualification matrix
+
+The following matrix is the minimum release evidence plan. A provider preset,
+an endpoint probe, an OAuth refresh test, or the generic IMAP fixture does not
+advance a row to qualified. Each row needs a signed evidence bundle covering
+dry pilot, live pilot, recovery, and verification for the exact release and
+engine, plus the mailbox-shape cases listed below.
+
+| Provider pair | Current status | Required live evidence |
+|---|---|---|
+| Google Workspace → Microsoft 365 | Not qualified | OAuth/IMAP, labels and special folders, throttling, quota, long-running refresh, recovery |
+| Microsoft 365 → Google Workspace | Not qualified | OAuth/IMAP, special folders, throttling, quota, long-running refresh, recovery |
+| cPanel/Dovecot → Microsoft 365 | Not qualified | Password/app-password source, OAuth destination, folder normalization, quota, recovery |
+| cPanel/Dovecot → Google Workspace | Not qualified | Password/app-password source, OAuth destination, labels, quota, recovery |
+| cPanel/Dovecot → cPanel/Dovecot | Not qualified | Native hosted Dovecot behavior, folder and UID stability, recovery |
+| Generic Dovecot → Generic Dovecot | Generic lab only | Hosted-server evidence beyond the disposable fixture, including recovery |
+| Fastmail → Google Workspace or Microsoft 365 | Not qualified | App-password source, OAuth destination, throttling, folder mapping, recovery |
+
+Every qualified pair must include tiny, 10k-message, 100k-message, and
+million-message accounts where available; 10+ GiB and 50+ GiB accounts;
+folder-heavy mailboxes; large attachments; duplicate-heavy data;
+non-ASCII and renamed folders; and cancellation, token rotation, quota,
+disconnect, and final-delta scenarios. Until those runs produce signed
+evidence, the rows remain unsupported regardless of how complete the preset
+code path is.

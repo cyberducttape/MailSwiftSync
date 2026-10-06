@@ -33,6 +33,26 @@ reports enough totals, and unresolved work. This is attempt provenance, not a
 per-message checkpoint; imapsync recovery still rediscovers already-present
 messages on restart.
 
+## Verification restart boundary
+
+Message verification has its own durable restart path, separate from the
+transfer process. While verification is incomplete, its private SQLite stage
+retains one cursor per source and destination folder containing the folder
+snapshot (`UIDVALIDITY`, `UIDNEXT`, and `EXISTS`), the last staged UID, a
+completion flag, and the staged-row count. Each metadata or body-fingerprint
+page is committed before its cursor advances. A restart reuses only a cursor
+whose complete snapshot still matches the server; otherwise that folder is
+discarded and rescanned. This means a controller interruption during
+verification does not require the transfer engine to start over.
+
+The current product does not retain completed message metadata indefinitely
+and does not yet expose a separate post-completion `verify` job. A successful
+verification commits its evidence and removes the private stage; an
+interrupted or failed verification retains it for the next verification
+attempt. Persistent customer-facing verification segments, rolling digests,
+and an operator-invokable verification-only workflow remain GA work rather
+than being implied by the current checkpoint implementation.
+
 Body-byte totals count bytes fetched and hashed from both endpoints together;
 they are not the source mailbox's total stored size. The current implementation
 does not sample body fingerprints and does not automatically fall back to a
