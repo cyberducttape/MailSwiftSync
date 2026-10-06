@@ -25,7 +25,8 @@ pub(crate) struct OrganizationProviderPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct OrganizationWebhookPolicy {
-    /// Permit literal private, loopback, link-local, or local-only webhook targets.
+    /// Permit private, loopback, link-local, or local-only webhook targets,
+    /// including addresses returned by DNS.
     pub(crate) allow_private_networks: bool,
     /// Optional host boundary. When non-empty, webhook hosts must match one entry.
     /// A `*.example.com` entry matches subdomains, but not `example.com` itself.

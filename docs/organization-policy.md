@@ -49,8 +49,11 @@ still require qualification or future control-plane work.
 
 Webhook delivery is restricted independently from migration plans because the
 payload can contain customer-sensitive operational metadata. Private,
-loopback, link-local, and local-only hostname targets are rejected by default.
-Set `allow_private_networks = true` only for a deliberately controlled local
+loopback, link-local, and local-only hostname targets, including every private
+address returned by DNS for a public-looking hostname, are rejected by default.
+Delivery uses the bounded, policy-checked address set so a DNS answer cannot be
+re-resolved to bypass the check during the request. Set
+`allow_private_networks = true` only for a deliberately controlled local
 receiver. When `allowed_domains` is non-empty, the webhook host must match an
 exact entry or a `*.example.com` subdomain pattern. Keep this file owner-only;
 it is read and enforced when the endpoint is validated and before delivery.

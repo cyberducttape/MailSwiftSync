@@ -34,27 +34,31 @@ use crate::credentials::{SecretString, read_secret_file};
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderName, HeaderValue};
 use ring::hmac;
-use std::{io::Read, sync::OnceLock, time::Duration};
+use std::{
+    io::Read,
+    net::{IpAddr, SocketAddr},
+    time::{Duration, Instant},
+};
 use zeroize::Zeroizing;
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const WEBHOOK_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WEBHOOK_TOTAL_BUDGET: Duration = Duration::from_secs(30);
-static WEBHOOK_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
-
-fn webhook_client() -> Result<&'static reqwest::blocking::Client, String> {
-    WEBHOOK_CLIENT
-        .get_or_init(|| {
-            reqwest::blocking::Client::builder()
-                .use_rustls_tls()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
-                .timeout(WEBHOOK_TOTAL_BUDGET)
-                .build()
-                .map_err(|error| format!("could not build webhook client: {error}"))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+fn webhook_client(
+    host: &str,
+    addresses: &[SocketAddr],
+) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .use_rustls_tls()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
+        .timeout(WEBHOOK_TOTAL_BUDGET)
+        // Pin the request to the addresses checked immediately before the
+        // request. This prevents a second DNS answer from redirecting the
+        // connection to an address that was never covered by policy.
+        .resolve_to_addrs(host, addresses)
+        .build()
+        .map_err(|error| format!("could not build webhook client: {error}"))
 }
 
 /// Retain only identifiers, phases, and aggregate counts for the default
@@ -100,12 +104,18 @@ pub(crate) fn post_json(
     body: &str,
 ) -> Result<u16, String> {
     let url = load_webhook_url(url)?;
+    let policy = webhook_policy()?;
+    let parsed_url = parse_https_url_with_policy(&url, &policy)?;
+    let addresses = resolve_webhook_target(&parsed_url, &policy)?;
     let bearer_token = load_webhook_bearer_token()?;
     let custom_header = load_webhook_custom_header()?;
     let signing_secret = load_webhook_signing_secret()?;
-    let parsed_url = parse_https_url(&url)?;
+    let host = parsed_url
+        .host_str()
+        .ok_or_else(|| "the webhook URL is missing a host".to_owned())?;
+    let client = webhook_client(host, &addresses)?;
 
-    let mut request = webhook_client()?
+    let mut request = client
         .post(parsed_url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(reqwest::header::ACCEPT, "application/json")
@@ -200,10 +210,16 @@ fn read_bounded_response(response: &mut Response) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn parse_https_url(url: &str) -> Result<reqwest::Url, String> {
-    let policy = crate::organization_policy::OrganizationPolicy::load()
-        .map_err(|error| format!("webhook organization policy is unavailable: {error}"))?;
-    parse_https_url_with_policy(url, &policy.webhooks)
+    let policy = webhook_policy()?;
+    parse_https_url_with_policy(url, &policy)
+}
+
+fn webhook_policy() -> Result<crate::organization_policy::OrganizationWebhookPolicy, String> {
+    crate::organization_policy::OrganizationPolicy::load()
+        .map(|policy| policy.webhooks)
+        .map_err(|error| format!("webhook organization policy is unavailable: {error}"))
 }
 
 fn parse_https_url_with_policy(
@@ -255,6 +271,48 @@ fn parse_https_url_with_policy(
     Ok(parsed)
 }
 
+fn resolve_webhook_target(
+    url: &reqwest::Url,
+    policy: &crate::organization_policy::OrganizationWebhookPolicy,
+) -> Result<Vec<SocketAddr>, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "the webhook URL is missing a host".to_owned())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "the webhook URL is missing a port".to_owned())?;
+    let addresses = match host.parse::<IpAddr>() {
+        Ok(address) => vec![SocketAddr::new(address, port)],
+        Err(_) => crate::imap_probe::resolve_dns_with_deadline(
+            &format!("{host}:{port}"),
+            Instant::now() + WEBHOOK_CONNECT_TIMEOUT,
+            &|| false,
+        )
+        .map_err(|error| format!("could not resolve webhook host: {error}"))?,
+    };
+    if addresses.is_empty() {
+        return Err("webhook host resolved to no addresses".into());
+    }
+    validate_webhook_addresses(&addresses, policy)?;
+    Ok(addresses)
+}
+
+fn validate_webhook_addresses(
+    addresses: &[SocketAddr],
+    policy: &crate::organization_policy::OrganizationWebhookPolicy,
+) -> Result<(), String> {
+    if !policy.allow_private_networks
+        && addresses
+            .iter()
+            .any(|address| is_private_webhook_ip(address.ip()))
+    {
+        return Err(
+            "webhook host resolves to a private, loopback, link-local, or local-only address disabled by organization policy".into(),
+        );
+    }
+    Ok(())
+}
+
 fn webhook_domain_matches(host: &str, pattern: &str) -> bool {
     let pattern = pattern.trim().trim_end_matches('.').to_ascii_lowercase();
     if pattern.is_empty() {
@@ -268,27 +326,8 @@ fn webhook_domain_matches(host: &str, pattern: &str) -> bool {
 }
 
 fn is_private_webhook_host(host: &str) -> bool {
-    use std::net::IpAddr;
     if let Ok(address) = host.parse::<IpAddr>() {
-        return match address {
-            IpAddr::V4(address) => {
-                address.is_private()
-                    || address.is_loopback()
-                    || address.is_link_local()
-                    || address.is_unspecified()
-                    || address.is_multicast()
-                    || address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1])
-                    || address.octets()[0] == 192 && address.octets()[1] == 0
-                    || address.octets()[0] == 198 && (18..=19).contains(&address.octets()[1])
-            }
-            IpAddr::V6(address) => {
-                address.is_loopback()
-                    || address.is_unspecified()
-                    || address.is_multicast()
-                    || (address.segments()[0] & 0xfe00) == 0xfc00
-                    || (address.segments()[0] & 0xffc0) == 0xfe80
-            }
-        };
+        return is_private_webhook_ip(address);
     }
     host == "localhost"
         || host.ends_with(".localhost")
@@ -296,6 +335,29 @@ fn is_private_webhook_host(host: &str) -> bool {
         || host.ends_with(".internal")
         || host.ends_with(".lan")
         || host.ends_with(".home.arpa")
+}
+
+fn is_private_webhook_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1])
+                || address.octets()[0] == 192 && address.octets()[1] == 0
+                || address.octets()[0] == 198 && (18..=19).contains(&address.octets()[1])
+        }
+        IpAddr::V6(address) => {
+            address.to_ipv4().is_some()
+                || address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || (address.segments()[0] & 0xfe00) == 0xfc00
+                || (address.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 /// Resolve the command-line URL, allowing operators to keep secret-bearing
@@ -478,10 +540,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn webhook_requests_share_a_connection_pooled_client() {
-        let first = webhook_client().unwrap();
-        let second = webhook_client().unwrap();
-        assert!(std::ptr::eq(first, second));
+    fn webhook_resolution_rejects_private_addresses_from_dns() {
+        let public = SocketAddr::from(([203, 0, 113, 10], 443));
+        let private = SocketAddr::from(([169, 254, 169, 254], 443));
+        let error =
+            validate_webhook_addresses(&[public, private], &Default::default()).unwrap_err();
+        assert!(error.contains("resolves"), "{error}");
+        let opt_in = crate::organization_policy::OrganizationWebhookPolicy {
+            allow_private_networks: true,
+            ..Default::default()
+        };
+        assert!(validate_webhook_addresses(&[public, private], &opt_in).is_ok());
     }
 
     #[test]

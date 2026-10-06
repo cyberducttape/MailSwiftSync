@@ -43,12 +43,23 @@ use protocol::{
     read_imap_tagged, read_imap_tagged_bytes_with_budget, read_imap_tagged_with_budget,
     read_imap_tagged_with_optional_budget, write_imap_command,
 };
-use resolver::{connect_racing, resolve_dns_with_deadline};
+use resolver::connect_racing;
 pub(crate) use tls::connect_tls_stream;
 use tls::connect_tls_stream_with_budget;
 
 pub(crate) fn internal_dns_resolver_main(arguments: &[std::ffi::OsString]) -> i32 {
     resolver::internal_dns_resolver_main(arguments)
+}
+
+/// Resolve a hostname through the bounded resolver used by network probes.
+/// Webhook delivery reuses this path so policy checks inspect the same bounded
+/// address set that is pinned into its HTTP client.
+pub(crate) fn resolve_dns_with_deadline(
+    address: &str,
+    deadline: std::time::Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    resolver::resolve_dns_with_deadline(address, deadline, cancelled)
 }
 
 pub(crate) fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
