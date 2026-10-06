@@ -97,12 +97,18 @@ pub(crate) fn attach_child_supervisor(child: &Child) -> std::io::Result<ChildSup
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
             SetInformationJobObject,
         };
+        // SAFETY: null security attributes/name request default job-object
+        // construction; the returned handle is checked and owned below.
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if job.is_null() {
             return Err(std::io::Error::last_os_error());
         }
+        // SAFETY: this Win32 POD has no invalid bit patterns and is fully
+        // initialized before being passed to SetInformationJobObject.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: limits points to a live, correctly sized POD for the
+        // duration of the synchronous API call.
         let configured = unsafe {
             SetInformationJobObject(
                 job,
@@ -117,6 +123,8 @@ pub(crate) fn attach_child_supervisor(child: &Child) -> std::io::Result<ChildSup
             }
             return Err(std::io::Error::last_os_error());
         }
+        // SAFETY: job is the checked handle created above and child exposes a
+        // live process handle valid for the duration of this call.
         let assigned = unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as _) };
         if assigned == 0 {
             unsafe {
@@ -959,12 +967,16 @@ fn wait_for_graceful_exit(child: &mut Child, grace: Duration) {
 
 #[cfg(unix)]
 fn process_group_exists(process_group: u32) -> bool {
+    // SAFETY: kill with signal 0 performs an existence/permission check only;
+    // the negated positive process-group ID is valid for the libc call.
     let result = unsafe { libc::kill(-(process_group as libc::pid_t), 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(unix)]
 fn terminate_process_group_id(process_group: u32) {
+    // SAFETY: the caller obtained this process-group ID from the owned child;
+    // SIGTERM has no pointer or lifetime requirements.
     unsafe {
         let _ = libc::kill(-(process_group as libc::pid_t), libc::SIGTERM);
     }
@@ -972,6 +984,8 @@ fn terminate_process_group_id(process_group: u32) {
 
 #[cfg(unix)]
 fn force_kill_process_group_id(process_group: u32) {
+    // SAFETY: the caller obtained this process-group ID from the owned child;
+    // SIGKILL has no pointer or lifetime requirements.
     unsafe {
         let _ = libc::kill(-(process_group as libc::pid_t), libc::SIGKILL);
     }
@@ -1241,6 +1255,8 @@ pub(crate) fn process_identity(pid: u32) -> Option<(u64, u32, u32)> {
 #[cfg(target_os = "macos")]
 pub(crate) fn process_identity(pid: u32) -> Option<(u64, u32, u32)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    // SAFETY: info is writable, properly aligned storage for proc_bsdinfo;
+    // proc_pidinfo writes at most the supplied size synchronously.
     let size = unsafe {
         libc::proc_pidinfo(
             pid as libc::c_int,
@@ -1253,7 +1269,10 @@ pub(crate) fn process_identity(pid: u32) -> Option<(u64, u32, u32)> {
     if size != std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int {
         return None;
     }
+    // SAFETY: the exact-size success result above means proc_pidinfo fully
+    // initialized the structure before it is read.
     let info = unsafe { info.assume_init() };
+    // SAFETY: getsid accepts a process ID and only returns its session ID.
     let session_id = unsafe { libc::getsid(pid as libc::pid_t) };
     if session_id < 0 {
         return None;

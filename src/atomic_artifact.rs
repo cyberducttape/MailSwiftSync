@@ -66,24 +66,32 @@ fn atomic_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
         .collect();
 
     match std::fs::metadata(dst) {
-        Ok(_) => unsafe {
-            if ReplaceFileW(
-                dst_wide.as_ptr(),
-                src_wide.as_ptr(),
-                std::ptr::null(),
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            ) == 0
-            {
-                return Err(std::io::Error::last_os_error());
+        Ok(_) => {
+            // SAFETY: the UTF-16 vectors are NUL-terminated, remain alive for
+            // the call, and the Windows API does not retain either pointer.
+            unsafe {
+                if ReplaceFileW(
+                    dst_wide.as_ptr(),
+                    src_wide.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ) == 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => unsafe {
-            if MoveFileExW(src_wide.as_ptr(), dst_wide.as_ptr(), MOVEFILE_WRITE_THROUGH) == 0 {
-                return Err(std::io::Error::last_os_error());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // SAFETY: both NUL-terminated path buffers remain alive through
+            // MoveFileExW, and WRITE_THROUGH requests durable rename handling.
+            unsafe {
+                if MoveFileExW(src_wide.as_ptr(), dst_wide.as_ptr(), MOVEFILE_WRITE_THROUGH) == 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
-        },
+        }
         Err(error) => return Err(error),
     }
     Ok(())
