@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add a verification workspace drill-down with durable mismatch details,
+  mailbox evidence, staged SQL reads, and customer-safe/operator evidence
+  views. Restore the CI verification gates and cover the new schema and
+  evidence paths with regression tests.
+- Harden fail-closed behavior around preview validation races, bounded body
+  hash limits, unknown persisted mismatch types, and unavailable batch
+  confirmation state. These paths now stop safely with actionable operator
+  feedback instead of panicking or starting an unconfirmed migration.
+- Localize the batch-confirmation failure fallback in the English and German
+  catalogs.
 - Distinguish verification that stopped at a safety limit from a failed
   transfer and from a verifier error (ledger version 28). Every verifier
   bound (folder inventory, response size, fetched state, message count,
