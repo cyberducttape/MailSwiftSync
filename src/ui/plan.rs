@@ -428,7 +428,13 @@ impl App {
                     return;
                 }
 
-                let (exe, args) = command.expect("preview command was validated above");
+                let Ok((exe, args)) = command else {
+                    // Validation may observe mutable form state changing while
+                    // the preview window is being rendered. The error branch
+                    // above is the normal path; if the result is unavailable,
+                    // keep the preview fail-closed instead of panicking.
+                    return;
+                };
                 ui.label(
                     RichText::new(self.language.message("ui.executable").replace("{}", &exe))
                         .monospace(),
