@@ -2,7 +2,7 @@ use crate::atomic_artifact::write_private_atomic;
 use crate::branding::OperatorBranding;
 use crate::{
     core,
-    reports::integrity::{evidence_digest, with_proof_digest},
+    reports::integrity::{evidence_coverage_fields, evidence_digest, with_proof_digest},
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -210,7 +210,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 Some((run_id, value, plan_snapshot)) => {
                     let plan_snapshot = plan_snapshot
                         .ok_or("The customer proof refers to a missing evidence run.")?;
-                    Some(serde_json::json!({
+                    let mut evidence = serde_json::json!({
                         "run_id": run_id,
                         "migration_plan_sha256": crate::plan_identity::snapshot_sha256(&plan_snapshot),
                         "engine_binary_sha256": execution_executable_sha256(&plan_snapshot),
@@ -239,7 +239,12 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "extra_messages": value.extra_messages,
                         "modified_messages": value.modified_messages,
                         "certificate_status": if value.is_exact_match() { "exact" } else { "exception" },
-                    }))
+                    });
+                    evidence
+                        .as_object_mut()
+                        .expect("evidence is a JSON object")
+                        .extend(evidence_coverage_fields(&value));
+                    Some(evidence)
                 }
                 None => None,
             };
@@ -475,6 +480,7 @@ mod tests {
                     extra_messages: 0,
                     modified_messages: 0,
                     probable_messages: 0,
+                    flag_verification: None,
                 },
             )
             .unwrap();
@@ -526,6 +532,15 @@ mod tests {
             evidence["engine_binary_sha256"],
             binary_identity.strip_prefix("sha256:").unwrap()
         );
+        // Aggregate evidence names its tier, checks no individual message,
+        // and reports flags as unverified rather than omitting them.
+        assert_eq!(
+            evidence["verification_tier"],
+            "Level 1 — Aggregate evidence — individual messages not compared"
+        );
+        assert_eq!(evidence["message_coverage"]["checked_messages"], 0);
+        assert_eq!(evidence["message_coverage"]["complete"], false);
+        assert!(evidence["flag_verification"].is_null());
         assert!(!certificate.to_string().contains(&plan_snapshot));
         assert!(
             !certificate
@@ -573,6 +588,7 @@ mod tests {
                             extra_messages: 0,
                             modified_messages: 0,
                             probable_messages: 0,
+                            flag_verification: None,
                         },
                         Some("plan".into()),
                     )

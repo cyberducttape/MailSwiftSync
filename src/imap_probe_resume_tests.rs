@@ -18,25 +18,30 @@ const PAGE: u64 = MESSAGE_FETCH_PAGE_SIZE;
 
 /// Minimal scripted IMAP server for one folder: answers SELECT, UID
 /// SEARCH, and UID FETCH (metadata and optional BODY[]) from an in-memory
-/// UID set, recording every UID it was asked to fetch.
-struct FolderServer {
+/// UID set, recording every UID it was asked to fetch. Messages listed in
+/// `flags` carry a FLAGS item; SELECT advertises `permanent_flags` if set.
+pub(super) struct FolderServer {
     uids: Vec<u64>,
     uidvalidity: u64,
     uidnext: u64,
     fetched: Vec<u64>,
     fetch_commands: usize,
+    pub(super) flags: std::collections::HashMap<u64, String>,
+    pub(super) permanent_flags: Option<String>,
     input: Vec<u8>,
     output: Vec<u8>,
 }
 
 impl FolderServer {
-    fn new(uids: &[u64], uidvalidity: u64, uidnext: u64) -> Self {
+    pub(super) fn new(uids: &[u64], uidvalidity: u64, uidnext: u64) -> Self {
         Self {
             uids: uids.to_vec(),
             uidvalidity,
             uidnext,
             fetched: Vec::new(),
             fetch_commands: 0,
+            flags: std::collections::HashMap::new(),
+            permanent_flags: None,
             input: Vec::new(),
             output: Vec::new(),
         }
@@ -53,8 +58,13 @@ impl FolderServer {
     fn respond(&mut self, line: &str) {
         let (tag, command) = line.split_once(' ').unwrap();
         let reply = if command.starts_with("SELECT ") {
+            let permanent = self
+                .permanent_flags
+                .as_ref()
+                .map(|flags| format!("* OK [PERMANENTFLAGS ({flags})] ok\r\n"))
+                .unwrap_or_default();
             format!(
-                "* {} EXISTS\r\n* OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n{tag} OK SELECT completed\r\n",
+                "* {} EXISTS\r\n{permanent}* OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n{tag} OK SELECT completed\r\n",
                 self.uids.len(),
                 self.uidvalidity,
                 self.uidnext
@@ -91,8 +101,13 @@ impl FolderServer {
                 } else {
                     String::new()
                 };
+                let flags = self
+                    .flags
+                    .get(&uid)
+                    .map(|flags| format!("FLAGS ({flags}) "))
+                    .unwrap_or_default();
                 reply.push_str(&format!(
-                        "* {sequence} FETCH (UID {uid} RFC822.SIZE 10 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n{header}{body})\r\n",
+                        "* {sequence} FETCH (UID {uid} {flags}RFC822.SIZE 10 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n{header}{body})\r\n",
                         header.len()
                     ));
             }
@@ -181,6 +196,7 @@ fn staged_page(uidvalidity: u64, uids: impl IntoIterator<Item = u64>) -> Extract
                     uid: Some(uid.to_string()),
                     size_bytes: Some(10),
                     internal_date: Some("01-Jan-2024 00:00:00 +0000".into()),
+                    flags: None,
                 },
             )
         })

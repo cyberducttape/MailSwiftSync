@@ -1,6 +1,4 @@
-use super::fetch_parser::{
-    parse_message_fetch_body_hashes_response_bytes, parse_message_fetch_state_response_bytes,
-};
+use super::fetch_parser::{canonical_flag_set, parse_message_fetch_body_hashes_response_bytes};
 use super::{
     ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
     MailboxFetchError, MessageFetchBudget, MessageStateBudget, StateReservation,
@@ -367,13 +365,55 @@ fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
 }
 
 #[test]
-fn fetch_parser_extracts_system_flags_and_custom_keywords() {
-    let response = b"* 1 FETCH (UID 5 FLAGS (\\Seen \\Answered) KEYWORDS ($Forwarded team-blue))\r\n* 2 FETCH (UID 9 FLAGS () KEYWORDS NIL)\r\nv002 OK FETCH completed\r\n";
-    let states = parse_message_fetch_state_response_bytes(response).unwrap();
-    assert_eq!(states["5"].flags, ["\\Seen", "\\Answered"]);
-    assert_eq!(states["5"].keywords, ["$Forwarded", "team-blue"]);
-    assert!(states["9"].flags.is_empty());
-    assert!(states["9"].keywords.is_empty());
+fn metadata_fetch_parser_extracts_canonical_flags_and_keywords() {
+    let response = b"* 1 FETCH (UID 5 FLAGS (\\seen \\Answered $Forwarded Team-Blue \\Recent) RFC822.SIZE 10)\r\n* 2 FETCH (UID 9 FLAGS () RFC822.SIZE 11)\r\n* 3 FETCH (UID 12 RFC822.SIZE 12)\r\nv002 OK FETCH completed\r\n";
+    let messages =
+        parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap();
+    let flags = |uid: &str| {
+        messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, uid)]
+            .flags
+            .clone()
+    };
+    // System flags take canonical case, keywords fold to lowercase, and the
+    // session-only \Recent flag is dropped.
+    assert_eq!(
+        flags("5").as_deref(),
+        Some("$forwarded \\Answered \\Seen team-blue")
+    );
+    // An empty FLAGS list is known-empty; an absent FLAGS item is unknown.
+    assert_eq!(flags("9").as_deref(), Some(""));
+    assert_eq!(flags("12"), None);
+}
+
+#[test]
+fn flag_values_inside_literals_are_never_parsed_as_flags() {
+    let response = b"* 1 FETCH (UID 5 BODY[HEADER.FIELDS (MESSAGE-ID)] {29}\r\nSubject: FLAGS (\\Flagged)\r\n\r\n FLAGS (\\Seen))\r\nv002 OK done\r\n";
+    let messages =
+        parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap();
+    let message = &messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "5")];
+    assert_eq!(message.flags.as_deref(), Some("\\Seen"));
+}
+
+#[test]
+fn canonical_flag_set_is_order_and_case_insensitive() {
+    assert_eq!(
+        canonical_flag_set(["\\FLAGGED", "Work", "\\seen", "work"]),
+        canonical_flag_set(["\\Seen", "\\Flagged", "WORK"])
+    );
+    assert_eq!(canonical_flag_set(["\\Recent"]), "");
+}
+
+#[test]
+fn permanent_flags_are_parsed_from_select_responses() {
+    let response = "* 3 EXISTS\r\n* OK [PERMANENTFLAGS (\\Seen \\Flagged \\*)] Limited\r\n* OK [UIDVALIDITY 7] ok\r\nv001 OK [READ-WRITE] SELECT completed\r\n";
+    assert_eq!(
+        super::parse_permanent_flags(response).as_deref(),
+        Some("\\* \\Flagged \\Seen")
+    );
+    assert_eq!(
+        super::parse_permanent_flags("* 3 EXISTS\r\nv001 OK SELECT completed\r\n"),
+        None
+    );
 }
 
 #[test]
@@ -441,6 +481,7 @@ fn estimated_record_bytes_include_body_fingerprint_storage() {
         uid: Some("900001".into()),
         size_bytes: Some(42),
         internal_date: Some("01-Jan-2026 00:00:00 +0000".into()),
+        flags: None,
     };
     let without_fingerprint = super::estimated_message_record_bytes(&key, &message, None);
     let with_fingerprint =

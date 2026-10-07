@@ -500,6 +500,7 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            flag_verification: None,
         };
         assert_eq!(
             batch_mailbox_state("failed", Some(&exact_evidence)),

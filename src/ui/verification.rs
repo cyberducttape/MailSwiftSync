@@ -494,6 +494,50 @@ impl App {
                                     .text(evidence.verification_outcome().display_label())
                                     .to_owned(),
                             ),
+                            (self.language.message("ui.message-coverage"), {
+                                let (checked, total) = evidence.message_coverage();
+                                self.language
+                                    .message("ui.message-coverage-summary")
+                                    .replace("{checked}", &checked.to_string())
+                                    .replace("{total}", &total.to_string())
+                                    .replace(
+                                        "{percent}",
+                                        &crate::core::coverage_percent(checked, total),
+                                    )
+                            }),
+                            (
+                                self.language.message("ui.flags-and-keywords"),
+                                evidence.flag_verification.map_or_else(
+                                    || self.language.message("ui.not-verified").to_owned(),
+                                    |flags| {
+                                        self.language
+                                            .message("ui.flag-verification-summary")
+                                            .replace(
+                                                "{compared}",
+                                                &flags.compared_messages.to_string(),
+                                            )
+                                            .replace(
+                                                "{total}",
+                                                &evidence.source_messages.to_string(),
+                                            )
+                                            .replace(
+                                                "{percent}",
+                                                &crate::core::coverage_percent(
+                                                    flags.compared_messages,
+                                                    evidence.source_messages,
+                                                ),
+                                            )
+                                            .replace(
+                                                "{mismatched}",
+                                                &flags.mismatched_messages.to_string(),
+                                            )
+                                            .replace(
+                                                "{excepted}",
+                                                &flags.excepted_messages.to_string(),
+                                            )
+                                    },
+                                ),
+                            ),
                             (
                                 self.language.message("ui.folders"),
                                 format!(
@@ -752,6 +796,7 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            flag_verification: None,
         };
         assert_eq!(verification_confidence_key(&evidence), "ui.confidence-high");
         let mut changed = evidence.clone();

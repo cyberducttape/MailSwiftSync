@@ -36,6 +36,7 @@ fn synthetic_verifier_scale_covers_balanced_mismatch_rates() {
                     uid: Some(uid.clone()),
                     size_bytes: Some(1_000),
                     internal_date: Some("2024-01-01T00:00:00Z".to_owned()),
+                    flags: None,
                 },
             );
             destination.insert(
@@ -45,6 +46,7 @@ fn synthetic_verifier_scale_covers_balanced_mismatch_rates() {
                     uid: Some(uid),
                     size_bytes: Some(if index < changed { 1_001 } else { 1_000 }),
                     internal_date: Some("2024-01-01T00:00:00Z".to_owned()),
+                    flags: None,
                 },
             );
         }
@@ -74,6 +76,7 @@ fn detects_missing_messages() {
             uid: Some("1".to_string()),
             size_bytes: Some(1000),
             internal_date: Some("2024-01-01".to_string()),
+            flags: None,
         },
     );
     source.insert(
@@ -83,6 +86,7 @@ fn detects_missing_messages() {
             uid: Some("2".to_string()),
             size_bytes: Some(2000),
             internal_date: Some("2024-01-02".to_string()),
+            flags: None,
         },
     );
 
@@ -94,6 +98,7 @@ fn detects_missing_messages() {
             uid: Some("1".to_string()),
             size_bytes: Some(1000),
             internal_date: Some("2024-01-01".to_string()),
+            flags: None,
         },
     );
 
@@ -118,6 +123,7 @@ fn equivalent_internal_date_offsets_match_semantically() {
         uid: Some("1".into()),
         size_bytes: Some(100),
         internal_date: Some(date.into()),
+        flags: None,
     };
     let source = HashMap::from([(key("1"), message("01-Jan-2024 12:00:00 +0000"))]);
     let destination = HashMap::from([(key("1"), message("01-Jan-2024 07:00:00 -0500"))]);
@@ -139,6 +145,7 @@ fn detects_extra_messages() {
             uid: Some("1".to_string()),
             size_bytes: Some(1000),
             internal_date: Some("2024-01-01".to_string()),
+            flags: None,
         },
     );
 
@@ -150,6 +157,7 @@ fn detects_extra_messages() {
             uid: Some("1".to_string()),
             size_bytes: Some(1000),
             internal_date: Some("2024-01-01".to_string()),
+            flags: None,
         },
     );
     dest.insert(
@@ -159,6 +167,7 @@ fn detects_extra_messages() {
             uid: Some("2".to_string()),
             size_bytes: Some(3000),
             internal_date: Some("2024-01-03".to_string()),
+            flags: None,
         },
     );
 
@@ -184,6 +193,7 @@ fn detects_same_metadata_with_different_content_fingerprints() {
         uid: Some("1".into()),
         size_bytes: Some(100),
         internal_date: Some("2024-01-01".into()),
+        flags: None,
     };
     let mut source = HashMap::new();
     source.insert(source_key.clone(), message.clone());
@@ -231,6 +241,7 @@ fn content_verification_rejects_equal_count_fingerprint_key_substitution() {
         uid: Some("1".into()),
         size_bytes: Some(123),
         internal_date: Some("2025-01-01".into()),
+        flags: None,
     };
     let source = HashMap::from([(source_key.clone(), message.clone())]);
     let destination = HashMap::from([(destination_key.clone(), message)]);
@@ -286,6 +297,7 @@ fn content_match_does_not_erase_existing_metadata_mismatch() {
             uid: Some("1".into()),
             size_bytes: Some(100),
             internal_date: Some("2024-01-01".into()),
+            flags: None,
         },
     )]);
     let destination = HashMap::from([(
@@ -295,6 +307,7 @@ fn content_match_does_not_erase_existing_metadata_mismatch() {
             uid: Some("99".into()),
             size_bytes: Some(200),
             internal_date: Some("2024-01-01".into()),
+            flags: None,
         },
     )]);
     let source_fingerprints = HashMap::from([(source_key, "same-body".into())]);
@@ -328,6 +341,7 @@ fn duplicate_message_ids_match_content_as_a_multiset() {
         uid: None,
         size_bytes: Some(100),
         internal_date: Some("2024-01-01".into()),
+        flags: None,
     };
     let source = HashMap::from([
         (source_key_a.clone(), message.clone()),
@@ -363,6 +377,7 @@ fn message(message_id: Option<&str>, uid: &str, size: u64, date: &str) -> Extrac
         uid: Some(uid.into()),
         size_bytes: Some(size),
         internal_date: Some(date.into()),
+        flags: None,
     }
 }
 
@@ -489,6 +504,7 @@ fn detects_changed_messages() {
             uid: Some("1".to_string()),
             size_bytes: Some(1000),
             internal_date: Some("2024-01-01".to_string()),
+            flags: None,
         },
     );
 
@@ -500,6 +516,7 @@ fn detects_changed_messages() {
             uid: Some("1".to_string()),
             size_bytes: Some(2000), // Different size
             internal_date: Some("2024-01-01".to_string()),
+            flags: None,
         },
     );
 
@@ -521,6 +538,7 @@ fn mismatches_preserve_complete_mailbox_local_identity() {
             uid: Some("42".to_owned()),
             size_bytes: Some(1_000),
             internal_date: Some("2024-01-01".to_owned()),
+            flags: None,
         },
     )]);
     let destination = HashMap::from([(
@@ -530,6 +548,7 @@ fn mismatches_preserve_complete_mailbox_local_identity() {
             uid: Some("7742".to_owned()),
             size_bytes: Some(1_001),
             internal_date: Some("2024-01-02".to_owned()),
+            flags: None,
         },
     )]);
 
@@ -562,6 +581,7 @@ fn matching_message_in_wrong_folder_is_not_counted_as_metadata_match() {
         uid: Some("1".to_owned()),
         size_bytes: Some(1_000),
         internal_date: Some("2024-01-01".to_owned()),
+        flags: None,
     };
     let source = HashMap::from([(MailboxMessageKey::new("INBOX", "1"), message.clone())]);
     let destination = HashMap::from([(MailboxMessageKey::new("WrongFolder", "9"), message)]);
@@ -597,6 +617,7 @@ fn wrong_folder_candidate_selection_is_deterministic() {
         uid: Some("1".to_owned()),
         size_bytes: Some(1_000),
         internal_date: Some("2024-01-01".to_owned()),
+        flags: None,
     };
     let source = HashMap::from([(MailboxMessageKey::new("INBOX", "1"), message.clone())]);
     let destination = HashMap::from([
@@ -631,6 +652,7 @@ fn message_id_without_metadata_is_not_exact_proof() {
         uid: Some("1".to_string()),
         size_bytes: None,
         internal_date: None,
+        flags: None,
     };
     let source = HashMap::from([(key("1"), message.clone())]);
     let destination = HashMap::from([(key("99"), message)]);
@@ -654,6 +676,7 @@ fn one_missing_metadata_field_is_not_treated_as_matching() {
             uid: Some("1".to_string()),
             size_bytes: Some(100),
             internal_date: None,
+            flags: None,
         },
     )]);
     let destination = HashMap::from([(
@@ -663,6 +686,7 @@ fn one_missing_metadata_field_is_not_treated_as_matching() {
             uid: Some("2".to_string()),
             size_bytes: Some(100),
             internal_date: None,
+            flags: None,
         },
     )]);
 
@@ -685,6 +709,7 @@ fn perfect_match_when_identical() {
             uid: Some("1".to_string()),
             size_bytes: Some(1000),
             internal_date: Some("2024-01-01".to_string()),
+            flags: None,
         },
     );
 
@@ -704,6 +729,7 @@ fn validation_rejects_duplicate_classification_and_omitted_identity() {
         uid: None,
         size_bytes: None,
         internal_date: None,
+        flags: None,
     };
     let source = HashMap::from([(key("1"), empty_message()), (key("2"), empty_message())]);
     let destination = source.clone();
@@ -752,6 +778,7 @@ fn destination_uid_rewrite_is_not_reported_as_missing_and_extra() {
             uid: Some("17".to_string()),
             size_bytes: Some(4096),
             internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            flags: None,
         },
     )]);
     let destination = HashMap::from([(
@@ -761,6 +788,7 @@ fn destination_uid_rewrite_is_not_reported_as_missing_and_extra() {
             uid: Some("904".to_string()),
             size_bytes: Some(4096),
             internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            flags: None,
         },
     )]);
 
@@ -782,6 +810,7 @@ fn date_and_size_fallback_is_probable_not_exact() {
             uid: Some("1".to_string()),
             size_bytes: Some(512),
             internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            flags: None,
         },
     )]);
     let destination = HashMap::from([(
@@ -791,6 +820,7 @@ fn date_and_size_fallback_is_probable_not_exact() {
             uid: Some("88".to_string()),
             size_bytes: Some(512),
             internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            flags: None,
         },
     )]);
 
@@ -811,6 +841,7 @@ fn ambiguous_fingerprint_fails_closed_instead_of_pairing_by_uid() {
         uid: Some(uid.to_string()),
         size_bytes: Some(512),
         internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        flags: None,
     };
     let source = HashMap::from([(key("1"), message("1")), (key("2"), message("2"))]);
     let destination = HashMap::from([(key("88"), message("88")), (key("89"), message("89"))]);
@@ -832,6 +863,7 @@ fn duplicate_message_id_is_reported_without_using_uid_as_identity() {
         uid: Some(uid.to_string()),
         size_bytes: Some(512),
         internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        flags: None,
     };
     let source = HashMap::from([(key("1"), message("1"))]);
     let destination = HashMap::from([(key("88"), message("88")), (key("89"), message("89"))]);
@@ -856,6 +888,7 @@ fn preserved_source_duplicates_are_not_reported_as_created_duplicates() {
         uid: Some(uid.to_string()),
         size_bytes: Some(512),
         internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        flags: None,
     };
     let source = HashMap::from([
         (MailboxMessageKey::new("INBOX", "1"), message("1")),
@@ -886,6 +919,7 @@ fn duplicate_message_id_groups_match_metadata_multisets_not_key_order() {
         uid: Some(uid.to_string()),
         size_bytes: Some(size),
         internal_date: Some(date.to_string()),
+        flags: None,
     };
     let source = HashMap::from([
         (key("1"), message("1", 10_000, "2024-01-01")),
@@ -919,6 +953,7 @@ fn duplicate_message_id_groups_report_only_genuine_changed_leftovers() {
         uid: Some(uid.to_string()),
         size_bytes: Some(size),
         internal_date: Some(date.to_string()),
+        flags: None,
     };
     let source = HashMap::from([
         (key("1"), message("1", 10_000, "2024-01-01")),
@@ -954,6 +989,7 @@ fn repeated_destination_message_id_without_source_is_extra_not_duplicate() {
         uid: Some(uid.to_string()),
         size_bytes: Some(512),
         internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        flags: None,
     };
     let source = HashMap::new();
     let destination = HashMap::from([
@@ -1034,6 +1070,7 @@ fn staged_reconciliation_matches_in_memory_accounting() {
         uid: Some(uid.to_owned()),
         size_bytes: Some(size),
         internal_date: Some(date.to_owned()),
+        flags: None,
     };
     let source = ExtractedMessages::from([
         (
@@ -1193,6 +1230,7 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
         uid: Some(uid.to_owned()),
         size_bytes: Some(size),
         internal_date: Some(date.to_owned()),
+        flags: None,
     };
     let cases = [
         (
@@ -1439,6 +1477,7 @@ fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
                     uid: Some(source_uid),
                     size_bytes: size,
                     internal_date: date.clone(),
+                    flags: None,
                 },
             );
 
@@ -1470,6 +1509,7 @@ fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
                     internal_date: Some(
                         dates[((destination_seed >> 24) as usize) % dates.len()].to_owned(),
                     ),
+                    flags: None,
                 },
             );
         }
@@ -1535,6 +1575,7 @@ fn durable_stage_reconciliation_benchmark() {
                         uid: Some(format!("{index}")),
                         size_bytes: Some(1_000 + index as u64 * size),
                         internal_date: Some("01-Jan-2024 00:00:00 +0000".to_owned()),
+                        flags: None,
                     },
                 )
             })

@@ -2,7 +2,23 @@
 
 ## Unreleased
 
-- Add migration waves (schema v26): named, ordered, approvable subsets of a
+- Verify message flags and custom keywords independently (ledger version
+  27). Live imapsync verification now parses the FLAGS it already fetched
+  (the parser was previously test-only), stages them, and runs a separate
+  fidelity pass that compares `\Seen`, `\Answered`, `\Flagged`, `\Draft`,
+  `\Deleted`, and keywords for every message pair whose identity is
+  unambiguous. Flags are compared case-insensitively and `\Recent` is
+  ignored. A message whose flags the destination folder's PERMANENTFLAGS say
+  it cannot store is recorded as a provider exception rather than a failure;
+  any other difference yields the new `flags_changed` outcome, keeps the
+  mailbox out of `verified`, and is reported in the GUI, operator report,
+  customer proof, and evidence digest. Duplicates and probable pairings are
+  left uncompared, so the compared count is reported as flag coverage.
+- Reports and the GUI now state the verification tier achieved and its
+  coverage: how many source messages were individually checked and how many
+  had their flags compared. Evidence recorded before flag verification reads
+  as "flags not verified", never as clean.
+- Add migration waves (ledger version 26): named, ordered, approvable subsets of a
   project's mailboxes with a planned start, maintenance window, and
   concurrency ceiling. Status, progress, evidence coverage, and cutover
   readiness are derived from member mailboxes. Live admission refuses members

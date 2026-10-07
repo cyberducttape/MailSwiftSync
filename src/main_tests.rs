@@ -257,6 +257,7 @@ fn evidence_digest_binds_run_plan_and_evidence_values() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     let first = evidence_digest("run-one", "snapshot-one", &evidence);
     assert_eq!(first, evidence_digest("run-one", "snapshot-one", &evidence));

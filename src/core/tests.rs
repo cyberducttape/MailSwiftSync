@@ -149,6 +149,7 @@ fn evidence_is_durable_and_explainable() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.record_evidence(&job, &e).unwrap();
     assert_eq!(
@@ -225,6 +226,7 @@ fn message_level_evidence_counts_round_trip_through_the_ledger() {
         extra_messages: 2,
         modified_messages: 1,
         probable_messages: 0,
+        flag_verification: None,
     };
 
     db.record_evidence(&job, &evidence).unwrap();
@@ -257,6 +259,7 @@ fn probable_message_evidence_round_trips_without_becoming_exact() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 1,
+        flag_verification: None,
     };
 
     db.record_evidence(&job, &evidence).unwrap();
@@ -297,6 +300,7 @@ fn message_mismatch_details_commit_atomically_with_terminal_evidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     let mismatch = MessageMismatch {
         id: "message-detail-mismatch".into(),
@@ -588,6 +592,7 @@ fn folder_mismatch_cannot_claim_full_confidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert_eq!(evidence.confidence_percent(), 0);
     assert_eq!(evidence.evidence_level(), "Aggregate mismatch");
@@ -616,6 +621,7 @@ fn balanced_aggregate_totals_cannot_hide_message_level_mismatches() {
         extra_messages: 1,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
 
     assert_eq!(evidence.evidence_level(), "Message-level mismatch");
@@ -653,6 +659,7 @@ fn empty_mailbox_with_failures_is_not_verified() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert_eq!(evidence.confidence_percent(), 0);
     assert_eq!(evidence.evidence_level(), "Incomplete evidence");
@@ -680,6 +687,7 @@ fn aggregate_match_has_bounded_but_nonmisleading_score() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert_eq!(evidence.confidence_percent(), 85);
     assert!(evidence.is_exact_match());
@@ -898,6 +906,7 @@ fn newer_run_cannot_reuse_older_evidence_for_verified_state() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.begin_run(&project.id, &job, "run-with-evidence", "test")
         .unwrap();
@@ -950,6 +959,7 @@ fn generic_terminal_completion_cannot_reuse_stale_evidence_for_verified() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.begin_run(&project.id, &job, "run-old-evidence", "imapsync")
         .unwrap();
@@ -1029,6 +1039,7 @@ fn project_cannot_complete_without_verified_mailboxes() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.finish_run_for_mailbox_with_evidence(
         &project.id,
@@ -1435,6 +1446,7 @@ fn evidence_terminal_completion_allows_running_to_verified_atomically() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.register_process(&ActiveProcess {
         run_id: "run-evidence".into(),
@@ -1494,6 +1506,7 @@ fn preflight_evidence_and_plan_commit_atomically_without_certifying_mailbox() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
 
@@ -1568,6 +1581,7 @@ fn evidence_difference_is_not_promoted_to_verified_or_complete() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert!(
         db.finish_run_for_mailbox_with_evidence(
@@ -1628,6 +1642,7 @@ fn latest_evidence_resolves_to_its_own_run() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.finish_run_for_mailbox_with_evidence(
         &project.id,
@@ -1696,6 +1711,7 @@ fn evidence_projection_migration_backfills_its_latest_history_run() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.finish_run_for_mailbox_with_evidence(
         &project.id,
@@ -2430,6 +2446,7 @@ fn evidence_rejects_values_that_do_not_fit_sqlite_signed_integers() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert!(
         db.finish_run_for_mailbox_with_evidence(
@@ -2754,6 +2771,7 @@ fn verification_difference_requires_durable_exception_acceptance() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     db.begin_run(&project.id, &job, "exception-run", "imapsync")
         .unwrap();
@@ -2832,6 +2850,7 @@ fn terminal_write_rejects_contradictory_exact_evidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert!(
         db.finish_run_for_mailbox_with_evidence_and_checkpoint(
@@ -2880,6 +2899,7 @@ fn terminal_write_rejects_non_authoritative_exact_engine_evidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert!(
         db.finish_run_for_mailbox_with_evidence_and_checkpoint(
@@ -3069,6 +3089,7 @@ fn project_report_snapshot_loads_related_rows_as_one_read_model() {
             extra_messages: 2,
             modified_messages: 1,
             probable_messages: 0,
+            flag_verification: None,
         },
     )
     .unwrap();
@@ -4832,6 +4853,7 @@ fn evidence_rejects_orphaned_run_ids() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
     assert!(
         db.record_evidence_for_run(&job, "missing", &evidence)
@@ -4868,6 +4890,7 @@ fn evidence_rejects_a_run_for_a_different_mailbox() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        flag_verification: None,
     };
 
     assert!(
@@ -5163,5 +5186,181 @@ fn schema_v14_ledger_upgrades_to_transfer_pass_provenance_with_backup() {
         })
         .count();
     assert_eq!(backups, 1);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn flag_evidence(
+    outcome: VerificationOutcome,
+    flag_verification: Option<FlagVerification>,
+) -> MailboxEvidence {
+    MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(outcome),
+        source_messages: 6,
+        destination_messages: 6,
+        source_bytes: 600,
+        destination_bytes: 600,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+        flag_verification,
+    }
+}
+
+#[test]
+fn flag_differences_round_trip_and_cannot_reach_verified() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db.create_project("flags", "source", "destination").unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "flag-run", "imapsync")
+        .unwrap();
+    let evidence = flag_evidence(
+        VerificationOutcome::FlagsChanged,
+        Some(FlagVerification {
+            compared_messages: 6,
+            mismatched_messages: 1,
+            excepted_messages: 2,
+        }),
+    );
+    assert!(!evidence.is_exact_match());
+    assert!(
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "flag-run",
+            "completed",
+            "verified",
+            "",
+            &evidence,
+        )
+        .is_err()
+    );
+    db.finish_run_for_mailbox_with_evidence(
+        &project.id,
+        &job,
+        "flag-run",
+        "completed",
+        "verification_difference",
+        "",
+        &evidence,
+    )
+    .unwrap();
+    assert_eq!(db.evidence(&job).unwrap(), Some(evidence.clone()));
+    let snapshot = db.project_report_snapshot(&project.id).unwrap().unwrap();
+    let (_, reported, _) = snapshot.mailboxes[0].evidence.clone().unwrap();
+    assert_eq!(reported, evidence);
+    assert_eq!(
+        db.latest_evidence_for_run(&job)
+            .unwrap()
+            .map(|(_, value)| value),
+        Some(evidence)
+    );
+}
+
+#[test]
+fn terminal_write_rejects_exact_outcome_with_flag_mismatches() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db.create_project("flags", "source", "destination").unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "flag-run", "imapsync")
+        .unwrap();
+    let evidence = flag_evidence(
+        VerificationOutcome::ExactMetadataMatch,
+        Some(FlagVerification {
+            compared_messages: 6,
+            mismatched_messages: 1,
+            excepted_messages: 0,
+        }),
+    );
+    assert!(
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "flag-run",
+            "completed",
+            "verification_difference",
+            "",
+            &evidence,
+        )
+        .is_err()
+    );
+    // Counters that cannot describe the compared population are refused.
+    let inconsistent = flag_evidence(
+        VerificationOutcome::FlagsChanged,
+        Some(FlagVerification {
+            compared_messages: 1,
+            mismatched_messages: 1,
+            excepted_messages: 1,
+        }),
+    );
+    assert!(
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "flag-run",
+            "completed",
+            "verification_difference",
+            "",
+            &inconsistent,
+        )
+        .is_err()
+    );
+    assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
+}
+
+#[test]
+fn readonly_rejects_exact_evidence_whose_flag_row_records_mismatches() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-schema-flag-semantics-{}",
+        Uuid::new_v4()
+    ));
+    let path = directory.join("state.db");
+    create_private_test_directory(&directory);
+    let db = StateStore::open(&path).unwrap();
+    let project = db.create_project("flags", "source", "destination").unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "flag-run", "imapsync")
+        .unwrap();
+    let evidence = flag_evidence(
+        VerificationOutcome::ExactMetadataMatch,
+        Some(FlagVerification {
+            compared_messages: 6,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        }),
+    );
+    db.finish_run_for_mailbox_with_evidence(
+        &project.id,
+        &job,
+        "flag-run",
+        "completed",
+        "verified",
+        "",
+        &evidence,
+    )
+    .unwrap();
+    drop(db);
+    assert!(StateStore::open_readonly(&path).is_ok());
+    let db = StateStore::open(&path).unwrap();
+    db.connection
+        .execute(
+            "UPDATE evidence_flag_verification SET mismatched_messages=1",
+            [],
+        )
+        .unwrap();
+    drop(db);
+    assert!(StateStore::open_readonly(&path).is_err());
     std::fs::remove_dir_all(directory).unwrap();
 }

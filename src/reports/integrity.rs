@@ -29,7 +29,54 @@ pub(crate) fn evidence_digest(
         evidence.probable_count(),
         evidence.metadata_matched_count(),
     );
+    // Appended only when present so digests of evidence recorded before
+    // flag verification existed are unchanged.
+    let canonical = match evidence.flag_verification {
+        Some(flags) => format!(
+            "{canonical}flags_compared={}\nflags_mismatched={}\nflags_excepted={}\n",
+            flags.compared_messages, flags.mismatched_messages, flags.excepted_messages
+        ),
+        None => canonical,
+    };
     snapshot_sha256(&canonical)
+}
+
+/// Verification tier and coverage fields shared by operator reports and
+/// customer proofs: which level was achieved, how many source messages were
+/// individually checked, and the flag/keyword result (`null` when flags were
+/// not verified, never an implied pass).
+pub(crate) fn evidence_coverage_fields(
+    evidence: &core::MailboxEvidence,
+) -> serde_json::Map<String, serde_json::Value> {
+    let (checked, total) = evidence.message_coverage();
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        "verification_tier".into(),
+        evidence.verification_level().into(),
+    );
+    fields.insert(
+        "message_coverage".into(),
+        serde_json::json!({
+            "checked_messages": checked,
+            "source_messages": total,
+            "percent": core::coverage_percent(checked, total),
+            "complete": total > 0 && checked == total,
+        }),
+    );
+    fields.insert(
+        "flag_verification".into(),
+        evidence
+            .flag_verification
+            .map_or(serde_json::Value::Null, |flags| {
+                serde_json::json!({
+                    "compared_messages": flags.compared_messages,
+                    "mismatched_messages": flags.mismatched_messages,
+                    "excepted_messages": flags.excepted_messages,
+                    "coverage_percent": core::coverage_percent(flags.compared_messages, evidence.source_messages),
+                })
+            }),
+    );
+    fields
 }
 
 /// Add a deterministic, bundle-level integrity reference to a structured

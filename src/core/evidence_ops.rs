@@ -31,7 +31,44 @@ pub(super) fn upsert_evidence_projection(
             run_id,
         ],
     )?;
+    // Flag verification is stored per evidence run, so evidence recorded
+    // before it existed keeps reading as "not verified" rather than "clean".
+    tx.execute(
+        "DELETE FROM evidence_flag_verification WHERE job_id=?1 AND run_id=?2",
+        params![job_id, run_id],
+    )?;
+    if let Some(flags) = value.flag_verification {
+        if !flags.is_consistent() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "INSERT INTO evidence_flag_verification(job_id,run_id,compared_messages,mismatched_messages,excepted_messages) VALUES(?1,?2,?3,?4,?5)",
+            params![
+                job_id,
+                run_id,
+                sqlite_i64(flags.compared_messages)?,
+                sqlite_i64(flags.mismatched_messages)?,
+                sqlite_i64(flags.excepted_messages)?,
+            ],
+        )?;
+    }
     Ok(())
+}
+
+/// Decode the three nullable `evidence_flag_verification` columns selected by
+/// a LEFT JOIN starting at `offset`. A missing row means not verified.
+pub(super) fn flag_verification_from_row(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<Option<FlagVerification>> {
+    let Some(compared) = row.get::<_, Option<i64>>(offset)? else {
+        return Ok(None);
+    };
+    Ok(Some(FlagVerification {
+        compared_messages: sqlite_u64(compared)?,
+        mismatched_messages: sqlite_u64(row.get(offset + 1)?)?,
+        excepted_messages: sqlite_u64(row.get(offset + 2)?)?,
+    }))
 }
 
 impl StateStore {
@@ -166,7 +203,7 @@ impl StateStore {
     }
     #[cfg(test)]
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
-        self.connection.query_row("SELECT verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { verification_method: VerificationMethod::parse(&r.get::<_, String>(0)?).ok_or(rusqlite::Error::InvalidQuery)?, verification_outcome: Some(VerificationOutcome::parse(&r.get::<_, String>(1)?).ok_or(rusqlite::Error::InvalidQuery)?), source_messages: sqlite_u64(r.get(2)?)?, destination_messages: sqlite_u64(r.get(3)?)?, source_bytes: sqlite_u64(r.get(4)?)?, destination_bytes: sqlite_u64(r.get(5)?)?, unmatched_messages: sqlite_optional_u64(r.get(6)?)?, failed_messages: sqlite_u64(r.get(7)?)?, source_folders: sqlite_u64(r.get(8)?)?, destination_folders: sqlite_u64(r.get(9)?)?, authoritative:r.get::<_, i64>(10)? != 0, missing_messages: sqlite_u64(r.get(11)?)?, extra_messages: sqlite_u64(r.get(12)?)?, modified_messages: sqlite_u64(r.get(13)?)?, probable_messages: sqlite_u64(r.get(14)?)? })).optional()
+        self.connection.query_row("SELECT e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM evidence e LEFT JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id WHERE e.job_id=?1", [job_id], |r| Ok(MailboxEvidence { verification_method: VerificationMethod::parse(&r.get::<_, String>(0)?).ok_or(rusqlite::Error::InvalidQuery)?, verification_outcome: Some(VerificationOutcome::parse(&r.get::<_, String>(1)?).ok_or(rusqlite::Error::InvalidQuery)?), source_messages: sqlite_u64(r.get(2)?)?, destination_messages: sqlite_u64(r.get(3)?)?, source_bytes: sqlite_u64(r.get(4)?)?, destination_bytes: sqlite_u64(r.get(5)?)?, unmatched_messages: sqlite_optional_u64(r.get(6)?)?, failed_messages: sqlite_u64(r.get(7)?)?, source_folders: sqlite_u64(r.get(8)?)?, destination_folders: sqlite_u64(r.get(9)?)?, authoritative:r.get::<_, i64>(10)? != 0, missing_messages: sqlite_u64(r.get(11)?)?, extra_messages: sqlite_u64(r.get(12)?)?, modified_messages: sqlite_u64(r.get(13)?)?, probable_messages: sqlite_u64(r.get(14)?)?, flag_verification: flag_verification_from_row(r, 15)? })).optional()
     }
     #[cfg(test)]
     pub fn latest_evidence_for_run(
@@ -175,7 +212,7 @@ impl StateStore {
     ) -> rusqlite::Result<Option<(String, MailboxEvidence)>> {
         self.connection
             .query_row(
-                "SELECT run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages FROM evidence_history WHERE job_id=?1 ORDER BY captured_at DESC, id DESC LIMIT 1",
+                "SELECT h.run_id,h.verification_method,h.verification_outcome,h.source_messages,h.destination_messages,h.source_bytes,h.destination_bytes,h.unmatched_messages,h.failed_messages,h.source_folders,h.destination_folders,h.authoritative,h.missing_messages,h.extra_messages,h.modified_messages,h.probable_messages,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM evidence_history h LEFT JOIN evidence_flag_verification f ON f.job_id=h.job_id AND f.run_id=h.run_id WHERE h.job_id=?1 ORDER BY h.captured_at DESC, h.id DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok((
@@ -196,6 +233,7 @@ impl StateStore {
                             extra_messages: sqlite_u64(row.get(13)?)?,
                             modified_messages: sqlite_u64(row.get(14)?)?,
                             probable_messages: sqlite_u64(row.get(15)?)?,
+                            flag_verification: flag_verification_from_row(row, 16)?,
                         },
                     ))
                 },

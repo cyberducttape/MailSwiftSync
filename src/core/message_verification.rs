@@ -31,6 +31,7 @@ const ESTIMATED_RECONCILIATION_INDEX_BYTES_PER_RECORD: usize = 128;
 /// mismatch-heavy account owns additional strings for every detail row.
 const MAX_ESTIMATED_MISMATCH_DETAIL_BYTES: usize = 64 * 1024 * 1024;
 mod fingerprints;
+mod flags;
 mod mismatch;
 mod reconciliation;
 mod staged;

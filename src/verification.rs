@@ -157,6 +157,7 @@ impl ImapsyncEvidenceAccumulator {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            flag_verification: None,
         })
     }
 }
@@ -327,6 +328,7 @@ pub(crate) fn dovecot_evidence_from_accumulators(
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            flag_verification: None,
         })
 }
 

@@ -23,6 +23,7 @@ use auth::authenticate_imap_stream;
 use fetch_pages::{
     FetchPagePlanner, encode_uid_page, parse_uid_search_response, validate_fetch_page_coverage,
 };
+use fetch_parser::canonical_flag_set;
 use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
 use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 #[cfg(test)]
@@ -294,6 +295,16 @@ trait MessageSink {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Record the canonical PERMANENTFLAGS a folder's SELECT advertised
+    /// (`None` when the server sent none), so flag verification can tell a
+    /// flag the destination cannot store from one that was lost.
+    fn record_permanent_flags(
+        &mut self,
+        _mailbox: &str,
+        _permanent_flags: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct StageMessageSink<'a> {
@@ -337,6 +348,15 @@ impl MessageSink for StageMessageSink<'_> {
         self.stage
             .count_mailbox(self.side, mailbox, uidvalidity)
             .map_err(|error| error.to_string())
+    }
+
+    fn record_permanent_flags(
+        &mut self,
+        mailbox: &str,
+        permanent_flags: Option<&str>,
+    ) -> Result<(), String> {
+        self.stage
+            .record_permanent_flags(self.side, mailbox, permanent_flags)
     }
 
     fn resume_after_uid(
@@ -762,6 +782,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         uidnext,
         exists: start_exists,
     };
+    sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
     let resume_after_uid = sink.resume_after_uid(mailbox, snapshot)?;
     let searched_uid_count = enumerate_uid_pages(
         stream,
@@ -1405,6 +1426,18 @@ fn parse_selected_mailbox(
     Ok((exists, uidvalidity, uidnext))
 }
 
+/// Extract the canonical `PERMANENTFLAGS` set from a SELECT response. RFC
+/// 9051 says a client should assume every flag can be stored when the code
+/// is absent, so `None` grants no exception during flag verification.
+fn parse_permanent_flags(response: &str) -> Option<String> {
+    response.lines().find_map(|line| {
+        let upper = line.to_ascii_uppercase();
+        let start = upper.find("[PERMANENTFLAGS (")? + "[PERMANENTFLAGS (".len();
+        let end = start + line[start..].find(')')?;
+        Some(canonical_flag_set(line[start..end].split_whitespace()))
+    })
+}
+
 pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
     !form.dry_run
         && form.engine() == core::Engine::ImapSync
@@ -1419,3 +1452,7 @@ mod tests;
 #[cfg(test)]
 #[path = "imap_probe_resume_tests.rs"]
 mod resume_tests;
+
+#[cfg(test)]
+#[path = "imap_probe_flag_tests.rs"]
+mod flag_tests;

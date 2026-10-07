@@ -554,6 +554,7 @@ mod tests {
             "Exact metadata match — message bodies not compared",
             "Probable metadata match — message bodies not compared",
             "Ambiguous metadata result — message bodies not compared",
+            "Message flags or keywords differ",
             "Missing messages detected",
             "Changed messages detected",
             "Unexpected messages detected",

@@ -83,9 +83,9 @@ impl PostMigrationReport {
                     VerificationOutcome::Incomplete | VerificationOutcome::Failed => {
                         Some(ExceptionSeverity::Critical)
                     }
-                    VerificationOutcome::Ambiguous | VerificationOutcome::ProbableMatch => {
-                        Some(ExceptionSeverity::Warning)
-                    }
+                    VerificationOutcome::Ambiguous
+                    | VerificationOutcome::ProbableMatch
+                    | VerificationOutcome::FlagsChanged => Some(ExceptionSeverity::Warning),
                     _ => None,
                 };
                 if let Some(severity) = severity {
@@ -351,6 +351,7 @@ mod tests {
                             extra_messages: 2,
                             modified_messages: 3,
                             probable_messages: 0,
+                            flag_verification: None,
                         },
                         Some("{}".into()),
                     )),

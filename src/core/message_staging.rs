@@ -391,6 +391,7 @@ impl MessageMetadataStage {
                  internal_date TEXT,
                  date_key TEXT,
                  size_bytes INTEGER CHECK(size_bytes IS NULL OR size_bytes >= 0),
+                 flags TEXT,
                  PRIMARY KEY(side,mailbox,uidvalidity,uid)
              );
              CREATE INDEX IF NOT EXISTS staged_messages_id ON staged_messages(side,message_id,mailbox,uidvalidity,uid);
@@ -400,8 +401,25 @@ impl MessageMetadataStage {
              CREATE INDEX IF NOT EXISTS staged_messages_exact_destination ON staged_messages(message_id,mailbox,date_key,size_bytes,uidvalidity,uid) WHERE side=1 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
-             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));",
+             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));
+             CREATE TABLE IF NOT EXISTS stage_permanent_flags(side INTEGER NOT NULL, mailbox TEXT NOT NULL, flags TEXT, PRIMARY KEY(side,mailbox));",
         )?;
+        // Stages written before flags were staged would leave every resumed
+        // row without flags and silently shrink flag-verification coverage.
+        // They are a disposable cache, so discard their rows and rescan.
+        let staged_flags: bool = self.connection_ref()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('staged_messages') WHERE name='flags')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !staged_flags {
+            self.connection_ref()?.execute_batch(
+                "DELETE FROM staged_messages;
+                 DELETE FROM stage_fingerprints;
+                 DELETE FROM stage_cursors;
+                 ALTER TABLE staged_messages ADD COLUMN flags TEXT;",
+            )?;
+        }
         // Stages written before cursors recorded the full SELECT snapshot
         // cannot prove their pages still describe the server. They are a
         // disposable cache, so discard them and rescan.
@@ -445,6 +463,7 @@ impl MessageMetadataStage {
             tx.execute("DELETE FROM staged_messages", [])?;
             tx.execute("DELETE FROM stage_fingerprints", [])?;
             tx.execute("DELETE FROM stage_cursors", [])?;
+            tx.execute("DELETE FROM stage_permanent_flags", [])?;
             tx.execute("DELETE FROM stage_metadata", [])?;
             tx.execute(
                 "INSERT INTO stage_metadata(key,value) VALUES('identity',?1)",
@@ -517,7 +536,7 @@ impl MessageMetadataStage {
         let mut ordered_messages = messages.iter().collect::<Vec<_>>();
         ordered_messages.sort_by(|(left, _), (right, _)| left.cmp(right));
         {
-            let mut insert = tx.prepare_cached("INSERT OR REPLACE INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8)").map_err(|e| e.to_string())?;
+            let mut insert = tx.prepare_cached("INSERT OR REPLACE INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes,flags) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8,?9)").map_err(|e| e.to_string())?;
             for (key, message) in ordered_messages {
                 let uidvalidity = key
                     .uidvalidity
@@ -539,7 +558,8 @@ impl MessageMetadataStage {
                         message.message_id,
                         message.internal_date,
                         metadata_date_key(message.internal_date.as_deref()),
-                        size
+                        size,
+                        message.flags
                     ])
                     .map_err(|e| e.to_string())?;
             }
@@ -575,6 +595,21 @@ impl MessageMetadataStage {
                 .insert((side, key.clone()), fingerprint.clone());
         }
         Ok(())
+    }
+
+    pub(crate) fn record_permanent_flags(
+        &mut self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        permanent_flags: Option<&str>,
+    ) -> Result<(), String> {
+        self.connection()?
+            .execute(
+                "INSERT OR REPLACE INTO stage_permanent_flags(side,mailbox,flags) VALUES(?1,?2,?3)",
+                params![side.as_i64(), mailbox, permanent_flags],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("could not stage PERMANENTFLAGS: {error}"))
     }
 
     pub(crate) fn delete_mailbox(
@@ -879,7 +914,7 @@ impl MessageMetadataStage {
         side: StagedMessageSide,
     ) -> rusqlite::Result<ExtractedMessages> {
         let mut statement = self.connection_ref()?.prepare(
-            "SELECT mailbox,uidvalidity,uid,message_id,internal_date,size_bytes FROM staged_messages WHERE side=?1 ORDER BY rowid",
+            "SELECT mailbox,uidvalidity,uid,message_id,internal_date,size_bytes,flags FROM staged_messages WHERE side=?1 ORDER BY rowid",
         )?;
         let rows = statement.query_map([side.as_i64()], |row| {
             let uidvalidity: i64 = row.get(1)?;
@@ -911,6 +946,7 @@ impl MessageMetadataStage {
                     uid: Some(uid),
                     size_bytes,
                     internal_date: row.get(4)?,
+                    flags: row.get(6)?,
                 },
             ))
         })?;
@@ -960,6 +996,9 @@ fn staged_message_from_row_at(row: &Row<'_>, offset: usize) -> rusqlite::Result<
             uid: Some(uid),
             size_bytes,
             internal_date: row.get(offset + 5)?,
+            // Reconciliation never reads flags; flag verification is a
+            // separate pass over the stage (`verify_staged_flags`).
+            flags: None,
         },
         date_key: row.get(offset + 6)?,
     })
@@ -1057,6 +1096,7 @@ mod tests {
                 uid: Some("42".into()),
                 size_bytes: Some(123),
                 internal_date: Some("01-Jan-2024 00:00:00 +0000".into()),
+                flags: None,
             },
         )]);
         let key = messages.keys().next().unwrap().clone();
@@ -1107,6 +1147,7 @@ mod tests {
                         uid: Some(uid.to_string()),
                         size_bytes: Some(64),
                         internal_date: None,
+                        flags: None,
                     },
                 )
             })
@@ -1407,6 +1448,53 @@ mod tests {
                 .resume_mailbox(side, "INBOX", snapshot(42, 8, 1))
                 .unwrap(),
             None
+        );
+        drop(stage);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn stage_without_staged_flags_is_discarded_for_a_full_rescan() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE staged_messages(side INTEGER NOT NULL, mailbox TEXT NOT NULL, match_mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, message_id TEXT, internal_date TEXT, date_key TEXT, size_bytes INTEGER, PRIMARY KEY(side,mailbox,uidvalidity,uid));
+                     CREATE TABLE stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                     INSERT INTO stage_metadata VALUES('identity','plan');
+                     CREATE TABLE stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL, exists_count INTEGER NOT NULL, last_uid INTEGER NOT NULL, completed INTEGER NOT NULL, PRIMARY KEY(side,mailbox));
+                     INSERT INTO staged_messages VALUES(0,'INBOX','INBOX',42,'7','<a@x>',NULL,NULL,1);
+                     INSERT INTO stage_cursors VALUES(0,'INBOX',42,8,1,7,1);",
+                )
+                .unwrap();
+        }
+        let mut stage = MessageMetadataStage::open_durable(path, "plan").unwrap();
+        let side = StagedMessageSide::Source;
+        // Resuming would leave the staged row without flags and silently
+        // shrink flag-verification coverage, so the folder is rescanned.
+        assert_eq!(stage.count(side).unwrap(), 0);
+        assert_eq!(
+            stage
+                .resume_mailbox(side, "INBOX", snapshot(42, 8, 1))
+                .unwrap(),
+            None
+        );
+        let mut page = page(42, [7]);
+        page.values_mut()
+            .for_each(|message| message.flags = Some("\\Seen".into()));
+        stage.insert_messages(side, &page).unwrap();
+        assert_eq!(
+            stage
+                .all_messages(side)
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .flags
+                .as_deref(),
+            Some("\\Seen")
         );
         drop(stage);
         let _ = std::fs::remove_dir_all(directory);

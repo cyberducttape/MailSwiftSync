@@ -188,7 +188,7 @@ pub(crate) fn build_project_json(
                 Some((evidence_run_id, evidence, plan_snapshot)) => {
                     let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
                     let digest = evidence_digest(&evidence_run_id, &plan_snapshot, &evidence);
-                    Ok(serde_json::json!({
+                    let mut evidence_json = serde_json::json!({
                         "id": job.id,
                         "source_mailbox": job.source_mailbox,
                         "destination_mailbox": job.destination_mailbox,
@@ -221,7 +221,12 @@ pub(crate) fn build_project_json(
                             "metadata_matched_count": evidence.metadata_matched_count(),
                             "failed_messages": evidence.failed_messages,
                         }
-                    }))
+                    });
+                    evidence_json["evidence"]
+                        .as_object_mut()
+                        .expect("evidence is a JSON object")
+                        .extend(crate::reports::integrity::evidence_coverage_fields(&evidence));
+                    Ok(evidence_json)
                 }
                 None => Ok(serde_json::json!({
                     "id": job.id,
@@ -403,6 +408,12 @@ pub(crate) fn build_verification_report(
             }
         },
     );
+    report.push_str(&format!(
+        "\n## Verification coverage\n\n- Verification tier: {}\n- Message coverage: {}\n- Flags and keywords: {}\n",
+        evidence.verification_level(),
+        evidence.message_coverage_label(),
+        evidence.flag_verification_label(),
+    ));
     report.push_str("\n## Message-level mismatch details\n\n");
     if mismatches.is_empty() {
         report

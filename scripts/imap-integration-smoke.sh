@@ -558,6 +558,12 @@ fi
 # UID assignment rather than relying on filename order.
 chown -R "$mail_uid:$mail_gid" "$workspace/source/mail/$user/Maildir"
 doveadm -c "$workspace/source.conf" expunge -u "$user" mailbox Sparse uid 1:90
+# Give the fixture read, flagged, answered, and custom-keyword state so the
+# verifier's independent flag comparison runs against real servers.
+# shellcheck disable=SC2016 # literal IMAP flag atoms, not shell expansions
+doveadm -c "$workspace/source.conf" flags add -u "$user" \
+  '\Seen \Flagged \Answered $MailSwiftSyncLab' \
+  mailbox INBOX header Message-ID mailswiftsync-integration-fixture
 # doveadm may create or rewrite mailbox index/UID files as root while
 # preparing the sparse-UID fixture. Restore service-account ownership before
 # the migration process accesses the mailbox over IMAP.
@@ -808,6 +814,14 @@ run_product customer-proof "$state" "$proof" \
   --scenario-ids basic-small,idempotent-delta
 run_product verify "$proof"
 echo "PASS: packaged customer proof exported and verified"
+if [[ "$test_engine" != Dovecot ]]; then
+  if ! grep -Eq '"compared_messages": [1-9]' "$proof" \
+    || ! grep -Eq '"mismatched_messages": 0([^0-9]|$)' "$proof"; then
+    echo "FAIL: customer proof does not record clean independent flag verification" >&2
+    exit 1
+  fi
+  echo "PASS: independent flag and keyword verification compared messages without differences"
+fi
 if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
   mkdir -p "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
   cp -- "$proof" "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/customer-proof.json"

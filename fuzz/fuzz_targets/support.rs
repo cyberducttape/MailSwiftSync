@@ -28,6 +28,7 @@ pub mod core {
         pub uid: Option<String>,
         pub size_bytes: Option<u64>,
         pub internal_date: Option<String>,
+        pub flags: Option<String>,
     }
 
     pub type ExtractedMessages = HashMap<MailboxMessageKey, ExtractedMessage>;

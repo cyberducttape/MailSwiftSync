@@ -101,7 +101,7 @@ impl StateStore {
 
         let mut evidence = HashMap::new();
         let mut evidence_statement = tx.prepare(
-            "SELECT e.job_id,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,r.plan_snapshot FROM evidence e JOIN mailbox_jobs j ON j.id=e.job_id JOIN runs r ON r.id=e.run_id WHERE j.project_id=?1",
+            "SELECT e.job_id,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,r.plan_snapshot,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM evidence e JOIN mailbox_jobs j ON j.id=e.job_id JOIN runs r ON r.id=e.run_id LEFT JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id WHERE j.project_id=?1",
         )?;
         for row in evidence_statement.query_map([project_id], |row| {
             Ok((
@@ -126,6 +126,7 @@ impl StateStore {
                     extra_messages: sqlite_u64(row.get(14)?)?,
                     modified_messages: sqlite_u64(row.get(15)?)?,
                     probable_messages: sqlite_u64(row.get(16)?)?,
+                    flag_verification: super::evidence_ops::flag_verification_from_row(row, 18)?,
                 },
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<String>>(17)?,
@@ -237,7 +238,7 @@ impl StateStore {
         let limit = limit.min(MAX_REPORT_PAGE_ROWS);
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare(
-            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,j.rowid FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence e ON e.job_id=j.id WHERE j.project_id=?1 AND j.rowid>?2 AND (?3 IS NULL OR j.attention_reason=?3 OR (?3='unknown' AND j.attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))) ORDER BY j.rowid LIMIT ?4",
+            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,j.rowid,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id WHERE j.project_id=?1 AND j.rowid>?2 AND (?3 IS NULL OR j.attention_reason=?3 OR (?3='unknown' AND j.attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))) ORDER BY j.rowid LIMIT ?4",
         )?;
         let rows = statement
             .query_map(
@@ -287,6 +288,8 @@ impl StateStore {
                                     extra_messages: sqlite_u64(row.get(22)?)?,
                                     modified_messages: sqlite_u64(row.get(23)?)?,
                                     probable_messages: sqlite_u64(row.get(24)?)?,
+                                    flag_verification:
+                                        super::evidence_ops::flag_verification_from_row(row, 26)?,
                                 },
                                 None,
                             ))

@@ -253,7 +253,13 @@ MailSwiftSync presents three verification levels:
 <!-- verification-levels:end -->
 
 Native Dovecot runs currently provide Level 1. Encrypted imapsync runs use
-Level 2 by default when independent IMAP fetch succeeds. Level 3 is an
+Level 2 by default when independent IMAP fetch succeeds. Those runs also
+compare message flags and custom keywords (read, flagged, answered, draft,
+deleted, and keywords) for every unambiguously matched message, as a separate
+dimension from the level: a difference blocks `verified`, while a flag the
+destination folder cannot store is recorded as a provider exception. Reports
+and the GUI show the level achieved, how many source messages were
+individually checked, and how many had their flags compared. Level 3 is an
 explicit forensic mode; it is not a complete byte-for-byte mailbox proof and
 is not yet provider-qualified. Incomplete or failed evidence has no
 verification level; process success alone never counts as verification.

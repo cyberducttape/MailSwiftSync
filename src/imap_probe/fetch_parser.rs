@@ -63,6 +63,7 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
                     uid: None,
                     size_bytes: fetch_number(&record.protocol_text, "RFC822.SIZE"),
                     internal_date: fetch_quoted(&record.protocol_text, "INTERNALDATE"),
+                    flags: fetch_flags(&record.protocol_text),
                 });
             }
             Entry::Occupied(entry) => {
@@ -119,38 +120,6 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
         fingerprints,
         total_bytes,
     })
-}
-
-/// State returned by an IMAP FETCH `FLAGS KEYWORDS` request.  This is kept
-/// separate from the message identity record so older metadata reconciliation
-/// remains wire-compatible while callers can explicitly opt into mailbox
-/// fidelity checks.
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct FetchMessageState {
-    pub(super) flags: Vec<String>,
-    pub(super) keywords: Vec<String>,
-}
-
-#[cfg(test)]
-pub(super) fn parse_message_fetch_state_response_bytes(
-    response: &[u8],
-) -> Result<HashMap<String, FetchMessageState>, String> {
-    let mut states = HashMap::new();
-    for record in fetch_records(response) {
-        let record = record?;
-        let uid = fetch_number(&record.protocol_text, "UID")
-            .ok_or_else(|| "IMAP state FETCH record omitted UID".to_owned())?
-            .to_string();
-        let state = FetchMessageState {
-            flags: fetch_atom_list(&record.protocol_text, "FLAGS"),
-            keywords: fetch_atom_list(&record.protocol_text, "KEYWORDS"),
-        };
-        if states.insert(uid.clone(), state).is_some() {
-            return Err(format!("duplicate state FETCH UID {uid}"));
-        }
-    }
-    Ok(states)
 }
 
 #[derive(Debug)]
@@ -218,23 +187,38 @@ fn fetch_quoted(text: &str, field: &str) -> Option<String> {
     Some(value[..end].to_owned())
 }
 
-#[cfg(test)]
-fn fetch_atom_list(text: &str, field: &str) -> Vec<String> {
-    let Some(offset) = find_item(text, field) else {
-        return Vec::new();
-    };
-    let value = text[offset..].trim_start();
-    let Some(value) = value.strip_prefix('(') else {
-        return Vec::new();
-    };
-    let Some(end) = value.find(')') else {
-        return Vec::new();
-    };
-    value[..end]
-        .split_whitespace()
-        .filter(|atom| *atom != "NIL")
-        .map(str::to_owned)
-        .collect()
+/// Read a record's FLAGS item into the canonical flag-set form. Custom
+/// keywords are ordinary FLAGS atoms in IMAP; there is no portable KEYWORDS
+/// FETCH item. `None` means the record carried no parseable FLAGS list.
+fn fetch_flags(text: &str) -> Option<String> {
+    let value = text[find_item(text, "FLAGS")?..].trim_start();
+    let value = value.strip_prefix('(')?;
+    // Flag atoms cannot contain `)` (an atom-special), so the first closing
+    // parenthesis ends the list.
+    let end = value.find(')')?;
+    Some(canonical_flag_set(value[..end].split_whitespace()))
+}
+
+/// Normalize IMAP flags for comparison: flags are case-insensitive, so
+/// the five RFC 9051 system flags take their canonical spelling and every
+/// other atom is ASCII-lowercased. `\Recent` is session state that a client
+/// can never store and is dropped. The result is sorted, de-duplicated, and
+/// space-separated; an empty string is a known-empty flag set.
+pub(crate) fn canonical_flag_set<'a>(atoms: impl IntoIterator<Item = &'a str>) -> String {
+    const SYSTEM: [&str; 5] = ["\\Answered", "\\Deleted", "\\Draft", "\\Flagged", "\\Seen"];
+    let mut flags = atoms
+        .into_iter()
+        .filter(|atom| !atom.is_empty() && !atom.eq_ignore_ascii_case("\\Recent"))
+        .map(|atom| {
+            SYSTEM
+                .iter()
+                .find(|system| system.eq_ignore_ascii_case(atom))
+                .map_or_else(|| atom.to_ascii_lowercase(), |system| (*system).to_owned())
+        })
+        .collect::<Vec<_>>();
+    flags.sort_unstable();
+    flags.dedup();
+    flags.join(" ")
 }
 
 /// Return the offset just past a whole FETCH item name. The name must start

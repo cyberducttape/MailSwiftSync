@@ -54,6 +54,10 @@ pub struct ExtractedMessage {
     pub uid: Option<String>,
     pub size_bytes: Option<u64>,
     pub internal_date: Option<String>,
+    /// Canonical IMAP FLAGS (system flags and keywords, sorted and
+    /// space-separated; `\Recent` excluded). `None` means the server response
+    /// carried no FLAGS item, which is distinct from an empty flag set.
+    pub flags: Option<String>,
 }
 
 /// A source-to-destination mapping emitted by imapsync after a successful
@@ -97,6 +101,7 @@ impl ImapsyncMessageExtractor {
                         uid: Some(record.source_uid),
                         size_bytes: record.size_bytes,
                         internal_date: None,
+                        flags: None,
                     },
                 );
             }
@@ -268,6 +273,7 @@ impl DovecotMessageExtractor {
                         uid: Some(uid),
                         size_bytes,
                         internal_date,
+                        flags: None,
                     },
                 )
                 .is_some()

@@ -18,14 +18,29 @@ exact-message outcome as complete mailbox fidelity:
 | --- | --- | --- |
 | Message presence, folder mapping, INTERNALDATE | PASS when reconciliation is exact | PASS when reconciliation is exact |
 | Body integrity | NOT VERIFIED | PASS within the bounded hash scope |
-| System flags (`\\Seen`, `\\Answered`, `\\Flagged`, `\\Draft`, `\\Deleted`) | NOT VERIFIED | NOT VERIFIED |
-| Custom keywords | WARNING until state verification is enabled | WARNING until state verification is enabled |
+| System flags (`\Seen`, `\Answered`, `\Flagged`, `\Draft`, `\Deleted`) | PASS when every source message's flags were compared without difference; WARNING for differences, provider exceptions, or partial coverage | Same as metadata reconciliation |
+| Custom keywords | Same as system flags | Same as system flags |
 | Subscriptions, ACLs, quotas, SPECIAL-USE, Gmail labels | NOT VERIFIED | NOT VERIFIED |
 
-The live FETCH request now asks for `FLAGS` and `KEYWORDS`, and the parser has
-coverage for those atoms, but the migration verifier does not yet promote them
-to a PASS dimension. This keeps the evidence honest while making the remaining
-mailbox-state work explicit.
+Flag verification is a separate fidelity pass over the private stage after
+message reconciliation; it never forms or changes message pairings. The live
+FETCH already requests `FLAGS` (custom keywords are FLAGS atoms; IMAP has no
+portable `KEYWORDS` item), and the production parser stores a canonical flag
+set per message: system flags in canonical case, keywords lowercased because
+IMAP flags are case-insensitive, and `\Recent` dropped because it is session
+state a client cannot store.
+
+| Rule | Behavior |
+| --- | --- |
+| Compared messages | Only pairs where exactly one source and one destination message share the Message-ID, expected destination folder, INTERNALDATE, and RFC822.SIZE. Duplicates, probable pairings, unmatched messages, and messages whose FETCH carried no FLAGS are not compared. The compared count against all source messages is reported as flag coverage. |
+| Documented exception | The destination lost flags, gained none, and every lost flag is one the destination folder's SELECT `PERMANENTFLAGS` cannot store (a keyword is storable when `\*` is listed; a system flag only when listed by name). This is counted as excepted, not as a failure. Without `PERMANENTFLAGS` every flag is assumed storable, as RFC 9051 requires. |
+| Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
+| Point in time | Each side is read once. A user reading or flagging mail between the source and destination scans, or after cutover, is reported as a difference. Pages kept by a resumed verification keep the flags observed when they were staged. |
+
+Evidence recorded before flag verification existed, aggregate evidence, and
+native Dovecot evidence report flags as not verified. Reports and the GUI show
+the verification tier, how many source messages were individually checked,
+and the flag result with its coverage.
 
 Transfer attempts also retain the last durable content-free progress snapshot:
 copied messages, copied bytes, an estimated skipped count when the engine

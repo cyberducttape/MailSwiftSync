@@ -54,10 +54,10 @@ pub(crate) use cutover::CutoverStage;
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{
-    EvidenceDimensionStatus, EvidenceScope, MailboxAssurance, MailboxEvidence,
+    EvidenceDimensionStatus, EvidenceScope, FlagVerification, MailboxAssurance, MailboxEvidence,
     ProjectReportSnapshot, ReportMailboxPage, ReportMailboxSnapshot, ReportRunSnapshot,
     VerificationAcceptance, VerificationDimensions, VerificationEvidence, VerificationMethod,
-    VerificationOutcome,
+    VerificationOutcome, coverage_percent,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 pub(crate) use message_staging::{
@@ -79,7 +79,7 @@ pub use transfer_passes::{
     TransferPassIntent, TransferPassRecord, TransferProgressSnapshot, folder_digest, sha256_hex,
 };
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 26;
+pub const CURRENT_SCHEMA_VERSION: i64 = 27;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

@@ -21,6 +21,7 @@ capability in its `manifest_rows` are checked against these fields.
 | Capability | code | controller | ui | generic_lab | gmail_live | m365_live | production_supported |
 |---|---|---|---|---|---|---|---|
 | `aggregate_evidence` | implemented | wired | wired | passed | no | no | no |
+| `flag_keyword_verification` | implemented | wired | wired | not_run | no | no | no |
 | `imapsync_engine_install` | implemented | wired | wired | not_run | no | no | no |
 | `message_body_proof` | bounded_opt_in | wired | wired | not_run | no | no | no |
 | `message_level_metadata_reconciliation` | implemented | wired | partial | passed | no | no | no |
@@ -200,6 +201,7 @@ particular target.
 1. **Message-level verification is metadata reconciliation by default; bounded content proof is opt-in**
    - Wired after successful TLS imapsync transfers for the full selectable-folder inventory
    - The default path uses Message-ID, INTERNALDATE, and RFC822.SIZE; an explicit encrypted-imapsync forensic mode also hashes bounded RFC822 bodies with SHA-256
+   - IMAP flags and custom keywords are compared for unambiguously matched message pairs, with PERMANENTFLAGS-derived provider exceptions and reported coverage; this has not yet run in the generic lab or against live providers
    - Bounded fetch pages, account/message limits, and any unstable folder fail closed; partial account evidence is not emitted
    - Live verification stages fetched metadata in SQLite and reconciles it in bounded batches; the estimated 256 MiB fetched-state budget is an admission guard, not a whole-process peak-memory guarantee
    - Large-account/provider qualification remains outstanding; mismatch details are still accumulated for evidence persistence, and durable per-message checkpoint restart semantics remain future work

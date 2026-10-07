@@ -119,6 +119,16 @@ impl StateStore {
                 ],
             ),
             (
+                "evidence_flag_verification",
+                &[
+                    ("job_id", "TEXT", true, 1),
+                    ("run_id", "TEXT", true, 2),
+                    ("compared_messages", "INTEGER", true, 0),
+                    ("mismatched_messages", "INTEGER", true, 0),
+                    ("excepted_messages", "INTEGER", true, 0),
+                ],
+            ),
+            (
                 "runs",
                 &[
                     ("id", "TEXT", false, 1),
@@ -426,6 +436,20 @@ impl StateStore {
             ),
             (
                 "evidence_history",
+                &[
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                ],
+            ),
+            (
+                "evidence_flag_verification",
                 &[
                     (
                         "mailbox_jobs",
@@ -885,6 +909,9 @@ impl StateStore {
             ("evidence_history", "extra_messages"),
             ("evidence_history", "modified_messages"),
             ("evidence_history", "probable_messages"),
+            ("evidence_flag_verification", "compared_messages"),
+            ("evidence_flag_verification", "mismatched_messages"),
+            ("evidence_flag_verification", "excepted_messages"),
             ("message_mismatches", "source_uidvalidity"),
             ("message_mismatches", "destination_uidvalidity"),
             ("message_mismatches", "source_size_bytes"),
@@ -924,9 +951,9 @@ impl StateStore {
             "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE state NOT IN ('imported','queued','preflight','ready','running','completed','verified','verified_with_exceptions','failed','cancelled','attention','delta_required','verification_difference'))",
             "SELECT EXISTS(SELECT 1 FROM runs WHERE status NOT IN ('queued','running','completed','failed','cancelled','abandoned','verification_failed'))",
             "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_method NOT IN ('aggregate_engine','metadata_reconciliation','body_hash','native_dovecot'))",
-            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome NOT IN ('exact_body_match','exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome NOT IN ('exact_body_match','exact_metadata_match','probable_match','ambiguous','flags_changed','missing','changed','unexpected','incomplete','failed'))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_method NOT IN ('aggregate_engine','metadata_reconciliation','body_hash','native_dovecot'))",
-            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome NOT IN ('exact_body_match','exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome NOT IN ('exact_body_match','exact_metadata_match','probable_match','ambiguous','flags_changed','missing','changed','unexpected','incomplete','failed'))",
             "SELECT EXISTS(SELECT 1 FROM evidence WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE mismatch_type NOT IN ('message_id_only','message_present_wrong_folder','missing','extra','duplicated'))",
@@ -943,6 +970,8 @@ impl StateStore {
         // that may be edited without changing them. In particular, never let
         // a forged exact outcome survive read-only recovery validation.
         const SEMANTIC_CHECKS: &[&str] = &[
+            "SELECT EXISTS(SELECT 1 FROM evidence e JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id WHERE e.verification_outcome IN ('exact_body_match','exact_metadata_match') AND f.mismatched_messages<>0)",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history h JOIN evidence_flag_verification f ON f.job_id=h.job_id AND f.run_id=h.run_id WHERE h.verification_outcome IN ('exact_body_match','exact_metadata_match') AND f.mismatched_messages<>0)",
             "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
         ];
@@ -957,6 +986,7 @@ impl StateStore {
             "SELECT EXISTS(SELECT 1 FROM evidence e JOIN runs r ON r.id=e.run_id WHERE r.job_id IS NULL OR r.job_id<>e.job_id)",
             "SELECT EXISTS(SELECT 1 FROM evidence_history h JOIN runs r ON r.id=h.run_id WHERE r.job_id IS NULL OR r.job_id<>h.job_id)",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches m JOIN runs r ON r.id=m.run_id WHERE r.job_id IS NULL OR r.job_id<>m.job_id)",
+            "SELECT EXISTS(SELECT 1 FROM evidence_flag_verification f JOIN runs r ON r.id=f.run_id WHERE r.job_id IS NULL OR r.job_id<>f.job_id)",
             "SELECT EXISTS(SELECT 1 FROM active_processes p JOIN runs r ON r.id=p.run_id WHERE r.job_id IS NULL OR r.job_id<>p.job_id)",
             "SELECT EXISTS(SELECT 1 FROM verification_acceptances a JOIN runs r ON r.id=a.run_id WHERE r.job_id<>a.job_id)",
             "SELECT EXISTS(SELECT 1 FROM events e JOIN runs r ON r.id=e.run_id WHERE r.project_id<>e.project_id)",
@@ -1035,6 +1065,15 @@ impl StateStore {
                     "extra_messages>=0",
                     "modified_messages>=0",
                     "probable_messages>=0",
+                ],
+            ),
+            (
+                "evidence_flag_verification",
+                &[
+                    "compared_messages>=0",
+                    "mismatched_messages>=0",
+                    "excepted_messages>=0",
+                    "mismatched_messages+excepted_messages<=compared_messages",
                 ],
             ),
             (

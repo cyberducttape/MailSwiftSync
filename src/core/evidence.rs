@@ -37,9 +37,35 @@ pub struct VerificationEvidence {
     pub modified_messages: u64,
     /// Metadata pairings that remain candidates rather than exact identities.
     pub probable_messages: u64,
+    /// Independent IMAP FLAGS comparison. `None` means flags and keywords
+    /// were not verified (aggregate evidence, or evidence recorded before
+    /// flag verification existed); it never means "no differences".
+    pub flag_verification: Option<FlagVerification>,
 }
 
 pub type MailboxEvidence = VerificationEvidence;
+
+/// Result of comparing IMAP FLAGS (system flags and custom keywords) for
+/// message pairs whose identity is unambiguous. Messages outside that set
+/// (duplicates, probable pairings, unmatched messages) are not compared, so
+/// `compared_messages` against the source message count is the coverage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlagVerification {
+    pub compared_messages: u64,
+    /// Pairs whose flags differ in a way the destination could have stored.
+    pub mismatched_messages: u64,
+    /// Pairs whose flags differ only by flags the destination folder's
+    /// PERMANENTFLAGS say it cannot store (a documented provider exception).
+    pub excepted_messages: u64,
+}
+
+impl FlagVerification {
+    pub fn is_consistent(&self) -> bool {
+        self.mismatched_messages
+            .checked_add(self.excepted_messages)
+            .is_some_and(|differing| differing <= self.compared_messages)
+    }
+}
 
 /// Independent evidence dimensions.  These are intentionally not collapsed
 /// into `VerificationOutcome`: an exact message reconciliation does not prove
@@ -91,8 +117,8 @@ impl VerificationEvidence {
             } else {
                 EvidenceDimensionStatus::Warning
             },
-            system_flags: EvidenceDimensionStatus::NotVerified,
-            custom_keywords: EvidenceDimensionStatus::Warning,
+            system_flags: self.flag_dimension(),
+            custom_keywords: self.flag_dimension(),
             folder_subscriptions: EvidenceDimensionStatus::NotVerified,
             folder_mapping: if exact {
                 EvidenceDimensionStatus::Pass
@@ -145,6 +171,7 @@ pub enum VerificationOutcome {
     ExactMetadataMatch,
     ProbableMatch,
     Ambiguous,
+    FlagsChanged,
     Missing,
     Changed,
     Unexpected,
@@ -159,6 +186,7 @@ impl VerificationOutcome {
             Self::ExactMetadataMatch => "exact_metadata_match",
             Self::ProbableMatch => "probable_match",
             Self::Ambiguous => "ambiguous",
+            Self::FlagsChanged => "flags_changed",
             Self::Missing => "missing",
             Self::Changed => "changed",
             Self::Unexpected => "unexpected",
@@ -175,6 +203,7 @@ impl VerificationOutcome {
             Self::ExactMetadataMatch => "Exact metadata match — message bodies not compared",
             Self::ProbableMatch => "Probable metadata match — message bodies not compared",
             Self::Ambiguous => "Ambiguous metadata result — message bodies not compared",
+            Self::FlagsChanged => "Message flags or keywords differ",
             Self::Missing => "Missing messages detected",
             Self::Changed => "Changed messages detected",
             Self::Unexpected => "Unexpected messages detected",
@@ -189,6 +218,7 @@ impl VerificationOutcome {
             self,
             Self::ProbableMatch
                 | Self::Ambiguous
+                | Self::FlagsChanged
                 | Self::Missing
                 | Self::Changed
                 | Self::Unexpected
@@ -203,6 +233,7 @@ impl VerificationOutcome {
             "exact_metadata_match" => Self::ExactMetadataMatch,
             "probable_match" => Self::ProbableMatch,
             "ambiguous" => Self::Ambiguous,
+            "flags_changed" => Self::FlagsChanged,
             "missing" => Self::Missing,
             "changed" => Self::Changed,
             "unexpected" => Self::Unexpected,
@@ -449,11 +480,68 @@ impl VerificationEvidence {
         self.missing_messages > 0 || self.extra_messages > 0 || self.modified_messages > 0
     }
 
+    fn has_flag_mismatch(&self) -> bool {
+        self.flag_verification
+            .is_some_and(|flags| flags.mismatched_messages > 0 || !flags.is_consistent())
+    }
+
     fn has_verification_exception(&self) -> bool {
         self.failed_messages > 0
             || self.unmatched_messages.is_some_and(|count| count > 0)
             || self.probable_messages > 0
             || self.has_message_level_mismatch()
+            || self.has_flag_mismatch()
+    }
+
+    fn flag_dimension(&self) -> EvidenceDimensionStatus {
+        match self.flag_verification {
+            None => EvidenceDimensionStatus::NotVerified,
+            Some(flags)
+                if !self.has_flag_mismatch()
+                    && flags.excepted_messages == 0
+                    && flags.compared_messages == self.source_messages =>
+            {
+                EvidenceDimensionStatus::Pass
+            }
+            Some(_) => EvidenceDimensionStatus::Warning,
+        }
+    }
+
+    /// Source messages individually compared by the verifier, and the source
+    /// population. Aggregate evidence compares no individual message.
+    pub fn message_coverage(&self) -> (u64, u64) {
+        let checked = match self.verification_method {
+            VerificationMethod::MetadataReconciliation | VerificationMethod::BodyHash => {
+                self.source_messages
+            }
+            VerificationMethod::AggregateEngine | VerificationMethod::NativeDovecot => 0,
+        };
+        (checked, self.source_messages)
+    }
+
+    /// Operator-facing coverage sentence for the message-identity checks.
+    pub fn message_coverage_label(&self) -> String {
+        let (checked, total) = self.message_coverage();
+        format!(
+            "{checked} of {total} source messages individually checked ({})",
+            coverage_percent(checked, total)
+        )
+    }
+
+    /// Operator-facing flag/keyword result, or an explicit not-verified
+    /// statement. Coverage is reported against all source messages.
+    pub fn flag_verification_label(&self) -> String {
+        match self.flag_verification {
+            None => "Flags and keywords not verified".to_owned(),
+            Some(flags) => format!(
+                "Flags and keywords compared for {} of {} source messages ({}): {} differ, {} differ only by flags the destination cannot store",
+                flags.compared_messages,
+                self.source_messages,
+                coverage_percent(flags.compared_messages, self.source_messages),
+                flags.mismatched_messages,
+                flags.excepted_messages
+            ),
+        }
     }
 
     pub fn evidence_scope(&self) -> EvidenceScope {
@@ -489,6 +577,8 @@ impl VerificationEvidence {
             VerificationOutcome::ProbableMatch
         } else if self.unmatched_messages.is_some_and(|count| count > 0) {
             VerificationOutcome::Ambiguous
+        } else if self.has_flag_mismatch() {
+            VerificationOutcome::FlagsChanged
         } else if self.aggregate_totals_match() {
             if self.verification_method == VerificationMethod::BodyHash {
                 VerificationOutcome::ExactBodyMatch
@@ -533,6 +623,9 @@ impl VerificationEvidence {
         if self.has_message_level_mismatch() || self.probable_messages > 0 {
             return "Message-level mismatch";
         }
+        if self.has_flag_mismatch() {
+            return "Flag or keyword mismatch";
+        }
         let exact = self.aggregate_totals_match();
         if self.evidence_scope() == EvidenceScope::BodyHashed && exact {
             "Level 3 — Bounded content fingerprints"
@@ -563,6 +656,9 @@ impl VerificationEvidence {
             }
             VerificationOutcome::Ambiguous => {
                 Some("message identity could not be resolved unambiguously")
+            }
+            VerificationOutcome::FlagsChanged => {
+                Some("flag verification found messages whose flags or keywords differ")
             }
             VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch => None,
         }
@@ -615,11 +711,21 @@ impl VerificationEvidence {
     }
 }
 
+/// Coverage percentage rounded down to a tenth, so partial coverage is never
+/// displayed as 100%.
+pub fn coverage_percent(checked: u64, total: u64) -> String {
+    if total == 0 {
+        return "no source messages".to_owned();
+    }
+    let tenths = u128::from(checked.min(total)) * 1000 / u128::from(total);
+    format!("{}.{}%", tenths / 10, tenths % 10)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot, VerificationMethod,
-        VerificationOutcome,
+        EvidenceDimensionStatus, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
+        VerificationMethod, VerificationOutcome,
     };
     use crate::core::{MailboxJob, OperationalState, Phase, Project};
 
@@ -712,6 +818,7 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            flag_verification: None,
         }
     }
 
@@ -762,6 +869,7 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            flag_verification: None,
         };
         assert_eq!(
             evidence.verification_outcome(),
@@ -854,6 +962,7 @@ mod tests {
                     extra_messages: 0,
                     modified_messages: 0,
                     probable_messages: 0,
+                    flag_verification: None,
                 },
                 None,
             )),
@@ -902,11 +1011,66 @@ mod tests {
                     extra_messages: u64::MAX,
                     modified_messages: u64::MAX,
                     probable_messages: 0,
+                    flag_verification: None,
                 },
                 None,
             )),
         };
 
         assert_eq!(mailbox.assurance().differences_found, u64::MAX);
+    }
+
+    #[test]
+    fn flag_mismatches_are_an_exception_and_coverage_never_rounds_up() {
+        let mut evidence = missing_evidence();
+        evidence.verification_outcome = None;
+        evidence.missing_messages = 0;
+        evidence.destination_messages = evidence.source_messages;
+        evidence.destination_bytes = evidence.source_bytes;
+        evidence.unmatched_messages = Some(0);
+        evidence.flag_verification = None;
+        assert_eq!(
+            evidence.verification_outcome(),
+            VerificationOutcome::ExactMetadataMatch
+        );
+        assert_eq!(
+            evidence.dimensions().system_flags,
+            EvidenceDimensionStatus::NotVerified
+        );
+        assert_eq!(
+            evidence.flag_verification_label(),
+            "Flags and keywords not verified"
+        );
+
+        evidence.flag_verification = Some(super::FlagVerification {
+            compared_messages: evidence.source_messages,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        });
+        assert!(evidence.is_exact_match());
+        assert_eq!(
+            evidence.dimensions().custom_keywords,
+            EvidenceDimensionStatus::Pass
+        );
+
+        evidence.flag_verification = Some(super::FlagVerification {
+            compared_messages: evidence.source_messages,
+            mismatched_messages: 1,
+            excepted_messages: 0,
+        });
+        assert_eq!(
+            evidence.verification_outcome(),
+            VerificationOutcome::FlagsChanged
+        );
+        assert!(!evidence.is_exact_match());
+        assert!(VerificationOutcome::FlagsChanged.is_exception());
+        assert_eq!(
+            VerificationOutcome::parse(VerificationOutcome::FlagsChanged.as_str()),
+            Some(VerificationOutcome::FlagsChanged)
+        );
+
+        assert_eq!(super::coverage_percent(9_999, 10_000), "99.9%");
+        assert_eq!(super::coverage_percent(10_000, 10_000), "100.0%");
+        assert_eq!(super::coverage_percent(0, 0), "no source messages");
     }
 }

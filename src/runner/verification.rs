@@ -3,8 +3,9 @@ use super::*;
 /// Perform independent, folder-aware IMAP reconciliation after a successful
 /// imapsync transfer. Engine counters remain useful as a fallback, but they
 /// cannot prove portable message identity; this adapter fetches Message-ID,
-/// INTERNALDATE, and RFC822.SIZE from both accounts and feeds the bounded
-/// records into the shared verifier. Full RFC822 bodies are intentionally not
+/// INTERNALDATE, RFC822.SIZE, and FLAGS from both accounts and feeds the
+/// bounded records into the shared verifier. Flags and keywords are compared
+/// in a separate fidelity pass over unambiguous message pairs. Full RFC822 bodies are intentionally not
 /// downloaded by the default path; forensic body hashing must be opt-in.
 pub(crate) fn run_imap_message_verification(
     form: &crate::Form,
@@ -174,6 +175,10 @@ pub(crate) fn run_imap_message_verification(
             &folder_mapping,
         )?
     };
+    // Flag fidelity is its own dimension: it never forms or changes message
+    // pairings, and it reports how many messages it could compare.
+    let flag_verification =
+        core::MessageVerification::verify_staged_flags(&stage, &folder_mapping)?;
     let source_bytes = stage
         .sum_bytes(core::StagedMessageSide::Source)
         .map_err(|e| e.to_string())?;
@@ -192,6 +197,17 @@ pub(crate) fn run_imap_message_verification(
             if verification_method == core::VerificationMethod::BodyHash =>
         {
             core::VerificationOutcome::ExactBodyMatch
+        }
+        outcome => outcome,
+    };
+    // A message-level exception is more severe and keeps its outcome; an
+    // otherwise exact result with lost or altered flags is not exact.
+    let verification_outcome = match verification_outcome {
+        core::VerificationOutcome::ExactBodyMatch
+        | core::VerificationOutcome::ExactMetadataMatch
+            if flag_verification.mismatched_messages > 0 =>
+        {
+            core::VerificationOutcome::FlagsChanged
         }
         outcome => outcome,
     };
@@ -219,6 +235,7 @@ pub(crate) fn run_imap_message_verification(
         extra_messages: summary.extra_count.saturating_add(summary.duplicated_count),
         modified_messages: summary.changed_count,
         probable_messages: summary.probable_matches,
+        flag_verification: Some(flag_verification),
     };
     // Capture each folder's cursor before a durable stage is removed; the
     // caller records them (by folder digest) as the pass's verified ranges.
