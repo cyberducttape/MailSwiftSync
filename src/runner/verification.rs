@@ -30,14 +30,16 @@ pub(crate) fn run_imap_message_verification(
         usize::try_from(form.profile.body_hash_max_total_bytes)
             .map_err(|_| "body-hash total bound does not fit the platform usize".to_owned())?,
     );
-    let body_hash =
-        form.profile
-            .body_hash_verification
-            .then(|| crate::imap_probe::BodyHashOptions {
-                max_body_bytes: usize::try_from(form.profile.body_hash_max_bytes)
-                    .expect("body-hash per-message bound validated above"),
-                budget: &body_hash_budget,
-            });
+    let body_hash = if form.profile.body_hash_verification {
+        Some(crate::imap_probe::BodyHashOptions {
+            max_body_bytes: usize::try_from(form.profile.body_hash_max_bytes).map_err(|_| {
+                "body-hash per-message bound does not fit the platform usize".to_owned()
+            })?,
+            budget: &body_hash_budget,
+        })
+    } else {
+        None
+    };
     let source_host = crate::imap_probe::endpoint_for_probe(
         &form.profile.source_host,
         &form.profile.source_port,
