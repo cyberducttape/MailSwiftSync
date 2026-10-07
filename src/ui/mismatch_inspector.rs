@@ -82,10 +82,12 @@ impl ObservedFolderNames {
 pub(crate) fn folder_rows(summary: &[MismatchFolderSummary]) -> Vec<(String, [u64; 5])> {
     let mut rows: Vec<(String, [u64; 5])> = Vec::new();
     for entry in summary {
-        let index = TYPES
-            .iter()
-            .position(|known| *known == entry.mismatch_type)
-            .expect("every mismatch type has a column");
+        let Some(index) = TYPES.iter().position(|known| *known == entry.mismatch_type) else {
+            // Durable state may outlive the UI's known mismatch vocabulary.
+            // Preserve the rest of the report instead of crashing the UI when
+            // a newer or malformed row is encountered.
+            continue;
+        };
         match rows.last_mut() {
             Some((digest, counts)) if *digest == entry.folder_digest => {
                 counts[index] += entry.count;
