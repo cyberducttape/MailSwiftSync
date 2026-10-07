@@ -156,9 +156,9 @@ impl MessageStateBudget {
                     (next <= MAX_ESTIMATED_FETCHED_STATE_BYTES).then_some(next)
                 });
         if reserved.is_err() {
-            return Err(format!(
+            return Err(crate::core::VerificationLimit::FetchedState.tag(format!(
                 "account pair exceeded the estimated {MAX_ESTIMATED_FETCHED_STATE_BYTES}-byte fetched-state admission budget"
-            ));
+            )));
         }
         Ok(())
     }
@@ -233,10 +233,12 @@ impl BodyHashBudget {
                     (next <= self.max_total_bytes).then_some(next)
                 });
         if reserved.is_err() {
-            return Err(format!(
-                "RFC822 body hashing exceeded the configured {}-byte total bound",
-                self.max_total_bytes
-            ));
+            return Err(
+                crate::core::VerificationLimit::BodyHashTotalSize.tag(format!(
+                    "RFC822 body hashing exceeded the configured {}-byte total bound",
+                    self.max_total_bytes
+                )),
+            );
         }
         Ok(())
     }
@@ -406,7 +408,8 @@ impl<'a> MessageFetchBudget<'a> {
             return Err("message-level verification cancelled by operator".into());
         }
         if Instant::now() >= self.deadline {
-            return Err("message-level verification exceeded its execution deadline".into());
+            return Err(crate::core::VerificationLimit::Deadline
+                .tag("message-level verification exceeded its execution deadline"));
         }
         Ok(())
     }
@@ -801,9 +804,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         |stream, buffer, uid_page, uid_set| {
             budget.check()?;
             if body_hash.is_some() && body_hash_message_limit_exceeded(sink.len(), uid_page.len()) {
-                return Err(format!(
+                return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
                     "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
-                ));
+                )));
             }
             let tag = format!("v{:03}", page_number + 3);
             page_number = page_number.saturating_add(1);
@@ -902,9 +905,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                     .sum(),
             );
             if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
-                return Err(format!(
+                return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
                     "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
-                ));
+                )));
             }
             if let Some(last_uid) = uid_page.last().copied() {
                 sink.checkpoint_page(mailbox, snapshot, last_uid)?;
@@ -1154,7 +1157,8 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
         &mut buffer,
         &mut mailbox_details,
         budget,
-    )?;
+    )
+    .map_err(tag_folder_inventory_limit)?;
     let mut mailboxes = mailbox_details
         .iter()
         .filter(|mailbox| mailbox.selectable)
@@ -1204,9 +1208,9 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                 total_exists = total_exists.saturating_add(folder_exists);
                 if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
                     let _ = stream.write_all(b"a999 LOGOUT\r\n");
-                    return Err(format!(
+                    return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
                         "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
-                    ));
+                    )));
                 }
             }
             Err(MailboxFetchError::Control(error)) => {
@@ -1303,9 +1307,9 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
 ) -> Result<FetchedAccountSummary, String> {
     let count = stage.count(side).map_err(|error| error.to_string())? as usize;
     if body_hash.is_some() && count > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT {
-        return Err(format!(
+        return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
             "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
-        ));
+        )));
     }
     let mut sink = StageMessageSink { stage, side, count };
     fetch_tls_account_messages_with_sink(
@@ -1364,7 +1368,7 @@ fn format_folder_failures(host: &str, failures: &HashMap<String, String>, total:
         })
         .collect::<Vec<_>>();
     let omitted = total.saturating_sub(details.len());
-    if omitted == 0 {
+    let message = if omitted == 0 {
         format!(
             "{host}: verification did not obtain stable metadata for folders: {}",
             details.join("; ")
@@ -1374,6 +1378,24 @@ fn format_folder_failures(host: &str, failures: &HashMap<String, String>, total:
             "{host}: verification did not obtain stable metadata for folders: {}; (+{omitted} more)",
             details.join("; ")
         )
+    };
+    // A folder that stopped at a safety limit cannot be completed by
+    // retrying, so the account result carries that limit's tag even when
+    // the folder's detail is truncated or omitted above.
+    let mut limits = failures
+        .iter()
+        .filter_map(|(folder, reason)| {
+            crate::core::VerificationLimit::from_detail(reason).map(|limit| (folder, limit))
+        })
+        .collect::<Vec<_>>();
+    limits.sort_by(|left, right| left.0.cmp(right.0));
+    match limits.first() {
+        Some((_, limit))
+            if crate::core::VerificationLimit::from_detail(&message) != Some(*limit) =>
+        {
+            limit.tag(message)
+        }
+        _ => message,
     }
 }
 
@@ -1424,6 +1446,16 @@ fn parse_selected_mailbox(
         format!("{host}: SELECT {mailbox} did not return an untagged EXISTS count")
     })?;
     Ok((exists, uidvalidity, uidnext))
+}
+
+/// LIST parsing is shared with preflight discovery, so its inventory bounds
+/// are tagged as verification limits only where verification reads LIST.
+fn tag_folder_inventory_limit(error: String) -> String {
+    if error.contains("LIST inventory exceeded") || error.contains("-mailbox limit") {
+        crate::core::VerificationLimit::FolderInventory.tag(error)
+    } else {
+        error
+    }
 }
 
 /// Extract the canonical `PERMANENTFLAGS` set from a SELECT response. RFC

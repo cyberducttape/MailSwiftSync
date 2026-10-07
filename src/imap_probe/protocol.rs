@@ -111,9 +111,10 @@ pub(super) fn read_imap_tagged_with_budget<S: Read>(
             Err(error) => return Err(error.to_string()),
         }
         if raw_response.len() > max_bytes {
-            return Err(format!(
+            // Budgeted reads belong to message verification only.
+            return Err(crate::core::VerificationLimit::ResponseSize.tag(format!(
                 "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
-            ));
+            )));
         }
         if scanner.scan(&raw_response) {
             response.clear();
@@ -170,9 +171,9 @@ pub(super) fn read_imap_tagged_bytes_with_budget<S: Read>(
             Err(error) => return Err(error.to_string()),
         }
         if response.len() > max_bytes {
-            return Err(format!(
+            return Err(crate::core::VerificationLimit::ResponseSize.tag(format!(
                 "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
-            ));
+            )));
         }
         if scanner.scan(&response) {
             return Ok(response);

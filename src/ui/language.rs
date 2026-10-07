@@ -648,6 +648,7 @@ mod tests {
         for reason in [
             crate::core::AttentionReason::Interrupted,
             crate::core::AttentionReason::VerificationIncomplete,
+            crate::core::AttentionReason::VerificationLimitExceeded,
             crate::core::AttentionReason::VerificationDifference,
             crate::core::AttentionReason::ProcessIdentityUnverified,
             crate::core::AttentionReason::AuthenticationFailed,

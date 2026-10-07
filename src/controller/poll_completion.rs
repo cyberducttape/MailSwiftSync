@@ -96,16 +96,29 @@ impl App {
                 } else {
                     "failed"
                 };
-                let detail = r.as_ref().err().map_or_else(String::new, |error| {
-                    let provider = crate::controller::failure::provider_for_sided_error(
-                        &run_context.source_provider,
-                        &run_context.destination_provider,
-                        error,
-                    );
-                    crate::controller::failure::classified_failure_detail_for_provider(
-                        provider, error,
-                    )
-                });
+                // A transfer that completed without evidence records why
+                // verification fell short, including any safety limit.
+                let verification_failure =
+                    (succeeded && !run_context.dry_run && terminal_evidence.is_none())
+                        .then_some(self.pending_verification_failure.as_deref())
+                        .flatten();
+                let detail = r.as_ref().err().map_or_else(
+                    || {
+                        verification_failure
+                            .map(crate::controller::failure::incomplete_verification_detail)
+                            .unwrap_or_default()
+                    },
+                    |error| {
+                        let provider = crate::controller::failure::provider_for_sided_error(
+                            &run_context.source_provider,
+                            &run_context.destination_provider,
+                            error,
+                        );
+                        crate::controller::failure::classified_failure_detail_for_provider(
+                            provider, error,
+                        )
+                    },
+                );
                 let terminal_write = if !was_bulk_run
                     && let (Some(job), Some(state)) = (&run_context.job_id, direct_final_state)
                 {
@@ -186,6 +199,7 @@ impl App {
                     // a retry would be unable to reproduce the same durable
                     // result.
                     self.pending_evidence = None;
+                    self.pending_verification_failure = None;
                     self.pending_mismatches.clear();
                     self.pending_checkpoint = None;
                 }
@@ -330,5 +344,126 @@ impl App {
             self.bulk_live_run = false;
             self.live_confirmed = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::controller::{ActiveRunContext, RunKind};
+    use crate::*;
+
+    fn with_app(test: impl FnOnce(&mut App)) {
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-verification-limit-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = App::from_state_path(Some(&state_path));
+        test(&mut app);
+        drop(app);
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_file(state_path.with_extension("lock"));
+    }
+
+    /// Drive one single-mailbox live run whose transfer succeeds while its
+    /// verification reports `verification_error`, then return the durable
+    /// mailbox state, attention reason, run status, and run detail.
+    fn finish_with_verification_failure(
+        verification_error: &str,
+    ) -> (String, Option<core::AttentionReason>, String, String) {
+        let mut result = None;
+        with_app(|app| {
+            let project = app
+                .store
+                .create_project("limits", "source", "destination")
+                .unwrap();
+            let job = app
+                .store
+                .add_mailbox(
+                    &project.id,
+                    "source@example.test",
+                    "destination@example.test",
+                )
+                .unwrap();
+            app.store
+                .begin_run(&project.id, &job, "limit-run", "imapsync")
+                .unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "limit-run".into(),
+                project_id: project.id.clone(),
+                job_id: Some(job.clone()),
+                batch_job_ids: Vec::new(),
+                batch_child_run_ids: Vec::new(),
+                batch_child_indices: Default::default(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Single,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+            });
+            app.run_id = Some("limit-run".into());
+            let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+            sender
+                .send(Event::VerificationFailed(verification_error.to_owned()))
+                .unwrap();
+            sender
+                .send(Event::Finished(Ok(StreamOutcome::Completed)))
+                .unwrap();
+            drop(sender);
+            app.receiver = Some(receiver);
+            for _ in 0..10 {
+                app.poll();
+            }
+            let snapshot = app
+                .store
+                .project_report_snapshot(&project.id)
+                .unwrap()
+                .unwrap();
+            let mailbox = &snapshot.mailboxes[0];
+            let run = snapshot
+                .runs
+                .iter()
+                .find(|run| run.run.id == "limit-run")
+                .unwrap();
+            result = Some((
+                mailbox.job.state.clone(),
+                mailbox.attention_reason,
+                run.run.status.clone(),
+                run.run.detail.clone(),
+            ));
+        });
+        result.unwrap()
+    }
+
+    #[test]
+    fn completed_transfer_with_a_verification_limit_records_the_limit_for_review() {
+        let error = core::VerificationLimit::BodyHashMessageCount
+            .tag("imap.example.test: body-hash proof is limited to 100000 messages per endpoint");
+        let (state, reason, run_status, detail) = finish_with_verification_failure(&error);
+        // The transfer completed; the evidence did not. Never verified,
+        // never a failed migration.
+        assert_eq!(state, "attention");
+        assert_eq!(run_status, "completed");
+        assert_eq!(
+            reason,
+            Some(core::AttentionReason::VerificationLimitExceeded)
+        );
+        assert_eq!(
+            core::VerificationLimit::from_detail(&detail),
+            Some(core::VerificationLimit::BodyHashMessageCount)
+        );
+        assert!(detail.contains(core::VerificationLimit::BodyHashMessageCount.guidance()));
+    }
+
+    #[test]
+    fn completed_transfer_with_a_verifier_error_records_incomplete_evidence() {
+        let (state, reason, run_status, detail) =
+            finish_with_verification_failure("imap.example.test: connection reset by peer");
+        assert_eq!(state, "attention");
+        assert_eq!(run_status, "completed");
+        assert_eq!(reason, Some(core::AttentionReason::VerificationIncomplete));
+        assert!(detail.contains("connection reset by peer"), "{detail}");
+        assert_eq!(core::VerificationLimit::from_detail(&detail), None);
     }
 }

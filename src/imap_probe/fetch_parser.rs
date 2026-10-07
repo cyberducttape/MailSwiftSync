@@ -97,8 +97,10 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
             .or_else(|| record.frame.literal_after(b"BODY.PEEK[]"))
             .ok_or_else(|| format!("IMAP body FETCH UID {uid} omitted BODY[] literal"))?;
         if body.len() > max_body_bytes {
+            // `VerificationLimit::BodyHashMessageSize`, spelled out because
+            // the fuzz harness compiles this parser without `core`.
             return Err(format!(
-                "IMAP body FETCH UID {uid} exceeded the {max_body_bytes}-byte body-hash bound"
+                "[verification_limit=body_hash_message_size] IMAP body FETCH UID {uid} exceeded the {max_body_bytes}-byte body-hash bound"
             ));
         }
         total_bytes = total_bytes.saturating_add(body.len());

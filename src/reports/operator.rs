@@ -261,6 +261,7 @@ pub(crate) fn build_project_json(
                 "status": run.status,
                 "started_at": run.started_at,
                 "finished_at": run.finished_at,
+                "verification_limit": verification_limit_json(&run.detail),
                 "detail": run.detail,
             }))
         })
@@ -282,6 +283,18 @@ pub(crate) fn build_project_json(
         "note": "The run manifest contains every durable run for this project. Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
     });
     serde_json::to_string_pretty(&with_proof_digest(value)?).map_err(|e| e.to_string())
+}
+
+/// Structured form of a verifier safety limit recorded in a run detail, so
+/// automation need not parse the prose. `null` when no limit was hit.
+fn verification_limit_json(detail: &str) -> serde_json::Value {
+    core::VerificationLimit::from_detail(detail).map_or(serde_json::Value::Null, |limit| {
+        serde_json::json!({
+            "code": limit.code(),
+            "resumable": limit.resumable(),
+            "guidance": limit.guidance(),
+        })
+    })
 }
 
 pub(crate) fn build_post_migration_report_json(

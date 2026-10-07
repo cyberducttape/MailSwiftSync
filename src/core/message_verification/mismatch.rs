@@ -129,10 +129,12 @@ pub(super) fn estimated_verifier_state_bytes(
 
 pub(super) fn enforce_verifier_state_budget(estimated_state_bytes: usize) -> Result<(), String> {
     if estimated_state_bytes > MAX_ESTIMATED_VERIFIER_STATE_BYTES {
-        return Err(format!(
-            "verification state exceeds the estimated {}-byte aggregate verifier budget",
-            MAX_ESTIMATED_VERIFIER_STATE_BYTES
-        ));
+        return Err(
+            crate::core::VerificationLimit::ReconciliationState.tag(format!(
+                "verification state exceeds the estimated {}-byte aggregate verifier budget",
+                MAX_ESTIMATED_VERIFIER_STATE_BYTES
+            )),
+        );
     }
     Ok(())
 }
@@ -166,10 +168,12 @@ pub(super) fn append_mismatch_with_budget(
 ) -> Result<(), String> {
     *estimated_bytes = estimated_bytes.saturating_add(estimated_mismatch_bytes(&mismatch));
     if *estimated_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
-        return Err(format!(
-            "verification mismatch detail exceeds the estimated {}-byte evidence budget",
-            MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
-        ));
+        return Err(
+            crate::core::VerificationLimit::ReconciliationState.tag(format!(
+                "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+                MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+            )),
+        );
     }
     mismatches.push(mismatch);
     Ok(())
@@ -208,5 +212,19 @@ pub(super) fn make_mismatch(
         dest_date: destination.and_then(|message| message.internal_date.clone()),
         source_fingerprint: None,
         destination_fingerprint: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn verifier_state_budget_is_a_tagged_reconciliation_limit() {
+        let error =
+            super::enforce_verifier_state_budget(super::MAX_ESTIMATED_VERIFIER_STATE_BYTES + 1)
+                .unwrap_err();
+        assert_eq!(
+            crate::core::VerificationLimit::from_detail(&error),
+            Some(crate::core::VerificationLimit::ReconciliationState)
+        );
     }
 }

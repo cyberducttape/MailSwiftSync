@@ -1060,7 +1060,6 @@ const ENGINE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
 /// The resolver helper must use the same per-process resolver overrides as
 /// the controller (notably split-DNS settings), without inheriting unrelated
 /// application secrets or the engine-specific Perl/TLS environment.
-#[cfg(not(test))]
 const DNS_ENVIRONMENT_ALLOWLIST: &[&str] = &[
     "PATH",
     "HOME",
@@ -1136,7 +1135,6 @@ fn hardened_engine_path() -> String {
 /// Start the internal system-DNS helper with only settings that affect the
 /// platform resolver. This keeps split-DNS behavior while excluding cloud
 /// credentials, proxies, key material, and unrelated application variables.
-#[cfg(not(test))]
 pub(crate) fn apply_dns_environment(command: &mut Command) {
     apply_environment_allowlist(command, DNS_ENVIRONMENT_ALLOWLIST);
 }

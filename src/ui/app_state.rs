@@ -220,6 +220,9 @@ pub(crate) struct App {
     pub(crate) oauth_refresh_editor_refresh_token: SecretString,
     pub(crate) active_view: WorkspaceView,
     pub(crate) pending_evidence: Option<core::MailboxEvidence>,
+    /// Why the current run's post-transfer verification produced no
+    /// evidence, recorded as the terminal run detail.
+    pub(crate) pending_verification_failure: Option<String>,
     pub(crate) pending_mismatches: Vec<core::MessageMismatch>,
     pub(crate) pending_batch_evidence: HashMap<String, core::MailboxEvidence>,
     pub(crate) pending_batch_mismatches: HashMap<String, Vec<core::MessageMismatch>>,

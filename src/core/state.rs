@@ -67,6 +67,10 @@ mod tests {
 pub enum AttentionReason {
     Interrupted,
     VerificationIncomplete,
+    /// The transfer completed, but verification stopped at a safety limit
+    /// (`VerificationLimit`), so the evidence is incomplete for a known,
+    /// actionable reason rather than a verifier error.
+    VerificationLimitExceeded,
     VerificationDifference,
     ProcessIdentityUnverified,
     AuthenticationFailed,
@@ -83,6 +87,7 @@ impl AttentionReason {
         match self {
             Self::Interrupted => "interrupted",
             Self::VerificationIncomplete => "verification_incomplete",
+            Self::VerificationLimitExceeded => "verification_limit_exceeded",
             Self::VerificationDifference => "verification_difference",
             Self::ProcessIdentityUnverified => "process_identity_unverified",
             Self::AuthenticationFailed => "authentication_failed",
@@ -99,6 +104,7 @@ impl AttentionReason {
         Some(match value {
             "interrupted" => Self::Interrupted,
             "verification_incomplete" => Self::VerificationIncomplete,
+            "verification_limit_exceeded" => Self::VerificationLimitExceeded,
             "verification_difference" => Self::VerificationDifference,
             "process_identity_unverified" => Self::ProcessIdentityUnverified,
             "authentication_failed" => Self::AuthenticationFailed,
@@ -116,6 +122,9 @@ impl AttentionReason {
         match self {
             Self::Interrupted => "Interrupted; recovery review required",
             Self::VerificationIncomplete => "Verification evidence is incomplete",
+            Self::VerificationLimitExceeded => {
+                "Transfer completed; verification exceeded a safety limit"
+            }
             Self::VerificationDifference => "Verification found differences",
             Self::ProcessIdentityUnverified => "Process ownership could not be verified",
             Self::AuthenticationFailed => "Authentication failed",
@@ -135,6 +144,9 @@ impl AttentionReason {
             }
             Self::VerificationIncomplete | Self::VerificationDifference => {
                 "Review the evidence and reconcile before retrying or completing"
+            }
+            Self::VerificationLimitExceeded => {
+                "Follow the limit guidance in the run detail, then rerun to obtain evidence"
             }
             Self::AuthenticationFailed => {
                 "Verify credentials and endpoint permissions before retrying"

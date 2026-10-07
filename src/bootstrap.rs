@@ -475,6 +475,7 @@ impl App {
             oauth_refresh_editor_refresh_token: SecretString::default(),
             active_view: WorkspaceView::Overview,
             pending_evidence: None,
+            pending_verification_failure: None,
             pending_mismatches: Vec::new(),
             pending_batch_evidence: HashMap::new(),
             pending_batch_mismatches: HashMap::new(),

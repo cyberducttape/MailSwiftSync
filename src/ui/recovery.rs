@@ -62,9 +62,11 @@ fn already_tried(group: &RecoveryGroup) -> &'static str {
             | AttentionReason::PolicyBlocked
             | AttentionReason::MessageRejected,
         ) => "ui.recovery-tried-not-retried",
-        Some(AttentionReason::VerificationDifference | AttentionReason::VerificationIncomplete) => {
-            "ui.recovery-tried-verification"
-        }
+        Some(
+            AttentionReason::VerificationDifference
+            | AttentionReason::VerificationIncomplete
+            | AttentionReason::VerificationLimitExceeded,
+        ) => "ui.recovery-tried-verification",
         Some(AttentionReason::ProcessIdentityUnverified) => "ui.recovery-tried-process",
         Some(AttentionReason::Unknown) | None => match group.state.as_str() {
             "delta_required" => "ui.recovery-tried-delta",
@@ -78,7 +80,11 @@ fn reviews_evidence(group: &RecoveryGroup) -> bool {
     group.state == "verification_difference"
         || matches!(
             group.reason,
-            Some(AttentionReason::VerificationDifference | AttentionReason::VerificationIncomplete)
+            Some(
+                AttentionReason::VerificationDifference
+                    | AttentionReason::VerificationIncomplete
+                    | AttentionReason::VerificationLimitExceeded
+            )
         )
 }
 
@@ -101,6 +107,11 @@ fn remediation(group: &RecoveryGroup) -> (&'static str, &'static str, WorkspaceV
                 WorkspaceView::Verification,
             )
         }
+        Some(AttentionReason::VerificationLimitExceeded) => (
+            "The transfer completed, but verification stopped at a safety limit; follow the limit guidance in the run detail, then rerun to obtain evidence.",
+            "Review verification",
+            WorkspaceView::Verification,
+        ),
         Some(AttentionReason::ConfigurationInvalid | AttentionReason::PolicyBlocked) => (
             "The migration plan or organization safety policy blocks execution; correct it before preflight.",
             "Review migration plan",

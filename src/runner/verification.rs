@@ -137,10 +137,10 @@ pub(crate) fn run_imap_message_verification(
         ] {
             let count = stage.count(side).map_err(|error| error.to_string())?;
             if count > crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT as u64 {
-                return Err(format!(
+                return Err(core::VerificationLimit::BodyHashMessageCount.tag(format!(
                     "body-hash verification refuses to load more than {} messages per endpoint into the forensic reconciler (requested {count})",
                     crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
-                ));
+                )));
             }
         }
         let source_messages = stage

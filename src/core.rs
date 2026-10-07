@@ -47,6 +47,7 @@ mod run_queries;
 mod runs;
 mod state;
 mod transfer_passes;
+mod verification_limit;
 mod waves;
 mod webhook_outbox;
 pub use capabilities::{NamespaceEntry, NamespaceInfo, ServerCapabilities};
@@ -78,8 +79,9 @@ pub use transfer_passes::{
     EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
     TransferPassIntent, TransferPassRecord, TransferProgressSnapshot, folder_digest, sha256_hex,
 };
+pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 27;
+pub const CURRENT_SCHEMA_VERSION: i64 = 28;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

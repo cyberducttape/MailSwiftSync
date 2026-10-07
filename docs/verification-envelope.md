@@ -76,6 +76,43 @@ proof fails closed. Operators requiring verification above those body limits
 must select metadata-only verification; complete metadata reconciliation then
 remains subject to its own endpoint message-count and runtime/storage limits.
 
+## When verification reaches a limit
+
+Every bound above fails closed, but the transfer has usually finished by the
+time verification runs. MailSwiftSync therefore keeps four outcomes apart and
+never turns missing evidence into success:
+
+| Outcome | Run status | Mailbox state | Attention reason |
+| --- | --- | --- | --- |
+| Transfer failed | `failed` (or `cancelled`) | `failed` / `attention` | Transfer class, for example `transport_failed` |
+| Transfer completed, verification failed | `completed` (imapsync message verification) or `verification_failed` (Dovecot verification) | `attention` | `verification_incomplete` |
+| Transfer completed, verification stopped at a safety limit | `completed` | `attention` | `verification_limit_exceeded` |
+| Transfer completed and verification ran | `completed` | `verified`, or `verification_difference` for differences | none, or `verification_difference` |
+
+A limit is tagged where it is enforced as `[verification_limit=<code>]` and
+recorded in the run detail together with operator guidance. The operator
+project report exposes it per run as `verification_limit` (`code`,
+`resumable`, `guidance`). The codes are stable for automation:
+
+| Code | Bound | Rerun resumes? | Guidance |
+| --- | --- | --- | --- |
+| `folder_inventory` | LIST inventory 32 MiB or 100,000 folders | No | Exclude folders or split the account |
+| `response_size` | One IMAP response 64 MiB | No | Lower the body-hash per-message bound or use metadata verification |
+| `fetched_state` | Transient fetched state 256 MiB | Yes | Rerun; use metadata verification if it recurs |
+| `message_count` | 1,000,000 messages per endpoint | No | Split into smaller folder scopes or accept the difference explicitly |
+| `body_hash_message_count` | 100,000 messages per endpoint in body-hash mode | No | Disable body-hash verification to obtain metadata evidence |
+| `body_hash_message_size` | Per-message body-hash bound | No | Raise the bound (up to 64 MiB) or disable body hashing |
+| `body_hash_total_size` | Total body-hash bound | No | Raise the bound (up to 8 GiB) or disable body hashing |
+| `reconciliation_state` | Reconciliation state or 64 MiB mismatch detail | No | Inspect the transfer and run another delta pass |
+| `deadline` | Verification exceeded the migration timeout | Yes | Rerun to resume from staged pages, or raise the timeout |
+
+"Rerun resumes" means the retained verification stage lets the next run pick
+up where this one stopped; the other limits recur until the plan or scope
+changes. A folder that stops at a limit tags the whole account result, even
+when its own detail is truncated from the folder-failure summary. A single
+IMAP command that stalls for 15 seconds is treated as a provider or transport
+failure, not a limit, because retrying can succeed.
+
 The 1,000,000-message endpoint ceiling, page-state estimate, folder limits, and
 body-proof bounds are implementation limits, not a qualified enterprise
 capacity commitment. Larger scale claims require repeatable end-to-end tests

@@ -159,6 +159,11 @@ fn classify_failure_text(provider: &str, error: &str) -> FailureClass {
     if let Some(class) = controller_failure_class(error) {
         return class;
     }
+    // A verifier safety limit is tagged at its source. It is verification
+    // incompleteness, never a transport or capacity failure to retry.
+    if core::VerificationLimit::from_detail(error).is_some() {
+        return FailureClass::Verification;
+    }
 
     // Runner diagnostics append a presentation-only tail after this marker.
     // It can contain arbitrary mailbox/server prose and must never influence
@@ -534,13 +539,43 @@ fn classified_failure_detail_internal(
     } else {
         String::new()
     };
+    let attention_reason = if class == FailureClass::Verification
+        && core::VerificationLimit::from_detail(error).is_some()
+    {
+        core::AttentionReason::VerificationLimitExceeded
+    } else {
+        class.attention_reason()
+    };
     format!(
         "[attention_reason={}] [class={}] {provider_context}{}{error}{}",
-        class.attention_reason().as_str(),
+        attention_reason.as_str(),
         class.label(),
         signal.0,
         signal.1
     )
+}
+
+/// Durable run detail for a transfer that completed without verification
+/// evidence. A tagged safety limit becomes `verification_limit_exceeded` with
+/// its guidance; any other verifier error stays `verification_incomplete`.
+/// Neither is ever recorded as a verified or failed transfer.
+pub(crate) fn incomplete_verification_detail(error: &str) -> String {
+    match core::VerificationLimit::from_detail(error) {
+        Some(limit) => limit.attention_detail(error),
+        None => format!(
+            "[attention_reason={}] message-level verification incomplete: {error}",
+            core::AttentionReason::VerificationIncomplete.as_str()
+        ),
+    }
+}
+
+/// Bound a verifier error for durable storage without losing its limit tag.
+pub(crate) fn bounded_verification_error(error: &str, max_chars: usize) -> String {
+    let error = match core::VerificationLimit::from_detail(error) {
+        Some(limit) if !error.starts_with(&limit.marker()) => limit.tag(error),
+        _ => error.to_owned(),
+    };
+    error.chars().take(max_chars).collect()
 }
 
 /// Classify a failure with the provider selected at the execution boundary.
@@ -557,6 +592,41 @@ pub(crate) fn classified_failure_detail(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verification_limits_are_verification_failures_with_their_own_reason() {
+        let tagged = crate::core::VerificationLimit::Deadline
+            .tag("message-level verification exceeded its execution deadline after a timeout");
+        // Prose such as "timeout" must not turn a limit into a transport retry.
+        assert_eq!(
+            super::classify_failure(&tagged),
+            super::FailureClass::Verification
+        );
+        assert!(
+            super::classified_failure_detail(&tagged).starts_with(
+                "[attention_reason=verification_limit_exceeded] [class=verification] "
+            )
+        );
+        assert!(
+            super::incomplete_verification_detail(&tagged)
+                .starts_with("[attention_reason=verification_limit_exceeded] ")
+        );
+        assert!(
+            super::incomplete_verification_detail("connection reset")
+                .starts_with("[attention_reason=verification_incomplete] ")
+        );
+        let long = format!(
+            "{} {}",
+            "x".repeat(4096),
+            crate::core::VerificationLimit::MessageCount.tag("too many messages")
+        );
+        let bounded = super::bounded_verification_error(&long, 2048);
+        assert_eq!(bounded.chars().count(), 2048);
+        assert_eq!(
+            crate::core::VerificationLimit::from_detail(&bounded),
+            Some(crate::core::VerificationLimit::MessageCount)
+        );
+    }
+
     #[test]
     fn terminal_provider_selection_requires_unambiguous_endpoint_attribution() {
         assert_eq!(

@@ -1,8 +1,6 @@
 //! Bounded DNS resolution and IPv4/IPv6 connection racing for IMAP probes.
 
-#[cfg(not(test))]
 use std::process::{Command, Stdio};
-#[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     io::Write,
@@ -15,7 +13,7 @@ use std::{
 /// at once. Unlike an in-process `getaddrinfo` call, each child can be killed
 /// when its caller's deadline expires, so a broken resolver cannot consume
 /// this capacity permanently.
-#[cfg(not(test))]
+#[cfg_attr(all(test, not(unix)), allow(dead_code))]
 const MAX_OUTSTANDING_DNS_LOOKUPS: usize = 16;
 pub(super) const MAX_DNS_ADDRESSES: usize = 64;
 /// RFC 8305 connection attempt delay between address attempts.
@@ -29,11 +27,10 @@ static OUTSTANDING_DNS_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
 pub(super) type DnsResult = std::io::Result<Vec<SocketAddr>>;
 
 /// Releases one outstanding-lookup slot when its resolver child exits.
-#[cfg(not(test))]
-struct OutstandingLookup(&'static AtomicUsize);
+#[cfg_attr(all(test, not(unix)), allow(dead_code))]
+struct OutstandingLookup<'a>(&'a AtomicUsize);
 
-#[cfg(not(test))]
-impl Drop for OutstandingLookup {
+impl Drop for OutstandingLookup<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
@@ -41,10 +38,9 @@ impl Drop for OutstandingLookup {
 
 /// Do not leave a resolver child behind if waiting or reading its bounded
 /// response fails unexpectedly.
-#[cfg(not(test))]
+#[cfg_attr(all(test, not(unix)), allow(dead_code))]
 struct ResolverChild(std::process::Child);
 
-#[cfg(not(test))]
 impl Drop for ResolverChild {
     fn drop(&mut self) {
         if !matches!(self.0.try_wait(), Ok(Some(_))) {
@@ -59,9 +55,11 @@ pub(super) fn resolve_dns_with_deadline(
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> DnsResult {
-    // Unit-test binaries do not dispatch through the application CLI. Keep
-    // protocol tests independent of a recursively spawned test harness; the
-    // production resolver subprocess is exercised through its CLI contract.
+    // Unit-test binaries do not dispatch through the application CLI, so
+    // protocol tests resolve directly. The production helper path below is
+    // the same `resolve_with_helper` that resolver tests drive with stub
+    // helpers, and tests/dns_resolver.rs exercises the packaged binary's
+    // `--internal-dns-resolve` contract.
     #[cfg(test)]
     {
         let _ = (deadline, cancelled);
@@ -70,51 +68,73 @@ pub(super) fn resolve_dns_with_deadline(
 
     #[cfg(not(test))]
     {
-        OUTSTANDING_DNS_LOOKUPS
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (current < MAX_OUTSTANDING_DNS_LOOKUPS).then_some(current + 1)
-            })
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    "too many system DNS lookups are in progress",
-                )
-            })?;
-        let _slot = OutstandingLookup(&OUTSTANDING_DNS_LOOKUPS);
-        if cancelled() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "DNS resolution cancelled",
-            ));
-        }
-        if Instant::now() >= deadline {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "DNS resolution timed out",
-            ));
-        }
-
-        let executable = std::env::current_exe()?;
-        let mut command = Command::new(executable);
-        crate::process::apply_dns_environment(&mut command);
-        command
-            .arg("--internal-dns-resolve")
-            .arg(address)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        // On Unix, a Linux parent-death signal also prevents an abandoned helper
-        // if the controller itself crashes. Windows needs no breakaway Job Object
-        // for this single child: Child::kill directly terminates the resolver.
-        #[cfg(unix)]
-        crate::process::configure_process_group(&mut command);
-        let mut child = ResolverChild(command.spawn()?);
-        let output = wait_for_child_output(&mut child.0, deadline, cancelled)?;
-        parse_dns_output(&output)
+        resolve_with_helper(
+            &std::env::current_exe()?,
+            address,
+            deadline,
+            cancelled,
+            &OUTSTANDING_DNS_LOOKUPS,
+        )
     }
 }
 
-#[cfg(any(not(test), unix))]
+/// Resolve `address` in a bounded child process: `helper` is invoked as
+/// `helper --internal-dns-resolve <address>` with the DNS environment
+/// allowlist, its own session (and, on Linux, a parent-death signal), and
+/// is killed and reaped when `deadline` passes or `cancelled` returns true.
+/// At most `MAX_OUTSTANDING_DNS_LOOKUPS` helpers counted in `outstanding`
+/// run at once; a slot is released however the lookup ends.
+#[cfg_attr(all(test, not(unix)), allow(dead_code))]
+fn resolve_with_helper(
+    helper: &std::path::Path,
+    address: &str,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+    outstanding: &AtomicUsize,
+) -> DnsResult {
+    outstanding
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            (current < MAX_OUTSTANDING_DNS_LOOKUPS).then_some(current + 1)
+        })
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "too many system DNS lookups are in progress",
+            )
+        })?;
+    let _slot = OutstandingLookup(outstanding);
+    if cancelled() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "DNS resolution cancelled",
+        ));
+    }
+    if Instant::now() >= deadline {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "DNS resolution timed out",
+        ));
+    }
+
+    let mut command = Command::new(helper);
+    crate::process::apply_dns_environment(&mut command);
+    command
+        .arg("--internal-dns-resolve")
+        .arg(address)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // On Unix, a Linux parent-death signal also prevents an abandoned helper
+    // if the controller itself crashes. Windows needs no breakaway Job Object
+    // for this single child: Child::kill directly terminates the resolver.
+    #[cfg(unix)]
+    crate::process::configure_process_group(&mut command);
+    let mut child = ResolverChild(command.spawn()?);
+    let output = wait_for_child_output(&mut child.0, deadline, cancelled)?;
+    parse_dns_output(&output)
+}
+
+#[cfg_attr(all(test, not(unix)), allow(dead_code))]
 fn wait_for_child_output(
     child: &mut std::process::Child,
     deadline: Instant,
@@ -315,8 +335,6 @@ pub(super) fn connect_racing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use std::process::{Command, Stdio};
 
     #[test]
     fn dns_lookup_resolves_literals() {
@@ -355,6 +373,320 @@ mod tests {
             });
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    /// Stub `--internal-dns-resolve` helpers driving the production parent
+    /// path (`resolve_with_helper`): argument passing, output parsing, child
+    /// failures, deadline, cancellation, the outstanding-lookup bound, and
+    /// cleanup. A real system resolver cannot be made to hang on demand, so
+    /// these stubs stand in for one.
+    #[cfg(unix)]
+    mod helper {
+        use super::*;
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        use std::path::{Path, PathBuf};
+
+        pub(super) struct Stub {
+            pub(super) directory: PathBuf,
+            pub(super) program: PathBuf,
+        }
+
+        impl Drop for Stub {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.directory);
+            }
+        }
+
+        /// A helper whose body runs with `$1` = `--internal-dns-resolve` and
+        /// `$2` = the address, exactly as the production command passes them.
+        pub(super) fn stub(body: &str) -> Stub {
+            // Not under the shared secret runtime base: other tests sweep
+            // stale run directories there while these helpers run.
+            let directory = std::env::temp_dir()
+                .join(format!("mailswiftsync-dns-helper-{}", uuid::Uuid::new_v4()));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .unwrap();
+            let program = directory.join("resolver-helper");
+            std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+            Stub { directory, program }
+        }
+
+        pub(super) fn resolve(
+            helper: &Path,
+            address: &str,
+            timeout: Duration,
+            cancelled: &dyn Fn() -> bool,
+            outstanding: &AtomicUsize,
+        ) -> DnsResult {
+            resolve_with_helper(
+                helper,
+                address,
+                Instant::now() + timeout,
+                cancelled,
+                outstanding,
+            )
+        }
+
+        /// True once `pid` has exited (absent, or a zombie awaiting its new
+        /// parent's reap).
+        pub(super) fn process_gone(pid: i32) -> bool {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(stat) => stat
+                    .rsplit_once(") ")
+                    .is_some_and(|(_, rest)| rest.starts_with('Z')),
+                Err(_) => (unsafe { libc::kill(pid, 0) }) == -1,
+            }
+        }
+
+        pub(super) fn wait_for_pid(path: &Path) -> i32 {
+            let started = Instant::now();
+            loop {
+                if let Some(pid) = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| text.trim().parse().ok())
+                {
+                    return pid;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "helper never started"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_receives_the_contract_arguments_and_its_addresses_are_parsed() {
+        let stub = helper::stub(
+            r#"[ "$1" = --internal-dns-resolve ] && [ $# -eq 2 ] || exit 9
+printf '%s\n' "$2" '[::1]:993'"#,
+        );
+        let outstanding = AtomicUsize::new(0);
+        let addresses = helper::resolve(
+            &stub.program,
+            "127.0.0.1:993",
+            Duration::from_secs(5),
+            &|| false,
+            &outstanding,
+        )
+        .unwrap();
+        assert_eq!(
+            addresses,
+            vec![
+                "127.0.0.1:993".parse().unwrap(),
+                "[::1]:993".parse().unwrap()
+            ]
+        );
+        assert_eq!(outstanding.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_failures_are_lookup_errors_and_release_their_slot() {
+        let outstanding = AtomicUsize::new(0);
+        for (body, kind) in [
+            // An unresolvable host: the helper exits 1 without output.
+            ("exit 1", std::io::ErrorKind::Other),
+            // The helper crashes mid-lookup.
+            ("kill -9 $$", std::io::ErrorKind::Other),
+            // Unexpected output is never treated as an address.
+            (
+                "echo 'resolver warning: retrying'",
+                std::io::ErrorKind::InvalidData,
+            ),
+            (
+                "i=0; while [ $i -le 64 ]; do echo 127.0.0.1:$i; i=$((i+1)); done",
+                std::io::ErrorKind::InvalidData,
+            ),
+        ] {
+            let stub = helper::stub(body);
+            let error = helper::resolve(
+                &stub.program,
+                "mail.example.test:993",
+                Duration::from_secs(5),
+                &|| false,
+                &outstanding,
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), kind, "{body}: {error}");
+            assert_eq!(outstanding.load(Ordering::Acquire), 0, "{body}");
+        }
+        let missing = std::env::temp_dir().join("mailswiftsync-missing-dns-helper");
+        assert!(
+            helper::resolve(
+                &missing,
+                "a:1",
+                Duration::from_secs(1),
+                &|| false,
+                &outstanding
+            )
+            .is_err()
+        );
+        assert_eq!(outstanding.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hung_helper_is_killed_at_the_deadline_or_on_cancellation() {
+        let stub = helper::stub(r#"echo $$ > "$(dirname "$0")/pid"; exec /bin/sleep 30"#);
+        let pid_file = stub.directory.join("pid");
+        let outstanding = AtomicUsize::new(0);
+
+        let started = Instant::now();
+        let error = helper::resolve(
+            &stub.program,
+            "slow.example.test:993",
+            Duration::from_millis(300),
+            &|| false,
+            &outstanding,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(helper::process_gone(helper::wait_for_pid(&pid_file)));
+        assert_eq!(outstanding.load(Ordering::Acquire), 0);
+
+        std::fs::remove_file(&pid_file).unwrap();
+        let cancel_at = Instant::now() + Duration::from_millis(300);
+        let error = helper::resolve(
+            &stub.program,
+            "slow.example.test:993",
+            Duration::from_secs(30),
+            &|| Instant::now() >= cancel_at,
+            &outstanding,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+        assert!(helper::process_gone(helper::wait_for_pid(&pid_file)));
+        assert_eq!(outstanding.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parallel_lookups_are_bounded_and_every_slot_is_returned() {
+        let hung = helper::stub("exec /bin/sleep 30");
+        let answering = helper::stub(r#"printf '%s\n' "$2""#);
+        let outstanding = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let lookups = (0..MAX_OUTSTANDING_DNS_LOOKUPS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        helper::resolve(
+                            &hung.program,
+                            "slow.example.test:993",
+                            Duration::from_secs(2),
+                            &|| false,
+                            &outstanding,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let started = Instant::now();
+            while outstanding.load(Ordering::Acquire) < MAX_OUTSTANDING_DNS_LOOKUPS {
+                assert!(started.elapsed() < Duration::from_secs(2));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let refused = helper::resolve(
+                &answering.program,
+                "127.0.0.1:993",
+                Duration::from_secs(1),
+                &|| false,
+                &outstanding,
+            )
+            .unwrap_err();
+            assert_eq!(refused.kind(), std::io::ErrorKind::WouldBlock);
+            for lookup in lookups {
+                assert_eq!(
+                    lookup.join().unwrap().unwrap_err().kind(),
+                    std::io::ErrorKind::TimedOut
+                );
+            }
+        });
+        assert_eq!(outstanding.load(Ordering::Acquire), 0);
+        // Parallel lookups that answer all succeed once capacity is free.
+        std::thread::scope(|scope| {
+            let lookups = (0..MAX_OUTSTANDING_DNS_LOOKUPS)
+                .map(|port| {
+                    let outstanding = &outstanding;
+                    let program = &answering.program;
+                    scope.spawn(move || {
+                        helper::resolve(
+                            program,
+                            &format!("127.0.0.1:{}", 1000 + port),
+                            Duration::from_secs(10),
+                            &|| false,
+                            outstanding,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            for (port, lookup) in lookups.into_iter().enumerate() {
+                assert_eq!(
+                    lookup.join().unwrap().unwrap(),
+                    vec![SocketAddr::from(([127, 0, 0, 1], 1000 + port as u16))]
+                );
+            }
+        });
+        assert_eq!(outstanding.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    const CRASH_ROLE_DIRECTORY: &str = "MAILSWIFTSYNC_TEST_RESOLVER_CRASH_DIRECTORY";
+
+    /// Re-executed by `controller_crash_terminates_a_hung_helper` as the
+    /// controller that crashes mid-lookup; a no-op in a normal test run.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "role process for controller_crash_terminates_a_hung_helper"]
+    fn resolver_crash_parent_role() {
+        let Some(directory) = std::env::var_os(CRASH_ROLE_DIRECTORY) else {
+            return;
+        };
+        let program = std::path::Path::new(&directory).join("resolver-helper");
+        let _ = resolve_with_helper(
+            &program,
+            "slow.example.test:993",
+            Instant::now() + Duration::from_secs(60),
+            &|| false,
+            &AtomicUsize::new(0),
+        );
+    }
+
+    /// If the controller is killed while a lookup is in flight, Linux's
+    /// parent-death signal terminates the helper instead of orphaning it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn controller_crash_terminates_a_hung_helper() {
+        let stub = helper::stub(r#"echo $$ > "$(dirname "$0")/pid"; exec /bin/sleep 60"#);
+        let mut parent = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "imap_probe::resolver::tests::resolver_crash_parent_role",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env(CRASH_ROLE_DIRECTORY, &stub.directory)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let helper_pid = helper::wait_for_pid(&stub.directory.join("pid"));
+        assert!(!helper::process_gone(helper_pid));
+        parent.kill().unwrap();
+        parent.wait().unwrap();
+        let started = Instant::now();
+        while !helper::process_gone(helper_pid) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "resolver helper outlived its crashed controller"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

@@ -578,7 +578,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                                 index + 1
                             );
                             *verification_failure = Some(
-                                safe.chars().take(2048).collect::<String>(),
+                                crate::controller::failure::bounded_verification_error(&safe, 2048),
                             );
                             send_run_line(&tx, form, &child_run_id, &job_id, format!(
                                     "[{}] message-level verification unavailable; transfer succeeded and requires review: {safe}",
@@ -1066,11 +1066,7 @@ impl BatchAttemptRunner {
                 } else {
                     task.verification_failure.as_ref().map_or_else(
                         || "process completed".into(),
-                        |reason| {
-                            format!(
-                                "[attention_reason=verification_incomplete] message-level verification incomplete: {reason}"
-                            )
-                        },
+                        |reason| crate::controller::failure::incomplete_verification_detail(reason),
                     )
                 };
                 let fingerprint = task

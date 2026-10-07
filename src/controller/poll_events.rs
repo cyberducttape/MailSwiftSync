@@ -588,6 +588,7 @@ impl App {
                         if active_run.is_some()
                             && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
+                            self.pending_verification_failure = Some(safe.clone());
                             pending_db_events.push(PendingDbEvent::new(
                                 run_id.to_owned(),
                                 "verification_pending".into(),

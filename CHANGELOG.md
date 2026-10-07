@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Distinguish verification that stopped at a safety limit from a failed
+  transfer and from a verifier error (ledger version 28). Every verifier
+  bound (folder inventory, response size, fetched state, message count,
+  body-hash count and size, reconciliation state, deadline) tags its error
+  with a stable `[verification_limit=<code>]`. A completed transfer whose
+  verification hits one is recorded as the new `verification_limit_exceeded`
+  attention reason, with the limit and operator guidance in the run detail and
+  a structured `verification_limit` object in the operator report. It is
+  never recorded as verified. Single-mailbox runs now also record why
+  verification produced no evidence; previously the run detail was empty and
+  the reason fell back to `unknown`.
+- Test the production DNS resolver path. The bounded helper-process parent
+  code is now shared with tests, which drive it with stub helpers for argument
+  handling, bad output, helper crashes, deadline, cancellation, the
+  16-lookup bound, slot release, and (on Linux) cleanup after a controller
+  crash. A new packaged-binary test runs `--internal-dns-resolve` for
+  literal, named, unresolvable, malformed, and parallel lookups.
 - Verify message flags and custom keywords independently (ledger version
   27). Live imapsync verification now parses the FLAGS it already fetched
   (the parser was previously test-only), stages them, and runs a separate

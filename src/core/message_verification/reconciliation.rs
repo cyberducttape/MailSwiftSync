@@ -446,10 +446,12 @@ impl MessageVerification {
                 .sum::<usize>(),
         );
         if estimated_detail_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
-            return Err(format!(
-                "verification mismatch detail exceeds the estimated {}-byte evidence budget",
-                MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
-            ));
+            return Err(
+                crate::core::VerificationLimit::ReconciliationState.tag(format!(
+                    "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+                    MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+                )),
+            );
         }
         all_mismatches.append(&mut pass1_mismatches);
 
@@ -487,10 +489,12 @@ impl MessageVerification {
                 .sum::<usize>(),
         );
         if estimated_detail_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
-            return Err(format!(
-                "verification mismatch detail exceeds the estimated {}-byte evidence budget",
-                MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
-            ));
+            return Err(
+                crate::core::VerificationLimit::ReconciliationState.tag(format!(
+                    "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+                    MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+                )),
+            );
         }
         all_mismatches.append(&mut pass2_mismatches);
         for key in &pass2_matched_src {

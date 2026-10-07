@@ -108,10 +108,12 @@ impl MessageVerification {
             .map(estimated_mismatch_bytes)
             .sum::<usize>();
         if estimated_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
-            return Err(format!(
-                "verification mismatch detail exceeds the estimated {}-byte evidence budget",
-                MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
-            ));
+            return Err(
+                crate::core::VerificationLimit::ReconciliationState.tag(format!(
+                    "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+                    MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+                )),
+            );
         }
         let mut clean_pairs = clean_pairs;
         clean_pairs.sort();

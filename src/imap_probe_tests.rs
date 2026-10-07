@@ -833,3 +833,85 @@ fn message_fetch_budget_honors_operator_cancellation() {
     let budget = MessageFetchBudget::new(Duration::from_secs(60), &cancelled);
     assert!(budget.check().unwrap_err().contains("cancelled"));
 }
+
+#[test]
+fn verifier_safety_limits_are_tagged_at_their_source() {
+    use crate::core::VerificationLimit;
+    let limit = |error: &str| VerificationLimit::from_detail(error);
+
+    let state = MessageStateBudget::new();
+    let error = state
+        .reserve(MAX_ESTIMATED_FETCHED_STATE_BYTES + 1)
+        .unwrap_err();
+    assert_eq!(limit(&error), Some(VerificationLimit::FetchedState));
+
+    let body = super::BodyHashBudget::new(10);
+    assert_eq!(
+        limit(&body.reserve(11).unwrap_err()),
+        Some(VerificationLimit::BodyHashTotalSize)
+    );
+
+    let oversized = b"* 1 FETCH (UID 4 BODY[] {6}\r\n123456)\r\nv002 OK done\r\n";
+    let error =
+        parse_message_fetch_body_hashes_response_bytes(oversized, "INBOX", Some(7), 5).unwrap_err();
+    assert_eq!(limit(&error), Some(VerificationLimit::BodyHashMessageSize));
+
+    let cancel = AtomicBool::new(false);
+    let expired = MessageFetchBudget::new(Duration::ZERO, &cancel);
+    let error = expired.check().unwrap_err();
+    assert_eq!(limit(&error), Some(VerificationLimit::Deadline));
+    // The tag does not change how a folder failure is handled.
+    assert!(matches!(
+        classify_mailbox_fetch_error(error),
+        MailboxFetchError::Control(_)
+    ));
+    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(limit(&expired.check().unwrap_err()), None);
+
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::new(Duration::from_secs(5), &cancel);
+    let mut buffer = [0; 4096];
+    let mut large = Cursor::new(vec![b'x'; 64]);
+    let error =
+        super::read_imap_tagged_bytes_with_budget(&mut large, "v002", &mut buffer, 16, &budget)
+            .unwrap_err();
+    assert_eq!(limit(&error), Some(VerificationLimit::ResponseSize));
+
+    assert_eq!(
+        limit(&super::tag_folder_inventory_limit(
+            "IMAP LIST response exceeded the 100000-mailbox limit".into()
+        )),
+        Some(VerificationLimit::FolderInventory)
+    );
+    assert_eq!(
+        limit(&super::tag_folder_inventory_limit(
+            "IMAP connection closed".into()
+        )),
+        None
+    );
+}
+
+#[test]
+fn account_failure_keeps_a_folder_limit_even_when_its_detail_is_omitted() {
+    let mut failures = (0..20)
+        .map(|index| {
+            (
+                format!("A{index:02}"),
+                "mailbox changed during verification".to_owned(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    failures.insert(
+        "Z-large".into(),
+        crate::core::VerificationLimit::ResponseSize.tag("IMAP response exceeded"),
+    );
+    let detail = format_folder_failures("imap.example", &failures, failures.len());
+    assert!(!detail.contains("Z-large"), "{detail}");
+    assert_eq!(
+        crate::core::VerificationLimit::from_detail(&detail),
+        Some(crate::core::VerificationLimit::ResponseSize)
+    );
+    failures.remove("Z-large");
+    let detail = format_folder_failures("imap.example", &failures, failures.len());
+    assert_eq!(crate::core::VerificationLimit::from_detail(&detail), None);
+}

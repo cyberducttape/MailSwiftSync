@@ -5364,3 +5364,38 @@ fn readonly_rejects_exact_evidence_whose_flag_row_records_mismatches() {
     assert!(StateStore::open_readonly(&path).is_err());
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn verification_limit_attention_reason_survives_validated_reopen() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-verification-limit-reason-{}",
+        Uuid::new_v4()
+    ));
+    let path = directory.join("state.db");
+    create_private_test_directory(&directory);
+    let db = StateStore::open(&path).unwrap();
+    let project = db
+        .create_project("limits", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET state='attention',attention_reason='verification_limit_exceeded' WHERE id=?1",
+            [&job],
+        )
+        .unwrap();
+    drop(db);
+    assert!(StateStore::open_readonly(&path).is_ok());
+    let db = StateStore::open(&path).unwrap();
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET attention_reason='verification_limit_bogus' WHERE id=?1",
+            [&job],
+        )
+        .unwrap();
+    drop(db);
+    assert!(StateStore::open_readonly(&path).is_err());
+    std::fs::remove_dir_all(directory).unwrap();
+}

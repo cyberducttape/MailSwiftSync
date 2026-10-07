@@ -957,7 +957,7 @@ impl StateStore {
             "SELECT EXISTS(SELECT 1 FROM evidence WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE mismatch_type NOT IN ('message_id_only','message_present_wrong_folder','missing','extra','duplicated'))",
-            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE attention_reason IS NOT NULL AND attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))",
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE attention_reason IS NOT NULL AND attention_reason NOT IN ('interrupted','verification_incomplete','verification_limit_exceeded','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))",
             "SELECT EXISTS(SELECT 1 FROM webhook_deliveries WHERE status NOT IN ('queued','delivering','delivered','dead_letter'))",
         ];
         for sql in ENUM_CHECKS {
