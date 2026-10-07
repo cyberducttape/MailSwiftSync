@@ -200,11 +200,15 @@ crate::ui::name_modal(ui, &modal_heading);
                 action_plan_hash: plan.identity_hash,
             });
         }
-        let summary = self
-            .bulk_confirmation_summary
-            .as_ref()
-            .cloned()
-            .expect("confirmation summary is initialized above");
+        let Some(summary) = self.bulk_confirmation_summary.as_ref().cloned() else {
+            // Keep the destructive action fail-closed if another UI event
+            // invalidates the derived summary between frames.
+            self.bulk_live_confirm_open = false;
+            self.bulk_confirmation_identity = None;
+            self.bulk_message =
+                "Could not build the batch confirmation summary; no migration was started.".into();
+            return;
+        };
         let selected_count = self.bulk_selection_count();
         let selected_samples = self
             .queue
