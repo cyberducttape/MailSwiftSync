@@ -417,7 +417,9 @@ impl StateStore {
         // project-scoped webhook delivery claims, version 25 adds a trigram
         // search index over queue facts, version 26 adds migration waves
         // (named, approvable mailbox subsets with schedule and concurrency),
-        // and version 27 adds per-run IMAP flag verification results.
+        // version 27 adds per-run IMAP flag verification results, version 28
+        // the verification_limit_exceeded attention reason, and version 29
+        // project-scoped folder digests on message mismatches.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -471,7 +473,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS webhook_deliveries (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, endpoint_digest TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivering','delivered','dead_letter')), last_error TEXT, next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TEXT, lease_owner TEXT, lease_until TEXT);
                  CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, source_folder_digest TEXT, destination_folder_digest TEXT);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_rowid ON mailbox_jobs(project_id);
                  CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
@@ -841,6 +843,8 @@ impl StateStore {
             ("destination_uidvalidity", "INTEGER"),
             ("source_fingerprint", "TEXT"),
             ("destination_fingerprint", "TEXT"),
+            ("source_folder_digest", "TEXT"),
+            ("destination_folder_digest", "TEXT"),
         ] {
             if !mismatch_columns.iter().any(|existing| existing == column) {
                 tx.execute(
@@ -1060,7 +1064,7 @@ impl StateStore {
             tx.execute_batch(
                 "DROP INDEX IF EXISTS idx_message_mismatches_job_run;
                  ALTER TABLE message_mismatches RENAME TO message_mismatches_legacy;
-                 CREATE TABLE message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, source_folder_digest TEXT, destination_folder_digest TEXT);
                  INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,recorded_at) SELECT id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,recorded_at FROM message_mismatches_legacy;
                  DROP TABLE message_mismatches_legacy;
                  CREATE INDEX IF NOT EXISTS idx_message_mismatches_job_run ON message_mismatches(job_id, run_id, recorded_at);",

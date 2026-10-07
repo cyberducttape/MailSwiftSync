@@ -23,6 +23,8 @@ pub(crate) mod engine;
 pub(crate) mod fonts;
 mod keyring_ops;
 mod language;
+mod mailbox_evidence;
+mod mismatch_inspector;
 mod operations;
 mod output;
 pub(crate) mod overview;

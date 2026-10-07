@@ -303,6 +303,10 @@ pub(crate) struct App {
     pub(crate) verification_offset: u32,
     pub(crate) verification_cursor: Option<i64>,
     pub(crate) verification_cursor_stack: Vec<Option<i64>>,
+    pub(crate) mismatch_inspector: super::mismatch_inspector::MismatchInspector,
+    /// Folder names behind mismatch folder digests, as observed by
+    /// verifications in this process. Never persisted.
+    pub(crate) observed_folder_names: super::mismatch_inspector::ObservedFolderNames,
     pub(crate) source_provider: ProviderPreset,
     pub(crate) destination_provider: ProviderPreset,
 }

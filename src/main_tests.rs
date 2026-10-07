@@ -46,6 +46,13 @@ fn dovecot_form() -> Form {
     form
 }
 
+#[cfg(unix)]
+fn shell_transfer_pass() -> core::TransferPassIntent {
+    let mut intent = core::TransferPassIntent::for_test();
+    intent.executable_identity = crate::plan_identity::executable_content_identity("/bin/sh");
+    intent
+}
+
 #[test]
 fn filter_matching_is_case_insensitive_without_changing_input() {
     let value = "Customer-09@Example.Test";
@@ -1930,6 +1937,7 @@ fn live_dovecot_exit_code_two_is_a_delta_outcome() {
     });
     let cancel = AtomicBool::new(false);
     let args = vec!["-c".into(), "exit 2".into()];
+    let transfer_pass = shell_transfer_pass();
     let outcome = run_streaming(RunContext {
         executable: "/bin/sh",
         args: &args,
@@ -1946,7 +1954,7 @@ fn live_dovecot_exit_code_two_is_a_delta_outcome() {
         imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         diagnostic_logger: None,
         attempt_number: 1,
-        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
     })
     .unwrap();
@@ -1984,7 +1992,8 @@ fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
     let args = vec![
             "-c".into(),
             "printf '%s\\n' 'Host1 Nb folders: 2 folders' 'Host2 Nb folders: 2 folders' 'Host1 Nb messages: 7 messages' 'Host2 Nb messages: 7 messages' 'Host1 Total size: 100 bytes' 'Host2 Total size: 100 bytes' 'The sync looks good, all 7 identified messages in host1 are on host2.' 'Detected 0 errors'".into(),
-        ];
+    ];
+    let transfer_pass = shell_transfer_pass();
     let result = run_streaming(RunContext {
         executable: "/bin/sh",
         args: &args,
@@ -2001,7 +2010,7 @@ fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
         imapsync_output_profile: verification::ImapsyncOutputProfile::Packaged2314,
         diagnostic_logger: None,
         attempt_number: 1,
-        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
     })
     .unwrap();
@@ -2011,7 +2020,7 @@ fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
     assert!(matches!(
         &attempts[0],
         (1, controller::TransferAttemptStatus::Started(intent))
-            if **intent == core::TransferPassIntent::for_test()
+            if **intent == transfer_pass
     ));
     // The finish carries the engine's own counters, never its output.
     let (
@@ -2056,7 +2065,8 @@ fn streaming_rejects_evidence_for_an_unknown_imapsync_profile() {
     let args = vec![
             "-c".into(),
             "printf '%s\\n' 'Host1 Nb folders: 2 folders' 'Host2 Nb folders: 2 folders' 'Host1 Nb messages: 7 messages' 'Host2 Nb messages: 7 messages' 'Host1 Total size: 100 bytes' 'Host2 Total size: 100 bytes' 'The sync looks good, all 7 identified messages in host1 are on host2.' 'Detected 0 errors'".into(),
-        ];
+    ];
+    let transfer_pass = shell_transfer_pass();
     let result = run_streaming(RunContext {
         executable: "/bin/sh",
         args: &args,
@@ -2073,7 +2083,7 @@ fn streaming_rejects_evidence_for_an_unknown_imapsync_profile() {
         imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         diagnostic_logger: None,
         attempt_number: 1,
-        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
     })
     .unwrap();
@@ -2136,6 +2146,7 @@ fn disconnected_process_event_channel_cancels_child_before_returning() {
     drop(rx);
     let cancel = AtomicBool::new(false);
     let args = ["-c".into(), "sleep 30".into()];
+    let transfer_pass = shell_transfer_pass();
     let outcome = run_streaming(RunContext {
         executable: "/bin/sh",
         args: &args,
@@ -2152,7 +2163,7 @@ fn disconnected_process_event_channel_cancels_child_before_returning() {
         imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         diagnostic_logger: None,
         attempt_number: 1,
-        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
     });
 
@@ -2172,6 +2183,7 @@ fn rejected_process_registration_cancels_child_before_returning() {
     });
     let cancel = AtomicBool::new(false);
     let args = ["-c".into(), "sleep 30".into()];
+    let transfer_pass = shell_transfer_pass();
     let outcome = run_streaming(RunContext {
         executable: "/bin/sh",
         args: &args,
@@ -2188,7 +2200,7 @@ fn rejected_process_registration_cancels_child_before_returning() {
         imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         diagnostic_logger: None,
         attempt_number: 1,
-        transfer_pass: Some(&core::TransferPassIntent::for_test()),
+        transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
     });
     drop(tx);

@@ -55,6 +55,83 @@ pub(super) fn upsert_evidence_projection(
     Ok(())
 }
 
+const MISMATCH_COLUMNS: &str = "id,mismatch_type,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_fingerprint,destination_fingerprint";
+
+/// Filter for the verification drill-down.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MismatchFilter {
+    pub mismatch_type: Option<MismatchType>,
+    /// A `folder_digest`, or the empty string for rows without one.
+    pub folder_digest: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MismatchFolderSummary {
+    pub folder_digest: String,
+    pub mismatch_type: MismatchType,
+    pub count: u64,
+}
+
+/// A durable mismatch row as the drill-down reads it. Message-IDs and
+/// folder names are never stored; folders are project-scoped digests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredMismatch {
+    /// Keyset pagination key.
+    pub key: i64,
+    pub mismatch_type: MismatchType,
+    pub source_folder_digest: Option<String>,
+    pub destination_folder_digest: Option<String>,
+    pub source_uidvalidity: Option<u64>,
+    pub destination_uidvalidity: Option<u64>,
+    pub source_uid: Option<String>,
+    pub dest_uid: Option<String>,
+    pub source_size_bytes: Option<u64>,
+    pub dest_size_bytes: Option<u64>,
+    pub source_date: Option<String>,
+    pub dest_date: Option<String>,
+}
+
+fn mismatch_from_row(
+    row: &rusqlite::Row<'_>,
+    job_context: &Arc<str>,
+    run_context: &Arc<str>,
+) -> rusqlite::Result<MessageMismatch> {
+    let mismatch_type: String = row.get(1)?;
+    let Some(mismatch_type) = MismatchType::parse(&mismatch_type) else {
+        return Err(rusqlite::Error::InvalidQuery);
+    };
+    Ok(MessageMismatch {
+        id: row.get(0)?,
+        job_id: Arc::clone(job_context),
+        run_id: Arc::clone(run_context),
+        mismatch_type,
+        source_folder: row.get(2)?,
+        destination_folder: row.get(3)?,
+        source_uidvalidity: row.get::<_, Option<i64>>(4)?.map(sqlite_u64).transpose()?,
+        destination_uidvalidity: row.get::<_, Option<i64>>(5)?.map(sqlite_u64).transpose()?,
+        source_uid: row.get(6)?,
+        dest_uid: row.get(7)?,
+        source_message_id: row.get(8)?,
+        dest_message_id: row.get(9)?,
+        source_size_bytes: row.get::<_, Option<i64>>(10)?.map(sqlite_u64).transpose()?,
+        dest_size_bytes: row.get::<_, Option<i64>>(11)?.map(sqlite_u64).transpose()?,
+        source_date: row.get(12)?,
+        dest_date: row.get(13)?,
+        source_fingerprint: row.get(14)?,
+        destination_fingerprint: row.get(15)?,
+    })
+}
+
+fn finish_csv(
+    writer: csv::Writer<Vec<u8>>,
+    written: usize,
+    truncated: bool,
+) -> Result<(String, usize, bool), String> {
+    let bytes = writer.into_inner().map_err(|error| error.to_string())?;
+    let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+    Ok((text, written, truncated))
+}
+
 /// Decode the three nullable `evidence_flag_verification` columns selected by
 /// a LEFT JOIN starting at `offset`. A missing row means not verified.
 pub(super) fn flag_verification_from_row(
@@ -85,45 +162,159 @@ impl StateStore {
         let limit = limit.clamp(1, 10_000);
         let job_context: Arc<str> = Arc::from(job_id);
         let run_context: Arc<str> = Arc::from(run_id);
-        let mut statement = self.connection.prepare(
-            "SELECT id,mismatch_type,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_fingerprint,destination_fingerprint FROM message_mismatches WHERE job_id=?1 AND run_id=?2 ORDER BY recorded_at,id LIMIT ?3",
-        )?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {MISMATCH_COLUMNS} FROM message_mismatches WHERE job_id=?1 AND run_id=?2 ORDER BY recorded_at,id LIMIT ?3"
+        ))?;
         let mut rows = statement.query(params![job_id, run_id, (limit + 1) as i64])?;
         let mut mismatches = Vec::with_capacity(limit.min(256));
         while let Some(row) = rows.next()? {
-            let mismatch_type: String = row.get(1)?;
-            let Some(mismatch_type) = MismatchType::parse(&mismatch_type) else {
-                return Err(rusqlite::Error::InvalidQuery);
-            };
-            mismatches.push(MessageMismatch {
-                id: row.get(0)?,
-                job_id: Arc::clone(&job_context),
-                run_id: Arc::clone(&run_context),
-                mismatch_type,
-                source_folder: row.get(2)?,
-                destination_folder: row.get(3)?,
-                source_uidvalidity: row.get::<_, Option<i64>>(4)?.map(sqlite_u64).transpose()?,
-                destination_uidvalidity: row
-                    .get::<_, Option<i64>>(5)?
-                    .map(sqlite_u64)
-                    .transpose()?,
-                source_uid: row.get(6)?,
-                dest_uid: row.get(7)?,
-                source_message_id: row.get(8)?,
-                dest_message_id: row.get(9)?,
-                source_size_bytes: row.get::<_, Option<i64>>(10)?.map(sqlite_u64).transpose()?,
-                dest_size_bytes: row.get::<_, Option<i64>>(11)?.map(sqlite_u64).transpose()?,
-                source_date: row.get(12)?,
-                dest_date: row.get(13)?,
-                source_fingerprint: row.get(14)?,
-                destination_fingerprint: row.get(15)?,
-            });
+            mismatches.push(mismatch_from_row(row, &job_context, &run_context)?);
         }
         let truncated = mismatches.len() > limit;
         if truncated {
             mismatches.truncate(limit);
         }
         Ok((mismatches, truncated))
+    }
+
+    /// Mismatch counts per folder and type for one evidence run, for the
+    /// verification drill-down. Folders are project-scoped digests (names
+    /// are never stored); a message's folder is its source folder, or its
+    /// destination folder when it exists only there. Rows recorded before
+    /// digests existed group under an empty digest.
+    pub(crate) fn mismatch_folder_summary(
+        &self,
+        job_id: &str,
+        run_id: &str,
+    ) -> rusqlite::Result<Vec<MismatchFolderSummary>> {
+        let mut statement = self.connection.prepare(
+            "SELECT COALESCE(source_folder_digest,destination_folder_digest,''),mismatch_type,COUNT(*) FROM message_mismatches WHERE job_id=?1 AND run_id=?2 GROUP BY 1,2 ORDER BY 1,2 LIMIT 10000",
+        )?;
+        let rows = statement.query_map(params![job_id, run_id], |row| {
+            Ok(MismatchFolderSummary {
+                folder_digest: row.get(0)?,
+                mismatch_type: MismatchType::parse(&row.get::<_, String>(1)?)
+                    .ok_or(rusqlite::Error::InvalidQuery)?,
+                count: sqlite_u64(row.get(2)?)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// One keyset page of an evidence run's mismatches matching `filter`,
+    /// after the row key `after`, and whether more rows follow.
+    pub(crate) fn message_mismatch_page(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        filter: &MismatchFilter,
+        after: i64,
+        limit: usize,
+    ) -> rusqlite::Result<(Vec<StoredMismatch>, bool)> {
+        let limit = limit.clamp(1, 1_000);
+        let mut statement = self.connection.prepare(
+            "SELECT rowid,mismatch_type,source_folder_digest,destination_folder_digest,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_size_bytes,dest_size_bytes,source_date,dest_date FROM message_mismatches WHERE job_id=?1 AND run_id=?2 AND rowid>?3 AND (?4 IS NULL OR mismatch_type=?4) AND (?5 IS NULL OR COALESCE(source_folder_digest,destination_folder_digest,'')=?5) ORDER BY rowid LIMIT ?6",
+        )?;
+        let mut rows = statement.query(params![
+            job_id,
+            run_id,
+            after,
+            filter.mismatch_type.map(|value| value.as_str()),
+            filter.folder_digest.as_deref(),
+            (limit + 1) as i64
+        ])?;
+        let optional_u64 = |value: Option<i64>| -> rusqlite::Result<Option<u64>> {
+            value.map(sqlite_u64).transpose()
+        };
+        let mut page = Vec::with_capacity(limit.min(256));
+        while let Some(row) = rows.next()? {
+            page.push(StoredMismatch {
+                key: row.get(0)?,
+                mismatch_type: MismatchType::parse(&row.get::<_, String>(1)?)
+                    .ok_or(rusqlite::Error::InvalidQuery)?,
+                source_folder_digest: row.get(2)?,
+                destination_folder_digest: row.get(3)?,
+                source_uidvalidity: optional_u64(row.get(4)?)?,
+                destination_uidvalidity: optional_u64(row.get(5)?)?,
+                source_uid: row.get(6)?,
+                dest_uid: row.get(7)?,
+                source_size_bytes: optional_u64(row.get(8)?)?,
+                dest_size_bytes: optional_u64(row.get(9)?)?,
+                source_date: row.get(10)?,
+                dest_date: row.get(11)?,
+            });
+        }
+        let more = page.len() > limit;
+        page.truncate(limit);
+        Ok((page, more))
+    }
+
+    /// An evidence run's mismatches matching `filter` as CSV, at most
+    /// `max_rows` rows. `folder_name` resolves a digest to a name this
+    /// process observed; otherwise the digest is written. Returns the CSV,
+    /// the rows written, and whether more matched.
+    pub(crate) fn export_message_mismatches_csv(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        filter: &MismatchFilter,
+        max_rows: usize,
+        folder_name: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(String, usize, bool), String> {
+        let mut writer = csv::Writer::from_writer(Vec::new());
+        writer
+            .write_record([
+                "type",
+                "source_folder",
+                "destination_folder",
+                "source_uidvalidity",
+                "source_uid",
+                "destination_uidvalidity",
+                "destination_uid",
+                "source_size_bytes",
+                "destination_size_bytes",
+                "source_internal_date",
+                "destination_internal_date",
+            ])
+            .map_err(|error| error.to_string())?;
+        let folder = |digest: &Option<String>| {
+            digest.as_deref().map_or_else(String::new, |digest| {
+                folder_name(digest).unwrap_or_else(|| format!("sha256:{digest}"))
+            })
+        };
+        let text = |value: &Option<String>| value.clone().unwrap_or_default();
+        let number = |value: Option<u64>| value.map(|value| value.to_string()).unwrap_or_default();
+        let (mut after, mut written) = (0_i64, 0_usize);
+        loop {
+            let (page, more) = self
+                .message_mismatch_page(job_id, run_id, filter, after, 1_000)
+                .map_err(|error| error.to_string())?;
+            for mismatch in &page {
+                if written == max_rows {
+                    return finish_csv(writer, written, true);
+                }
+                writer
+                    .write_record([
+                        mismatch.mismatch_type.as_str().to_owned(),
+                        folder(&mismatch.source_folder_digest),
+                        folder(&mismatch.destination_folder_digest),
+                        number(mismatch.source_uidvalidity),
+                        text(&mismatch.source_uid),
+                        number(mismatch.destination_uidvalidity),
+                        text(&mismatch.dest_uid),
+                        number(mismatch.source_size_bytes),
+                        number(mismatch.dest_size_bytes),
+                        text(&mismatch.source_date),
+                        text(&mismatch.dest_date),
+                    ])
+                    .map_err(|error| error.to_string())?;
+                written += 1;
+                after = mismatch.key;
+            }
+            if !more {
+                return finish_csv(writer, written, false);
+            }
+        }
     }
 
     // Legacy evidence insertion is retained only as a fixture helper for

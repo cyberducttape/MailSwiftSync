@@ -1152,11 +1152,11 @@ fn staged_reconciliation_matches_in_memory_accounting() {
     assert_eq!(staged_summary.changed_count, expected_summary.changed_count);
     let mut expected_types = expected_mismatches
         .iter()
-        .map(|mismatch| mismatch.mismatch_type.clone())
+        .map(|mismatch| mismatch.mismatch_type)
         .collect::<Vec<_>>();
     let mut staged_types = staged_mismatches
         .iter()
-        .map(|mismatch| mismatch.mismatch_type.clone())
+        .map(|mismatch| mismatch.mismatch_type)
         .collect::<Vec<_>>();
     expected_types.sort_by_key(MismatchType::as_str);
     staged_types.sort_by_key(MismatchType::as_str);
@@ -1377,7 +1377,7 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
             .iter()
             .map(|mismatch| {
                 (
-                    mismatch.mismatch_type.clone(),
+                    mismatch.mismatch_type,
                     mismatch.source_folder.clone(),
                     mismatch.source_uid.clone(),
                     mismatch.destination_folder.clone(),
@@ -1389,7 +1389,7 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
             .iter()
             .map(|mismatch| {
                 (
-                    mismatch.mismatch_type.clone(),
+                    mismatch.mismatch_type,
                     mismatch.source_folder.clone(),
                     mismatch.source_uid.clone(),
                     mismatch.destination_folder.clone(),
@@ -1548,13 +1548,230 @@ fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
     }
 }
 
+/// Input shape for the durable-stage benchmark
+/// (`MAILSWIFTSYNC_RECONCILIATION_BENCH_SHAPE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BenchShape {
+    /// Unique Message-IDs; 2% of destination sizes differ.
+    Typical,
+    /// 20% of messages share a Message-ID in groups of five and 1% share one
+    /// "hot" Message-ID; 2% of destination sizes differ.
+    DuplicateIds,
+    /// Half the messages have no Message-ID; a tenth of those also share one
+    /// date/size bucket, so they cannot be paired at all.
+    AbsentIds,
+    /// 30% changed sizes, 10% missing, 10% extra, and 10% in another folder.
+    MismatchHeavy,
+}
+
+impl BenchShape {
+    fn parse(value: &str) -> Self {
+        match value {
+            "typical" => Self::Typical,
+            "duplicate_ids" => Self::DuplicateIds,
+            "absent_ids" => Self::AbsentIds,
+            "mismatch_heavy" => Self::MismatchHeavy,
+            other => panic!("unknown benchmark shape {other:?}"),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Typical => "typical",
+            Self::DuplicateIds => "duplicate_ids",
+            Self::AbsentIds => "absent_ids",
+            Self::MismatchHeavy => "mismatch_heavy",
+        }
+    }
+
+    /// The staged row for message `index` on one side, or `None` when the
+    /// shape leaves it out of that side.
+    fn message(
+        self,
+        destination: bool,
+        index: usize,
+    ) -> Option<(MailboxMessageKey, ExtractedMessage)> {
+        let mut mailbox = "INBOX";
+        let mut message_id = Some(format!("<m{index}@example>"));
+        let mut size = 1_000 + index as u64;
+        match self {
+            Self::Typical => {
+                if destination && index.is_multiple_of(50) {
+                    size += 1;
+                }
+            }
+            Self::DuplicateIds => {
+                if index.is_multiple_of(100) {
+                    message_id = Some("<hot@example>".to_owned());
+                } else if index % 10 < 2 {
+                    message_id = Some(format!("<group{}@example>", index / 50));
+                }
+                if destination && index % 50 == 1 {
+                    size += 1;
+                }
+            }
+            Self::AbsentIds => {
+                if index.is_multiple_of(2) {
+                    message_id = None;
+                    if index.is_multiple_of(20) {
+                        size = 777;
+                    }
+                }
+            }
+            Self::MismatchHeavy => {
+                if destination {
+                    match index % 10 {
+                        0..=2 => size += 1,
+                        3 => return None,
+                        4 => mailbox = "Archive",
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let flags = if index.is_multiple_of(3) {
+            "\\Seen"
+        } else {
+            ""
+        };
+        Some((
+            MailboxMessageKey::new(mailbox, format!("{index}")),
+            ExtractedMessage {
+                message_id,
+                uid: Some(format!("{index}")),
+                size_bytes: Some(size),
+                internal_date: Some("01-Jan-2024 00:00:00 +0000".to_owned()),
+                flags: Some(flags.to_owned()),
+            },
+        ))
+    }
+
+    /// Destination-only messages the shape adds.
+    fn extra(self, index: usize) -> Option<(MailboxMessageKey, ExtractedMessage)> {
+        (self == Self::MismatchHeavy && index % 10 == 5).then(|| {
+            (
+                MailboxMessageKey::new("INBOX", format!("x{index}")),
+                ExtractedMessage {
+                    message_id: Some(format!("<extra{index}@example>")),
+                    uid: Some(format!("x{index}")),
+                    size_bytes: Some(5_000_000 + index as u64),
+                    internal_date: Some("02-Jan-2024 00:00:00 +0000".to_owned()),
+                    flags: Some(String::new()),
+                },
+            )
+        })
+    }
+}
+
+/// Stage `messages` per side of `shape` in an in-memory stage.
+fn bench_stage(shape: BenchShape, messages: usize) -> MessageMetadataStage {
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    for side in [StagedMessageSide::Source, StagedMessageSide::Destination] {
+        let destination = side == StagedMessageSide::Destination;
+        let mut page = (0..messages)
+            .filter_map(|index| shape.message(destination, index))
+            .collect::<ExtractedMessages>();
+        if destination {
+            page.extend((0..messages).filter_map(|index| shape.extra(index)));
+        }
+        stage.insert_messages(side, &page).unwrap();
+    }
+    stage
+}
+
+/// The query plans that keep staged reconciliation linear. Measured on a
+/// durable stage at 100,000 messages per side, a shared date/size bucket
+/// made probable pairing quadratic (62 s) and re-sorting a whole side for
+/// every 512-row page made draining unmatched rows superlinear. A planner
+/// change that reintroduces either fails here rather than at scale.
+#[test]
+fn staged_reconciliation_plans_stay_linear() {
+    let mut plans = Vec::new();
+    for shape in [
+        BenchShape::AbsentIds,
+        BenchShape::MismatchHeavy,
+        BenchShape::DuplicateIds,
+    ] {
+        let stage = bench_stage(shape, 2_000);
+        crate::core::stage_sql::plans::start();
+        MessageVerification::detect_mismatches_from_stage("job", "run", &stage, &HashMap::new())
+            .unwrap();
+        MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
+        plans.extend(crate::core::stage_sql::plans::finish());
+    }
+    let plan_for = |fragment: &str| {
+        let matching = plans
+            .iter()
+            .filter(|(sql, _)| sql.contains(fragment))
+            .map(|(_, plan)| plan.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            !matching.is_empty(),
+            "no statement containing {fragment:?} ran"
+        );
+        matching
+    };
+    for (sql, plan) in &plans {
+        assert!(!plan.starts_with("unavailable"), "{sql}: {plan}");
+        assert!(
+            !plan
+                .lines()
+                .any(|line| line.trim() == "SCAN staged_messages"),
+            "full stage scan in {sql}:\n{plan}"
+        );
+    }
+    for plan in plan_for("FROM staged_messages NOT INDEXED WHERE side=?1 AND rowid>?2") {
+        assert!(
+            plan.contains("USING INTEGER PRIMARY KEY (rowid>?)"),
+            "{plan}"
+        );
+        assert!(!plan.contains("TEMP B-TREE FOR ORDER BY"), "{plan}");
+    }
+    for plan in plan_for(
+        "FROM staged_messages d INDEXED BY staged_messages_exact_destination WHERE d.side=1 AND d.message_id=?1",
+    ) {
+        assert!(
+            plan.contains("staged_messages_exact_destination (message_id=?"),
+            "{plan}"
+        );
+    }
+    for plan in plan_for("CREATE TABLE staged_probable_pairs") {
+        assert!(
+            plan.contains("USING INDEX staged_probable_source_key"),
+            "{plan}"
+        );
+    }
+}
+
+/// `/proc/self/io` counters: `(write_bytes, wchar)`. `write_bytes` is what
+/// this process sent to the block layer; `wchar` counts every write call,
+/// including page-cache and journal writes. Zero where unavailable.
+fn bench_io() -> (u64, u64) {
+    let io = std::fs::read_to_string("/proc/self/io").unwrap_or_default();
+    let field = |name: &str| {
+        io.lines()
+            .find_map(|line| line.strip_prefix(name)?.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    (field("write_bytes:"), field("wchar:"))
+}
+
 /// Reconciliation on a durable (FULL-synchronous) stage, as live
 /// verification uses. Opt-in: `cargo test --release durable_stage_reconciliation_benchmark -- --ignored --nocapture`.
-/// Set `MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES` to scale the per-side row
-/// count; run each size in its own process so peak RSS is per size
-/// (`scripts/benchmark-verification-scale.sh` does this). Rows are staged in
-/// fetch-sized pages, as the live IMAP adapter does, so the benchmark's own
-/// input does not dominate the measured process memory.
+/// `scripts/benchmark-verification-scale.sh` runs each size and shape in its
+/// own process so peak RSS is per run. Environment:
+///
+/// * `MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES` messages per side (20,000)
+/// * `MAILSWIFTSYNC_RECONCILIATION_BENCH_SHAPE` a `BenchShape` (`typical`)
+/// * `MAILSWIFTSYNC_RECONCILIATION_BENCH_DIR` stage parent directory; use a
+///   real disk, since a tmpfs temp directory hides I/O cost
+/// * `MAILSWIFTSYNC_RECONCILIATION_BENCH_PLANS` file to write every
+///   statement's `EXPLAIN QUERY PLAN` to
+///
+/// Rows are staged in fetch-sized pages, as the live IMAP adapter does. After
+/// the first pass the stage is closed, reopened, and reconciled again, which
+/// is what a restarted verification does with a complete durable stage. A
+/// reconciliation that stops at a safety limit is reported as its outcome.
 #[test]
 #[ignore = "opt-in durable-stage reconciliation benchmark"]
 fn durable_stage_reconciliation_benchmark() {
@@ -1564,24 +1781,14 @@ fn durable_stage_reconciliation_benchmark() {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(20_000);
     assert!(messages > 0, "benchmark size must be positive");
-    let page = |side: &str, range: std::ops::Range<usize>| {
-        range
-            .map(|index| {
-                let size = if side == "d" && index % 50 == 0 { 2 } else { 1 };
-                (
-                    MailboxMessageKey::new("INBOX", format!("{index}")),
-                    ExtractedMessage {
-                        message_id: Some(format!("<m{index}@example>")),
-                        uid: Some(format!("{index}")),
-                        size_bytes: Some(1_000 + index as u64 * size),
-                        internal_date: Some("01-Jan-2024 00:00:00 +0000".to_owned()),
-                        flags: None,
-                    },
-                )
-            })
-            .collect::<ExtractedMessages>()
-    };
-    let directory = std::env::temp_dir().join(format!("mss-stage-bench-{}", uuid::Uuid::new_v4()));
+    let shape = BenchShape::parse(
+        &std::env::var("MAILSWIFTSYNC_RECONCILIATION_BENCH_SHAPE")
+            .unwrap_or_else(|_| "typical".to_owned()),
+    );
+    let parent = std::env::var_os("MAILSWIFTSYNC_RECONCILIATION_BENCH_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let directory = parent.join(format!("mss-stage-bench-{}", uuid::Uuid::new_v4()));
     let builder = std::fs::DirBuilder::new();
     builder.create(&directory).unwrap();
     #[cfg(unix)]
@@ -1596,22 +1803,31 @@ fn durable_stage_reconciliation_benchmark() {
     };
     let rss_start = bench_memory_kib("VmRSS:");
     let cpu_start = bench_cpu_seconds();
-    let mut stage = MessageMetadataStage::open_durable(database, "bench").unwrap();
+    let mut stage = MessageMetadataStage::open_durable(database.clone(), "bench").unwrap();
     let staging_started = std::time::Instant::now();
-    for (side, label) in [
-        (StagedMessageSide::Source, "s"),
-        (StagedMessageSide::Destination, "d"),
-    ] {
+    let io_start = bench_io();
+    let mut staged = [0_usize; 2];
+    for (slot, side) in [StagedMessageSide::Source, StagedMessageSide::Destination]
+        .into_iter()
+        .enumerate()
+    {
+        let destination = side == StagedMessageSide::Destination;
         let mut start = 0;
         while start < messages {
             let end = (start + PAGE).min(messages);
-            stage
-                .insert_messages(side, &page(label, start..end))
-                .unwrap();
+            let mut page = (start..end)
+                .filter_map(|index| shape.message(destination, index))
+                .collect::<ExtractedMessages>();
+            if destination {
+                page.extend((start..end).filter_map(|index| shape.extra(index)));
+            }
+            staged[slot] += page.len();
+            stage.insert_messages(side, &page).unwrap();
             start = end;
         }
     }
     let staging_ms = staging_started.elapsed().as_millis();
+    let io_staged = bench_io();
     let rss_after_staging = bench_memory_kib("VmRSS:");
     let stage_bytes = files_bytes();
     // Sample the stage directory while reconciliation runs: the rollback
@@ -1644,29 +1860,102 @@ fn durable_stage_reconciliation_benchmark() {
             }
         })
     };
-    let started = std::time::Instant::now();
-    let (_, summary) = MessageVerification::detect_mismatches_from_stage(
-        "job-bench",
-        "run-bench",
-        &stage,
-        &HashMap::new(),
-    )
-    .unwrap();
-    let reconcile_ms = started.elapsed().as_millis();
+    let plans_path = std::env::var_os("MAILSWIFTSYNC_RECONCILIATION_BENCH_PLANS");
+    if plans_path.is_some() {
+        crate::core::stage_sql::plans::start();
+    }
+    let reconcile = |stage: &MessageMetadataStage| {
+        let started = std::time::Instant::now();
+        let result = MessageVerification::detect_mismatches_from_stage(
+            "job-bench",
+            "run-bench",
+            stage,
+            &HashMap::new(),
+        );
+        (result, started.elapsed().as_millis())
+    };
+    let (result, reconcile_ms) = reconcile(&stage);
+    let io_reconciled = bench_io();
+    let flags_started = std::time::Instant::now();
+    let flags = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
+    let flags_ms = flags_started.elapsed().as_millis();
     sampling.store(false, std::sync::atomic::Ordering::Relaxed);
     let (peak_stage_bytes, peak_journal_bytes) = sampler.join().unwrap();
+    if let Some(path) = plans_path {
+        let plans = crate::core::stage_sql::plans::finish();
+        let text = plans
+            .iter()
+            .map(|(sql, plan)| format!("-- {sql}\n{plan}\n"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path, text).unwrap();
+    }
     let final_stage_bytes = files_bytes();
+    let outcome =
+        |result: &Result<(Vec<MessageMismatch>, VerificationSummary), String>| match result {
+            Ok(_) => "ok".to_owned(),
+            Err(error) => match crate::core::VerificationLimit::from_detail(error) {
+                Some(limit) => format!("limit:{}", limit.code()),
+                None => panic!("reconciliation failed: {error}"),
+            },
+        };
+    let first_outcome = outcome(&result);
+    let (recorded, summary) = match &result {
+        Ok((mismatches, summary)) => {
+            assert_eq!(summary.total_source, staged[0] as u64);
+            assert_eq!(summary.total_destination, staged[1] as u64);
+            (mismatches.len(), Some(summary.clone()))
+        }
+        Err(_) => (0, None),
+    };
+    drop(result);
+
+    // A restarted verification reopens the complete durable stage, discards
+    // reconciliation intermediates, and reconciles again.
+    drop(stage);
+    let resume_io_start = bench_io();
+    let resume_started = std::time::Instant::now();
+    let mut stage = MessageMetadataStage::open_durable(database, "bench").unwrap();
+    stage.reset_reconciliation().unwrap();
+    let (resumed, _) = reconcile(&stage);
+    let resumed_ms = resume_started.elapsed().as_millis();
+    let resume_io = bench_io();
+    assert_eq!(
+        outcome(&resumed),
+        first_outcome,
+        "resumed pass changed outcome"
+    );
+    if let (Ok((_, resumed_summary)), Some(summary)) = (&resumed, &summary) {
+        assert_eq!(resumed_summary, summary, "resumed pass changed the result");
+    }
+    drop(resumed);
+
     let cpu_seconds = bench_cpu_seconds() - cpu_start;
-    assert_eq!(summary.total_source, messages as u64);
     let rate = |count: usize, millis: u128| (count as f64 * 1_000.0 / millis.max(1) as f64) as u64;
+    let summary_fields = summary.map_or_else(String::new, |summary| {
+        format!(
+            " matched={} probable={} missing={} extra={} duplicated={} changed={}",
+            summary.metadata_matches,
+            summary.probable_matches,
+            summary.missing_count,
+            summary.extra_count,
+            summary.duplicated_count,
+            summary.changed_count
+        )
+    });
     eprintln!(
-        "verification-scale messages_per_side={messages} staging_ms={staging_ms} staging_rows_per_sec={} reconcile_ms={reconcile_ms} reconcile_messages_per_sec={} cpu_seconds={cpu_seconds:.1} peak_rss_mib={} rss_start_mib={} rss_after_staging_mib={} stage_bytes_after_staging={stage_bytes} peak_stage_bytes_during_reconcile={peak_stage_bytes} peak_journal_bytes={peak_journal_bytes} stage_bytes_after_reconcile={final_stage_bytes} changed={}",
-        rate(messages * 2, staging_ms),
+        "verification-scale shape={} messages_per_side={messages} outcome={first_outcome} staging_ms={staging_ms} staging_rows_per_sec={} staging_write_bytes={} reconcile_ms={reconcile_ms} reconcile_messages_per_sec={} reconcile_write_bytes={} reconcile_wchar_bytes={} flags_ms={flags_ms} flags_compared={} resumed_reconcile_ms={resumed_ms} resumed_write_bytes={} cpu_seconds={cpu_seconds:.1} peak_rss_mib={} rss_start_mib={} rss_after_staging_mib={} stage_bytes_after_staging={stage_bytes} peak_stage_bytes_during_reconcile={peak_stage_bytes} peak_journal_bytes={peak_journal_bytes} stage_bytes_after_reconcile={final_stage_bytes} mismatch_rows={recorded}{summary_fields}",
+        shape.label(),
+        rate(staged[0] + staged[1], staging_ms),
+        io_staged.0 - io_start.0,
         rate(messages, reconcile_ms),
+        io_reconciled.0 - io_staged.0,
+        io_reconciled.1 - io_staged.1,
+        flags.compared_messages,
+        resume_io.0 - resume_io_start.0,
         bench_memory_kib("VmHWM:") / 1024,
         rss_start / 1024,
         rss_after_staging / 1024,
-        summary.changed_count
     );
     drop(stage);
     let _ = std::fs::remove_dir_all(directory);

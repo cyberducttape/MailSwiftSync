@@ -67,23 +67,21 @@ impl MessageVerification {
         // Ephemeral stages run with journal_mode=OFF, where a rollback cannot
         // undo DDL, so the table is dropped explicitly instead; dropping it
         // first also clears one left by an interrupted durable pass.
-        connection
-            .execute_batch(
+        crate::core::stage_sql::execute_batch(connection,
                 "DROP TABLE IF EXISTS staged_flag_folder_mapping;
                  CREATE TABLE staged_flag_folder_mapping(source TEXT PRIMARY KEY, destination TEXT NOT NULL);",
             )
             .map_err(|error| format!("could not initialize flag verification: {error}"))?;
         for (source, destination) in folder_mapping {
-            connection
-                .execute(
-                    "INSERT INTO staged_flag_folder_mapping(source,destination) VALUES(?1,?2)",
-                    params![source, destination],
-                )
-                .map_err(|error| format!("could not stage folder mapping: {error}"))?;
+            crate::core::stage_sql::execute(
+                connection,
+                "INSERT INTO staged_flag_folder_mapping(source,destination) VALUES(?1,?2)",
+                params![source, destination],
+            )
+            .map_err(|error| format!("could not stage folder mapping: {error}"))?;
         }
         let result = Self::compare_staged_flag_pairs(connection);
-        connection
-            .execute_batch("DROP TABLE staged_flag_folder_mapping;")
+        crate::core::stage_sql::execute_batch(connection, "DROP TABLE staged_flag_folder_mapping;")
             .map_err(|error| format!("could not release flag verification rows: {error}"))?;
         result
     }
@@ -91,9 +89,9 @@ impl MessageVerification {
     fn compare_staged_flag_pairs(
         connection: &rusqlite::Connection,
     ) -> Result<FlagVerification, String> {
-        let mut statement = connection
-            .prepare(
-                "WITH source AS (
+        let mut statement = crate::core::stage_sql::prepare(
+            connection,
+            "WITH source AS (
                     SELECT s.message_id,COALESCE(m.destination,s.mailbox) AS expected_mailbox,
                            s.date_key,s.size_bytes,MIN(s.flags) AS flags
                     FROM staged_messages s
@@ -117,8 +115,8 @@ impl MessageVerification {
                   AND d.date_key=s.date_key AND d.size_bytes=s.size_bytes
                  LEFT JOIN stage_permanent_flags p ON p.side=1 AND p.mailbox=d.mailbox
                  WHERE s.flags IS NOT NULL AND d.flags IS NOT NULL",
-            )
-            .map_err(|error| format!("could not prepare flag verification: {error}"))?;
+        )
+        .map_err(|error| format!("could not prepare flag verification: {error}"))?;
         let mut rows = statement
             .query([])
             .map_err(|error| format!("could not query flag verification pairs: {error}"))?;

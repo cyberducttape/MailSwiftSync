@@ -513,6 +513,8 @@ impl App {
                             && matches!(run.kind, RunKind::Batch)
                             && run.batch_child_index(&job_id, &child_run_id).is_some()
                         {
+                            self.observed_folder_names
+                                .observe(&run.project_id, &mismatches);
                             self.pending_batch_evidence
                                 .insert(child_run_id.clone(), evidence);
                             self.pending_batch_mismatches
@@ -565,10 +567,12 @@ impl App {
                         job_id,
                         mismatches,
                     } => {
-                        if active_run
+                        if let Some(run) = active_run
                             .as_ref()
-                            .is_some_and(|run| run.owns_process(&run_id, &job_id))
+                            .filter(|run| run.owns_process(&run_id, &job_id))
                         {
+                            self.observed_folder_names
+                                .observe(&run.project_id, &mismatches);
                             self.pending_mismatches = mismatches;
                         } else {
                             durability_errors.push(format!(

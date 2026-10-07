@@ -25,6 +25,7 @@ mod engine;
 mod events;
 mod evidence;
 mod evidence_ops;
+pub use evidence_ops::{MismatchFilter, MismatchFolderSummary, StoredMismatch};
 mod mailboxes;
 mod message_extraction;
 mod message_staging;
@@ -45,6 +46,7 @@ mod recovery_queue;
 mod reports;
 mod run_queries;
 mod runs;
+mod stage_sql;
 mod state;
 mod transfer_passes;
 mod verification_limit;
@@ -81,7 +83,7 @@ pub use transfer_passes::{
 };
 pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 28;
+pub const CURRENT_SCHEMA_VERSION: i64 = 29;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

@@ -227,6 +227,8 @@ impl StateStore {
                     ("source_fingerprint", "TEXT", false, 0),
                     ("destination_fingerprint", "TEXT", false, 0),
                     ("recorded_at", "TEXT", true, 0),
+                    ("source_folder_digest", "TEXT", false, 0),
+                    ("destination_folder_digest", "TEXT", false, 0),
                 ],
             ),
             (

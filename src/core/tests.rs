@@ -5399,3 +5399,152 @@ fn verification_limit_attention_reason_survives_validated_reopen() {
     assert!(StateStore::open_readonly(&path).is_err());
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn verification_drill_down_groups_pages_and_exports_without_storing_names() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db.create_project("drill", "source", "destination").unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    let run_id = "drill-run";
+    db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
+    let mismatch =
+        |index: usize, mismatch_type, source: Option<&str>, destination: Option<&str>| {
+            MessageMismatch {
+                id: format!("m{index}"),
+                job_id: std::sync::Arc::from(job.as_str()),
+                run_id: std::sync::Arc::from(run_id),
+                mismatch_type,
+                source_folder: source.map(str::to_owned),
+                destination_folder: destination.map(str::to_owned),
+                source_uidvalidity: source.map(|_| 7),
+                destination_uidvalidity: destination.map(|_| 9),
+                source_uid: source.map(|_| index.to_string()),
+                dest_uid: destination.map(|_| (index + 100).to_string()),
+                source_message_id: Some(format!("<{index}@example>")),
+                dest_message_id: None,
+                source_size_bytes: Some(10),
+                dest_size_bytes: None,
+                source_date: None,
+                dest_date: None,
+                source_fingerprint: None,
+                destination_fingerprint: None,
+            }
+        };
+    use message_verification::MismatchType;
+    let mut mismatches = (0..5)
+        .map(|index| mismatch(index, MismatchType::Missing, Some("INBOX"), None))
+        .collect::<Vec<_>>();
+    mismatches.push(mismatch(5, MismatchType::Extra, None, Some("Archive")));
+    mismatches.push(mismatch(
+        6,
+        MismatchType::PresentWrongFolder,
+        Some("INBOX"),
+        Some("Archive"),
+    ));
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(VerificationOutcome::Missing),
+        source_messages: 7,
+        destination_messages: 2,
+        source_bytes: 70,
+        destination_bytes: 20,
+        unmatched_messages: Some(7),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 5,
+        extra_messages: 1,
+        modified_messages: 1,
+        probable_messages: 0,
+        flag_verification: None,
+    };
+    db.finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
+        &project.id,
+        &job,
+        run_id,
+        "completed",
+        "verification_difference",
+        "differences",
+        &evidence,
+        &mismatches,
+        None,
+    )
+    .unwrap();
+
+    // Names and Message-IDs never reach the ledger; digests do.
+    let names: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM message_mismatches WHERE source_folder IS NOT NULL OR destination_folder IS NOT NULL OR source_message_id IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(names, 0);
+    let inbox = folder_digest(&project.id, "INBOX");
+    let archive = folder_digest(&project.id, "Archive");
+
+    let summary = db.mismatch_folder_summary(&job, run_id).unwrap();
+    let count = |digest: &str, mismatch_type| {
+        summary
+            .iter()
+            .find(|entry| entry.folder_digest == digest && entry.mismatch_type == mismatch_type)
+            .map_or(0, |entry| entry.count)
+    };
+    assert_eq!(count(&inbox, MismatchType::Missing), 5);
+    assert_eq!(count(&inbox, MismatchType::PresentWrongFolder), 1);
+    assert_eq!(count(&archive, MismatchType::Extra), 1);
+
+    let missing = MismatchFilter {
+        mismatch_type: Some(MismatchType::Missing),
+        folder_digest: Some(inbox.clone()),
+    };
+    let (first, more) = db
+        .message_mismatch_page(&job, run_id, &missing, 0, 3)
+        .unwrap();
+    assert_eq!(first.len(), 3);
+    assert!(more);
+    let (second, more) = db
+        .message_mismatch_page(&job, run_id, &missing, first[2].key, 3)
+        .unwrap();
+    assert_eq!(second.len(), 2);
+    assert!(!more);
+    assert!(
+        first
+            .iter()
+            .chain(&second)
+            .all(|row| row.mismatch_type == MismatchType::Missing
+                && row.source_uidvalidity == Some(7))
+    );
+    let archive_only = MismatchFilter {
+        mismatch_type: None,
+        folder_digest: Some(archive.clone()),
+    };
+    let (rows, _) = db
+        .message_mismatch_page(&job, run_id, &archive_only, 0, 50)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].dest_uid.as_deref(), Some("105"));
+
+    let (csv, written, truncated) = db
+        .export_message_mismatches_csv(&job, run_id, &MismatchFilter::default(), 100, &|digest| {
+            (digest == inbox).then(|| "INBOX".to_owned())
+        })
+        .unwrap();
+    assert_eq!((written, truncated), (7, false));
+    assert!(
+        csv.lines()
+            .nth(1)
+            .unwrap()
+            .starts_with("missing,INBOX,,7,0,")
+    );
+    assert!(csv.contains(&format!("sha256:{archive}")));
+    assert!(!csv.contains("@example"));
+    let (_, written, truncated) = db
+        .export_message_mismatches_csv(&job, run_id, &MismatchFilter::default(), 4, &|_| None)
+        .unwrap();
+    assert_eq!((written, truncated), (4, true));
+}

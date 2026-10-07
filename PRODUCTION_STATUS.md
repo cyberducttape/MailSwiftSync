@@ -5,7 +5,7 @@
 |---|---|
 | Status | Technical Preview |
 | Package version | `0.1.0-alpha.1` |
-| SQLite schema version | `28` |
+| SQLite schema version | `29` |
 | Last reviewed | 2026-10-03 |
 | Qualified engine | `imapsync 2.314` |
 <!-- release-metadata:end -->
@@ -172,7 +172,7 @@ new metadata verifier against real accounts.
 - [ ] Continue modularizing the core and application entry point as needed; file sizes are intentionally not maintained as status claims.
 - [ ] Batch controller context structs
 
-**Status:** Functional and tested, not blocking production use
+**Status:** Functional and tested; additional refactoring remains outside the technical-preview gate
 
 ### Documentation [OPERATIONAL IMPROVEMENT]
 - [ ] Compatibility matrix with live test results

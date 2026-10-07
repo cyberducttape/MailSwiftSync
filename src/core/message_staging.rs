@@ -884,12 +884,14 @@ impl MessageMetadataStage {
         } else {
             ""
         };
+        // Walk the rowid range directly. With a `side` index SQLite read and
+        // sorted the whole side for every 512-row page, so draining many
+        // unmatched rows grew with the square of their number.
         let sql = format!(
-            "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages WHERE side=?1 AND rowid>?2 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=staged_messages.side AND m.mailbox=staged_messages.mailbox AND m.uidvalidity=staged_messages.uidvalidity AND m.uid=staged_messages.uid){condition_id}{condition_metadata} ORDER BY rowid LIMIT {}",
+            "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages NOT INDEXED WHERE side=?1 AND rowid>?2 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=staged_messages.side AND m.mailbox=staged_messages.mailbox AND m.uidvalidity=staged_messages.uidvalidity AND m.uid=staged_messages.uid){condition_id}{condition_metadata} ORDER BY rowid LIMIT {}",
             super::message_staging::STAGE_BATCH_SIZE
         );
-        self.connection_ref()?
-            .prepare(&sql)?
+        super::stage_sql::prepare(self.connection_ref()?, &sql)?
             .query_map(params![side.as_i64(), after_rowid], staged_message_from_row)?
             .collect()
     }

@@ -537,6 +537,8 @@ impl App {
             verification_offset: 0,
             verification_cursor: None,
             verification_cursor_stack: Vec::new(),
+            mismatch_inspector: Default::default(),
+            observed_folder_names: Default::default(),
             source_provider: ProviderPreset::GenericImap,
             destination_provider: ProviderPreset::GenericImap,
         })

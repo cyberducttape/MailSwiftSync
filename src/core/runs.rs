@@ -946,7 +946,7 @@ impl StateStore {
             params![job_id, run_id],
         )?;
         let mut insert = tx.prepare_cached(
-            "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14)",
+            "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,source_folder_digest,destination_folder_digest) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14,?15,?16)",
         )?;
         for mismatch in mismatches {
             let source_size = mismatch
@@ -974,7 +974,13 @@ impl StateStore {
             // and fingerprints are retained for investigation. Operators should use the
             // verification reports for detailed evidence export, not the durable ledger.
             // This prevents accidental disclosure of folder structures and message
-            // identifiers in database backups and exports.
+            // identifiers in database backups and exports. Folders are kept only
+            // as project-scoped digests so differences can be grouped by folder.
+            let digest = |folder: &Option<String>| {
+                folder
+                    .as_deref()
+                    .map(|folder| super::folder_digest(project_id, folder))
+            };
             insert.execute(params![
                 mismatch.id,
                 job_id,
@@ -990,6 +996,8 @@ impl StateStore {
                 destination_uidvalidity,
                 mismatch.source_fingerprint,
                 mismatch.destination_fingerprint,
+                digest(&mismatch.source_folder),
+                digest(&mismatch.destination_folder),
             ])?;
         }
         drop(insert);

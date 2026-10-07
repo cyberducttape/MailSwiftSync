@@ -8,7 +8,7 @@ use super::*;
 /// `VerificationSummary`, not mismatch records. Content-hash and folder-aware
 /// classifications are intentionally not represented here until extraction
 /// supplies those fields and the live path persists them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MismatchType {
     /// Message-ID matches but available metadata differs.
     MessageIdOnly,

@@ -18,8 +18,7 @@ pub(super) fn stage_candidate<P: rusqlite::Params>(
     parameters: P,
 ) -> Result<Option<StagedMessage>, String> {
     // Cached: reconciliation runs these few statements once per message.
-    connection
-        .prepare_cached(sql)
+    crate::core::stage_sql::prepare_cached(connection, sql)
         .and_then(|mut statement| statement.query_row(parameters, staged_message_from_row))
         .optional()
         .map_err(|error| format!("could not query staged reconciliation candidate: {error}"))
@@ -38,20 +37,20 @@ pub(super) fn mark_stage_matched(
         })
         .transpose()?
         .unwrap_or(-1);
-    connection
-        .prepare_cached(
-            "INSERT INTO staged_matched(side,mailbox,uidvalidity,uid) VALUES(?1,?2,?3,?4)",
-        )
-        .and_then(|mut statement| {
-            statement.execute(params![
-                side.as_i64(),
-                message.key.mailbox.as_ref(),
-                uidvalidity,
-                message.key.uid,
-            ])
-        })
-        .map(|_| ())
-        .map_err(|error| format!("could not mark staged message as matched: {error}"))
+    crate::core::stage_sql::prepare_cached(
+        connection,
+        "INSERT INTO staged_matched(side,mailbox,uidvalidity,uid) VALUES(?1,?2,?3,?4)",
+    )
+    .and_then(|mut statement| {
+        statement.execute(params![
+            side.as_i64(),
+            message.key.mailbox.as_ref(),
+            uidvalidity,
+            message.key.uid,
+        ])
+    })
+    .map(|_| ())
+    .map_err(|error| format!("could not mark staged message as matched: {error}"))
 }
 
 pub(super) fn append_stage_mismatch(
@@ -80,8 +79,7 @@ impl MessageVerification {
         let transaction = connection
             .unchecked_transaction()
             .map_err(|error| format!("could not begin staged reconciliation: {error}"))?;
-        connection
-            .execute_batch(
+        crate::core::stage_sql::execute_batch(connection,
                 // Keep reconciliation intermediates in the private stage
                 // database. TEMP tables may spill into SQLite's process-wide
                 // temporary directory when temp_store=FILE, escaping the
@@ -91,19 +89,18 @@ impl MessageVerification {
             )
             .map_err(|error| format!("could not initialize staged reconciliation: {error}"))?;
         for (source, destination) in folder_mapping {
-            connection
-                .execute(
-                    "INSERT INTO staged_folder_mapping(source,destination) VALUES(?1,?2)",
-                    params![source, destination],
-                )
-                .map_err(|error| format!("could not stage folder mapping: {error}"))?;
+            crate::core::stage_sql::execute(
+                connection,
+                "INSERT INTO staged_folder_mapping(source,destination) VALUES(?1,?2)",
+                params![source, destination],
+            )
+            .map_err(|error| format!("could not stage folder mapping: {error}"))?;
         }
         // Precompute the effective destination folder and let SQLite seek on
         // it directly during fallback. Evaluating this mapping expression in
         // each count query can repeatedly scan records from every folder that
         // shares the same date/size pair.
-        connection
-            .execute(
+        crate::core::stage_sql::execute(connection,
                 "UPDATE staged_messages SET match_mailbox=COALESCE((SELECT destination FROM staged_folder_mapping WHERE source=staged_messages.mailbox),mailbox) WHERE side=0",
                 [],
             )
@@ -118,8 +115,7 @@ impl MessageVerification {
         // unindexed window-function CTEs made SQLite choose a quadratic plan
         // on large stages. Row numbers preserve the old deterministic greedy
         // order (source staging order, then destination mailbox/UID order).
-        connection
-            .execute_batch(
+        crate::core::stage_sql::execute_batch(connection,
                 "CREATE TABLE staged_exact_source_ranked AS
                     SELECT rowid AS source_rowid,message_id,match_mailbox,date_key,size_bytes,
                            ROW_NUMBER() OVER (
@@ -183,9 +179,9 @@ impl MessageVerification {
         // Remaining Message-ID matches in the expected folder are changes.
         // Rank each unmatched side once, pair ordinally, and materialize the
         // pairs so the only Rust work is constructing bounded mismatch proof.
-        connection
-            .execute_batch(
-                "CREATE TABLE staged_changed_source_ranked AS
+        crate::core::stage_sql::execute_batch(
+            connection,
+            "CREATE TABLE staged_changed_source_ranked AS
                     SELECT rowid AS source_rowid,message_id,match_mailbox,
                            ROW_NUMBER() OVER (
                                PARTITION BY message_id,match_mailbox ORDER BY rowid
@@ -229,11 +225,10 @@ impl MessageVerification {
                     SELECT 1,m.mailbox,m.uidvalidity,m.uid
                     FROM staged_changed_pairs p
                     JOIN staged_messages m ON m.rowid=p.destination_rowid;",
-            )
-            .map_err(|error| format!("could not reconcile changed staged IDs: {error}"))?;
+        )
+        .map_err(|error| format!("could not reconcile changed staged IDs: {error}"))?;
         {
-            let mut statement = connection
-                .prepare(
+            let mut statement = crate::core::stage_sql::prepare(connection,
                     "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes,
                             d.rowid,d.mailbox,d.uidvalidity,d.uid,d.message_id,d.internal_date,d.date_key,d.size_bytes
                      FROM staged_changed_pairs p
@@ -264,13 +259,13 @@ impl MessageVerification {
                 changed_count = changed_count.saturating_add(1);
             }
         }
-        connection
-            .execute_batch(
-                "DROP TABLE staged_changed_pairs;
+        crate::core::stage_sql::execute_batch(
+            connection,
+            "DROP TABLE staged_changed_pairs;
                  DROP TABLE staged_changed_source_ranked;
                  DROP TABLE staged_changed_destination_ranked;",
-            )
-            .map_err(|error| format!("could not release changed reconciliation rows: {error}"))?;
+        )
+        .map_err(|error| format!("could not release changed reconciliation rows: {error}"))?;
 
         // Same Message-ID and metadata in a wrong folder.
         let mut after_rowid = 0_i64;
@@ -284,7 +279,7 @@ impl MessageVerification {
             after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
             for source in batch {
                 let expected = expected_destination_folder(&source.key, folder_mapping);
-                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox< ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox DESC,d.uidvalidity,d.uid LIMIT 1";
+                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d INDEXED BY staged_messages_exact_destination WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox< ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox DESC,d.uidvalidity,d.uid LIMIT 1";
                 let lower = stage_candidate(
                     connection,
                     query,
@@ -295,7 +290,7 @@ impl MessageVerification {
                         expected
                     ],
                 )?;
-                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox> ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox,d.uidvalidity,d.uid LIMIT 1";
+                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d INDEXED BY staged_messages_exact_destination WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox> ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox,d.uidvalidity,d.uid LIMIT 1";
                 let upper = stage_candidate(
                     connection,
                     query,
@@ -338,66 +333,71 @@ impl MessageVerification {
 
         // A probable match is permitted only when exactly one unmatched
         // message exists on each side of a mapped-folder/date/size bucket.
-        // Aggregate and pair those buckets inside SQLite in one set operation.
-        let probable_rows = connection
-            .execute(
-                "WITH source_buckets AS (
-                    SELECT match_mailbox,date_key,size_bytes,COUNT(*) AS n
+        // Reduce each side to its singleton buckets first, then pair them
+        // one to one. Joining rows before discarding shared buckets cost the
+        // square of a bucket's size: 100,000 messages per side with one
+        // shared date/size bucket of 5,000 took about a minute.
+        crate::core::stage_sql::execute_batch(
+            connection,
+            "CREATE TABLE staged_probable_source AS
+                SELECT mailbox,uidvalidity,uid,match_mailbox,date_key,size_bytes FROM (
+                    SELECT s.mailbox,s.uidvalidity,s.uid,s.match_mailbox,s.date_key,s.size_bytes,
+                           COUNT(*) OVER (PARTITION BY s.match_mailbox,s.date_key,s.size_bytes) AS n
                     FROM staged_messages s
-                    WHERE side=0 AND date_key IS NOT NULL AND size_bytes IS NOT NULL
+                    WHERE s.side=0 AND s.date_key IS NOT NULL AND s.size_bytes IS NOT NULL
                       AND NOT EXISTS (
                           SELECT 1 FROM staged_matched m
                           WHERE m.side=s.side AND m.mailbox=s.mailbox
                             AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid
                       )
-                    GROUP BY match_mailbox,date_key,size_bytes
-                    HAVING COUNT(*)=1
-                 ), destination_buckets AS (
-                    SELECT match_mailbox,date_key,size_bytes,COUNT(*) AS n
+                ) WHERE n=1;
+             CREATE INDEX staged_probable_source_key
+                ON staged_probable_source(match_mailbox,date_key,size_bytes);
+             CREATE TABLE staged_probable_destination AS
+                SELECT mailbox,uidvalidity,uid,match_mailbox,date_key,size_bytes FROM (
+                    SELECT d.mailbox,d.uidvalidity,d.uid,d.match_mailbox,d.date_key,d.size_bytes,
+                           COUNT(*) OVER (PARTITION BY d.match_mailbox,d.date_key,d.size_bytes) AS n
                     FROM staged_messages d
-                    WHERE side=1 AND date_key IS NOT NULL AND size_bytes IS NOT NULL
+                    WHERE d.side=1 AND d.date_key IS NOT NULL AND d.size_bytes IS NOT NULL
                       AND NOT EXISTS (
                           SELECT 1 FROM staged_matched m
                           WHERE m.side=d.side AND m.mailbox=d.mailbox
                             AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid
                       )
-                    GROUP BY match_mailbox,date_key,size_bytes
-                    HAVING COUNT(*)=1
-                 ), pairs AS (
-                    SELECT s.mailbox AS source_mailbox,
-                           s.uidvalidity AS source_uidvalidity,
-                           s.uid AS source_uid,
-                           d.mailbox AS destination_mailbox,
-                           d.uidvalidity AS destination_uidvalidity,
-                           d.uid AS destination_uid
-                    FROM source_buckets sb
-                    JOIN destination_buckets db USING(match_mailbox,date_key,size_bytes)
-                    JOIN staged_messages s
-                      ON s.side=0 AND s.match_mailbox=sb.match_mailbox
-                     AND s.date_key=sb.date_key AND s.size_bytes=sb.size_bytes
-                     AND NOT EXISTS (
-                         SELECT 1 FROM staged_matched m
-                         WHERE m.side=s.side AND m.mailbox=s.mailbox
-                           AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid
-                     )
-                    JOIN staged_messages d
-                      ON d.side=1 AND d.match_mailbox=db.match_mailbox
-                     AND d.date_key=db.date_key AND d.size_bytes=db.size_bytes
-                     AND NOT EXISTS (
-                         SELECT 1 FROM staged_matched m
-                         WHERE m.side=d.side AND m.mailbox=d.mailbox
-                           AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid
-                     )
-                 )
-                 INSERT INTO staged_matched(side,mailbox,uidvalidity,uid)
-                 SELECT 0,source_mailbox,source_uidvalidity,source_uid FROM pairs
-                 UNION ALL
-                 SELECT 1,destination_mailbox,destination_uidvalidity,destination_uid FROM pairs",
-                [],
-            )
-            .map_err(|error| format!("could not reconcile unique staged fingerprints: {error}"))?;
-        let probable_matches = u64::try_from(probable_rows / 2)
-            .map_err(|_| "probable staged match count exceeded SQLite range".to_owned())?;
+                ) WHERE n=1;
+             CREATE TABLE staged_probable_pairs AS
+                SELECT s.mailbox AS source_mailbox,
+                       s.uidvalidity AS source_uidvalidity,
+                       s.uid AS source_uid,
+                       d.mailbox AS destination_mailbox,
+                       d.uidvalidity AS destination_uidvalidity,
+                       d.uid AS destination_uid
+                FROM staged_probable_destination d
+                JOIN staged_probable_source s
+                  ON s.match_mailbox=d.match_mailbox
+                 AND s.date_key=d.date_key AND s.size_bytes=d.size_bytes;
+             INSERT INTO staged_matched(side,mailbox,uidvalidity,uid)
+                SELECT 0,source_mailbox,source_uidvalidity,source_uid FROM staged_probable_pairs
+             UNION ALL
+                SELECT 1,destination_mailbox,destination_uidvalidity,destination_uid FROM staged_probable_pairs;",
+        )
+        .map_err(|error| format!("could not reconcile unique staged fingerprints: {error}"))?;
+        let probable_matches = connection
+            .query_row("SELECT COUNT(*) FROM staged_probable_pairs", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| format!("could not count probable staged matches: {error}"))
+            .and_then(|count| {
+                u64::try_from(count)
+                    .map_err(|_| format!("probable staged match count is invalid: {count}"))
+            })?;
+        crate::core::stage_sql::execute_batch(
+            connection,
+            "DROP TABLE staged_probable_pairs;
+             DROP TABLE staged_probable_source;
+             DROP TABLE staged_probable_destination;",
+        )
+        .map_err(|error| format!("could not release probable reconciliation rows: {error}"))?;
 
         // Remaining rows become bounded mismatch evidence.
         after_rowid = 0;
@@ -426,7 +426,7 @@ impl MessageVerification {
                 missing_count = missing_count.saturating_add(1);
             }
         }
-        connection.execute_batch("CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0; CREATE INDEX staged_duplicate_ids_message_id ON staged_duplicate_ids(message_id);").map_err(|error| error.to_string())?;
+        crate::core::stage_sql::execute_batch(connection, "CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0; CREATE INDEX staged_duplicate_ids_message_id ON staged_duplicate_ids(message_id);").map_err(|error| error.to_string())?;
         after_rowid = 0;
         loop {
             let batch = stage
@@ -438,16 +438,16 @@ impl MessageVerification {
             after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
             for destination in batch {
                 let duplicated = match destination.message.message_id.as_deref() {
-                    Some(id) => connection
-                        .prepare_cached(
-                            "SELECT EXISTS(SELECT 1 FROM staged_duplicate_ids WHERE message_id=?1)",
-                        )
-                        .and_then(|mut statement| {
-                            statement.query_row([id], |row| row.get::<_, bool>(0))
-                        })
-                        .map_err(|error| {
-                            format!("could not classify staged duplicate message: {error}")
-                        })?,
+                    Some(id) => crate::core::stage_sql::prepare_cached(
+                        connection,
+                        "SELECT EXISTS(SELECT 1 FROM staged_duplicate_ids WHERE message_id=?1)",
+                    )
+                    .and_then(|mut statement| {
+                        statement.query_row([id], |row| row.get::<_, bool>(0))
+                    })
+                    .map_err(|error| {
+                        format!("could not classify staged duplicate message: {error}")
+                    })?,
                     None => false,
                 };
                 let mismatch_type = if duplicated {

@@ -26,10 +26,14 @@ awk -v strict="$strict" -v preview_release="$preview_release" '
   }
   /^\|[[:space:]]*Source[[:space:]]*\|/ {
     header = 1
+    found_header = 1
     next
   }
   header && /^\|[[:space:]]*:?-+[[:space:]]*\|/ {
     next
+  }
+  header && !/^\|/ {
+    header = 0
   }
   header && /^\|/ {
     fields = split($0, columns, "|")
@@ -87,7 +91,7 @@ awk -v strict="$strict" -v preview_release="$preview_release" '
     rows++
   }
   END {
-    if (!header) {
+    if (!found_header) {
       print "FAIL: compatibility matrix table header is missing" > "/dev/stderr"
       exit 1
     }

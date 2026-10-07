@@ -340,6 +340,16 @@ impl App {
             if let Some(mailbox) = selected_mailbox {
                 let assurance = mailbox.assurance();
                 ui.separator();
+                self.mailbox_evidence_card_ui(ui, &mailbox);
+                if let Some((run_id, evidence, _)) = mailbox.evidence.as_ref()
+                    && matches!(
+                        evidence.verification_method(),
+                        crate::core::VerificationMethod::MetadataReconciliation
+                            | crate::core::VerificationMethod::BodyHash
+                    )
+                {
+                    self.mismatch_inspector_ui(ui, &mailbox.job.id, run_id, evidence);
+                }
                 ui.heading(self.language.message("ui.assurance"));
                 ui.label(if assurance.unresolved {
                     self.language
