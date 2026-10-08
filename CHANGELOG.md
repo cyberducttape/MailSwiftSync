@@ -10,6 +10,9 @@
   rotated refresh tokens back to the configured keyring or fail closed.
 - Replace sparse-mailbox UIDNEXT-window enumeration with EXISTS-bounded
   sequence-number UID FETCH pages and snapshot consistency checks.
+- Reject throttle divisors that would multiply a configured aggregate
+  message/byte budget, require complete non-excepted flag coverage for exact
+  verification, and bound subprocess output-drainer completion after exit.
 - Add a verification workspace drill-down with durable mismatch details,
   mailbox evidence, staged SQL reads, and customer-safe/operator evidence
   views. Restore the CI verification gates and cover the new schema and

@@ -481,8 +481,12 @@ impl VerificationEvidence {
     }
 
     fn has_flag_mismatch(&self) -> bool {
-        self.flag_verification
-            .is_some_and(|flags| flags.mismatched_messages > 0 || !flags.is_consistent())
+        self.flag_verification.is_some_and(|flags| {
+            flags.mismatched_messages > 0
+                || flags.excepted_messages > 0
+                || flags.compared_messages != self.source_messages
+                || !flags.is_consistent()
+        })
     }
 
     fn has_verification_exception(&self) -> bool {
@@ -1051,6 +1055,17 @@ mod tests {
         assert_eq!(
             evidence.dimensions().custom_keywords,
             EvidenceDimensionStatus::Pass
+        );
+
+        evidence.flag_verification = Some(super::FlagVerification {
+            compared_messages: 0,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        });
+        assert!(!evidence.is_exact_match());
+        assert_eq!(
+            evidence.dimensions().system_flags,
+            EvidenceDimensionStatus::Warning
         );
 
         evidence.flag_verification = Some(super::FlagVerification {

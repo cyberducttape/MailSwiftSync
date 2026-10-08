@@ -676,6 +676,20 @@ fn batch_throttles_are_divided_across_workers() {
 }
 
 #[test]
+fn engine_throttle_rejects_a_divisor_that_would_exceed_the_aggregate_budget() {
+    let mut profile = Profile {
+        max_messages_per_second: 1,
+        max_bytes_per_second: 1,
+        ..Profile::default()
+    };
+    assert!(engine::imapsync_args(&profile, true, 16).is_err());
+    profile.max_messages_per_second = 16;
+    assert!(engine::imapsync_args(&profile, true, 16).is_err());
+    profile.max_bytes_per_second = 16;
+    assert!(engine::imapsync_args(&profile, true, 16).is_ok());
+}
+
+#[test]
 fn process_launch_limiter_honors_cancellation() {
     let limiter = ProcessLaunchLimiter::new(1);
     let cancel = AtomicBool::new(true);

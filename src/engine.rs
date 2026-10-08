@@ -14,6 +14,7 @@ pub(crate) fn imapsync_args(
     dry_run: bool,
     throttle_divisor: usize,
 ) -> Result<Vec<String>, PlanError> {
+    validate_throttle_divisor(profile, throttle_divisor)?;
     let extra_options = crate::extra_options::canonical(&profile.extra_options)?;
     Ok(imapsync_args_with_extra_options(
         profile,
@@ -32,6 +33,7 @@ pub(crate) fn imapsync_preview_args(
     dry_run: bool,
     throttle_divisor: usize,
 ) -> Result<Vec<String>, String> {
+    validate_throttle_divisor(profile, throttle_divisor)?;
     let extra_options = crate::extra_options::canonical(&profile.extra_options)?;
     Ok(imapsync_args_with_extra_options(
         profile,
@@ -40,6 +42,25 @@ pub(crate) fn imapsync_preview_args(
         true,
         extra_options,
     ))
+}
+
+fn validate_throttle_divisor(profile: &Profile, throttle_divisor: usize) -> Result<(), String> {
+    let divisor = throttle_divisor.max(1);
+    if profile.max_messages_per_second > 0
+        && (divisor > u32::MAX as usize || profile.max_messages_per_second < divisor as u32)
+    {
+        return Err(format!(
+            "Messages/second target ({}) cannot be divided across {divisor} active workers without exceeding the configured aggregate budget",
+            profile.max_messages_per_second
+        ));
+    }
+    if profile.max_bytes_per_second > 0 && profile.max_bytes_per_second < divisor as u64 {
+        return Err(format!(
+            "Bytes/second target ({}) cannot be divided across {divisor} active workers without exceeding the configured aggregate budget",
+            profile.max_bytes_per_second
+        ));
+    }
+    Ok(())
 }
 
 fn imapsync_args_with_extra_options(
@@ -141,17 +162,13 @@ fn imapsync_args_with_extra_options(
     if profile.max_messages_per_second > 0 {
         args.extend([
             "--maxmessagespersecond".into(),
-            (profile.max_messages_per_second / divisor as u32)
-                .max(1)
-                .to_string(),
+            (profile.max_messages_per_second / divisor as u32).to_string(),
         ]);
     }
     if profile.max_bytes_per_second > 0 {
         args.extend([
             "--maxbytespersecond".into(),
-            (profile.max_bytes_per_second / divisor as u64)
-                .max(1)
-                .to_string(),
+            (profile.max_bytes_per_second / divisor as u64).to_string(),
         ]);
     }
     if dry_run {

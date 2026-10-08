@@ -81,9 +81,9 @@ use crate::{
     MAX_PROCESS_TAIL_LINES, StreamOutcome, core,
     credentials::SecretString,
     process::{
-        ProcessOutcome, attach_child_supervisor, collect_redacted_lines_with_callback,
-        configure_process_group, for_each_lossy_line, process_identity, terminate_process_group,
-        wait_with_timeout,
+        ProcessOutcome, READER_DRAIN_TIMEOUT, attach_child_supervisor,
+        collect_redacted_lines_with_callback, configure_process_group, for_each_lossy_line,
+        process_identity, receive_reader_result, terminate_process_group, wait_with_timeout,
     },
     truncate_utf8, verification,
 };
@@ -228,8 +228,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let durable_progress = transfer_pass.is_some();
     let mut last_progress_event: Option<std::time::Instant> = None;
     let mut last_durable_progress_event: Option<std::time::Instant> = None;
+    let (out_reader_tx, out_reader_rx) = mpsc::sync_channel(1);
     let out_thread = thread::spawn(move || {
-        for_each_lossy_line(stdout, |line| {
+        let result = for_each_lossy_line(stdout, |line| {
             let safe = crate::process::redact_known_secrets(
                 line,
                 out_secrets.iter().map(SecretString::as_str),
@@ -297,7 +298,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             {
                 out_dropped_diagnostics.fetch_add(1, Ordering::Relaxed);
             }
-        })
+        });
+        let _ = out_reader_tx.send(result);
     });
     let err_tx = tx.clone();
     let err_prefix = prefix.to_owned();
@@ -310,8 +312,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let err_project_id = project_id.to_owned();
     let err_logger = diagnostic_logger.clone();
     let err_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
+    let (err_reader_tx, err_reader_rx) = mpsc::sync_channel(1);
     let err_thread = thread::spawn(move || {
-        for_each_lossy_line(stderr, |line| {
+        let result = for_each_lossy_line(stderr, |line| {
             let safe = crate::process::redact_known_secrets(
                 line,
                 err_secrets.iter().map(SecretString::as_str),
@@ -337,7 +340,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             {
                 err_dropped_diagnostics.fetch_add(1, Ordering::Relaxed);
             }
-        })
+        });
+        let _ = err_reader_tx.send(result);
     });
     // Start both drainers before the reliable lifecycle send. If the
     // bounded event queue is temporarily full, this send may wait, but the
@@ -455,15 +459,12 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] streaming wait returned; joining stdout reader");
     }
-    let stdout_reader = out_thread
-        .join()
-        .map_err(|_| "stdout reader thread panicked".to_owned());
+    let reader_deadline = std::time::Instant::now() + READER_DRAIN_TIMEOUT;
+    let stdout_reader = receive_reader_result(out_reader_rx, out_thread, reader_deadline, "stdout");
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] stdout reader joined; joining stderr reader");
     }
-    let stderr_reader = err_thread
-        .join()
-        .map_err(|_| "stderr reader thread panicked".to_owned());
+    let stderr_reader = receive_reader_result(err_reader_rx, err_thread, reader_deadline, "stderr");
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] stderr reader joined");
     }
@@ -486,8 +487,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 .and_then(|result| result.as_ref().err())
                 .map(|error| format!("stderr reader failed: {error}"))
         });
-    // The readers have joined: deliver the final counters reliably so the
-    // cockpit does not stop at the last throttled snapshot.
+    // Deliver the final counters reliably after the bounded reader wait so
+    // the cockpit does not stop at the last throttled snapshot.
     let final_progress = progress.lock().ok().map(|progress| *progress);
     if let Some(final_progress) = final_progress.filter(|progress| progress.has_activity()) {
         let _ = send_reliable_event(
@@ -522,8 +523,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     }
     let dropped = dropped_diagnostics.load(Ordering::Relaxed);
     if dropped > 0 {
-        // The reader threads have joined, so the content-free accounting
-        // event can be sent reliably without blocking a child pipe.
+        // The accounting event is content-free and can be sent without
+        // blocking a child pipe.
         let _ = send_reliable_event(
             tx,
             Event::DiagnosticLinesDropped {
@@ -534,9 +535,13 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         );
     }
     let mut failed_diagnostic_writes = failed_diagnostic_writes.load(Ordering::Relaxed);
-    // Both drainers have joined. Close this run's transcript off the drainer
-    // path; the writer reports lines it accepted but could not persist.
-    if let Some(logger) = &diagnostic_logger {
+    // Do not finalize a transcript while a timed-out drainer may still be
+    // writing it. The detached drainer retains the logger until its inherited
+    // descriptor closes; retention cleanup can remove the unfinished record.
+    let reader_detached = reader_error
+        .as_deref()
+        .is_some_and(|error| error.contains("reader did not close"));
+    if !reader_detached && let Some(logger) = &diagnostic_logger {
         match logger.finish_run(run_id) {
             Ok(failed) => failed_diagnostic_writes += failed,
             Err(error) => {

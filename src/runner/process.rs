@@ -288,21 +288,25 @@ pub(crate) fn run_capture_lines(
     };
     let out_secrets = secrets.to_vec();
     let out_observer = observer.clone();
+    let (out_reader_tx, out_reader_rx) = mpsc::sync_channel(1);
     let out_thread = thread::spawn(move || {
-        collect_redacted_lines_with_callback(stdout, &out_secrets, |line| {
+        let result = collect_redacted_lines_with_callback(stdout, &out_secrets, |line| {
             if let Some(observer) = &out_observer {
                 observer(line);
             }
-        })
+        });
+        let _ = out_reader_tx.send(result);
     });
     let err_secrets = secrets.to_vec();
     let err_observer = observer;
+    let (err_reader_tx, err_reader_rx) = mpsc::sync_channel(1);
     let err_thread = thread::spawn(move || {
-        collect_redacted_lines_with_callback(stderr, &err_secrets, |line| {
+        let result = collect_redacted_lines_with_callback(stderr, &err_secrets, |line| {
             if let Some(observer) = &err_observer {
                 observer(line);
             }
-        })
+        });
+        let _ = err_reader_tx.send(result);
     });
     let registration = durable.map(|(tx, run_id, job_id)| {
         register_process(tx, run_id, job_id, executable, &child, cancel)
@@ -336,17 +340,24 @@ pub(crate) fn run_capture_lines(
     if debug_supervision {
         eprintln!("[process-debug] capture wait returned; joining stdout reader");
     }
-    let stdout_lines = out_thread
-        .join()
-        .map_err(|_| "stdout reader thread panicked".to_owned())?
-        .map_err(|error| format!("stdout reader failed: {error}"));
+    let reader_deadline = std::time::Instant::now() + crate::process::READER_DRAIN_TIMEOUT;
+    let stdout_lines = crate::process::receive_reader_result(
+        out_reader_rx,
+        out_thread,
+        reader_deadline,
+        "stdout",
+    )?
+    .map_err(|error| format!("stdout reader failed: {error}"));
     if debug_supervision {
         eprintln!("[process-debug] stdout reader joined; joining stderr reader");
     }
-    let stderr_lines = err_thread
-        .join()
-        .map_err(|_| "stderr reader thread panicked".to_owned())?
-        .map_err(|error| format!("stderr reader failed: {error}"));
+    let stderr_lines = crate::process::receive_reader_result(
+        err_reader_rx,
+        err_thread,
+        reader_deadline,
+        "stderr",
+    )?
+    .map_err(|error| format!("stderr reader failed: {error}"));
     if debug_supervision {
         eprintln!("[process-debug] stderr reader joined");
     }
@@ -374,4 +385,27 @@ pub(crate) fn run_capture_lines(
 
 pub(crate) fn process_supervision_debug_enabled() -> bool {
     std::env::var_os("MAILSWIFTSYNC_DEBUG_PROCESS_WAIT").is_some_and(|value| value == "1")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reader_result_join_is_bounded_when_a_pipe_drainer_does_not_finish() {
+        let (sender, receiver) = mpsc::sync_channel::<()>(1);
+        let handle = thread::spawn(move || {
+            let _sender = sender;
+            thread::sleep(Duration::from_millis(100));
+        });
+        let started = std::time::Instant::now();
+        let result = crate::process::receive_reader_result(
+            receiver,
+            handle,
+            started + Duration::from_millis(10),
+            "stdout",
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_millis(80));
+    }
 }

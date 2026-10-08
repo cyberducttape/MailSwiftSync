@@ -23,6 +23,41 @@ const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
 const MAX_CAPTURED_OUTPUT_LINES: usize = 8 * 1024;
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
+/// Reader threads normally finish immediately after the child process group
+/// closes its pipes. A detached descendant can inherit a pipe forever,
+/// however, so process supervision must never join a drainer without a
+/// deadline.
+pub(crate) const READER_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) fn receive_reader_result<T>(
+    receiver: std::sync::mpsc::Receiver<T>,
+    handle: thread::JoinHandle<()>,
+    deadline: Instant,
+    stream_name: &str,
+) -> Result<T, String> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(result) => handle
+            .join()
+            .map_err(|_| format!("{stream_name} reader thread panicked"))
+            .map(|_| result),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // The reader owns the OS pipe and cannot be force-joined safely.
+            // Dropping the handle detaches it; the bounded caller error lets
+            // the controller finish while the thread exits when the inherited
+            // descriptor is eventually closed.
+            drop(handle);
+            Err(format!(
+                "{stream_name} reader did not close within {} seconds after process supervision ended",
+                READER_DRAIN_TIMEOUT.as_secs()
+            ))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+            "{stream_name} reader thread exited without a result"
+        )),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EngineExecutionProfile {
     Compatibility,

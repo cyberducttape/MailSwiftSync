@@ -5319,6 +5319,38 @@ fn terminal_write_rejects_exact_outcome_with_flag_mismatches() {
 }
 
 #[test]
+fn verified_mailbox_rejects_uncompared_flags_even_without_mismatches() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db.create_project("flags", "source", "destination").unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "flag-run", "imapsync")
+        .unwrap();
+    let evidence = flag_evidence(
+        VerificationOutcome::ExactMetadataMatch,
+        Some(FlagVerification {
+            compared_messages: 0,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        }),
+    );
+    assert!(!evidence.is_exact_match());
+    assert!(
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "flag-run",
+            "completed",
+            "verified",
+            "",
+            &evidence,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn readonly_rejects_exact_evidence_whose_flag_row_records_mismatches() {
     let directory = std::env::temp_dir().join(format!(
         "mailswiftsync-schema-flag-semantics-{}",
