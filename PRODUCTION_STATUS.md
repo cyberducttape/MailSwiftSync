@@ -235,6 +235,14 @@ new metadata verifier against real accounts.
 - ⏳ Successful live pilots with real data
 - ⏳ Recovery/interruption testing with production accounts
 - ⏳ Provider-specific edge case validation
+- ⏳ Signed real-provider qualification artifacts for Gmail/Workspace ↔
+  Microsoft 365 routes; generic IMAP fixtures and synthetic reconciliation do
+  not satisfy this gate
+- ⏳ Hypervisor power-cut campaign with durable-ledger and evidence comparison
+- ⏳ Real-engine 1/4/8/16-worker concurrency/resource matrix
+- ⏳ Capacity-planning evidence for the 1,000,000-message metadata and
+  100,000-message body-proof envelopes, including the shared body-byte budget;
+  unknown capacity remains fail-closed rather than scale-qualified
 - ⚠️ The packaged-engine scale lab completed both hosted generic-IMAP scenarios on 2026-10-04: 100,016 messages / 28.7 MB in 1,045 s (≈1.17 GiB sampled peak container memory) and 10,016 messages / 1.08 GB of bodies in 90 s (≈349 MiB), each with seed, incremental delta, exact metadata reconciliation, and zero unresolved differences. Per-process attribution shows the MailSwiftSync controller at 25–29 MiB; imapsync (≈451 MiB for one 100k-message folder) and reclaimable page cache account for the rest. This is not a 20 GiB, multi-migration, or hosted-provider qualification; Gmail/Microsoft 365 qualification remains outstanding. See [release readiness](docs/release-readiness.md) and the [100k run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37246504219) and [1 GiB run](https://github.com/cyberducttape/MailSwiftSync/actions/runs/37246501700).
 - ⚠️ CI scheduler stress coverage settles 1,024 synthetic mailbox jobs across 32 tenant domains at 16 workers; this does not exercise concurrent IMAP engines or qualify provider limits.
 

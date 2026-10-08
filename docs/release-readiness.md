@@ -235,6 +235,16 @@ screen-reader checklist are recorded in
   simultaneous real-engine resource measurements remain release evidence to
   collect; the existing 100k single-engine result must not be generalized to
   that matrix.
+- GA remains blocked until the release evidence package contains signed,
+  reviewed real-provider qualification for the supported Gmail/Workspace and
+  Microsoft 365 routes, a completed hypervisor power-cut campaign, and the
+  real-engine 1/4/8/16-worker matrix. Synthetic reconciliation, generic IMAP
+  fixtures, and controller-only scheduler stress are not substitutes for
+  those gates. The verification envelope's 1,000,000-message metadata,
+  100,000-body-proof, response-size, and shared-byte limits must be shown in
+  capacity planning before admission where the observed inventory permits it;
+  otherwise the run must remain explicitly subject to fail-closed verification
+  limits rather than being described as scale-qualified.
 - The [release upgrade and provider-failure matrix](release-upgrade-validation.md)
   defines the binary-produced 0.8→0.9→RC→1.0 persistence campaign and the
   real-provider throttling, quota, token-expiry, disconnect, folder-limit,

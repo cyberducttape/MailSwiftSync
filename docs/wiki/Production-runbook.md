@@ -76,6 +76,17 @@ binary is upgraded, rather than being interpreted with missing columns.
 9. Export **Customer proof JSON** for the change record and retain the separate project JSON/Markdown report for operator forensics. Customer proof omits internal endpoints, credential references, plan snapshots, executable paths, and diagnostic detail. Sign the customer proof with the approved Ed25519 key before distributing it.
 10. For a GUI-independent maintenance window, run `mailswiftsync supervise <state.db> 30 0` under the host service manager. It retries only automation-safe work and leaves Attention/verification-difference rows for review; configure restart limits and logs in the service manager.
 
+For cutover verification, treat mailbox activity as part of the change
+window. Prefer pausing inbound delivery, client edits, rules, and other
+writers while the final delta and verification run. When a provider cannot be
+quiesced, use a documented watermark or quiet interval, run the final delta,
+then start a fresh verification and retain the delivery/operation timestamps
+with the report. MailSwiftSync validates each folder's own UID snapshot, but
+source and destination are not observed as one atomic cross-server snapshot;
+changes between scans can legitimately appear as differences. Rerun after the
+quiet interval and compare the repeated differences with provider logs before
+classifying them as transfer loss or accepting a residual difference.
+
 Once every mailbox is evidence-backed, MailSwiftSync may mark the project
 **Complete**. Complete projects are intentionally read-only: adding a mailbox,
 starting a run, or changing mailbox state is rejected by the durable core. If a

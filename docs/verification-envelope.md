@@ -37,6 +37,27 @@ state a client cannot store.
 | Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
 | Point in time | Each side is read once. A user reading or flagging mail between the source and destination scans, or after cutover, is reported as a difference. Pages kept by a resumed verification keep the flags observed when they were staged. |
 
+## Snapshot and cutover semantics
+
+The source and destination scans are not one atomic cross-server snapshot.
+Each selected folder is checked for internal stability using its
+`UIDVALIDITY`, `UIDNEXT`, and `EXISTS` values, but the two endpoints are
+observed at different times. Delivery, user actions, server-side rules, and
+flag changes between those observations can therefore appear as missing,
+extra, changed, or flag differences even when the transfer itself was correct.
+The evidence records the per-folder UID snapshot and verification run identity;
+it is not a global cross-provider timestamp or a claim that mail flow was
+quiescent.
+
+For a cutover, operators must either pause inbound delivery and mailbox edits
+for the verification window or use an explicit final-delta protocol: complete
+the initial transfer, quiesce or narrowly watermark mail flow, run the final
+delta, then run a fresh verification after the delta. If quiescence is not
+possible, rerun verification after a documented quiet interval and triage
+repeated differences against delivery and user-action logs. Do not treat a
+single live-change mismatch as proof of transfer loss, and do not accept it
+as harmless without recording the operator decision and evidence run.
+
 Evidence recorded before flag verification existed, aggregate evidence, and
 native Dovecot evidence report flags as not verified. Reports and the GUI show
 the verification tier, how many source messages were individually checked,
