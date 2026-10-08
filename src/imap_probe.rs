@@ -1060,8 +1060,11 @@ where
             .min(exists);
         let search_tag = format!("s{:03}", search_number + 2);
         search_number = search_number.saturating_add(1);
+        // FETCH takes a sequence-number set.  Prefixing this with UID would
+        // make the range a historical UID set, defeating EXISTS-bounded
+        // enumeration for sparse mailboxes.
         let search_command =
-            format!("{search_tag} UID FETCH {sequence_start}:{sequence_end} (UID)\r\n");
+            format!("{search_tag} FETCH {sequence_start}:{sequence_end} (UID)\r\n");
         write_imap_command(
             stream,
             search_command.as_bytes(),
@@ -1074,7 +1077,7 @@ where
             return Err(imap_command_failure(
                 response.as_str(),
                 &search_tag,
-                "FETCH mailbox UID page",
+                "FETCH mailbox sequence page",
                 host,
             ));
         }

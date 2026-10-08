@@ -105,7 +105,7 @@ pub(super) fn parse_uid_search_response(
     Ok(uids)
 }
 
-/// Parse the UID values returned by a sequence-number `UID FETCH (... UID)`
+/// Parse the UID values returned by a sequence-number `FETCH (... UID)`
 /// page. Unlike UID SEARCH, this command's request size is based on EXISTS,
 /// so sparse historical UID spaces do not create one request per empty UID
 /// window.

@@ -9,7 +9,8 @@
   before independent verification, atomically rotate token files, and persist
   rotated refresh tokens back to the configured keyring or fail closed.
 - Replace sparse-mailbox UIDNEXT-window enumeration with EXISTS-bounded
-  sequence-number UID FETCH pages and snapshot consistency checks.
+  sequence-number FETCH pages and snapshot consistency checks; ensure the
+  enumeration command uses sequence numbers rather than historical UIDs.
 - Reject throttle divisors that would multiply a configured aggregate
   message/byte budget, require complete non-excepted flag coverage for exact
   verification, and bound subprocess output-drainer completion after exit.

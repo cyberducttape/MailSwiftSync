@@ -17,7 +17,7 @@ const SIDE: StagedMessageSide = StagedMessageSide::Destination;
 const PAGE: u64 = MESSAGE_FETCH_PAGE_SIZE;
 
 /// Minimal scripted IMAP server for one folder: answers SELECT, sequence
-/// number UID FETCH enumeration, and UID FETCH (metadata and optional BODY[])
+/// number FETCH enumeration, and UID FETCH (metadata and optional BODY[])
 /// from an in-memory
 /// UID set, recording every UID it was asked to fetch. Messages listed in
 /// `flags` carry a FLAGS item; SELECT advertises `permanent_flags` if set.
@@ -72,52 +72,52 @@ impl FolderServer {
                 self.uidvalidity,
                 self.uidnext
             )
+        } else if let Some(rest) = command.strip_prefix("FETCH ") {
+            let set = rest.split_whitespace().next().unwrap();
+            assert!(rest.ends_with("(UID)"));
+            self.uid_enumeration_commands += 1;
+            let (low, high) = set.split_once(':').unwrap();
+            let low = low.parse::<u64>().unwrap();
+            let high = high.parse::<u64>().unwrap();
+            let mut reply = String::new();
+            for sequence in low..=high {
+                if let Some(uid) = self.uids.get(sequence.saturating_sub(1) as usize) {
+                    reply.push_str(&format!("* {sequence} FETCH (UID {uid})\r\n"));
+                }
+            }
+            reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
+            reply
         } else if let Some(rest) = command.strip_prefix("UID FETCH ") {
             let set = rest.split_whitespace().next().unwrap();
-            if rest.ends_with("(UID)") {
-                self.uid_enumeration_commands += 1;
-                let (low, high) = set.split_once(':').unwrap();
-                let low = low.parse::<u64>().unwrap();
-                let high = high.parse::<u64>().unwrap();
-                let mut reply = String::new();
-                for sequence in low..=high {
-                    if let Some(uid) = self.uids.get(sequence.saturating_sub(1) as usize) {
-                        reply.push_str(&format!("* {sequence} FETCH (UID {uid})\r\n"));
-                    }
-                }
-                reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
-                reply
-            } else {
-                let with_body = rest.contains("BODY.PEEK[]");
-                self.fetch_commands += 1;
-                let mut reply = String::new();
-                let requested = set.split(',').flat_map(|item| {
-                    let (low, high) = item.split_once(':').unwrap_or((item, item));
-                    low.parse::<u64>().unwrap()..=high.parse::<u64>().unwrap()
-                });
-                for uid in requested {
-                    self.fetched.push(uid);
-                    let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
-                    let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
-                    let body = if with_body {
-                        let body = format!("body of {uid}");
-                        format!(" BODY[] {{{}}}\r\n{body}", body.len())
-                    } else {
-                        String::new()
-                    };
-                    let flags = self
-                        .flags
-                        .get(&uid)
-                        .map(|flags| format!("FLAGS ({flags}) "))
-                        .unwrap_or_default();
-                    reply.push_str(&format!(
-                        "* {sequence} FETCH (UID {uid} {flags}RFC822.SIZE 10 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n{header}{body})\r\n",
-                        header.len()
-                    ));
-                }
-                reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
-                reply
+            let with_body = rest.contains("BODY.PEEK[]");
+            self.fetch_commands += 1;
+            let mut reply = String::new();
+            let requested = set.split(',').flat_map(|item| {
+                let (low, high) = item.split_once(':').unwrap_or((item, item));
+                low.parse::<u64>().unwrap()..=high.parse::<u64>().unwrap()
+            });
+            for uid in requested {
+                self.fetched.push(uid);
+                let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
+                let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
+                let body = if with_body {
+                    let body = format!("body of {uid}");
+                    format!(" BODY[] {{{}}}\r\n{body}", body.len())
+                } else {
+                    String::new()
+                };
+                let flags = self
+                    .flags
+                    .get(&uid)
+                    .map(|flags| format!("FLAGS ({flags}) "))
+                    .unwrap_or_default();
+                reply.push_str(&format!(
+                    "* {sequence} FETCH (UID {uid} {flags}RFC822.SIZE 10 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n{header}{body})\r\n",
+                    header.len()
+                ));
             }
+            reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
+            reply
         } else {
             panic!("unexpected command {line}");
         };
