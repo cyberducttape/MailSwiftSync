@@ -57,6 +57,10 @@ pub(super) fn upsert_evidence_projection(
 
 const MISMATCH_COLUMNS: &str = "id,mismatch_type,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_fingerprint,destination_fingerprint";
 
+/// One keyset page of a run's mismatches. `idx_message_mismatches_job_run_key`
+/// lets it seek on `(job_id, run_id, rowid)` instead of scanning all runs.
+pub(super) const MISMATCH_PAGE_SQL: &str = "SELECT rowid,mismatch_type,source_folder_digest,destination_folder_digest,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_size_bytes,dest_size_bytes,source_date,dest_date FROM message_mismatches WHERE job_id=?1 AND run_id=?2 AND rowid>?3 AND (?4 IS NULL OR mismatch_type=?4) AND (?5 IS NULL OR COALESCE(source_folder_digest,destination_folder_digest,'')=?5) ORDER BY rowid LIMIT ?6";
+
 /// Filter for the verification drill-down.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MismatchFilter {
@@ -120,6 +124,17 @@ fn mismatch_from_row(
         source_fingerprint: row.get(14)?,
         destination_fingerprint: row.get(15)?,
     })
+}
+
+/// Folder names and server-supplied values are untrusted: a cell starting
+/// with a formula trigger would be evaluated when the export is opened in a
+/// spreadsheet, so it is prefixed with an apostrophe (OWASP CSV injection).
+fn spreadsheet_safe(value: String) -> String {
+    if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{value}")
+    } else {
+        value
+    }
 }
 
 fn finish_csv(
@@ -212,9 +227,7 @@ impl StateStore {
         limit: usize,
     ) -> rusqlite::Result<(Vec<StoredMismatch>, bool)> {
         let limit = limit.clamp(1, 1_000);
-        let mut statement = self.connection.prepare(
-            "SELECT rowid,mismatch_type,source_folder_digest,destination_folder_digest,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_size_bytes,dest_size_bytes,source_date,dest_date FROM message_mismatches WHERE job_id=?1 AND run_id=?2 AND rowid>?3 AND (?4 IS NULL OR mismatch_type=?4) AND (?5 IS NULL OR COALESCE(source_folder_digest,destination_folder_digest,'')=?5) ORDER BY rowid LIMIT ?6",
-        )?;
+        let mut statement = self.connection.prepare(MISMATCH_PAGE_SQL)?;
         let mut rows = statement.query(params![
             job_id,
             run_id,
@@ -279,10 +292,12 @@ impl StateStore {
             .map_err(|error| error.to_string())?;
         let folder = |digest: &Option<String>| {
             digest.as_deref().map_or_else(String::new, |digest| {
-                folder_name(digest).unwrap_or_else(|| format!("sha256:{digest}"))
+                folder_name(digest)
+                    .map(spreadsheet_safe)
+                    .unwrap_or_else(|| format!("sha256:{digest}"))
             })
         };
-        let text = |value: &Option<String>| value.clone().unwrap_or_default();
+        let text = |value: &Option<String>| value.clone().map(spreadsheet_safe).unwrap_or_default();
         let number = |value: Option<u64>| value.map(|value| value.to_string()).unwrap_or_default();
         let (mut after, mut written) = (0_i64, 0_usize);
         loop {

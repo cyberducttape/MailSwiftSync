@@ -768,6 +768,12 @@ impl StateStore {
                 false,
             ),
             (
+                "idx_message_mismatches_job_run_key",
+                &["job_id", "run_id"],
+                false,
+                false,
+            ),
+            (
                 "idx_events_run_created",
                 &["run_id", "created_at"],
                 false,
@@ -810,6 +816,7 @@ impl StateStore {
             ),
             ("idx_engine_versions_captured", "engine_versions"),
             ("idx_message_mismatches_job_run", "message_mismatches"),
+            ("idx_message_mismatches_job_run_key", "message_mismatches"),
             ("idx_events_run_created", "events"),
             ("idx_transfer_passes_mailbox", "transfer_passes"),
             ("idx_mailbox_queue_facts_project", "mailbox_queue_facts"),

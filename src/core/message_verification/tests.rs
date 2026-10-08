@@ -1990,3 +1990,61 @@ fn bench_cpu_seconds() -> f64 {
     }
     0.0
 }
+
+#[test]
+fn reset_discards_intermediates_left_by_an_aborted_reconciliation() {
+    let message_at = |uid: &str| {
+        (
+            MailboxMessageKey::new("INBOX", uid),
+            message(Some("<id>"), uid, 10, "01-Jan-2024 00:00:00 +0000"),
+        )
+    };
+    let source = HashMap::from([message_at("1")]);
+    let destination = HashMap::from([message_at("2")]);
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    stage
+        .insert_messages(StagedMessageSide::Source, &source)
+        .unwrap();
+    stage
+        .insert_messages(StagedMessageSide::Destination, &destination)
+        .unwrap();
+    let tables = |stage: &MessageMetadataStage| {
+        stage
+            .connection()
+            .unwrap()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let baseline = tables(&stage);
+    // A pass aborted under journal_mode=OFF keeps whatever DDL it ran.
+    for table in [
+        "staged_matched",
+        "staged_folder_mapping",
+        "staged_exact_source_ranked",
+        "staged_exact_destination_ranked",
+        "staged_exact_pairs",
+        "staged_changed_source_ranked",
+        "staged_changed_destination_ranked",
+        "staged_changed_pairs",
+        "staged_probable_source",
+        "staged_probable_destination",
+        "staged_probable_pairs",
+        "staged_duplicate_ids",
+    ] {
+        stage
+            .connection()
+            .unwrap()
+            .execute_batch(&format!("CREATE TABLE {table}(leftover INTEGER)"))
+            .unwrap();
+    }
+    stage.reset_reconciliation().unwrap();
+    assert_eq!(tables(&stage), baseline);
+    let (_, summary) =
+        MessageVerification::detect_mismatches_from_stage("job", "run", &stage, &HashMap::new())
+            .unwrap();
+    assert_eq!(summary.total_source, 1);
+}

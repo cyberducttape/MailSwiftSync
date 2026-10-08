@@ -819,11 +819,23 @@ impl MessageMetadataStage {
     }
 
     pub(crate) fn reset_reconciliation(&mut self) -> Result<(), String> {
+        // Every intermediate the reconciler creates. An ephemeral stage runs
+        // with journal_mode=OFF, where an aborted pass cannot roll its DDL
+        // back, so a leftover table would make the next pass fail on CREATE.
         self.connection()?
             .execute_batch(
                 "DROP TABLE IF EXISTS staged_matched;
                  DROP TABLE IF EXISTS staged_folder_mapping;
                  DROP TABLE IF EXISTS staged_fingerprint_buckets;
+                 DROP TABLE IF EXISTS staged_exact_source_ranked;
+                 DROP TABLE IF EXISTS staged_exact_destination_ranked;
+                 DROP TABLE IF EXISTS staged_exact_pairs;
+                 DROP TABLE IF EXISTS staged_changed_source_ranked;
+                 DROP TABLE IF EXISTS staged_changed_destination_ranked;
+                 DROP TABLE IF EXISTS staged_changed_pairs;
+                 DROP TABLE IF EXISTS staged_probable_source;
+                 DROP TABLE IF EXISTS staged_probable_destination;
+                 DROP TABLE IF EXISTS staged_probable_pairs;
                  DROP TABLE IF EXISTS staged_duplicate_ids;",
             )
             .map_err(|error| error.to_string())

@@ -12,6 +12,12 @@
   feedback instead of panicking or starting an unconfirmed migration.
 - Localize the batch-confirmation failure fallback in the English and German
   catalogs.
+- Page verification differences with an index seek on the run instead of
+  walking every run's mismatches, keep folder digests when a legacy mismatch
+  table is rebuilt, and let a restarted reconciliation discard every
+  intermediate table an aborted pass left behind. Exported difference CSVs
+  neutralize server-chosen folder names that would otherwise be evaluated as
+  spreadsheet formulas.
 - Distinguish verification that stopped at a safety limit from a failed
   transfer and from a verifier error (ledger version 28). Every verifier
   bound (folder inventory, response size, fetched state, message count,

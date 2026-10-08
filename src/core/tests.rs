@@ -5528,6 +5528,26 @@ fn verification_drill_down_groups_pages_and_exports_without_storing_names() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].dest_uid.as_deref(), Some("105"));
+    let page_plan: String = db
+        .connection
+        .prepare(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::evidence_ops::MISMATCH_PAGE_SQL
+        ))
+        .unwrap()
+        .query_map(
+            rusqlite::params![job, run_id, 0_i64, None::<String>, None::<String>, 51_i64],
+            |row| row.get(3),
+        )
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
+        .join(" ");
+    assert!(
+        page_plan.contains("idx_message_mismatches_job_run_key")
+            && !page_plan.contains("TEMP B-TREE"),
+        "{page_plan}"
+    );
 
     let (csv, written, truncated) = db
         .export_message_mismatches_csv(&job, run_id, &MismatchFilter::default(), 100, &|digest| {
@@ -5535,6 +5555,17 @@ fn verification_drill_down_groups_pages_and_exports_without_storing_names() {
         })
         .unwrap();
     assert_eq!((written, truncated), (7, false));
+    // Server-chosen folder names cannot inject spreadsheet formulas.
+    let (hostile, _, _) = db
+        .export_message_mismatches_csv(&job, run_id, &MismatchFilter::default(), 100, &|_| {
+            Some("=HYPERLINK(\"http://x\")".to_owned())
+        })
+        .unwrap();
+    assert!(hostile.contains("'=HYPERLINK"), "{hostile}");
+    assert!(
+        !hostile.contains(",=") && !hostile.contains(",\"="),
+        "{hostile}"
+    );
     assert!(
         csv.lines()
             .nth(1)

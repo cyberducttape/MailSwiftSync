@@ -71,7 +71,9 @@ impl ObservedFolderNames {
         match digest {
             None | Some("") => unknown.to_owned(),
             Some(digest) => self.name(digest).map_or_else(
-                || format!("#{}", &digest[..digest.len().min(12)]),
+                // `get` keeps a malformed non-ASCII ledger value from
+                // panicking on a char boundary.
+                || format!("#{}", digest.get(..12).unwrap_or(digest)),
                 str::to_owned,
             ),
         }

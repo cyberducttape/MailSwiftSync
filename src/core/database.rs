@@ -505,6 +505,12 @@ impl StateStore {
             "CREATE INDEX IF NOT EXISTS idx_message_mismatches_job_run ON message_mismatches(job_id, run_id, recorded_at)",
             [],
         )?;
+        // Keyset pages of one run's mismatches seek on (job_id, run_id, rowid);
+        // without it SQLite walks every run's rows in rowid order.
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_mismatches_job_run_key ON message_mismatches(job_id, run_id)",
+            [],
+        )?;
         tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_engine_versions_captured ON engine_versions(captured_at DESC)",
             [],
@@ -1063,11 +1069,13 @@ impl StateStore {
         if !has_checks("message_mismatches", &mismatch_checks)? {
             tx.execute_batch(
                 "DROP INDEX IF EXISTS idx_message_mismatches_job_run;
+                 DROP INDEX IF EXISTS idx_message_mismatches_job_run_key;
                  ALTER TABLE message_mismatches RENAME TO message_mismatches_legacy;
                  CREATE TABLE message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, source_folder_digest TEXT, destination_folder_digest TEXT);
-                 INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,recorded_at) SELECT id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,recorded_at FROM message_mismatches_legacy;
+                 INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,recorded_at,source_folder_digest,destination_folder_digest) SELECT id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,recorded_at,source_folder_digest,destination_folder_digest FROM message_mismatches_legacy;
                  DROP TABLE message_mismatches_legacy;
-                 CREATE INDEX IF NOT EXISTS idx_message_mismatches_job_run ON message_mismatches(job_id, run_id, recorded_at);",
+                 CREATE INDEX IF NOT EXISTS idx_message_mismatches_job_run ON message_mismatches(job_id, run_id, recorded_at);
+                 CREATE INDEX IF NOT EXISTS idx_message_mismatches_job_run_key ON message_mismatches(job_id, run_id);",
             )?;
         }
         Ok(())
