@@ -100,3 +100,84 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
             })
             == 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invalid(head: &str) -> String {
+        match parse_redirect_request(head, "expected") {
+            RedirectOutcome::InvalidCallback(reason) => reason,
+            _ => panic!("{head:?} was not refused as an invalid callback"),
+        }
+    }
+
+    #[test]
+    fn malformed_request_lines_are_invalid_callbacks() {
+        assert!(invalid("").contains("empty"));
+        assert!(invalid("GET\r\n\r\n").contains("malformed"));
+        assert!(
+            invalid("GET :99999/?state=expected HTTP/1.1\r\n\r\n").contains("target is malformed")
+        );
+    }
+
+    #[test]
+    fn requests_without_oauth_parameters_are_unrelated() {
+        for head in [
+            "GET /favicon.ico HTTP/1.1\r\n\r\n",
+            "POST /?state=expected&code=abc HTTP/1.1\r\n\r\n",
+            "GET /?utm_source=browser HTTP/1.1\r\n\r\n",
+        ] {
+            assert!(
+                matches!(
+                    parse_redirect_request(head, "expected"),
+                    RedirectOutcome::Unrelated
+                ),
+                "{head:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_rejection_without_a_usable_description_names_only_the_error() {
+        for head in [
+            "GET /?state=expected&error=access_denied HTTP/1.1\r\n\r\n",
+            "GET /?state=expected&error=access_denied&error_description=%0A%0D HTTP/1.1\r\n\r\n",
+        ] {
+            match parse_redirect_request(head, "expected") {
+                RedirectOutcome::ProviderRejected(reason) => assert_eq!(
+                    reason, "the provider declined authorization (access_denied)",
+                    "{head:?}"
+                ),
+                _ => panic!("{head:?} was not a provider rejection"),
+            }
+        }
+    }
+
+    #[test]
+    fn empty_or_oversized_codes_are_refused() {
+        assert!(invalid("GET /?state=expected&code= HTTP/1.1\r\n\r\n").contains("usable code"));
+        assert!(invalid("GET /?state=expected HTTP/1.1\r\n\r\n").contains("usable code"));
+        let oversized = format!(
+            "GET /?state=expected&code={} HTTP/1.1\r\n\r\n",
+            "a".repeat(MAX_AUTHORIZATION_CODE_BYTES + 1)
+        );
+        assert!(invalid(&oversized).contains("usable code"));
+        let largest = format!(
+            "GET /?state=expected&code={} HTTP/1.1\r\n\r\n",
+            "a".repeat(MAX_AUTHORIZATION_CODE_BYTES)
+        );
+        assert!(matches!(
+            parse_redirect_request(&largest, "expected"),
+            RedirectOutcome::Code(_)
+        ));
+    }
+
+    #[test]
+    fn state_comparison_requires_equal_length_and_bytes() {
+        assert!(constant_time_eq(b"expected", b"expected"));
+        assert!(!constant_time_eq(b"expected", b"expecte"));
+        assert!(!constant_time_eq(b"expected", b"expectee"));
+        assert!(invalid("GET /?state=expected-longer&code=abc HTTP/1.1\r\n\r\n").contains("state"));
+    }
+}

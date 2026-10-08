@@ -1000,4 +1000,174 @@ mod tests {
         assert_eq!(config.refresh_token.as_str(), "refresh");
         assert_eq!(config.token_endpoint, "https://oauth2.googleapis.com/token");
     }
+
+    #[test]
+    fn provider_overrides_apply_and_are_validated() {
+        let overridden = provider_profile(
+            "google",
+            ProviderOverrides {
+                authorize_endpoint: Some("https://accounts.google.com/o/oauth2/auth".into()),
+                token_endpoint: Some("https://oauth2.googleapis.com/token2".into()),
+                scope: Some("imap offline".into()),
+                redirect_host: Some(RedirectHost::Localhost),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            overridden.authorize_endpoint,
+            "https://accounts.google.com/o/oauth2/auth"
+        );
+        assert_eq!(
+            overridden.token_endpoint,
+            "https://oauth2.googleapis.com/token2"
+        );
+        assert_eq!(overridden.scope, "imap offline");
+        assert_eq!(overridden.redirect_host, RedirectHost::Localhost);
+
+        for provider in ["google", "custom"] {
+            let error = provider_profile(
+                provider,
+                ProviderOverrides {
+                    tenant: Some("contoso".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("--tenant"), "{provider}: {error}");
+        }
+        let custom = |authorize: Option<&str>, token: Option<&str>, scope: Option<&str>| {
+            provider_profile(
+                "custom",
+                ProviderOverrides {
+                    authorize_endpoint: authorize.map(str::to_owned),
+                    token_endpoint: token.map(str::to_owned),
+                    scope: scope.map(str::to_owned),
+                    ..Default::default()
+                },
+            )
+        };
+        let https = Some("https://accounts.google.com/oauth");
+        assert!(
+            custom(None, https, Some("imap"))
+                .unwrap_err()
+                .contains("--authorize-url")
+        );
+        assert!(
+            custom(https, None, Some("imap"))
+                .unwrap_err()
+                .contains("--token-url")
+        );
+        assert!(custom(https, https, None).unwrap_err().contains("--scope"));
+        assert!(
+            custom(Some("not a url"), https, Some("imap"))
+                .unwrap_err()
+                .contains("invalid")
+        );
+        assert!(
+            custom(
+                Some("https://user:pw@accounts.google.com/a"),
+                https,
+                Some("imap")
+            )
+            .unwrap_err()
+            .contains("user information")
+        );
+        for scope in [" ", "imap\nadmin"] {
+            assert!(
+                custom(https, https, Some(scope))
+                    .unwrap_err()
+                    .contains("scope"),
+                "{scope:?}"
+            );
+        }
+        assert!(custom(https, https, Some("imap")).is_ok());
+    }
+
+    #[test]
+    fn authorization_refuses_unsafe_client_id_and_login_hint() {
+        for client_id in ["", "  ", "client\nid"] {
+            let error = PendingAuthorization::begin(
+                "google",
+                ProviderOverrides::default(),
+                client_id,
+                None,
+                None,
+            )
+            .err()
+            .unwrap();
+            assert!(error.contains("client ID"), "{client_id:?}: {error}");
+        }
+        let error = PendingAuthorization::begin(
+            "google",
+            ProviderOverrides::default(),
+            "client",
+            None,
+            Some("user@example.test\r\nX: y"),
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("login hint"), "{error}");
+    }
+
+    #[test]
+    fn completion_validates_the_keyring_id_and_honours_cancellation() {
+        let begin = || {
+            PendingAuthorization::begin(
+                "google",
+                ProviderOverrides::default(),
+                "client",
+                None,
+                None,
+            )
+            .unwrap()
+            .0
+        };
+        let mut reported = Vec::new();
+        let error = begin()
+            .complete_and_store("", &AtomicBool::new(false), |step| reported.push(step))
+            .unwrap_err();
+        assert!(error.contains("keyring ID"), "{error}");
+        let pending = begin();
+        assert!(pending.redirect_uri().starts_with("http://127.0.0.1:"));
+        let error = pending
+            .complete_and_store("oauth-id", &AtomicBool::new(true), |step| {
+                reported.push(step)
+            })
+            .unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(reported.is_empty(), "no progress before a code arrives");
+    }
+
+    #[test]
+    fn oversized_or_non_utf8_redirects_are_invalid_callbacks() {
+        // An invalid callback keeps the listener waiting, so the wait ends
+        // at its timeout and reports the ignored request.
+        let wait = |request: Vec<u8>| {
+            let listener = RedirectListener::bind(RedirectHost::Ipv4Loopback).unwrap();
+            let port = listener.port();
+            let client = thread::spawn(move || {
+                let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                let _ = stream.write_all(&request);
+                let mut response = String::new();
+                let _ = stream.read_to_string(&mut response);
+                response
+            });
+            let result = listener.wait_for_code("expected", Duration::from_secs(1));
+            (result, client.join().unwrap())
+        };
+        let mut oversized = b"GET /?state=expected&code=".to_vec();
+        oversized.extend(std::iter::repeat_n(b'a', MAX_REDIRECT_REQUEST_BYTES + 1));
+        let mut non_utf8 = b"GET /?state=expected&code=\xff HTTP/1.1".to_vec();
+        non_utf8.extend_from_slice(b"\r\n\r\n");
+        for request in [oversized, non_utf8] {
+            let (result, response) = wait(request);
+            let error = result.unwrap_err();
+            assert!(error.contains("ignored 1 invalid callback"), "{error}");
+            assert!(
+                response.starts_with("HTTP/1.1 400 Bad Request"),
+                "{response}"
+            );
+        }
+    }
 }

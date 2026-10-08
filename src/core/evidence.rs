@@ -1073,4 +1073,161 @@ mod tests {
         assert_eq!(super::coverage_percent(10_000, 10_000), "100.0%");
         assert_eq!(super::coverage_percent(0, 0), "no source messages");
     }
+
+    const ALL_OUTCOMES: [VerificationOutcome; 10] = [
+        VerificationOutcome::ExactBodyMatch,
+        VerificationOutcome::ExactMetadataMatch,
+        VerificationOutcome::ProbableMatch,
+        VerificationOutcome::Ambiguous,
+        VerificationOutcome::FlagsChanged,
+        VerificationOutcome::Missing,
+        VerificationOutcome::Changed,
+        VerificationOutcome::Unexpected,
+        VerificationOutcome::Incomplete,
+        VerificationOutcome::Failed,
+    ];
+
+    #[test]
+    fn persisted_method_and_outcome_names_round_trip() {
+        for method in [
+            VerificationMethod::AggregateEngine,
+            VerificationMethod::MetadataReconciliation,
+            VerificationMethod::BodyHash,
+            VerificationMethod::NativeDovecot,
+        ] {
+            assert_eq!(VerificationMethod::parse(method.as_str()), Some(method));
+        }
+        assert_eq!(VerificationMethod::parse("sha1"), None);
+        let mut labels = std::collections::HashSet::new();
+        for outcome in ALL_OUTCOMES {
+            assert_eq!(VerificationOutcome::parse(outcome.as_str()), Some(outcome));
+            assert!(labels.insert(outcome.display_label()), "{outcome:?}");
+            let exact = matches!(
+                outcome,
+                VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch
+            );
+            assert_eq!(outcome.is_exception(), !exact, "{outcome:?}");
+            // Every non-exact outcome explains itself to the operator.
+            let mut evidence = missing_evidence();
+            evidence.verification_outcome = Some(outcome);
+            assert_eq!(
+                evidence.verification_reason().is_none(),
+                exact,
+                "{outcome:?}"
+            );
+        }
+        assert_eq!(VerificationOutcome::parse("verified"), None);
+        assert_eq!(
+            super::EvidenceScope::EngineConfirmed.label(),
+            "engine-confirmed"
+        );
+        assert_eq!(
+            super::EvidenceScope::AggregateReconciled.label(),
+            "aggregate-reconciled"
+        );
+        assert_eq!(super::EvidenceScope::BodyHashed.label(), "body-hash");
+    }
+
+    #[test]
+    fn derived_outcomes_follow_the_severity_order() {
+        let derive = |change: &dyn Fn(&mut MailboxEvidence)| {
+            let mut evidence = missing_evidence();
+            evidence.missing_messages = 0;
+            evidence.unmatched_messages = Some(0);
+            change(&mut evidence);
+            evidence.verification_outcome()
+        };
+        assert_eq!(
+            derive(&|e| e.failed_messages = 1),
+            VerificationOutcome::Failed
+        );
+        assert_eq!(
+            derive(&|e| e.unmatched_messages = None),
+            VerificationOutcome::Incomplete
+        );
+        assert_eq!(
+            derive(&|e| e.modified_messages = 1),
+            VerificationOutcome::Changed
+        );
+        assert_eq!(
+            derive(&|e| e.extra_messages = 1),
+            VerificationOutcome::Unexpected
+        );
+        assert_eq!(
+            derive(&|e| e.unmatched_messages = Some(2)),
+            VerificationOutcome::Ambiguous
+        );
+    }
+
+    #[test]
+    fn coverage_labels_state_what_was_checked() {
+        let mut evidence = missing_evidence();
+        assert!(
+            evidence
+                .message_coverage_label()
+                .starts_with("10 of 10 source messages individually checked")
+        );
+        assert_eq!(
+            evidence.flag_verification_label(),
+            "Flags and keywords not verified"
+        );
+        evidence.flag_verification = Some(super::FlagVerification {
+            compared_messages: 8,
+            mismatched_messages: 1,
+            excepted_messages: 2,
+        });
+        let label = evidence.flag_verification_label();
+        assert!(
+            label.starts_with("Flags and keywords compared for 8 of 10 source messages")
+                && label.ends_with("1 differ, 2 differ only by flags the destination cannot store"),
+            "{label}"
+        );
+        evidence.verification_method = VerificationMethod::AggregateEngine;
+        assert_eq!(evidence.message_coverage(), (0, 10));
+        evidence.verification_method = VerificationMethod::NativeDovecot;
+        assert_eq!(evidence.message_coverage(), (0, 10));
+    }
+
+    #[test]
+    fn non_exact_evidence_warns_on_every_compared_dimension() {
+        let dimensions = missing_evidence().dimensions();
+        assert_eq!(
+            dimensions.message_presence,
+            EvidenceDimensionStatus::Warning
+        );
+        assert_eq!(
+            dimensions.body_integrity,
+            EvidenceDimensionStatus::NotVerified
+        );
+        assert_eq!(dimensions.internal_dates, EvidenceDimensionStatus::Warning);
+        assert_eq!(dimensions.folder_mapping, EvidenceDimensionStatus::Warning);
+        assert_eq!(dimensions.acls, EvidenceDimensionStatus::NotVerified);
+    }
+
+    #[test]
+    fn unverified_projects_take_their_state_from_the_phase() {
+        for (phase, expected) in [
+            (Phase::Complete, OperationalState::Verified),
+            (Phase::Preflight, OperationalState::Ready),
+            (Phase::Discovery, OperationalState::Ready),
+            (Phase::Pilot, OperationalState::Ready),
+            (Phase::Seed, OperationalState::Migrated),
+            (Phase::CatchUp, OperationalState::Migrated),
+            (Phase::FinalDelta, OperationalState::Migrated),
+            (Phase::Verification, OperationalState::Migrated),
+            (Phase::Attention, OperationalState::NeedsAttention),
+        ] {
+            assert_eq!(
+                project_snapshot("queued", phase).operational_state(),
+                expected,
+                "{phase:?}"
+            );
+        }
+        let mut evidenced = project_snapshot("queued", Phase::Pilot);
+        evidenced.mailboxes[0].evidence = Some(("run".into(), missing_evidence(), None));
+        assert_eq!(
+            evidenced.operational_state(),
+            OperationalState::ReadyWithWarnings
+        );
+    }
 }

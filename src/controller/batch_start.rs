@@ -162,3 +162,152 @@ impl App {
         self.output.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::controller::BatchExecutionMode;
+    use crate::controller::batch::BatchStartBlock;
+    use std::path::PathBuf;
+
+    struct TestApp {
+        app: crate::App,
+        directory: PathBuf,
+    }
+
+    impl Drop for TestApp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    /// An App on a durable ledger in a fresh owner-only directory, with
+    /// `rows` imported mailboxes all selected.
+    fn app_with_rows(rows: usize) -> TestApp {
+        use crate::bulk_import::{BulkImportResult, BulkJob};
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-batch-start-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mut app = crate::App::from_state_path(Some(&directory.join("state.db")));
+        if rows > 0 {
+            let jobs = (0..rows)
+                .map(|index| {
+                    let mut form = app.form.clone_without_credentials();
+                    form.profile.source_host = "source.example".into();
+                    form.profile.destination_host = "destination.example".into();
+                    form.profile.source_user = format!("user{index}@source.example");
+                    form.profile.destination_user = format!("user{index}@destination.example");
+                    form.source_password = String::from("source-secret").into();
+                    form.destination_password = String::from("destination-secret").into();
+                    BulkJob::from_form(format!("Mailbox {index}"), form, "imported".into())
+                })
+                .collect::<Vec<_>>();
+            app.apply_bulk_import_result(Ok(BulkImportResult::Jobs(jobs)));
+            app.select_all_bulk_rows();
+        }
+        TestApp { app, directory }
+    }
+
+    #[test]
+    fn blocked_start_reports_the_block_and_launches_nothing() {
+        let mut test = app_with_rows(0);
+        let app = &mut test.app;
+        app.bulk_mode = BatchExecutionMode::Preflight;
+        app.start_bulk();
+        assert_eq!(app.bulk_message, BatchStartBlock::NoJobs.message());
+        assert!(app.receiver.is_none() && app.run_id.is_none());
+    }
+
+    #[test]
+    fn unconfirmed_live_start_opens_the_confirmation_instead_of_launching() {
+        let mut test = app_with_rows(1);
+        let app = &mut test.app;
+        app.bulk_mode = BatchExecutionMode::Live;
+        app.bulk_live_confirmed = false;
+        app.start_bulk();
+        assert!(app.bulk_live_confirm_open);
+        assert!(app.bulk_confirmation_summary.is_none());
+        assert!(app.receiver.is_none() && app.run_id.is_none());
+    }
+
+    #[test]
+    fn live_wave_outside_its_maintenance_window_is_refused() {
+        use chrono::Datelike;
+        let mut test = app_with_rows(2);
+        let app = &mut test.app;
+        // Every day except today and tomorrow, so a midnight rollover during
+        // the test cannot move "now" into the window.
+        let today = chrono::Local::now().weekday();
+        let days = [
+            chrono::Weekday::Mon,
+            chrono::Weekday::Tue,
+            chrono::Weekday::Wed,
+            chrono::Weekday::Thu,
+            chrono::Weekday::Fri,
+            chrono::Weekday::Sat,
+            chrono::Weekday::Sun,
+        ]
+        .into_iter()
+        .filter(|day| *day != today && *day != today.succ())
+        .map(|day| day.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+        let window = format!("00:00-00:00@{days}");
+        assert!(crate::maintenance_window::MaintenanceWindow::parse(&window).is_ok());
+        app.bulk_all_selected = false;
+        let project_id = app.queue.project_id().unwrap().to_owned();
+        let mut members = std::collections::HashSet::new();
+        app.store
+            .queue_durable_scan(&project_id, |row| {
+                members.insert(row.id);
+            })
+            .unwrap();
+        app.bulk_selected_ids = members;
+        let wave = crate::core::Wave {
+            id: "wave".into(),
+            position: 1,
+            settings: crate::core::WaveSettings {
+                name: "Night shift".into(),
+                scheduled_at: None,
+                maintenance_window: Some(window.clone()),
+                concurrency: None,
+            },
+            approved_by: None,
+            approved_at: None,
+        };
+        app.bulk_wave = Some((wave, app.bulk_selected_ids.clone()));
+        assert!(app.selected_wave().is_some());
+        app.bulk_mode = BatchExecutionMode::Live;
+        app.bulk_live_confirmed = true;
+        app.start_bulk();
+        assert!(
+            app.bulk_message.contains("Night shift"),
+            "{}",
+            app.bulk_message
+        );
+        assert!(app.bulk_message.contains(&window), "{}", app.bulk_message);
+        assert!(
+            !app.bulk_live_confirmed,
+            "a confirmation is spent by one attempt"
+        );
+        assert!(app.receiver.is_none() && app.run_id.is_none());
+    }
+
+    #[test]
+    fn live_start_without_a_preflighted_plan_fails_admission_closed() {
+        let mut test = app_with_rows(1);
+        let app = &mut test.app;
+        app.bulk_mode = BatchExecutionMode::Live;
+        app.bulk_live_confirmed = true;
+        app.start_bulk();
+        assert!(!app.bulk_message.is_empty());
+        assert!(!app.bulk_live_confirmed);
+        assert!(app.receiver.is_none() && app.run_id.is_none() && app.active_run.is_none());
+    }
+}
