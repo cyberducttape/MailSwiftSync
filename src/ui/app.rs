@@ -85,9 +85,13 @@ impl eframe::App for App {
             .frame(header_frame)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    let (brand_marker, _) =
+                        ui.allocate_exact_size(egui::vec2(6.0, 22.0), egui::Sense::hover());
+                    ui.painter().rect_filled(brand_marker, 3.0, colors.info);
+                    ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new("MailSwiftSync")
-                            .size(16.0)
+                            .size(17.0)
                             .strong()
                             .color(colors.info),
                     );
@@ -129,15 +133,19 @@ impl eframe::App for App {
                             .language
                             .lookup(&self.status.text)
                             .unwrap_or(&self.status.text);
+                        let status_tint = status_color(self.status.severity, colors);
                         let status_response = ui.add(
-                            egui::Label::new(
+                            egui::Button::new(
                                 egui::RichText::new(status_text)
-                                    .color(status_color(self.status.severity, colors)),
+                                    .small()
+                                    .strong()
+                                    .color(status_tint),
                             )
-                            .truncate()
-                            .sense(egui::Sense::click()),
+                            .fill(status_tint.gamma_multiply(0.12))
+                            .stroke(egui::Stroke::new(1.0, status_tint.gamma_multiply(0.45)))
+                            .corner_radius(egui::CornerRadius::same(12)),
                         );
-                        status_response.clone().on_hover_text(status_text);
+                        status_response.clone().on_hover_text("Open Activity");
                         if status_response.clicked() {
                             self.activity_search = self.run_id.clone().unwrap_or_default();
                             self.active_view = WorkspaceView::Activity;

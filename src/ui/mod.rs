@@ -81,7 +81,7 @@ pub(crate) fn card<R>(
         .fill(visuals.widgets.inactive.weak_bg_fill)
         .stroke(visuals.widgets.noninteractive.bg_stroke)
         .corner_radius(radius)
-        .inner_margin(egui::Margin::symmetric(14, 12))
+        .inner_margin(egui::Margin::symmetric(16, 14))
         .show(ui, |ui| {
             // Columns hand out justified layouts, which would stretch the
             // word spacing of wrapped text; cards always flow top-down.
@@ -542,9 +542,17 @@ pub(crate) fn stepper(
 
 /// Page title with a secondary description line.
 pub(crate) fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-    ui.label(egui::RichText::new(title).size(24.0).strong());
-    ui.label(egui::RichText::new(subtitle).color(ui.visuals().weak_text_color()));
-    ui.add_space(16.0);
+    let accent = ui.visuals().widgets.active.bg_fill;
+    ui.horizontal(|ui| {
+        let (marker, _) = ui.allocate_exact_size(egui::vec2(4.0, 34.0), egui::Sense::hover());
+        ui.painter().rect_filled(marker, 2.0, accent);
+        ui.add_space(4.0);
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(title).size(25.0).strong());
+            ui.label(egui::RichText::new(subtitle).color(ui.visuals().weak_text_color()));
+        });
+    });
+    ui.add_space(20.0);
 }
 
 /// Width of the label column in form rows, so fields line up across a card.
