@@ -1,7 +1,9 @@
 //! Bounded UID search, FETCH page planning, and exact coverage validation.
 
 use super::{MAX_MESSAGE_FETCH_RESPONSE_BYTES, MAX_UID_SET_BYTES, MESSAGE_FETCH_PAGE_SIZE};
-use crate::{core, imap_protocol::is_untagged_response};
+use crate::core;
+#[cfg(test)]
+use crate::imap_protocol::is_untagged_response;
 use std::collections::HashSet;
 
 /// Adaptive UID FETCH page sizing. Growth is capped at 2x, contraction is
@@ -81,6 +83,7 @@ pub(super) fn encode_uid_page(uids: &[u64], max_count: usize) -> (usize, String)
     (count, set)
 }
 
+#[cfg(test)]
 pub(super) fn parse_uid_search_response(
     response: &str,
     host: &str,
@@ -99,6 +102,70 @@ pub(super) fn parse_uid_search_response(
         })
         .collect::<Result<Vec<_>, _>>()?;
     uids.sort_unstable();
+    Ok(uids)
+}
+
+/// Parse the UID values returned by a sequence-number `UID FETCH (... UID)`
+/// page. Unlike UID SEARCH, this command's request size is based on EXISTS,
+/// so sparse historical UID spaces do not create one request per empty UID
+/// window.
+pub(super) fn parse_uid_fetch_response(
+    response: &str,
+    host: &str,
+    mailbox: &str,
+    sequence_start: u64,
+    sequence_end: u64,
+) -> Result<Vec<u64>, String> {
+    let mut uids = Vec::new();
+    for line in response.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some("*")
+            || fields
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_none()
+            || !fields
+                .next()
+                .is_some_and(|value| value.eq_ignore_ascii_case("FETCH"))
+        {
+            continue;
+        }
+        let mut tokens = line.split_whitespace();
+        let _asterisk = tokens.next();
+        let sequence = tokens
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| {
+                format!("{host}: FETCH {mailbox} returned an invalid sequence number")
+            })?;
+        if !(sequence_start..=sequence_end).contains(&sequence) {
+            return Err(format!(
+                "{host}: FETCH {mailbox} returned sequence {sequence} outside requested range {sequence_start}:{sequence_end}"
+            ));
+        }
+        let mut uid = None;
+        while let Some(token) = tokens.next() {
+            if token.trim_start_matches('(').eq_ignore_ascii_case("UID") {
+                uid = tokens
+                    .next()
+                    .and_then(|value| value.trim_end_matches([')', ',']).parse::<u64>().ok());
+                break;
+            }
+        }
+        let uid = uid.ok_or_else(|| {
+            format!("{host}: FETCH {mailbox} sequence {sequence} did not return a valid UID")
+        })?;
+        if uid == 0 {
+            return Err(format!(
+                "{host}: FETCH {mailbox} sequence {sequence} returned UID zero"
+            ));
+        }
+        uids.push(uid);
+    }
+    uids.sort_unstable();
+    if uids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(format!("{host}: FETCH {mailbox} returned duplicate UIDs"));
+    }
     Ok(uids)
 }
 

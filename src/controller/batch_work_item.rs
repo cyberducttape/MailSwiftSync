@@ -432,6 +432,7 @@ struct BatchAttemptContext<'a> {
     imapsync_output_profile: ImapsyncOutputProfile,
     verification_state_path: Option<std::path::PathBuf>,
     diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
+    oauth_refresh_locks: &'a OAuthRefreshLocks,
     transfer_attempt_number: &'a mut u32,
     verification_failure: &'a mut Option<String>,
     launch_limiter: &'a ProcessLaunchLimiter,
@@ -456,6 +457,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
         imapsync_output_profile,
         verification_state_path,
         diagnostic_logger,
+        oauth_refresh_locks,
         transfer_attempt_number,
         verification_failure,
         launch_limiter,
@@ -540,15 +542,25 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     && form.engine() == core::Engine::ImapSync
                     && message_verification_enabled(form)
                 {
-                    match run_imap_message_verification(
-                        form,
-                        &job_id,
-                        &child_run_id,
-                        &cancel,
-                        verification_state_path.as_deref().map(|path| {
-                            core::durable_stage_path(path, &job_id)
-                        }).as_deref(),
-                    ) {
+                    let mut verification_form = form.clone();
+                    let refresh_result = refresh_live_credentials(
+                        &mut verification_form,
+                        oauth_refresh_locks,
+                    )
+                    .map_err(|failure| failure.message);
+                    let verification_result = refresh_result.and_then(|()| {
+                        run_imap_message_verification(
+                            &verification_form,
+                            &job_id,
+                            &child_run_id,
+                            &cancel,
+                            verification_state_path
+                                .as_deref()
+                                .map(|path| core::durable_stage_path(path, &job_id))
+                                .as_deref(),
+                        )
+                    });
+                    match verification_result {
                         Ok(MessageVerificationResult {
                             evidence,
                             mismatches,
@@ -1033,6 +1045,7 @@ impl BatchAttemptRunner {
             imapsync_output_profile: task.imapsync_output_profile,
             verification_state_path: self.verification_state_path.clone(),
             diagnostic_logger: self.diagnostic_logger.clone(),
+            oauth_refresh_locks: &self.oauth_refresh_locks,
             transfer_attempt_number: &mut transfer_attempt_number,
             verification_failure: &mut verification_failure,
             launch_limiter: &self.launch_limiter,

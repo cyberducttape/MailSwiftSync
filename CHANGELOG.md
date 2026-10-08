@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Reject certificate-pinned transfer plans until the qualified external engine
+  can enforce strict leaf pins on every connection and reconnect. Rust probe
+  pin checks remain admission evidence, not transfer-level enforcement.
+- Refresh OAuth credentials through qualified imapsync reconnects and again
+  before independent verification, atomically rotate token files, and persist
+  rotated refresh tokens back to the configured keyring or fail closed.
+- Replace sparse-mailbox UIDNEXT-window enumeration with EXISTS-bounded
+  sequence-number UID FETCH pages and snapshot consistency checks.
 - Add a verification workspace drill-down with durable mismatch details,
   mailbox evidence, staged SQL reads, and customer-safe/operator evidence
   views. Restore the CI verification gates and cover the new schema and

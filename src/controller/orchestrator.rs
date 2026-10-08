@@ -241,8 +241,19 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 && message_verification_enabled(&form)
             {
                 result = result.and_then(|stream| {
+                    let mut verification_form = form.clone();
+                    if let Err(error) = verification_form
+                        .refresh_oauth_access_token(true)
+                        .and_then(|_| verification_form.refresh_oauth_access_token(false))
+                    {
+                        let detail = format!(
+                            "post-transfer OAuth refresh failed before independent verification: {error}"
+                        );
+                        send_reliable_event(&tx, Event::VerificationFailed(detail))?;
+                        return Ok(stream);
+                    }
                     match run_imap_message_verification(
-                        &form,
+                        &verification_form,
                         &job_id,
                         &run_id,
                         &cancel,

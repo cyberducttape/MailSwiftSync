@@ -152,18 +152,19 @@ impl Form {
             &self.profile.destination_certificate_pin_sha256,
             "Destination certificate pin",
         )?;
-        if self.engine() == core::Engine::Dovecot
-            && (!self.profile.source_certificate_pin_sha256.trim().is_empty()
+        let has_certificate_pin = || {
+            !self.profile.source_certificate_pin_sha256.trim().is_empty()
                 || !self
                     .profile
                     .destination_certificate_pin_sha256
                     .trim()
-                    .is_empty())
-        {
-            return Err(
-                "Certificate pinning is not currently supported by the Dovecot engine; remove the pin or select imapsync."
-                    .into(),
-            );
+                    .is_empty()
+        };
+        if has_certificate_pin() {
+            return Err(match self.engine() {
+                core::Engine::Dovecot => "Certificate pinning is not currently supported by the Dovecot engine; remove the pin or select an engine with transfer-level pin enforcement.".into(),
+                core::Engine::ImapSync | core::Engine::Auto => "Certificate pins are verified by MailSwiftSync's probe but cannot currently be enforced by the qualified imapsync transfer; remove the pin until a pin-enforcing engine backend is qualified.".into(),
+            });
         }
         endpoint::parts(
             &self.profile.source_host,

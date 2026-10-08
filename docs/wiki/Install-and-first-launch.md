@@ -47,7 +47,7 @@ Each card starts with the **Provider**, then asks only for what that provider ne
 - **User** — usually the complete email address.
 - **Sign-in** — for Google Workspace and Microsoft 365, click **Connect … account** to authorize in the browser with your registered OAuth app (see [OAUTH_SETUP.md](../../OAUTH_SETUP.md#authorize-with-mailswiftsync)); a temporary access token can be pasted instead. Password providers show a **Password** field for the account or app password.
 
-**Advanced connection settings** below each card hold the server override for hosted providers, the **Authentication** method override, the port, an optional OS-keyring **Credential ID**, an enterprise **CA bundle**, an optional **Certificate pin (SHA-256)** (imapsync only), and **TLS**. The migration method (imapsync or local Dovecot) is under **Advanced migration settings**.
+**Advanced connection settings** below each card hold the server override for hosted providers, the **Authentication** method override, the port, an optional OS-keyring **Credential ID**, an enterprise **CA bundle**, an optional **Certificate pin (SHA-256)** (used for probe qualification but currently rejected for transfer plans), and **TLS**. The migration method (imapsync or local Dovecot) is under **Advanced migration settings**.
 
 Do not reverse the cards. MailSwiftSync never treats the destination as a source unless you put it in the left card.
 

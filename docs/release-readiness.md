@@ -524,7 +524,10 @@ screen-reader checklist are recorded in
   outstanding. The imapsync path now supports operator-supplied OAuth 2.0 access tokens with
   XOAUTH2, including keyring references, private token-file delivery,
   redacted previews, fresh pre-live authentication, and (once a refresh
-  token is stored) automatic access-token refresh before each live launch.
+  token is stored) automatic access-token refresh before each live launch,
+  during qualified imapsync reconnects, and before independent verification.
+  Rotated refresh tokens are persisted to the configured keyring or the run
+  fails closed.
   Remote Dovecot execution is deliberately disabled until the application has
   a delivery mechanism that cannot expose credentials through
   destination-host process inspection.

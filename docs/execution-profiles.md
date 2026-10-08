@@ -20,8 +20,9 @@ Hardened execution:
 - removes inherited `SSL_CERT_FILE` and `SSL_CERT_DIR` overrides;
 - rejects attempts to reintroduce those variables through an engine runtime
   environment override; and
-- relies on the plan's explicit CA-bundle arguments and certificate pins for
-  TLS configuration.
+- relies on the plan's explicit CA-bundle arguments for TLS configuration;
+  certificate-pinned plans are rejected until the external transfer backend
+  can enforce the pin on every connection and reconnect.
 
 The profile does not sandbox imapsync or doveadm. The local operator and the
 verified engine remain part of the trust boundary, and the hardened profile

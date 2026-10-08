@@ -16,8 +16,9 @@ use std::time::Duration;
 const SIDE: StagedMessageSide = StagedMessageSide::Destination;
 const PAGE: u64 = MESSAGE_FETCH_PAGE_SIZE;
 
-/// Minimal scripted IMAP server for one folder: answers SELECT, UID
-/// SEARCH, and UID FETCH (metadata and optional BODY[]) from an in-memory
+/// Minimal scripted IMAP server for one folder: answers SELECT, sequence
+/// number UID FETCH enumeration, and UID FETCH (metadata and optional BODY[])
+/// from an in-memory
 /// UID set, recording every UID it was asked to fetch. Messages listed in
 /// `flags` carry a FLAGS item; SELECT advertises `permanent_flags` if set.
 pub(super) struct FolderServer {
@@ -26,6 +27,7 @@ pub(super) struct FolderServer {
     uidnext: u64,
     fetched: Vec<u64>,
     fetch_commands: usize,
+    uid_enumeration_commands: usize,
     pub(super) flags: std::collections::HashMap<u64, String>,
     pub(super) permanent_flags: Option<String>,
     input: Vec<u8>,
@@ -40,6 +42,7 @@ impl FolderServer {
             uidnext,
             fetched: Vec::new(),
             fetch_commands: 0,
+            uid_enumeration_commands: 0,
             flags: std::collections::HashMap::new(),
             permanent_flags: None,
             input: Vec::new(),
@@ -69,50 +72,52 @@ impl FolderServer {
                 self.uidvalidity,
                 self.uidnext
             )
-        } else if let Some(range) = command.strip_prefix("UID SEARCH UID ") {
-            let (low, high) = range.split_once(':').unwrap();
-            let (low, high) = (low.parse::<u64>().unwrap(), high.parse::<u64>().unwrap());
-            let found = self
-                .uids
-                .iter()
-                .filter(|uid| (low..=high).contains(*uid))
-                .map(u64::to_string)
-                .collect::<Vec<_>>();
-            format!(
-                "* SEARCH {}\r\n{tag} OK SEARCH completed\r\n",
-                found.join(" ")
-            )
         } else if let Some(rest) = command.strip_prefix("UID FETCH ") {
             let set = rest.split_whitespace().next().unwrap();
-            let with_body = rest.contains("BODY.PEEK[]");
-            self.fetch_commands += 1;
-            let mut reply = String::new();
-            let requested = set.split(',').flat_map(|item| {
-                let (low, high) = item.split_once(':').unwrap_or((item, item));
-                low.parse::<u64>().unwrap()..=high.parse::<u64>().unwrap()
-            });
-            for uid in requested {
-                self.fetched.push(uid);
-                let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
-                let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
-                let body = if with_body {
-                    let body = format!("body of {uid}");
-                    format!(" BODY[] {{{}}}\r\n{body}", body.len())
-                } else {
-                    String::new()
-                };
-                let flags = self
-                    .flags
-                    .get(&uid)
-                    .map(|flags| format!("FLAGS ({flags}) "))
-                    .unwrap_or_default();
-                reply.push_str(&format!(
+            if rest.ends_with("(UID)") {
+                self.uid_enumeration_commands += 1;
+                let (low, high) = set.split_once(':').unwrap();
+                let low = low.parse::<u64>().unwrap();
+                let high = high.parse::<u64>().unwrap();
+                let mut reply = String::new();
+                for sequence in low..=high {
+                    if let Some(uid) = self.uids.get(sequence.saturating_sub(1) as usize) {
+                        reply.push_str(&format!("* {sequence} FETCH (UID {uid})\r\n"));
+                    }
+                }
+                reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
+                reply
+            } else {
+                let with_body = rest.contains("BODY.PEEK[]");
+                self.fetch_commands += 1;
+                let mut reply = String::new();
+                let requested = set.split(',').flat_map(|item| {
+                    let (low, high) = item.split_once(':').unwrap_or((item, item));
+                    low.parse::<u64>().unwrap()..=high.parse::<u64>().unwrap()
+                });
+                for uid in requested {
+                    self.fetched.push(uid);
+                    let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
+                    let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
+                    let body = if with_body {
+                        let body = format!("body of {uid}");
+                        format!(" BODY[] {{{}}}\r\n{body}", body.len())
+                    } else {
+                        String::new()
+                    };
+                    let flags = self
+                        .flags
+                        .get(&uid)
+                        .map(|flags| format!("FLAGS ({flags}) "))
+                        .unwrap_or_default();
+                    reply.push_str(&format!(
                         "* {sequence} FETCH (UID {uid} {flags}RFC822.SIZE 10 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n{header}{body})\r\n",
                         header.len()
                     ));
+                }
+                reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
+                reply
             }
-            reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
-            reply
         } else {
             panic!("unexpected command {line}");
         };
@@ -250,6 +255,15 @@ fn large_folder_inventory_uses_few_adaptive_fetch_round_trips() {
         );
         debug_assert!(server.fetch_commands <= 12);
     }
+}
+
+#[test]
+fn sparse_historical_uid_space_does_not_create_empty_search_windows() {
+    let mut server = FolderServer::new(&[4_294_967_295], 9, 4_294_967_296);
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    assert_eq!(scan(&mut stage, &mut server), 1);
+    assert_eq!(server.uid_enumeration_commands, 1);
+    assert_eq!(staged_uids(&stage), vec![4_294_967_295]);
 }
 
 #[test]

@@ -267,6 +267,12 @@ impl ValidatedPlan<'_> {
                 "--oauthaccesstoken1".into(),
                 source_file.to_string_lossy().into_owned(),
             ]);
+            if let Err(error) =
+                append_oauth_refresh_command(&mut args, 1, form, &secret_dir, &source_file)
+            {
+                let _ = std::fs::remove_dir_all(&secret_dir);
+                return Err(error);
+            }
         } else {
             args.extend([
                 "--passfile1".into(),
@@ -278,6 +284,12 @@ impl ValidatedPlan<'_> {
                 "--oauthaccesstoken2".into(),
                 destination_file.to_string_lossy().into_owned(),
             ]);
+            if let Err(error) =
+                append_oauth_refresh_command(&mut args, 2, form, &secret_dir, &destination_file)
+            {
+                let _ = std::fs::remove_dir_all(&secret_dir);
+                return Err(error);
+            }
         } else {
             args.extend([
                 "--passfile2".into(),
@@ -292,6 +304,57 @@ impl ValidatedPlan<'_> {
             verification: Vec::new(),
         })
     }
+}
+
+/// Give qualified imapsync a protected refresh configuration and token path.
+/// imapsync invokes this command before each OAuth authentication, including
+/// reconnects, and rereads the token file. Secrets stay in owner-only files;
+/// the command line contains only paths. The per-run refresh configuration is
+/// intentionally separate from the OS keyring so a rotated provider token is
+/// serialized by the atomic file update without exposing it to argv.
+fn append_oauth_refresh_command(
+    args: &mut Vec<String>,
+    side: u8,
+    form: &Form,
+    secret_dir: &Path,
+    token_file: &Path,
+) -> Result<(), String> {
+    let refresh_id = if side == 1 {
+        form.profile.source_oauth_refresh_credential_id.trim()
+    } else {
+        form.profile.destination_oauth_refresh_credential_id.trim()
+    };
+    if refresh_id.is_empty() {
+        return Ok(());
+    }
+    let config = form
+        .load_oauth_refresh_config(side == 1)?
+        .ok_or_else(|| {
+            format!(
+                "automatic OAuth refresh is configured for side {side}, but its keyring configuration is unavailable"
+            )
+        })?;
+    let config_file = secret_dir.join(format!("oauth-refresh-{side}.json"));
+    write_private_atomic(
+        &config_file,
+        &crate::oauth_refresh::encode_refresh_config(&config),
+    )
+    .map_err(|error| format!("could not prepare OAuth refresh configuration: {error}"))?;
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("could not locate MailSwiftSync OAuth refresh helper: {error}"))?;
+    let command = format!(
+        "{} oauth-access-token {} {} --persist-keyring-id {}",
+        shell_quote(&executable.to_string_lossy()),
+        shell_quote(&config_file.to_string_lossy()),
+        shell_quote(&token_file.to_string_lossy()),
+        shell_quote(refresh_id),
+    );
+    args.extend([format!("--oauthrefreshcmd{side}"), command]);
+    Ok(())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 pub(crate) struct PreparedCommand {

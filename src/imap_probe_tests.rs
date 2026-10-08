@@ -474,6 +474,27 @@ fn uid_search_parser_uses_actual_sparse_uids_not_exists_count() {
 }
 
 #[test]
+fn uid_fetch_enumeration_parser_validates_sequence_pages() {
+    let response =
+        "* 1 FETCH (UID 4000000000)\r\n* 2 FETCH (UID 4294967295)\r\nv002 OK FETCH completed\r\n";
+    assert_eq!(
+        super::fetch_pages::parse_uid_fetch_response(response, "imap.example", "INBOX", 1, 2)
+            .unwrap(),
+        vec![4_000_000_000, 4_294_967_295]
+    );
+    assert!(
+        super::fetch_pages::parse_uid_fetch_response(
+            "* 3 FETCH (UID 9)\r\nv002 OK FETCH completed\r\n",
+            "imap.example",
+            "INBOX",
+            1,
+            2
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn estimated_record_bytes_include_body_fingerprint_storage() {
     let key = crate::core::MailboxMessageKey::new("INBOX", "900001");
     let message = crate::core::ExtractedMessage {

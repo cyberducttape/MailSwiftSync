@@ -2603,6 +2603,21 @@ fn dovecot_rejects_unenforced_certificate_pins() {
 }
 
 #[test]
+fn imapsync_rejects_certificate_pins_until_transfer_enforcement_exists() {
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.source_certificate_pin_sha256 = "ab".repeat(32);
+    let error = form.validate_internal(false).unwrap_err();
+    assert!(error.contains("cannot currently be enforced by the qualified imapsync transfer"));
+
+    let mut form = dovecot_form();
+    form.profile.engine = core::Engine::ImapSync;
+    form.profile.destination_certificate_pin_sha256 = "cd".repeat(32);
+    let error = form.validate_internal(false).unwrap_err();
+    assert!(error.contains("cannot currently be enforced by the qualified imapsync transfer"));
+}
+
+#[test]
 fn trust_settings_change_the_preflight_fingerprint() {
     let form = Form::default();
     let original = form.plan_fingerprint();

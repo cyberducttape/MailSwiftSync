@@ -257,8 +257,7 @@ pub(super) fn oauth_authorize_dispatch(arguments: std::env::ArgsOs) -> eframe::R
     }
 }
 
-const OAUTH_ACCESS_TOKEN_USAGE: &str =
-    "Usage: mailswiftsync oauth-access-token <refresh-config.json> <access-token-out>";
+const OAUTH_ACCESS_TOKEN_USAGE: &str = "Usage: mailswiftsync oauth-access-token <refresh-config.json> <access-token-out> [--persist-keyring-id <id>]";
 const OAUTH_EXPORT_USAGE: &str =
     "Usage: mailswiftsync oauth-export-refresh-config <keyring-id> <refresh-config-out.json>";
 
@@ -267,26 +266,50 @@ const OAUTH_EXPORT_USAGE: &str =
 /// automation that cannot reach an OS keyring (for example CI qualification
 /// jobs). Neither token is ever printed. When the provider rotates the
 /// refresh token, the configuration file is rewritten in place so later
-/// exchanges in the same job keep working.
+/// exchanges in the same job keep working. Live imapsync runs may also
+/// request persistence to the OS keyring so post-transfer verification sees
+/// the rotated refresh token.
 pub(super) fn oauth_access_token_command(
     mut arguments: impl Iterator<Item = OsString>,
 ) -> Result<String, (i32, String)> {
     let usage = || (2, OAUTH_ACCESS_TOKEN_USAGE.to_owned());
-    let (Some(config_path), Some(output_path), None) =
-        (arguments.next(), arguments.next(), arguments.next())
-    else {
+    let (Some(config_path), Some(output_path)) = (arguments.next(), arguments.next()) else {
         return Err(usage());
+    };
+    let persist_keyring_id = match arguments.next() {
+        None => None,
+        Some(flag) if flag == "--persist-keyring-id" => {
+            let Some(id) = arguments.next() else {
+                return Err(usage());
+            };
+            if arguments.next().is_some() {
+                return Err(usage());
+            }
+            let id = id
+                .into_string()
+                .map_err(|_| (2, "OAuth refresh keyring ID must be valid UTF-8".to_owned()))?;
+            crate::oauth_authorize::validate_keyring_id(&id).map_err(|error| (2, error))?;
+            Some(id)
+        }
+        Some(_) => return Err(usage()),
     };
     let config_path = PathBuf::from(config_path);
     let output_path = PathBuf::from(output_path);
+    // imapsync may ask for refreshes from more than one reconnect path. Lock
+    // the per-run configuration before reading it so refresh-token rotation
+    // cannot race with another helper and overwrite a newer token.
+    let _refresh_lock = crate::process::acquire_instance_lock(&config_path).map_err(|error| {
+        (
+            1,
+            format!("could not lock OAuth refresh configuration: {error}"),
+        )
+    })?;
     let stored = read_secret_file(&config_path)
         .map_err(|error| (1, format!("OAuth refresh configuration file: {error}")))?;
     let config =
         crate::oauth_refresh::decode_refresh_config(stored.as_str()).map_err(|error| (1, error))?;
     let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
         .map_err(|error| (1, format!("OAuth access token refresh failed: {error}")))?;
-    crate::atomic_artifact::write_private_atomic(&output_path, refreshed.access_token.as_str())
-        .map_err(|error| (1, format!("could not write the access token file: {error}")))?;
     let mut message = format!(
         "Wrote a fresh access token to the owner-only file{}.",
         refreshed
@@ -311,8 +334,58 @@ pub(super) fn oauth_access_token_command(
                 ),
             )
         })?;
-        message.push_str(" The provider rotated the refresh token; the configuration file was updated, so re-export it to any external secret store that holds the old value.");
+        if let Some(keyring_id) = persist_keyring_id.as_deref() {
+            let entry = keyring::Entry::new(crate::Form::OAUTH_REFRESH_KEYRING_SERVICE, keyring_id)
+                .map_err(|error| {
+                    (
+                        1,
+                        format!(
+                            "the provider rotated the refresh token but the OS keyring entry could not be opened: {error}"
+                        ),
+                    )
+                })?;
+            let encoded = crate::oauth_refresh::encode_refresh_config(&rotated_config);
+            entry.set_password(&encoded).map_err(|error| {
+                (
+                    1,
+                    format!(
+                        "the provider rotated the refresh token but the OS keyring could not be updated: {error}"
+                    ),
+                )
+            })?;
+            let stored = entry.get_password().map_err(|error| {
+                (
+                    1,
+                    format!(
+                        "the provider rotated the refresh token but the OS keyring update could not be verified: {error}"
+                    ),
+                )
+            })?;
+            let verified = crate::oauth_refresh::decode_refresh_config(&stored).map_err(|error| {
+                (
+                    1,
+                    format!(
+                        "the provider rotated the refresh token but the OS keyring returned invalid configuration: {error}"
+                    ),
+                )
+            })?;
+            if verified.refresh_token.as_str() != rotated_config.refresh_token.as_str() {
+                return Err((
+                    1,
+                    "the provider rotated the refresh token but the OS keyring returned a different token".to_owned(),
+                ));
+            }
+        }
+        if persist_keyring_id.is_some() {
+            message.push_str(
+                " The provider rotated the refresh token; the per-run configuration and configured OS keyring entry were updated.",
+            );
+        } else {
+            message.push_str(" The provider rotated the refresh token; the configuration file was updated, so re-export it to any external secret store that holds the old value.");
+        }
     }
+    crate::atomic_artifact::write_private_atomic(&output_path, refreshed.access_token.as_str())
+        .map_err(|error| (1, format!("could not write the access token file: {error}")))?;
     Ok(message)
 }
 

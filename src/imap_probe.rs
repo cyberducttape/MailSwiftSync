@@ -20,8 +20,10 @@ mod protocol;
 mod resolver;
 mod tls;
 use auth::authenticate_imap_stream;
+#[cfg(test)]
+use fetch_pages::parse_uid_search_response;
 use fetch_pages::{
-    FetchPagePlanner, encode_uid_page, parse_uid_search_response, validate_fetch_page_coverage,
+    FetchPagePlanner, encode_uid_page, parse_uid_fetch_response, validate_fetch_page_coverage,
 };
 use fetch_parser::canonical_flag_set;
 use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
@@ -115,7 +117,9 @@ const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 /// Initial metadata FETCH page; `FetchPagePlanner` adapts it per folder.
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 128;
 const MAX_UID_SET_BYTES: usize = 7_000;
-const MESSAGE_UID_SEARCH_WINDOW_SIZE: u64 = 10_000;
+/// Sequence-number FETCH pages scale with the number of messages in a
+/// mailbox, not with its historical UIDNEXT after years of expunges.
+const MESSAGE_UID_ENUMERATION_PAGE_SIZE: u64 = 512;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
 pub(crate) const MAX_BODY_HASH_MESSAGES_PER_ENDPOINT: usize = 100_000;
 // This is a fail-closed bound for one fetched page's transient Rust state. Live
@@ -787,11 +791,11 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     };
     sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
     let resume_after_uid = sink.resume_after_uid(mailbox, snapshot)?;
-    let searched_uid_count = enumerate_uid_pages(
+    let enumerated_uid_count = enumerate_uid_pages(
         stream,
         host,
         mailbox,
-        uidnext,
+        start_exists,
         &mut response,
         &mut buffer,
         budget,
@@ -915,9 +919,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             Ok(response_bytes)
         },
     )?;
-    if searched_uid_count != start_exists {
+    if enumerated_uid_count != start_exists {
         return Err(format!(
-            "{host}: folder {mailbox}: SEARCH coverage mismatch (EXISTS {start_exists}, validated UIDs {searched_uid_count})",
+            "{host}: folder {mailbox}: UID enumeration coverage mismatch (EXISTS {start_exists}, validated UIDs {enumerated_uid_count})",
         )
         .into());
     }
@@ -1025,15 +1029,17 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
     )))
 }
 
-/// Enumerate bounded UID windows and hand each fetch-sized page to the caller.
-/// No response contains the entire mailbox UID set, and no all-mailbox UID
-/// vector is retained between windows.
+/// Enumerate bounded sequence-number pages and hand each fetch-sized UID page
+/// to the caller. Sequence numbers are dense over the current SELECT snapshot,
+/// so command count scales with EXISTS rather than historical UIDNEXT. No
+/// response contains the entire mailbox UID set, and no all-mailbox UID vector
+/// is retained between pages.
 #[allow(clippy::too_many_arguments)]
 fn enumerate_uid_pages<S: Read + Write, F>(
     stream: &mut S,
     host: &str,
     mailbox: &str,
-    uidnext: u64,
+    exists: u64,
     response: &mut String,
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
@@ -1044,17 +1050,18 @@ fn enumerate_uid_pages<S: Read + Write, F>(
 where
     F: FnMut(&mut S, &mut [u8; 4096], &[u64], &str) -> Result<usize, String>,
 {
-    let mut window_start = 1_u64;
-    let mut searched_uid_count = 0_u64;
+    let mut sequence_start = 1_u64;
+    let mut enumerated_uid_count = 0_u64;
     let mut search_number = 0usize;
-    while window_start < uidnext {
+    while sequence_start <= exists {
         budget.check()?;
-        let window_end = window_start
-            .saturating_add(MESSAGE_UID_SEARCH_WINDOW_SIZE - 1)
-            .min(uidnext.saturating_sub(1));
+        let sequence_end = sequence_start
+            .saturating_add(MESSAGE_UID_ENUMERATION_PAGE_SIZE - 1)
+            .min(exists);
         let search_tag = format!("s{:03}", search_number + 2);
         search_number = search_number.saturating_add(1);
-        let search_command = format!("{search_tag} UID SEARCH UID {window_start}:{window_end}\r\n");
+        let search_command =
+            format!("{search_tag} UID FETCH {sequence_start}:{sequence_end} (UID)\r\n");
         write_imap_command(
             stream,
             search_command.as_bytes(),
@@ -1067,26 +1074,12 @@ where
             return Err(imap_command_failure(
                 response.as_str(),
                 &search_tag,
-                "SEARCH mailbox UID window",
+                "FETCH mailbox UID page",
                 host,
             ));
         }
-        let mut uids = parse_uid_search_response(response, host, mailbox)?;
-        uids.sort_unstable();
-        if uids.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(format!(
-                "{host}: folder {mailbox}: SEARCH returned duplicate UIDs in window {window_start}:{window_end}"
-            ));
-        }
-        if uids
-            .iter()
-            .any(|uid| *uid < window_start || *uid > window_end)
-        {
-            return Err(format!(
-                "{host}: folder {mailbox}: SEARCH returned a UID outside window {window_start}:{window_end}"
-            ));
-        }
-        searched_uid_count = searched_uid_count.saturating_add(uids.len() as u64);
+        let uids = parse_uid_fetch_response(response, host, mailbox, sequence_start, sequence_end)?;
+        enumerated_uid_count = enumerated_uid_count.saturating_add(uids.len() as u64);
         // Skip exactly the UIDs already staged before an interruption. Page
         // sizes adapt, so page boundaries are not stable across runs and
         // cannot be used to decide what was already fetched.
@@ -1099,9 +1092,9 @@ where
             planner.observe(uid_page.len(), response_bytes);
             offset += count;
         }
-        window_start = window_end.saturating_add(1);
+        sequence_start = sequence_end.saturating_add(1);
     }
-    Ok(searched_uid_count)
+    Ok(enumerated_uid_count)
 }
 
 /// Reconcile an entire IMAP account by enumerating selectable folders first.
