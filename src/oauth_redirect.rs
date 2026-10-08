@@ -62,6 +62,19 @@ pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> Redire
         );
     }
     if let Some(error) = error {
+        // The provider controls this query parameter. Keep malformed values
+        // from injecting terminal/UI control characters or an unbounded
+        // diagnostic while retaining a useful provider error code.
+        let error = error
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(128)
+            .collect::<String>();
+        let error = if error.is_empty() {
+            "unknown provider error"
+        } else {
+            error.as_str()
+        };
         let description = error_description
             .as_deref()
             .map(|value| {
@@ -75,9 +88,9 @@ pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> Redire
         return RedirectOutcome::ProviderRejected(match description {
             Some(description) => format!(
                 "the provider declined authorization ({}): {description}",
-                error.as_str()
+                error
             ),
-            None => format!("the provider declined authorization ({})", error.as_str()),
+            None => format!("the provider declined authorization ({error})"),
         });
     }
     match code {
@@ -151,6 +164,27 @@ mod tests {
                 ),
                 _ => panic!("{head:?} was not a provider rejection"),
             }
+        }
+    }
+
+    #[test]
+    fn provider_error_is_bounded_and_control_free() {
+        let request = "GET /?state=expected&error=%0D%0AInjected%00value HTTP/1.1\r\n\r\n";
+        match parse_redirect_request(request, "expected") {
+            RedirectOutcome::ProviderRejected(reason) => {
+                assert!(!reason.chars().any(char::is_control));
+                assert!(reason.contains("Injectedvalue"));
+            }
+            _ => panic!("provider error was not reported"),
+        }
+
+        let long_error = "x".repeat(256);
+        let request = format!("GET /?state=expected&error={long_error} HTTP/1.1\r\n\r\n");
+        match parse_redirect_request(&request, "expected") {
+            RedirectOutcome::ProviderRejected(reason) => {
+                assert!(reason.len() < 180, "{reason}");
+            }
+            _ => panic!("provider error was not reported"),
         }
     }
 
