@@ -26,10 +26,8 @@ pub(crate) fn build_project_report(
         .mailboxes
         .iter()
         .filter(|mailbox| {
-            matches!(
-                mailbox.job.state.as_str(),
-                "verified" | "verified_with_exceptions"
-            )
+            mailbox.job.state == "verified"
+                || (mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_some())
         })
         .count();
     let attention = snapshot

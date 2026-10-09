@@ -391,6 +391,13 @@ impl ProjectReportSnapshot {
             return OperationalState::NeedsAttention;
         }
 
+        let has_unaccepted_exception = self.mailboxes.iter().any(|mailbox| {
+            mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_none()
+        });
+        if has_unaccepted_exception {
+            return OperationalState::NeedsAttention;
+        }
+
         let has_blocking_mailbox = self.mailboxes.iter().any(|mailbox| {
             matches!(
                 mailbox.job.state.as_str(),
@@ -795,7 +802,16 @@ mod tests {
             OperationalState::Verified
         );
         let mut unaccepted = project_snapshot("verified_with_exceptions", Phase::Verification);
-        assert_eq!(unaccepted.operational_state(), OperationalState::Migrated);
+        assert_eq!(
+            unaccepted.operational_state(),
+            OperationalState::NeedsAttention
+        );
+        unaccepted.project.phase = Phase::Complete;
+        assert_eq!(
+            unaccepted.operational_state(),
+            OperationalState::NeedsAttention
+        );
+        unaccepted.project.phase = Phase::Verification;
         unaccepted.mailboxes[0].acceptance = Some(super::VerificationAcceptance {
             job_id: "mailbox".into(),
             run_id: "run".into(),
