@@ -211,10 +211,8 @@ pub(crate) fn export_from_store_with_options_and_identity(
         .mailboxes
         .iter()
         .filter(|mailbox| {
-            matches!(
-                mailbox.job.state.as_str(),
-                "verified" | "verified_with_exceptions"
-            )
+            mailbox.job.state == "verified"
+                || (mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_some())
         })
         .count();
     let project = snapshot.project;

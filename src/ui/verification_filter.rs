@@ -12,7 +12,10 @@ pub(crate) fn verification_row_matches(
     let state = mailbox.job.state.as_str();
     let result_match = match filter {
         "review" => needs_operator_review(state),
-        "verified" => matches!(state, "verified" | "verified_with_exceptions"),
+        "verified" => {
+            state == "verified"
+                || (state == "verified_with_exceptions" && mailbox.acceptance.is_some())
+        }
         "difference" => state == "verification_difference",
         _ => true,
     };
