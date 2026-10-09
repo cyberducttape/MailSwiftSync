@@ -644,7 +644,13 @@ impl App {
                             ConfidenceState::Warning => ("⚠", colors.warning, "Review"),
                             ConfidenceState::Unknown => ("?", colors.text_secondary, "Unknown"),
                         };
-                        ui.label(RichText::new(format!("{symbol} {}", finding.label)).strong());
+                        ui.label(
+                            RichText::new(format!(
+                                "{symbol} {}",
+                                self.language.text(finding.label)
+                            ))
+                            .strong(),
+                        );
                         ui.label(RichText::new(label).color(color));
                         ui.end_row();
                     }
@@ -685,7 +691,9 @@ impl App {
                                 findings.iter().filter(|finding| finding.section == section)
                             {
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(finding.label).strong());
+                                    ui.label(
+                                        RichText::new(self.language.text(finding.label)).strong(),
+                                    );
                                     ui.label(&finding.evidence);
                                     if ui
                                         .small_button(self.language.text(finding.remediation))

@@ -214,6 +214,31 @@ pub(crate) fn migration_confidence(input: ConfidenceInputs<'_>) -> Vec<Confidenc
         ),
     ));
 
+    let body_mode = input.verification_level.starts_with("Level 3");
+    let envelope_evidence = if input.proof_ready {
+        "The selected verification path completed within its configured safety envelope.".to_owned()
+    } else if body_mode {
+        "No mailbox size or message-count estimate is available from current preflight. Body verification admits at most 100,000 messages per endpoint, with configured per-message and total-byte limits.".to_owned()
+    } else {
+        "No mailbox size or message-count estimate is available from current preflight. Metadata verification admits at most 1,000,000 messages per endpoint, with bounded folder inventory and staging state.".to_owned()
+    };
+    findings.push(finding(
+        ConfidenceSection::Verification,
+        "Verification capacity",
+        if input.proof_ready {
+            ConfidenceState::Ready
+        } else {
+            ConfidenceState::Unknown
+        },
+        envelope_evidence,
+        (
+            "A completed transfer can still exceed the selected verification envelope and require operator review.",
+            "Review verification",
+            WorkspaceView::Verification,
+            false,
+        ),
+    ));
+
     findings.push(finding(
         ConfidenceSection::ProviderQualification,
         "Provider qualification",
@@ -344,6 +369,17 @@ mod tests {
             .unwrap();
         assert_eq!(cutover.state, ConfidenceState::Blocked);
         assert_eq!(cutover.destination, WorkspaceView::Mailboxes);
+    }
+
+    #[test]
+    fn verification_capacity_is_unknown_before_observed_proof() {
+        let findings = migration_confidence(inputs());
+        let capacity = findings
+            .iter()
+            .find(|item| item.label == "Verification capacity")
+            .expect("verification capacity finding");
+        assert_eq!(capacity.state, ConfidenceState::Unknown);
+        assert!(capacity.evidence.contains("1,000,000"));
     }
 
     #[test]

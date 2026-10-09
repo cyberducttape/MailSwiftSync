@@ -97,6 +97,20 @@ proof fails closed. Operators requiring verification above those body limits
 must select metadata-only verification; complete metadata reconciliation then
 remains subject to its own endpoint message-count and runtime/storage limits.
 
+## Verification capacity planning
+
+The readiness view exposes the selected verification envelope before a live
+run. Current authenticated capability preflight does not enumerate every
+message, total mailbox byte size, or complete folder inventory, so an
+unobserved mailbox is deliberately shown as **verification capacity unknown**;
+the application does not infer eligibility from an aggregate transfer plan.
+After a transfer, the observed evidence changes this finding to established
+only when verification completes within the configured envelope. Operators
+should obtain message, size, and folder estimates from the provider before
+selecting body-hash verification for large mailboxes. A transfer can complete
+successfully while verification still stops at a safety limit, which remains
+an operator-attention outcome.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the
