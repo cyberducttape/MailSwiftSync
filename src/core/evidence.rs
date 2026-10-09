@@ -409,7 +409,9 @@ impl ProjectReportSnapshot {
         let verified_with_exceptions = self
             .mailboxes
             .iter()
-            .filter(|mailbox| mailbox.job.state == "verified_with_exceptions")
+            .filter(|mailbox| {
+                mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_some()
+            })
             .count();
         let evidence_exceptions = self.mailboxes.iter().any(|mailbox| {
             mailbox
@@ -792,8 +794,17 @@ mod tests {
             project_snapshot("verified", Phase::Verification).operational_state(),
             OperationalState::Verified
         );
+        let mut unaccepted = project_snapshot("verified_with_exceptions", Phase::Verification);
+        assert_eq!(unaccepted.operational_state(), OperationalState::Migrated);
+        unaccepted.mailboxes[0].acceptance = Some(super::VerificationAcceptance {
+            job_id: "mailbox".into(),
+            run_id: "run".into(),
+            operator: "operator".into(),
+            reason: "approved exception".into(),
+            accepted_at: "2026-10-09T00:00:00Z".into(),
+        });
         assert_eq!(
-            project_snapshot("verified_with_exceptions", Phase::Verification).operational_state(),
+            unaccepted.operational_state(),
             OperationalState::VerifiedWithExceptions
         );
         assert_eq!(
