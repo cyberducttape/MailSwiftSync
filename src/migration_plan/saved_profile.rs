@@ -52,6 +52,65 @@ pub(crate) fn decode_report_run_snapshot(
         .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
 }
 
+impl RunProfileSnapshot {
+    /// Rehydrate only the non-secret plan needed by an independent verifier.
+    /// Runtime credentials are deliberately supplied separately by the
+    /// operator and are never recovered from the immutable run snapshot.
+    #[allow(clippy::field_reassign_with_default)]
+    pub(crate) fn into_profile(self) -> Profile {
+        let mut profile = Profile::default();
+        profile.name = self.name;
+        profile.source_host = self.source_host;
+        profile.source_port = self.source_port;
+        profile.source_tls = self.source_tls;
+        profile.source_ca_bundle = self.source_ca_bundle;
+        profile.source_certificate_pin_sha256 = self.source_certificate_pin_sha256;
+        profile.allow_insecure_source_transport = self.allow_insecure_source_transport;
+        profile.source_user = self.source_user;
+        profile.source_rate_tenant = self.source_rate_tenant;
+        profile.source_auth = self.source_auth;
+        profile.source_credential_id = self.source_credential_id;
+        profile.source_oauth_refresh_credential_id = self.source_oauth_refresh_credential_id;
+        profile.destination_host = self.destination_host;
+        profile.destination_user = self.destination_user;
+        profile.destination_rate_tenant = self.destination_rate_tenant;
+        profile.destination_auth = self.destination_auth;
+        profile.destination_credential_id = self.destination_credential_id;
+        profile.destination_oauth_refresh_credential_id =
+            self.destination_oauth_refresh_credential_id;
+        profile.destination_port = self.destination_port;
+        profile.destination_tls = self.destination_tls;
+        profile.destination_ca_bundle = self.destination_ca_bundle;
+        profile.destination_certificate_pin_sha256 = self.destination_certificate_pin_sha256;
+        profile.imapsync_path = self.imapsync_path;
+        profile.engine = self.engine;
+        profile.doveadm_path = self.doveadm_path;
+        profile.dovecot_config = self.dovecot_config;
+        profile.batch_concurrency = self.batch_concurrency;
+        profile.batch_retry_count = self.batch_retry_count;
+        profile.batch_process_starts_per_second = self.batch_process_starts_per_second;
+        profile.max_messages_per_second = self.max_messages_per_second;
+        profile.max_bytes_per_second = self.max_bytes_per_second;
+        profile.body_hash_verification = self.body_hash_verification;
+        profile.body_hash_max_bytes = self.body_hash_max_bytes;
+        profile.body_hash_max_total_bytes = self.body_hash_max_total_bytes;
+        profile.migration_timeout_hours = self.migration_timeout_hours;
+        profile.automap = self.automap;
+        profile.folder_mapping_rules = self.folder_mapping_rules;
+        profile.addheader = self.addheader;
+        profile.justfolders = self.justfolders;
+        profile.sync_internaldates = self.sync_internaldates;
+        profile.useuid = self.useuid;
+        profile.usecache = self.usecache;
+        profile.fastio1 = self.fastio1;
+        profile.fastio2 = self.fastio2;
+        profile.allowsizemismatch = self.allowsizemismatch;
+        profile.dovecot_strategy = self.dovecot_strategy;
+        profile.delete2 = self.delete2;
+        profile
+    }
+}
+
 pub(super) fn decode_saved_profile(path: &Path, text: &str) -> Result<Profile, String> {
     let raw: toml::Value = toml::from_str(text)
         .map_err(|error| format!("could not decode saved profile {}: {error}", path.display()))?;

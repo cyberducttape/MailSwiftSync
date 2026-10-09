@@ -164,6 +164,128 @@ pub(super) fn flag_verification_from_row(
 }
 
 impl StateStore {
+    /// Finish an audit-only verification run. Unlike transfer completion this
+    /// writes history and mismatch evidence without replacing the mailbox's
+    /// current migration projection or changing its operational state.
+    pub fn finish_verification_only_run(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        value: &MailboxEvidence,
+        mismatches: &[MessageMismatch],
+        detail: &str,
+    ) -> rusqlite::Result<()> {
+        if mismatches.len() > 1_000_000
+            || mismatches.iter().any(|mismatch| {
+                mismatch.job_id.as_ref() != job_id
+                    || mismatch.run_id.as_ref() != run_id
+                    || mismatch.id.is_empty()
+            })
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let changed = tx.execute(
+            "UPDATE runs SET status='completed',finished_at=CURRENT_TIMESTAMP,detail=?1 WHERE id=?2 AND project_id=?3 AND job_id=?4 AND status='running'",
+            params![bounded_event_detail(detail), run_id, project_id, job_id],
+        )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.execute(
+            "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?15,?16,?17)",
+            params![
+                job_id,
+                run_id,
+                value.verification_method().as_str(),
+                value.verification_outcome().as_str(),
+                sqlite_i64(value.source_messages)?,
+                sqlite_i64(value.destination_messages)?,
+                sqlite_i64(value.source_bytes)?,
+                sqlite_i64(value.destination_bytes)?,
+                sqlite_optional_i64(value.unmatched_messages)?,
+                sqlite_i64(value.failed_messages)?,
+                sqlite_i64(value.source_folders)?,
+                sqlite_i64(value.destination_folders)?,
+                sqlite_i64(value.missing_messages)?,
+                sqlite_i64(value.extra_messages)?,
+                sqlite_i64(value.modified_messages)?,
+                sqlite_i64(value.probable_messages)?,
+            ],
+        )?;
+        if let Some(flags) = value.flag_verification {
+            if !flags.is_consistent() {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            tx.execute(
+                "INSERT INTO evidence_flag_verification(job_id,run_id,compared_messages,mismatched_messages,excepted_messages) VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    job_id,
+                    run_id,
+                    sqlite_i64(flags.compared_messages)?,
+                    sqlite_i64(flags.mismatched_messages)?,
+                    sqlite_i64(flags.excepted_messages)?,
+                ],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM message_mismatches WHERE job_id=?1 AND run_id=?2",
+            params![job_id, run_id],
+        )?;
+        let mut insert = tx.prepare_cached(
+            "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,source_folder_digest,destination_folder_digest) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14,?15,?16)",
+        )?;
+        for mismatch in mismatches {
+            insert.execute(params![
+                mismatch.id,
+                job_id,
+                run_id,
+                mismatch.mismatch_type.as_str(),
+                mismatch.source_uid,
+                mismatch.dest_uid,
+                mismatch
+                    .source_size_bytes
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                mismatch
+                    .dest_size_bytes
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                mismatch.source_date,
+                mismatch.dest_date,
+                mismatch
+                    .source_uidvalidity
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                mismatch
+                    .destination_uidvalidity
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                mismatch.source_fingerprint,
+                mismatch.destination_fingerprint,
+                mismatch
+                    .source_folder
+                    .as_deref()
+                    .map(|folder| super::folder_digest(project_id, folder)),
+                mismatch
+                    .destination_folder
+                    .as_deref()
+                    .map(|folder| super::folder_digest(project_id, folder)),
+            ])?;
+        }
+        drop(insert);
+        tx.execute(
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'verification_finished',?3)",
+            params![project_id, run_id, bounded_event_detail(detail)],
+        )?;
+        tx.commit()
+    }
+
     /// Load a bounded operator-facing mismatch page for one evidence run.
     /// The boolean indicates that additional durable rows exist beyond the
     /// returned page, so reports cannot imply that a truncated view is

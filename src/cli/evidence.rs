@@ -106,6 +106,193 @@ pub(super) fn verify_command(mut arguments: std::env::ArgsOs) -> eframe::Result<
     }
 }
 
+/// Reconcile a completed mailbox without starting a transfer engine. Secret
+/// files are owner-only inputs and the original mailbox projection is left
+/// untouched; only a new run/history record and mismatch rows are written.
+pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
+    let (
+        Some(state),
+        Some(project_id),
+        Some(job_id),
+        Some(source_secret),
+        Some(destination_secret),
+    ) = (
+        arguments.next(),
+        arguments.next(),
+        arguments.next(),
+        arguments.next(),
+        arguments.next(),
+    )
+    else {
+        eprintln!(
+            "Usage: mailswiftsync reverify <state.db> <project-id> <mailbox-id> <source-secret-file> <destination-secret-file> [--mode metadata|content] [--differences output.csv]"
+        );
+        std::process::exit(2);
+    };
+    let mut mode = "metadata".to_owned();
+    let mut differences = None;
+    while let Some(argument) = arguments.next() {
+        let argument = argument.to_string_lossy().into_owned();
+        if let Some(value) = argument.strip_prefix("--mode=") {
+            mode = value.to_owned();
+        } else if argument == "--mode" {
+            mode = arguments
+                .next()
+                .and_then(|value| value.into_string().ok())
+                .unwrap_or_default();
+        } else if let Some(value) = argument.strip_prefix("--differences=") {
+            differences = Some(PathBuf::from(value));
+        } else if argument == "--differences" {
+            differences = arguments.next().map(PathBuf::from);
+        } else {
+            eprintln!("Reverification refused: unknown option {argument}");
+            std::process::exit(2);
+        }
+    }
+    let project_id = match project_id.into_string() {
+        Ok(value) => value,
+        Err(_) => {
+            eprintln!("Reverification refused: project ID must be valid UTF-8");
+            std::process::exit(2);
+        }
+    };
+    let job_id = match job_id.into_string() {
+        Ok(value) => value,
+        Err(_) => {
+            eprintln!("Reverification refused: mailbox ID must be valid UTF-8");
+            std::process::exit(2);
+        }
+    };
+    if !matches!(mode.as_str(), "metadata" | "content") {
+        eprintln!("Reverification refused: mode must be metadata or content");
+        std::process::exit(2);
+    }
+    let source_password = match read_secret_file(std::path::Path::new(&source_secret)) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("Reverification refused: source secret file: {error}");
+            std::process::exit(2);
+        }
+    };
+    let destination_password = match read_secret_file(std::path::Path::new(&destination_secret)) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("Reverification refused: destination secret file: {error}");
+            std::process::exit(2);
+        }
+    };
+    let state = PathBuf::from(state);
+    let store = match core::StateStore::open(&state) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Reverification refused: durable SQLite state is unavailable: {error}");
+            std::process::exit(1);
+        }
+    };
+    let Some(previous_run) = store.latest_run(&job_id).ok().flatten() else {
+        eprintln!("Reverification refused: no prior run exists for mailbox {job_id}");
+        std::process::exit(2);
+    };
+    let snapshot =
+        match crate::migration_plan::decode_report_run_snapshot(&previous_run.plan_snapshot) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                eprintln!("Reverification refused: the prior run has no immutable plan snapshot");
+                std::process::exit(2);
+            }
+            Err(error) => {
+                eprintln!("Reverification refused: {error}");
+                std::process::exit(2);
+            }
+        };
+    let mut form = crate::Form {
+        profile: snapshot.profile.into_profile(),
+        source_password,
+        destination_password,
+        dry_run: false,
+    };
+    if form.engine() != core::Engine::ImapSync {
+        eprintln!(
+            "Reverification refused: independent post-migration verification currently supports imapsync plans only"
+        );
+        std::process::exit(2);
+    }
+    form.profile.body_hash_verification = mode == "content";
+    if let Err(error) = crate::runner::validate_body_hash_limits(&form) {
+        eprintln!("Reverification refused: {error}");
+        std::process::exit(2);
+    }
+    let run_id = uuid::Uuid::new_v4().to_string();
+    if let Err(error) =
+        store.begin_verification_run(&project_id, &job_id, &run_id, &previous_run.plan_snapshot)
+    {
+        eprintln!("Reverification refused: could not begin durable verification run: {error}");
+        std::process::exit(1);
+    }
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let result =
+        crate::runner::run_imap_message_verification(&form, &job_id, &run_id, &cancel, None);
+    let (evidence, mismatches, folder_count) = match result {
+        Ok(crate::runner::MessageVerificationResult {
+            evidence,
+            mismatches,
+            folders,
+        }) => (evidence, mismatches, folders.len()),
+        Err(error) => {
+            let _ = store.finish_run(&run_id, "verification_failed", &error);
+            eprintln!("Reverification failed: {error}");
+            std::process::exit(1);
+        }
+    };
+    let detail = format!("verification-only mode={mode}; folders={folder_count}");
+    if let Err(error) = store.finish_verification_only_run(
+        &project_id,
+        &job_id,
+        &run_id,
+        &evidence,
+        &mismatches,
+        &detail,
+    ) {
+        eprintln!("Reverification failed to persist evidence: {error}");
+        std::process::exit(1);
+    }
+    if let Some(path) = differences {
+        let (csv, _, _) = match store.export_message_mismatches_csv(
+            &job_id,
+            &run_id,
+            &core::MismatchFilter::default(),
+            1_000_000,
+            &|_| None,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Reverification completed, but difference export failed: {error}");
+                std::process::exit(1);
+            }
+        };
+        if let Err(error) = crate::atomic_artifact::write_private_atomic(&path, &csv) {
+            eprintln!("Reverification completed, but difference export failed: {error}");
+            std::process::exit(1);
+        }
+    }
+    let result = serde_json::json!({
+        "run_id": run_id,
+        "mode": mode,
+        "verification_outcome": evidence.verification_outcome().as_str(),
+        "verification_level": evidence.verification_level(),
+        "source_messages": evidence.source_messages,
+        "destination_messages": evidence.destination_messages,
+        "missing_messages": evidence.missing_messages,
+        "extra_messages": evidence.extra_messages,
+        "modified_messages": evidence.modified_messages,
+        "probable_messages": evidence.probable_messages,
+        "mismatch_rows": mismatches.len(),
+        "note": "Verification-only observation; the original migration result is unchanged and differences may reflect legitimate post-migration activity."
+    });
+    out!("{result}");
+    Ok(())
+}
+
 pub(super) fn verify_certificate_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let Some(path) = arguments.next() else {
         eprintln!(

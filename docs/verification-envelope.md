@@ -138,6 +138,25 @@ expected-destination adapter plus provider qualification and regression tests
 for duplicates, reconnects, deletions, and partial failure. A preflight
 success alone is not sufficient evidence to enable it.
 
+## Independent post-migration verification
+
+The transfer engine and verifier have separate lifecycles. A completed
+imapsync mailbox can be audited again without launching imapsync:
+
+```text
+mailswiftsync reverify STATE PROJECT_ID MAILBOX_ID SOURCE_SECRET_FILE DESTINATION_SECRET_FILE \
+  --mode metadata --differences differences.csv
+```
+
+Use `--mode content` for the bounded body-fingerprint path. Secret files must
+be regular, owner-only files; credentials are never accepted in argv. The
+command reuses the immutable plan snapshot, records a separate
+verification-only run and `evidence_history` row, and stores differences under
+that run for CSV export. The original migration evidence and mailbox state are
+not overwritten. A later difference is an audit observation and may represent
+legitimate post-migration delivery, deletion, or flag changes; it must not
+automatically be presented as proof that the original transfer lost mail.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the

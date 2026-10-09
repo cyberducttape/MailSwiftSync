@@ -146,6 +146,9 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("verify") {
         return verify_command(arguments);
     }
+    if command == std::ffi::OsStr::new("reverify") {
+        return reverify_command(arguments);
+    }
     if command == std::ffi::OsStr::new("verify-certificate") {
         return verify_certificate_command(arguments);
     }
@@ -242,6 +245,9 @@ fn print_cli_help() {
         "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate credential-free operational status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST minimal credential-free operational status to HTTPS; opt into customer metadata explicitly\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n  wave <state> list <project> | approve <wave-id> <approver>  List migration waves or approve one for live migration\n  oauth-authorize <provider> <keyring-id> --client-id <id>  Authorize IMAP access in a browser and store the refresh configuration\n  oauth-export-refresh-config <keyring-id> <out>  Export a stored refresh configuration to an owner-only file for automation\n  oauth-access-token <refresh-config> <out>  Exchange a refresh-configuration file for an access token file\n  install-engine [--yes]         Download, verify, and install the qualified imapsync engine"
     );
     out!("  verify-certificate <file> [trusted-key]  Verify a signed migration certificate");
+    out!(
+        "  reverify <state> <project-id> <mailbox-id> <source-secret-file> <destination-secret-file> [--mode metadata|content] [--differences output.csv]  Reconcile a completed mailbox without rerunning the transfer engine"
+    );
     out!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n  --execution-profile <name>    Use compatibility (default) or hardened engine environment\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
     );

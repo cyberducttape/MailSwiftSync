@@ -9,7 +9,6 @@ impl StateStore {
             })
             .optional()
     }
-    #[cfg(test)]
     pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(

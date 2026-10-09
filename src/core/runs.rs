@@ -32,6 +32,44 @@ fn ensure_no_active_destination_lock_conflict(
 }
 
 impl StateStore {
+    /// Start a verification-only run without changing the mailbox's
+    /// migration state. This keeps post-migration audits independent from
+    /// the original transfer lifecycle.
+    pub fn begin_verification_run(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        plan_snapshot: &str,
+    ) -> rusqlite::Result<()> {
+        if plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let phase: String = tx.query_row(
+            "SELECT p.phase FROM projects p JOIN mailbox_jobs j ON j.project_id=p.id WHERE p.id=?1 AND j.id=?2",
+            params![project_id, job_id],
+            |row| row.get(0),
+        )?;
+        let active: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
+            params![project_id, job_id],
+            |row| row.get(0),
+        )?;
+        if active {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,'imap-verification',?4,?5,'running')",
+            params![run_id, project_id, job_id, phase, plan_snapshot],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'verification_started',?3)",
+            params![project_id, run_id, format!("verification-only ({job_id})")],
+        )?;
+        tx.commit()
+    }
+
     /// Atomically records a run and moves its mailbox into `running`.
     /// Keeping these writes together prevents restart recovery from seeing a
     /// running mailbox without the run record needed to explain it.
