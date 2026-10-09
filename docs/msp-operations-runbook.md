@@ -128,3 +128,8 @@ The MSP service owner should review dead-letter webhooks, unresolved mailbox
 states, backup/restore drills, supported runtime versions, and open qualification
 gaps before accepting the next customer wave. Centralized fleet monitoring,
 tenant boundaries, and RBAC remain outside the current product boundary.
+
+The `fleet-status` command is a read-only aggregation of separate local
+ledgers; it is not a scheduler, worker registry, heartbeat service, remote
+pause/resume mechanism, or distributed ownership protocol. Do not place the
+SQLite ledgers on shared storage or run multiple controllers against one ledger.

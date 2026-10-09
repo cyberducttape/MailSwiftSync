@@ -648,6 +648,7 @@ impl App {
                     Event::RetryScheduled {
                         job_id,
                         attempt,
+                        max_retries,
                         delay,
                         failure_class,
                     } => {
@@ -656,6 +657,7 @@ impl App {
                                 &job_id,
                                 controller::telemetry::RetryNote {
                                     attempt,
+                                    max_retries,
                                     retry_at: std::time::Instant::now() + delay,
                                     failure_class,
                                 },

@@ -118,6 +118,7 @@ pub(crate) fn telemetry_demo(app: &mut App) {
         &demo_id(11),
         crate::controller::telemetry::RetryNote {
             attempt: 2,
+            max_retries: 3,
             retry_at: now + Duration::from_secs(47),
             failure_class: "capacity",
         },

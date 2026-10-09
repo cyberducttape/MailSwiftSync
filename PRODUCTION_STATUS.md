@@ -178,6 +178,7 @@ new metadata verifier against real accounts.
 - [ ] Compatibility matrix with live test results
 - [ ] Provider-specific troubleshooting guides
 - [x] MSP operations procedure for customer scoping, change approvals, wave controls, incident handling, and evidence retention; centralized fleet control remains unavailable.
+- [ ] Central MSP control plane with worker registration, heartbeats, distributed job ownership, remote controls, tenant isolation, and RBAC; `fleet-status` is intentionally read-only aggregation only.
 
 **Status:** Foundation in place, can be extended from real-world usage
 

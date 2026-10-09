@@ -448,9 +448,10 @@ impl App {
             ui.label(
                 RichText::new(
                     self.language
-                        .text("! {} · retry {} in {} · {}")
+                        .text("! {} · retry {}/{} in {} · {}")
                         .replacen("{}", &self.job_label(job_id), 1)
                         .replacen("{}", &retry.attempt.to_string(), 1)
+                        .replacen("{}", &retry.max_retries.to_string(), 1)
                         .replacen(
                             "{}",
                             &format_estimate(retry.retry_at.saturating_duration_since(now)),

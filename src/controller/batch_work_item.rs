@@ -853,6 +853,7 @@ impl BatchAttemptRunner {
         let _ = self.tx.try_send(Event::RetryScheduled {
             job_id: task.job_id.clone(),
             attempt: u32::try_from(task.attempt + 2).unwrap_or(u32::MAX),
+            max_retries: u32::try_from(self.retry_count).unwrap_or(u32::MAX),
             delay,
             failure_class: classify_failure_for_provider(provider, error).label(),
         });
@@ -1126,19 +1127,27 @@ impl BatchAttemptRunner {
             }
             Err(error) => {
                 drop(admission);
+                let provider = provider_for_error(&task.form, &error);
+                let failure_class = classify_failure_for_provider(provider, &error);
+                let exhausted_retry_budget = attempt >= self.retry_count
+                    && should_retry_batch_error_for_provider(provider, &error, attempt, usize::MAX);
+                let detail = if exhausted_retry_budget {
+                    format!(
+                        "retry budget exhausted after {} retries: {error}",
+                        self.retry_count
+                    )
+                } else {
+                    error.clone()
+                };
                 self.line(
                     &task,
                     format!(
-                        "[{}] [{}] failed: {error}",
+                        "[{}] [{}] failed: {detail}",
                         task.index + 1,
-                        classify_failure_for_provider(
-                            provider_for_error(&task.form, &error),
-                            &error,
-                        )
-                        .label()
+                        failure_class.label()
                     ),
                 );
-                self.fail(&task, &error);
+                self.fail(&task, &detail);
                 self.finish_transcript(&task);
                 AttemptOutcome::Finished
             }
@@ -1384,6 +1393,7 @@ mod tests {
         ));
         let Event::RetryScheduled {
             attempt,
+            max_retries,
             failure_class,
             delay,
             ..
@@ -1392,6 +1402,7 @@ mod tests {
             panic!("expected a durable retry schedule");
         };
         assert_eq!(attempt, 2);
+        assert_eq!(max_retries, 2);
         assert_eq!(failure_class, "capacity");
         assert!(!delay.is_zero());
         let AttemptOutcome::Retry { task, .. } = worker.join().unwrap() else {

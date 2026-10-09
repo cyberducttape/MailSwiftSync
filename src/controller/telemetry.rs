@@ -30,6 +30,7 @@ pub(crate) struct JobTelemetry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RetryNote {
     pub(crate) attempt: u32,
+    pub(crate) max_retries: u32,
     pub(crate) retry_at: Instant,
     pub(crate) failure_class: &'static str,
 }
@@ -464,6 +465,7 @@ mod tests {
             "a",
             RetryNote {
                 attempt: 2,
+                max_retries: 3,
                 retry_at: start + Duration::from_secs(30),
                 failure_class: "capacity",
             },

@@ -162,6 +162,7 @@ pub(crate) enum Event {
     RetryScheduled {
         job_id: String,
         attempt: u32,
+        max_retries: u32,
         delay: std::time::Duration,
         failure_class: &'static str,
     },
