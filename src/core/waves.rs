@@ -303,7 +303,7 @@ impl StateStore {
         let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {WAVE_COLUMNS},
                     COUNT(m.job_id),
-                    COALESCE(SUM(j.state IN ('verified','verified_with_exceptions')),0),
+                    COALESCE(SUM(j.state='verified' OR (j.state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=j.id))),0),
                     COALESCE(SUM(j.state IN ('preflight','running','completed')),0),
                     COALESCE(SUM(j.state IN ('attention','failed','verification_difference')),0),
                     COALESCE(SUM(j.state='delta_required'),0),

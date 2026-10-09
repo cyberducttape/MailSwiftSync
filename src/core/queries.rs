@@ -254,7 +254,7 @@ impl StateStore {
 
     pub fn mailbox_state_counts(&self, project_id: &str) -> rusqlite::Result<MailboxStateCounts> {
         self.connection.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
             [project_id],
             |row| {
                 Ok(MailboxStateCounts {
@@ -270,7 +270,7 @@ impl StateStore {
 
     pub fn all_mailbox_state_counts(&self) -> rusqlite::Result<MailboxStateCounts> {
         self.connection.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs",
+            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs",
             [],
             |row| {
                 Ok(MailboxStateCounts {

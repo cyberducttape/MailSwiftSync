@@ -627,7 +627,7 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         let (total, verified): (i64, i64) = tx.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            "SELECT COUNT(*), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
             [project_id],
             |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
         )?;
