@@ -146,6 +146,16 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         transfer_pass,
         launch_limiter,
     } = context;
+    if imapsync_output_profile == verification::ImapsyncOutputProfile::Unknown
+        && args.iter().any(|arg| {
+            arg == "--oauthrefreshcmd1" || arg == "--oauthrefreshcmd2"
+        })
+    {
+        return Err(
+            "automatic OAuth refresh requires the qualified imapsync 2.314 refresh-command contract; refusing to launch an unqualified engine"
+                .to_owned(),
+        );
+    }
     let mut command = execution_command(executable, args, env)?;
     let launch_admitted_at = if let Some((limiter, path)) = launch_limiter {
         Some(limiter.acquire_scoped_at(path, cancel).ok_or_else(|| {
@@ -940,6 +950,33 @@ mod tests {
         assert_eq!(identity.version, "imapsync 2.314");
         assert_eq!(identity.output_profile, ImapsyncOutputProfile::Packaged2314);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn automatic_oauth_refresh_requires_a_qualified_engine_profile() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let cancel = AtomicBool::new(false);
+        let error = run_streaming(RunContext {
+            executable: "/path/that/does/not/exist/imapsync",
+            args: &["--oauthrefreshcmd1".to_owned()],
+            env: &[],
+            tx: &tx,
+            run_id: "run",
+            job_id: "job",
+            project_id: "project",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: Duration::from_secs(1),
+            dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
+            attempt_number: 1,
+            transfer_pass: None,
+            launch_limiter: None,
+        })
+        .unwrap_err();
+        assert!(error.contains("qualified imapsync 2.314"));
     }
 
     /// Progress is counted on the lossless reader, so a saturated controller
