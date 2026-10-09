@@ -174,6 +174,12 @@ pub(crate) enum Event {
         /// `host:port` of the paused domain; `None` for the global domain.
         endpoint: Option<String>,
         until: std::time::Instant,
+        /// Adaptive concurrency after this capacity event.
+        current_limit: usize,
+        /// Organization/batch ceiling for this domain.
+        configured_limit: usize,
+        /// Consecutive capacity failures in the current escalation episode.
+        consecutive_failures: u8,
     },
     /// Verification results for the transfer attempt they examined.
     TransferPassVerified {

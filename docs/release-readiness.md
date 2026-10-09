@@ -476,6 +476,15 @@ screen-reader checklist are recorded in
   it does not launch IMAP engines, model provider latency/throttling, or replace
   multi-migration load qualification against disposable real servers.
 
+  Provider capacity events honor provider-suggested retry delays when
+  available, reduce the affected hierarchical domain, and expose the observed
+  domain, adaptive ceiling, configured ceiling, and escalation count in run
+  telemetry. Retry budgets and global/provider/tenant/credential/mailbox
+  fairness remain bounded by the scheduler. Cooldown state is intentionally
+  process-local today; a controller restart re-qualifies capacity from fresh
+  provider signals rather than restoring a stale cooldown. This remains a
+  qualification limitation, not evidence of a provider-wide quota guarantee.
+
   The latest local release-mode baseline on 2026-09-30 (Linux x86_64, the
   cases run sequentially in one process) was:
 

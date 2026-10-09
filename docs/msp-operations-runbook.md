@@ -70,6 +70,12 @@ mailbox is complete, needs a delta, or requires operator review.
   throttling, queue eligibility, verification coverage, and destination
   capacity observations. Unknown quota is a blocker for any customer policy
   that requires known capacity.
+- When provider throttling pauses launches, the Activity view reports the
+  limiting domain, adaptive ceiling versus configured ceiling, and escalation
+  event count. Treat this as run telemetry: adaptive cooldown state is held in
+  the active controller process and is re-qualified after a restart; it is not
+  a durable provider guarantee. Unrelated tenant domains should remain eligible
+  unless the evidence escalates to their shared provider or global domain.
 - Use the durable cutover workflow for staged Seed, Catch-up, Final Delta, and
   Verification where the customer change requires it. External DNS/MX
   confirmation remains an explicit operator acknowledgement.

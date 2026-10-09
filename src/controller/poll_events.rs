@@ -667,10 +667,22 @@ impl App {
                         provider,
                         endpoint,
                         until,
+                        current_limit,
+                        configured_limit,
+                        consecutive_failures,
                     } => {
                         if active_run.is_some() {
-                            self.run_telemetry
-                                .record_cooldown(&domain, provider, endpoint, until);
+                            self.run_telemetry.record_cooldown(
+                                &domain,
+                                provider,
+                                endpoint,
+                                until,
+                                crate::controller::telemetry::CooldownDetails {
+                                    current_limit,
+                                    configured_limit,
+                                    consecutive_failures,
+                                },
+                            );
                         }
                     }
                     Event::Finished(r) => {

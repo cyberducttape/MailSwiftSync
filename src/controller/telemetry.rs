@@ -37,11 +37,25 @@ pub(crate) struct RetryNote {
 /// One rate domain paused after provider pushback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CooldownNote {
+    pub(crate) label: String,
     pub(crate) until: Instant,
     /// Canonical provider; `global` pauses every provider.
     pub(crate) provider: &'static str,
     /// `host:port` of the paused domain; `None` for the global domain.
     pub(crate) endpoint: Option<String>,
+    /// Adaptive concurrency ceiling after the observed capacity event.
+    pub(crate) current_limit: usize,
+    /// Configured organization/batch ceiling for this domain.
+    pub(crate) configured_limit: usize,
+    /// Consecutive capacity failures in the current escalation episode.
+    pub(crate) consecutive_failures: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CooldownDetails {
+    pub(crate) current_limit: usize,
+    pub(crate) configured_limit: usize,
+    pub(crate) consecutive_failures: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,16 +160,24 @@ impl RunTelemetry {
         provider: &'static str,
         endpoint: Option<String>,
         until: Instant,
+        details: CooldownDetails,
     ) {
         let entry = self
             .cooldowns
             .entry(label.to_owned())
             .or_insert_with(|| CooldownNote {
+                label: label.to_owned(),
                 until,
                 provider,
                 endpoint,
+                current_limit: details.current_limit,
+                configured_limit: details.configured_limit,
+                consecutive_failures: details.consecutive_failures,
             });
         entry.until = entry.until.max(until);
+        entry.current_limit = details.current_limit;
+        entry.configured_limit = details.configured_limit;
+        entry.consecutive_failures = details.consecutive_failures;
     }
 
     pub(crate) fn record_job_finished(
@@ -368,7 +390,7 @@ pub(crate) fn window_risk(eta: Duration, closes_in: Duration) -> WindowRisk {
 
 #[cfg(test)]
 mod tests {
-    use super::{RetryNote, RunTelemetry, WindowRisk, window_risk};
+    use super::{CooldownDetails, RetryNote, RunTelemetry, WindowRisk, window_risk};
     use crate::progress::TransferProgress;
     use std::time::{Duration, Instant};
 
@@ -451,9 +473,18 @@ mod tests {
             "generic",
             Some("src:993".into()),
             start + Duration::from_secs(60),
+            CooldownDetails {
+                current_limit: 2,
+                configured_limit: 8,
+                consecutive_failures: 1,
+            },
         );
         assert_eq!(telemetry.pending_retries(start).len(), 1);
         assert_eq!(telemetry.active_cooldowns(start)[0].1.as_secs(), 60);
+        let note = telemetry.active_cooldown_notes(start).remove(0);
+        assert_eq!(note.current_limit, 2);
+        assert_eq!(note.configured_limit, 8);
+        assert_eq!(note.consecutive_failures, 1);
         assert!(telemetry.has_live_countdowns(start));
         assert!(!telemetry.has_live_countdowns(start + Duration::from_secs(61)));
         telemetry.record_job_finished("a", "failed", "auth rejected", start);

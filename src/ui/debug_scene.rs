@@ -127,6 +127,11 @@ pub(crate) fn telemetry_demo(app: &mut App) {
         "generic",
         Some("imap.source.example:993".into()),
         now + Duration::from_secs(95),
+        crate::controller::telemetry::CooldownDetails {
+            current_limit: 8,
+            configured_limit: 20,
+            consecutive_failures: 1,
+        },
     );
     app.run_telemetry.record_job_finished(
         &demo_id(5),

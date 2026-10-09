@@ -461,13 +461,24 @@ impl App {
                 .color(colors.warning),
             );
         }
-        for (endpoint, remaining) in cooldowns {
+        for (label, remaining) in cooldowns {
+            let detail = telemetry
+                .active_cooldown_notes(now)
+                .into_iter()
+                .find(|note| note.label == label)
+                .map_or_else(String::new, |note| {
+                    format!(
+                        " · adaptive {}/{} · event #{}",
+                        note.current_limit, note.configured_limit, note.consecutive_failures
+                    )
+                });
             ui.label(
                 RichText::new(
                     self.language
-                        .text("⏸ {} · new launches paused for {} after provider throttling")
-                        .replacen("{}", endpoint, 1)
-                        .replacen("{}", &format_estimate(remaining), 1),
+                        .text("⏸ {} · new launches paused for {} after provider throttling{}")
+                        .replacen("{}", label, 1)
+                        .replacen("{}", &format_estimate(remaining), 1)
+                        .replacen("{}", &detail, 1),
                 )
                 .color(colors.warning),
             );

@@ -298,9 +298,13 @@ mod tests {
 
     fn note(provider: &'static str, endpoint: Option<&str>, until: Instant) -> CooldownNote {
         CooldownNote {
+            label: String::new(),
             until,
             provider,
             endpoint: endpoint.map(str::to_owned),
+            current_limit: 1,
+            configured_limit: 1,
+            consecutive_failures: 1,
         }
     }
 

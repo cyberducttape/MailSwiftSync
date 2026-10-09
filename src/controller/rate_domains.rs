@@ -587,6 +587,17 @@ impl RateDomainLimiter {
             )
         })
     }
+
+    /// Content-free operator telemetry for a domain that was just penalized.
+    pub(crate) fn telemetry_snapshot(&self, key: &DomainKey) -> Option<(usize, usize, u8)> {
+        self.state.lock().ok()?.get(key).map(|domain| {
+            (
+                domain.limit.floor().max(1.0) as usize,
+                self.domain_ceiling(key).floor().max(1.0) as usize,
+                domain.consecutive_capacity_failures,
+            )
+        })
+    }
 }
 
 #[cfg(test)]
@@ -772,6 +783,18 @@ mod tests {
         );
         assert!(try_admit(&limiter, &customer_a).is_none());
         assert!(try_admit(&limiter, &customer_b).is_some());
+    }
+
+    #[test]
+    fn capacity_event_exposes_adaptive_and_configured_limits() {
+        let limiter = Arc::new(RateDomainLimiter::new(8));
+        let job = path("alice@a.example", "alice@a.example");
+        let admission = admit(&limiter, &job);
+        let penalized = limiter.observe_failure(&admission, "Host1 too many requests");
+        let mailbox = job.domain(Side::Source, DomainLevel::Mailbox);
+
+        assert!(penalized.iter().any(|(key, _)| key == mailbox));
+        assert_eq!(limiter.telemetry_snapshot(mailbox), Some((4, 8, 1)));
     }
 
     #[test]

@@ -176,13 +176,22 @@ fn persist_batch_terminal_state(transition: BatchTerminalTransition<'_>) {
 }
 
 /// Tell the operator which rate domains a capacity failure paused.
-fn report_cooldowns(tx: &mpsc::SyncSender<Event>, penalized: Vec<(DomainKey, std::time::Instant)>) {
+fn report_cooldowns(
+    tx: &mpsc::SyncSender<Event>,
+    limiter: &RateDomainLimiter,
+    penalized: Vec<(DomainKey, std::time::Instant)>,
+) {
     for (domain, until) in penalized {
+        let (current_limit, configured_limit, consecutive_failures) =
+            limiter.telemetry_snapshot(&domain).unwrap_or((1, 1, 0));
         let _ = tx.try_send(Event::ProviderCooldown {
             domain: domain.label(),
             provider: domain.provider(),
             endpoint: domain.endpoint().map(str::to_owned),
             until,
+            current_limit,
+            configured_limit,
+            consecutive_failures,
         });
     }
 }
@@ -903,7 +912,7 @@ impl BatchAttemptRunner {
                         vec![error.side],
                     );
                     adapt_launch_rate(&self.launch_limiter, &penalized);
-                    report_cooldowns(&self.tx, penalized);
+                    report_cooldowns(&self.tx, &self.provider_limiter, penalized);
                     drop(admission);
                     return self.retry_later(
                         task,
@@ -951,7 +960,7 @@ impl BatchAttemptRunner {
                         self.provider_limiter
                             .observe_failure_on(&admission, &error, vec![side]);
                     adapt_launch_rate(&self.launch_limiter, &penalized);
-                    report_cooldowns(&self.tx, penalized);
+                    report_cooldowns(&self.tx, &self.provider_limiter, penalized);
                     drop(admission);
                     return self.retry_later(
                         task,
@@ -1110,7 +1119,7 @@ impl BatchAttemptRunner {
             {
                 let penalized = self.provider_limiter.observe_failure(&admission, &error);
                 adapt_launch_rate(&self.launch_limiter, &penalized);
-                report_cooldowns(&self.tx, penalized);
+                report_cooldowns(&self.tx, &self.provider_limiter, penalized);
                 drop(admission);
                 let provider = provider_for_error(&task.form, &error);
                 self.retry_later(task, provider, &error, "transient failure")
