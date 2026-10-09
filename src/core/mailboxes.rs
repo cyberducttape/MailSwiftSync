@@ -200,7 +200,7 @@ impl StateStore {
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "SELECT id,state,preflight_plan,checkpoint FROM mailbox_jobs WHERE project_id=?1 AND id IN ({placeholders})"
+                "SELECT id,state,(state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id))),preflight_plan,checkpoint FROM mailbox_jobs WHERE project_id=?1 AND id IN ({placeholders})"
             );
             let mut values = Vec::with_capacity(chunk.len() + 1);
             values.push(project_id.to_owned());
@@ -211,8 +211,9 @@ impl StateStore {
                     Ok(BatchAdmissionState {
                         job_id: row.get(0)?,
                         state: row.get(1)?,
-                        preflight_plan: row.get(2)?,
-                        checkpoint: row.get(3)?,
+                        verified_terminal: row.get(2)?,
+                        preflight_plan: row.get(3)?,
+                        checkpoint: row.get(4)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;

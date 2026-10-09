@@ -175,6 +175,7 @@ impl BatchExecutionMode {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn is_verified_terminal_state(state: &str) -> bool {
     matches!(state, "verified" | "verified_with_exceptions")
 }

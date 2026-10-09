@@ -28,8 +28,9 @@ pub(crate) use batch::{
     BatchActionPlan, BatchActionPlanBuilder, BatchActionRow, BatchConfirmationIdentity,
     BatchExecutionMode, BatchStartContext, BatchStartDecision, BulkQueueSummary, BulkRetryScope,
     BulkStateSet, SelectionScope, batch_mailbox_state, batch_start_decision,
-    is_verified_terminal_state,
 };
+#[cfg(test)]
+pub(crate) use batch::is_verified_terminal_state;
 pub(crate) use batch_admission::{
     BatchLaunchRequest, admit_batch_launch, decode_persisted_batch_profile,
     durable_single_identity_matches,

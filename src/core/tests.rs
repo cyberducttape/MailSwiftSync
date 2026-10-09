@@ -439,9 +439,11 @@ fn batch_admission_state_is_read_once_and_returned_in_request_order() {
         .unwrap();
     assert_eq!(rows[0].job_id, second);
     assert_eq!(rows[0].state, "ready");
+    assert!(!rows[0].verified_terminal);
     assert_eq!(rows[0].checkpoint.as_deref(), Some("checkpoint-2"));
     assert_eq!(rows[1].job_id, first);
     assert_eq!(rows[1].state, "failed");
+    assert!(!rows[1].verified_terminal);
     assert_eq!(rows[1].checkpoint, None);
     assert!(
         db.batch_admission_states(&project.id, &["missing".into()])
@@ -2801,6 +2803,10 @@ fn verification_difference_requires_durable_exception_acceptance() {
         .unwrap();
     assert!(!db.all_mailboxes_verified(&project.id).unwrap());
     assert_eq!(db.mailbox_state_counts(&project.id).unwrap().verified, 0);
+    assert!(!db
+        .batch_admission_states(&project.id, std::slice::from_ref(&job))
+        .unwrap()[0]
+        .verified_terminal);
     db.connection
         .execute(
             "UPDATE mailbox_jobs SET state='verification_difference' WHERE id=?1",
@@ -2872,6 +2878,10 @@ fn verification_difference_requires_durable_exception_acceptance() {
     assert_eq!(acceptance.operator, "operator@example");
     assert!(db.all_mailboxes_verified(&project.id).unwrap());
     assert_eq!(db.mailbox_state_counts(&project.id).unwrap().verified, 1);
+    assert!(db
+        .batch_admission_states(&project.id, std::slice::from_ref(&job))
+        .unwrap()[0]
+        .verified_terminal);
     assert_eq!(
         db.project(&project.id).unwrap().unwrap().phase,
         Phase::Complete

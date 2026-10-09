@@ -62,6 +62,7 @@ pub struct MailboxStateCounts {
 pub struct BatchAdmissionState {
     pub job_id: String,
     pub state: String,
+    pub verified_terminal: bool,
     pub preflight_plan: Option<String>,
     pub checkpoint: Option<String>,
 }
