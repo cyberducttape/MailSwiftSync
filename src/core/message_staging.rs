@@ -385,6 +385,13 @@ impl MessageMetadataStage {
     }
 
     fn initialize(&mut self, durable: bool) -> rusqlite::Result<()> {
+        // Verification staging is private to one run, but backups and
+        // recovery inspection can briefly contend for the file. Bound the
+        // wait instead of turning ordinary lock contention into an immediate
+        // unexplained verification failure. I/O errors, including SQLITE_FULL,
+        // still propagate from the owning transaction and retain the stage.
+        self.connection_ref()?
+            .execute_batch("PRAGMA busy_timeout=5000;")?;
         if !durable {
             self.connection_ref()?
                 .execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;")?;
@@ -1179,6 +1186,17 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn staging_configures_a_bounded_sqlite_busy_timeout() {
+        let stage = MessageMetadataStage::open_in_memory().unwrap();
+        let timeout: i64 = stage
+            .connection_ref()
+            .unwrap()
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
     }
 
     #[test]
