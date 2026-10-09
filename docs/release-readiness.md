@@ -553,6 +553,7 @@ screen-reader checklist are recorded in
   destination readiness remain explicit unknowns where the server cannot
   provide a reliable query.
 - Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints retain the opaque engine state but are now envelope-bound to a complete source/destination mailbox UIDVALIDITY digest; legacy or incomplete-context checkpoints fail closed.
+- A complete per-message imapsync transfer manifest is not currently implemented. Aggregate progress checkpoints remain operational telemetry; imapsync retries may rediscover already-present messages. Do not use human-readable copy lines as a skip index until a qualified engine acknowledgment contract supplies stable message identity and UIDVALIDITY-bound invalidation.
 - Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
 - Independent metadata-level message mismatch reporting and reconciliation is wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. Verification staging is private and restartable: fetched pages, body fingerprints, and per-mailbox UID cursors survive a controller interruption and are cleared after a successful verification result or plan-identity invalidation. Each cursor records the folder's SELECT snapshot (UIDVALIDITY, UIDNEXT, EXISTS); a resumed scan reuses staged pages only when the server still reports that exact snapshot, otherwise the folder is rescanned from zero, and a folder completes only when its staged rows equal the snapshot's EXISTS. An explicit forensic mode now fetches bounded RFC822 bodies, retains SHA-256 fingerprints for both sides, and emits `body_hash` evidence only when coverage and total-byte limits hold. The default path remains metadata-only; representative live body-hash evidence and live-provider/large-mailbox qualification remain outstanding.
 - Published migration evidence from representative datasets, including failures and recovery results.
@@ -576,6 +577,9 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
    tests against disposable servers.
 5. Publish signed native installers, upgrade/rollback guidance, and results
    from representative large-scale migrations.
+6. Qualify a UIDVALIDITY-bound per-message transfer manifest for imapsync
+   reconnect optimization, including folder rename, deletion, duplicate, and
+   destination-change fault cases; until then retain full engine rediscovery.
 
 ## Current dependency audit
 
