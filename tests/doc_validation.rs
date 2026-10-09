@@ -55,6 +55,28 @@ fn readme_front_matter_identifies_technical_preview_without_implying_ga() {
 }
 
 #[test]
+fn packaging_claims_match_the_release_workflow() {
+    let readme = fs::read_to_string("README.md").expect("Could not read README.md");
+    let readiness = fs::read_to_string("docs/release-readiness.md")
+        .expect("Could not read release-readiness.md");
+    let workflow = fs::read_to_string(".github/workflows/release.yml")
+        .expect("Could not read release workflow");
+
+    assert!(
+        readme.contains("signed-checksum Linux Debian and RPM packages"),
+        "README must describe both Linux package formats produced by release CI"
+    );
+    assert!(
+        readiness.contains("deterministic signed Debian and RPM packages"),
+        "release-readiness must describe both Linux package formats"
+    );
+    assert!(
+        workflow.contains("scripts/package-deb.sh") && workflow.contains("scripts/package-rpm.sh"),
+        "release CI must build both package formats named by the documentation"
+    );
+}
+
+#[test]
 fn production_readiness_surfaces_have_one_conservative_source() {
     assert!(
         !Path::new("docs/PRODUCTION_READINESS_REPORT_2026_09_25.md").exists(),

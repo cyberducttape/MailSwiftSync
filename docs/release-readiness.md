@@ -579,8 +579,8 @@ screen-reader checklist are recorded in
   Remote Dovecot execution is deliberately disabled until the application has
   a delivery mechanism that cannot expose credentials through
   destination-host process inspection.
-- Signed portable release archives for Linux, Windows, and macOS, plus a
-  deterministic signed Debian package for Linux, with checksums,
+- Signed portable release archives for Linux, Windows, and macOS, plus
+  deterministic signed Debian and RPM packages for Linux, with checksums,
   platform signatures/notarization, and reproducible release instructions.
   The RPM package is part of the current Linux release format; native
   Windows/macOS installer packages remain outside it.
