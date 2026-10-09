@@ -76,6 +76,11 @@ status = "partial"
 evidence = "Qualification evidence schema, strict phase-evidence validation, and a pack builder bound to one provider pair, release commit, engine binary, proof set, and explicit limitations are implemented. Real automated provider-pair qualification jobs have not yet produced signed evidence, so no live qualification pack is bundled."
 
 [[production_features]]
+feature = "Adoption qualification evidence"
+status = "partial"
+evidence = "The repository defines the required size, mailbox-shape, recovery, incremental, mutation, provider-version, direct-imapsync baseline, and performance measurement matrix; signed results are still required before production claims."
+
+[[production_features]]
 feature = "Signed migration certificate"
 status = "implemented"
 evidence = "The certificate command exports only durably completed customer evidence and atomically publishes an Ed25519-signed certificate; evidence exposes each mailbox's immutable plan-snapshot SHA-256 and, when captured as a SHA-256 in that snapshot, its execution-engine binary digest. The artifact remains an authenticated ledger claim rather than independent message-level attestation."
@@ -84,6 +89,11 @@ evidence = "The certificate command exports only durably completed customer evid
 feature = "Migration simulation"
 status = "partial"
 evidence = "Plan risk assessment now shows observed source/destination quota facts, RFC 7889 APPENDLIMIT maximum-message facts, and explicit unknown-capacity states; provider-specific folder-limit and complete destination-capacity simulation is not yet guaranteed."
+
+[[production_features]]
+feature = "Migration readiness score"
+status = "partial"
+evidence = "The pre-migration risk report provides an advisory scale score from supplied message/folder/size facts; live authentication, TLS, capacity, verification, maintenance-window, and provider-qualification checks remain separate hard gates."
 
 [[production_features]]
 feature = "Automatic destination capacity checks"
@@ -109,6 +119,21 @@ evidence = "Owner-only organization-policy.toml enforcement covers TLS, destinat
 feature = "Durable signed webhook delivery"
 status = "partial"
 evidence = "HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; notify-webhook --watch provides continuous operator-managed delivery while fleet-centralized management remains open."
+
+[[production_features]]
+feature = "Automation contract"
+status = "partial"
+evidence = "Status JSON, durable-state semantics, exit handling, and webhook integration guidance are documented; a published major-version compatibility promise and golden schema fixtures remain open."
+
+[[production_features]]
+feature = "MSP RBAC and tenant isolation"
+status = "not_implemented"
+evidence = "The local application has no authenticated multi-user control plane, role enforcement, row-level tenant boundary, or worker fencing; see docs/msp-rbac-and-tenant-isolation.md."
+
+[[production_features]]
+feature = "PSA/ticket lifecycle integration"
+status = "partial"
+evidence = "The signed/idempotent durable webhook and lifecycle event contract are available for receiver-side automation; ticket ownership, correlation, acknowledgements, and vendor API integrations remain outside the product."
 
 [documentation]
 # Terms that must appear only under README's experimental/planned status
