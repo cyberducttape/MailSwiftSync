@@ -9,6 +9,18 @@ provider, mailbox shape, or host has been qualified at that size.
 | Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Mismatch detail has a separate estimated 64 MiB cap. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; operators need adequate free space for the private SQLite stage. |
 | Body fingerprint proof | Up to 100,000 messages per endpoint are admitted before requesting the next body page and loaded into the forensic reconciler. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The 100,000-message guard is a message-count ceiling, not evidence that 100,000 large bodies fit within the byte budget or a memory guarantee. |
 
+The latest release-mode durable-stage benchmark on a local real-disk
+workspace (100,000 synthetic messages per endpoint, typical distribution)
+completed staging in 1.64 s and reconciliation in 1.87 s. It observed about
+22 MiB peak RSS, a 102 MiB peak stage directory during reconciliation, a
+9.3 MiB rollback-journal peak, and 14.4 MiB of reconciliation writes; the
+restart reconciliation completed in 1.89 s. This is a repeatable engineering
+measurement of SQLite reconciliation, not a provider qualification or a
+10/50/100 GiB mailbox result. Hardware, filesystem, cache state, and message
+distribution materially affect the numbers; run
+`scripts/benchmark-verification-scale.sh` on the target storage before
+setting a production mailbox envelope.
+
 ## Evidence dimensions
 
 Verification results expose independent dimensions rather than treating one
