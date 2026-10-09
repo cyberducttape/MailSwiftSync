@@ -88,6 +88,20 @@ impl StateStore {
             |row| row.get(0),
         )
     }
+
+    /// Test for automation-safe work without materializing mailbox rows. This
+    /// is intentionally separate from the bounded status projection: service
+    /// supervision must not mistake a truncated first page for an idle queue.
+    pub fn project_has_automation_safe_batch_work(
+        &self,
+        project_id: &str,
+    ) -> rusqlite::Result<bool> {
+        self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs m LEFT JOIN batch_plans p ON p.id=m.batch_plan_id WHERE m.project_id=?1 AND COALESCE(m.config,p.config) IS NOT NULL AND length(trim(COALESCE(m.config,p.config))) > 0 AND (m.state IN ('queued','ready','completed','delta_required','cancelled') OR (m.state='failed' AND m.attention_reason IN ('transport_failed','capacity_limited'))))",
+            [project_id],
+            |row| row.get(0),
+        )
+    }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row(

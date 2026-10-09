@@ -3042,6 +3042,42 @@ fn batch_classification_checks_configuration_completeness_without_loading_rows()
 }
 
 #[test]
+fn automation_work_query_is_exact_without_materializing_rows() {
+    let db = StateStore::in_memory().unwrap();
+    let rows = (0..10_001)
+        .map(|index| {
+            (
+                format!("source-{index}"),
+                format!("destination-{index}"),
+                "engine = \"imap\"".to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let (project, jobs) = db
+        .create_project_with_mailbox_configs("batch", "source", "destination", &rows)
+        .unwrap();
+    let last_job = jobs.last().unwrap();
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET state='verified' WHERE project_id=?1 AND id<>?2",
+            rusqlite::params![&project.id, last_job],
+        )
+        .unwrap();
+    assert!(db
+        .project_has_automation_safe_batch_work(&project.id)
+        .unwrap());
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+            [last_job],
+        )
+        .unwrap();
+    assert!(!db
+        .project_has_automation_safe_batch_work(&project.id)
+        .unwrap());
+}
+
+#[test]
 fn latest_run_summary_is_queryable_for_audit_reports() {
     let db = StateStore::in_memory().unwrap();
     let project = db.create_project("audit", "source", "destination").unwrap();

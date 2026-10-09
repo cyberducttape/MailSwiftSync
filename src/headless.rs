@@ -1020,21 +1020,18 @@ pub(crate) fn headless_supervise(
             thread::sleep(poll_interval);
             continue;
         }
-        let status = headless_status(state_path, None)?;
-        let actionable = status
-            .projects
-            .iter()
-            .filter(|project| project.batch)
-            .flat_map(|project| project.mailboxes.iter())
-            .any(|mailbox| {
-                BulkRetryScope::Automation.includes_automation(
-                    &mailbox.state,
-                    mailbox
-                        .attention_reason
-                        .as_deref()
-                        .and_then(core::AttentionReason::parse),
-                )
-            });
+        let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+        let actionable = store
+            .latest_project()
+            .map_err(|error| error.to_string())?
+            .filter(|project| !project.name.trim().is_empty())
+            .map(|project| {
+                store
+                    .project_has_automation_safe_batch_work(&project.id)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()?
+            .unwrap_or(false);
         if !actionable {
             idle_polls = idle_polls.saturating_add(1);
             if max_idle_polls != 0 && idle_polls >= max_idle_polls {
