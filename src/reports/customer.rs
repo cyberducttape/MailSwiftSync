@@ -235,6 +235,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "scope": value.evidence_scope().label(),
                         "verification_method": value.verification_method().as_str(),
                         "verification_outcome": value.verification_outcome().as_str(),
+                        "verification_status": value.verification_status(),
                         "verification_level": value.verification_outcome().display_label(),
                         "evidence_level": value.verification_outcome().display_label(),
                         "reason": value.verification_reason(),

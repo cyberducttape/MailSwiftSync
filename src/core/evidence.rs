@@ -713,6 +713,33 @@ impl VerificationEvidence {
         ) && self.aggregate_totals_match()
             && !self.has_verification_exception()
     }
+
+    /// Overall assurance status for customer-facing exports. This deliberately
+    /// combines the message result with every modeled fidelity dimension so an
+    /// exact metadata outcome cannot be displayed as unqualified verification
+    /// when flags are partial, excepted, or unavailable.
+    pub fn verification_status(&self) -> &'static str {
+        if self.is_exact_match() {
+            "verified"
+        } else {
+            match self.verification_outcome() {
+                VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch => {
+                    // An explicitly persisted exact outcome can still carry a
+                    // partial fidelity dimension from a later reconciliation.
+                    "verified_with_exceptions"
+                }
+                VerificationOutcome::FlagsChanged
+                    if self.aggregate_totals_match()
+                        && self.unmatched_messages == Some(0)
+                        && !self.has_message_level_mismatch()
+                        && self.failed_messages == 0 =>
+                {
+                    "verified_with_exceptions"
+                }
+                _ => "incomplete",
+            }
+        }
+    }
 }
 
 /// Coverage percentage rounded down to a tenth, so partial coverage is never
@@ -728,8 +755,8 @@ pub fn coverage_percent(checked: u64, total: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        EvidenceDimensionStatus, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
-        VerificationMethod, VerificationOutcome,
+        EvidenceDimensionStatus, FlagVerification, MailboxEvidence, ProjectReportSnapshot,
+        ReportMailboxSnapshot, VerificationMethod, VerificationOutcome,
     };
     use crate::core::{MailboxJob, OperationalState, Phase, Project};
 
@@ -842,6 +869,27 @@ mod tests {
             evidence.verification_reason(),
             Some("message-level reconciliation found missing messages")
         );
+    }
+
+    #[test]
+    fn verification_status_never_hides_partial_flag_coverage() {
+        let mut evidence = missing_evidence();
+        evidence.destination_messages = evidence.source_messages;
+        evidence.destination_bytes = evidence.source_bytes;
+        evidence.unmatched_messages = Some(0);
+        evidence.missing_messages = 0;
+        evidence.flag_verification = Some(FlagVerification {
+            compared_messages: 0,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        });
+        assert_eq!(evidence.verification_status(), "verified_with_exceptions");
+        assert!(!evidence.is_exact_match());
+    }
+
+    #[test]
+    fn verification_status_does_not_call_missing_messages_exceptions() {
+        assert_eq!(missing_evidence().verification_status(), "incomplete");
     }
 
     #[test]
