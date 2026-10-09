@@ -1,10 +1,15 @@
 # Durability and real-engine concurrency validation
 
 The existing controller and storage-fault labs validate process loss, ledger
-write failures, corrupted backups, and destination storage faults. They do not
-simulate a host or VM power cut. A process kill is useful evidence, but it
-does not exercise filesystem write ordering, journal recovery, or boot-time
-recovery.
+write failures, corrupted backups, and destination storage faults. The
+`scripts/process-supervision-chaos-smoke.sh` lab additionally qualifies the
+production gatekeeper handshake: an internal launcher refuses to execute an
+engine without the exact durable-release token, rejects invalid tokens, and
+executes only after release. The controller recovery lab covers parent loss,
+and the native process tests cover PID identity checks and Windows Job Object
+containment. These are process-level proofs; they do not simulate a host or
+VM power cut. A process kill is useful evidence, but it does not exercise
+filesystem write ordering, journal recovery, or boot-time recovery.
 
 ## Power-loss campaign
 
@@ -30,6 +35,25 @@ loss, or evidence stronger than the observed coverage.
 Until this campaign has run, the release claim is limited to controller
 crash/process-loss and storage-fault recovery. It must not be described as
 power-loss tested.
+
+## Process-supervision qualification matrix
+
+Run the process supervision lab with the packaged production binary before an
+unattended release:
+
+| Fault point | Required result | Coverage |
+| --- | --- | --- |
+| Launcher stdin closes before registration/release | Engine never starts | `process-supervision-chaos-smoke.sh` |
+| Invalid release token | Engine never starts and launcher exits nonzero | `process-supervision-chaos-smoke.sh` |
+| Valid release token | Engine starts only after release; controller recovery covers recorded ownership | `process-supervision-chaos-smoke.sh` plus controller recovery lab |
+| Controller SIGKILL during a running transfer | Durable run remains for recovery; no false completion | `controller-recovery-smoke.sh` |
+| Ledger write limit/corruption | Operation fails closed; ledger remains recoverable or restoreable | `controller-chaos-smoke.sh` |
+| PID reuse or identity mismatch | Existing process is never signalled as the old engine | Rust process-identity tests |
+| Windows parent termination | Descendants terminate with the Job Object | Windows native CI qualification |
+| Host power loss | Integrity, recovery, resume, and evidence are consistent | Required ephemeral-VM campaign above |
+
+The first seven rows are automated or CI-qualified where noted. The final
+row remains a release blocker and cannot be inferred from process-level tests.
 
 ## Real-engine concurrency matrix
 

@@ -15,6 +15,7 @@ SCALE_WATCHDOG = (ROOT / "scripts" / "scale-docker-wait.sh").read_text(encoding=
 SCALE_CONTAINER_WAIT = (ROOT / "scripts" / "scale-container-wait.sh").read_text(encoding="utf-8")
 SCALE_COMPLETION_WAIT = (ROOT / "scripts" / "scale-container-completion-wait.sh").read_text(encoding="utf-8")
 STORAGE_FAULT_SCRIPT = (ROOT / "scripts" / "engine-storage-fault-smoke.sh").read_text(encoding="utf-8")
+PROCESS_SUPERVISION_SCRIPT = (ROOT / "scripts" / "process-supervision-chaos-smoke.sh").read_text(encoding="utf-8")
 SCALE_WORKFLOW = (ROOT / ".github" / "workflows" / "scale-qualification.yml").read_text(encoding="utf-8")
 
 
@@ -67,6 +68,12 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_smoke_timeouts_manage_engine_process_groups(self):
         self.assertIn('timeout --kill-after=15s 300 "$binary" "$@"', STORAGE_FAULT_SCRIPT)
         self.assertNotIn('timeout --foreground', STORAGE_FAULT_SCRIPT)
+
+    def test_process_supervision_lab_requires_exact_release_handshake(self):
+        self.assertIn("without durable release", PROCESS_SUPERVISION_SCRIPT)
+        self.assertIn("printf 'NO\\n'", PROCESS_SUPERVISION_SCRIPT)
+        self.assertIn("printf 'GO\\n'", PROCESS_SUPERVISION_SCRIPT)
+        self.assertIn("assert_not_started", PROCESS_SUPERVISION_SCRIPT)
 
     def test_timeout_force_kills_a_process_group_that_ignores_term(self):
         if shutil.which("timeout") is None or shutil.which("bash") is None:
