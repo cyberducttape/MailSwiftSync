@@ -16,7 +16,10 @@ pub(super) fn index_by_message_id(
             index.entry(message_id).or_insert_with(Vec::new).push(uid);
         }
     }
-    index.values_mut().for_each(|uids| uids.sort());
+    // The key order is a deterministic tie-breaker for duplicate Message-ID
+    // matching, but stability is not required because MailboxMessageKey is
+    // totally ordered and unique within an extracted mailbox.
+    index.values_mut().for_each(|uids| uids.sort_unstable());
     index
 }
 
@@ -60,7 +63,8 @@ pub(super) fn index_by_fingerprint<'a>(
             .or_insert_with(Vec::new)
             .push(*uid);
     }
-    index.values_mut().for_each(|uids| uids.sort());
+    // Pass 3 only accepts singleton buckets, so ordering multi-entry buckets
+    // cannot affect correctness and only adds CPU work at scale.
     index
 }
 

@@ -5,12 +5,15 @@ set -euo pipefail
 # (FULL-synchronous) stage at increasing per-side message counts. Each size runs
 # in its own process so peak RSS (VmHWM) is per size. This is opt-in: the 1M
 # case writes roughly 1 GB of temporary SQLite data.
+# The benchmark line also includes phase-separated /proc/self/io read/write
+# bytes and syscall counts; cache-backed stages may legitimately report zero
+# block bytes. It does not claim allocator-level allocation counts.
 #
 # Gates (override for a qualified host class):
 #   MAILSWIFTSYNC_VERIFY_PEAK_RSS_BUDGET_MIB  controller peak RSS, any size (64)
 #   MAILSWIFTSYNC_VERIFY_MIN_RECONCILE_RATE   reconciled messages/sec, any size (20000)
 #   MAILSWIFTSYNC_VERIFY_SIZES                space-separated per-side counts
-sizes=${MAILSWIFTSYNC_VERIFY_SIZES:-"10000 100000 250000 500000 1000000"}
+sizes=${MAILSWIFTSYNC_VERIFY_SIZES:-"1000 10000 100000 500000 1000000"}
 rss_budget=${MAILSWIFTSYNC_VERIFY_PEAK_RSS_BUDGET_MIB:-64}
 min_rate=${MAILSWIFTSYNC_VERIFY_MIN_RECONCILE_RATE:-20000}
 

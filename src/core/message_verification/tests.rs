@@ -1743,17 +1743,30 @@ fn staged_reconciliation_plans_stay_linear() {
     }
 }
 
-/// `/proc/self/io` counters: `(write_bytes, wchar)`. `write_bytes` is what
-/// this process sent to the block layer; `wchar` counts every write call,
-/// including page-cache and journal writes. Zero where unavailable.
-fn bench_io() -> (u64, u64) {
+/// `/proc/self/io` counters for the benchmark process. `*_bytes` are block
+/// layer counters and `*_syscalls` count read/write calls, including page
+/// cache and journal writes. Zero where unavailable.
+#[derive(Clone, Copy, Default)]
+struct BenchIo {
+    read_bytes: u64,
+    write_bytes: u64,
+    read_syscalls: u64,
+    write_syscalls: u64,
+}
+
+fn bench_io() -> BenchIo {
     let io = std::fs::read_to_string("/proc/self/io").unwrap_or_default();
     let field = |name: &str| {
         io.lines()
             .find_map(|line| line.strip_prefix(name)?.trim().parse().ok())
             .unwrap_or(0)
     };
-    (field("write_bytes:"), field("wchar:"))
+    BenchIo {
+        read_bytes: field("read_bytes:"),
+        write_bytes: field("write_bytes:"),
+        read_syscalls: field("syscr:"),
+        write_syscalls: field("syscw:"),
+    }
 }
 
 /// Reconciliation on a durable (FULL-synchronous) stage, as live
@@ -1944,15 +1957,20 @@ fn durable_stage_reconciliation_benchmark() {
         )
     });
     eprintln!(
-        "verification-scale shape={} messages_per_side={messages} outcome={first_outcome} staging_ms={staging_ms} staging_rows_per_sec={} staging_write_bytes={} reconcile_ms={reconcile_ms} reconcile_messages_per_sec={} reconcile_write_bytes={} reconcile_wchar_bytes={} flags_ms={flags_ms} flags_compared={} resumed_reconcile_ms={resumed_ms} resumed_write_bytes={} cpu_seconds={cpu_seconds:.1} peak_rss_mib={} rss_start_mib={} rss_after_staging_mib={} stage_bytes_after_staging={stage_bytes} peak_stage_bytes_during_reconcile={peak_stage_bytes} peak_journal_bytes={peak_journal_bytes} stage_bytes_after_reconcile={final_stage_bytes} mismatch_rows={recorded}{summary_fields}",
+        "verification-scale shape={} messages_per_side={messages} outcome={first_outcome} staging_ms={staging_ms} staging_rows_per_sec={} staging_read_bytes={} staging_write_bytes={} staging_read_syscalls={} staging_write_syscalls={} reconcile_ms={reconcile_ms} reconcile_messages_per_sec={} reconcile_read_bytes={} reconcile_write_bytes={} reconcile_read_syscalls={} reconcile_write_syscalls={} flags_ms={flags_ms} flags_compared={} resumed_reconcile_ms={resumed_ms} resumed_write_bytes={} cpu_seconds={cpu_seconds:.1} peak_rss_mib={} rss_start_mib={} rss_after_staging_mib={} stage_bytes_after_staging={stage_bytes} peak_stage_bytes_during_reconcile={peak_stage_bytes} peak_journal_bytes={peak_journal_bytes} stage_bytes_after_reconcile={final_stage_bytes} mismatch_rows={recorded}{summary_fields}",
         shape.label(),
         rate(staged[0] + staged[1], staging_ms),
-        io_staged.0 - io_start.0,
+        io_staged.read_bytes - io_start.read_bytes,
+        io_staged.write_bytes - io_start.write_bytes,
+        io_staged.read_syscalls - io_start.read_syscalls,
+        io_staged.write_syscalls - io_start.write_syscalls,
         rate(messages, reconcile_ms),
-        io_reconciled.0 - io_staged.0,
-        io_reconciled.1 - io_staged.1,
+        io_reconciled.read_bytes - io_staged.read_bytes,
+        io_reconciled.write_bytes - io_staged.write_bytes,
+        io_reconciled.read_syscalls - io_staged.read_syscalls,
+        io_reconciled.write_syscalls - io_staged.write_syscalls,
         flags.compared_messages,
-        resume_io.0 - resume_io_start.0,
+        resume_io.write_bytes - resume_io_start.write_bytes,
         bench_memory_kib("VmHWM:") / 1024,
         rss_start / 1024,
         rss_after_staging / 1024,

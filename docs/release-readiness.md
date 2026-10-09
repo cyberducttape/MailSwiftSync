@@ -444,6 +444,14 @@ screen-reader checklist are recorded in
   transient during reconciliation). The release workflow gates every size at
   64 MiB peak RSS and 20,000 reconciled messages/s.
 
+  Each benchmark line also reports phase-separated `/proc/self/io` read/write
+  bytes and read/write syscall counts. `read_bytes` and `write_bytes` can be
+  zero on a cache-backed or tmpfs stage; those values are not physical-disk
+  evidence, so qualification runs must place the stage on the target storage
+  class. Allocator-level allocation counts are not inferred from RSS; collect
+  them separately with the deployment's allocator/profiling tool when making
+  an allocator decision.
+
   Reconciliation deliberately runs as one transaction on the private,
   per-verification stage. Measured at 1M messages per side, its rollback
   journal peaks near 100 MB (about 10% of the stage), an interruption loses at
