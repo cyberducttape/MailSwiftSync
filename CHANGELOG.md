@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Production-readiness stopping point (2026-10-09): durable verification
+  exception acceptance is now required before completion, cutover, queue,
+  headless-success, report, and operator-status paths can present a run as
+  verified. The release documentation and checks now also align on Debian and
+  RPM packaging. The audit record retains the remaining technical-preview
+  boundaries: no strict transfer-level certificate pinning for imapsync,
+  no signed real-provider qualification evidence or complete fault-injection
+  campaign, bounded verification envelopes without 100GB+ end-to-end proof,
+  no independent per-message transfer manifest, and no centralized MSP
+  control plane with RBAC, tenant isolation, and worker fencing.
 - Reject IMAP UIDs outside the protocol's nonzero 32-bit domain, make UID
   range compression overflow-safe, and label exact metadata-only evidence as
   limited confidence because message bodies were not compared.
