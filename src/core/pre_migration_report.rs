@@ -7,6 +7,9 @@ pub struct PreMigrationRisk {
     pub total_folders: u64,
     pub total_size_gb: f64,
     pub warnings: Vec<RiskWarning>,
+    /// Advisory score for the scale facts supplied to `assess`. This is never
+    /// a substitute for hard preflight gates or provider qualification.
+    pub readiness_score: u8,
     pub estimated_readiness: MigrationReadiness,
 }
 
@@ -49,9 +52,11 @@ impl PreMigrationRisk {
     ) -> Self {
         let mut warnings = Vec::new();
         let total_size_gb = total_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+        let mut score = 100_u8;
 
         // Warning thresholds
         if total_messages > 500_000 {
+            score = score.saturating_sub(15);
             warnings.push(RiskWarning {
                 severity: WarningSeverity::Warning,
                 category: "scale".to_string(),
@@ -63,6 +68,7 @@ impl PreMigrationRisk {
         }
 
         if total_size_gb > 100.0 {
+            score = score.saturating_sub(15);
             warnings.push(RiskWarning {
                 severity: WarningSeverity::Warning,
                 category: "size".to_string(),
@@ -74,6 +80,7 @@ impl PreMigrationRisk {
         }
 
         if total_folders > 100 {
+            score = score.saturating_sub(5);
             warnings.push(RiskWarning {
                 severity: WarningSeverity::Info,
                 category: "folders".to_string(),
@@ -102,6 +109,7 @@ impl PreMigrationRisk {
             total_folders,
             total_size_gb,
             warnings,
+            readiness_score: score,
             estimated_readiness,
         }
     }
@@ -126,6 +134,7 @@ mod tests {
         let risk = PreMigrationRisk::assess(1000, 5, 1_000_000_000, "");
         assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
         assert!(risk.warnings.is_empty());
+        assert_eq!(risk.readiness_score, 100);
     }
 
     #[test]
@@ -133,6 +142,7 @@ mod tests {
         let risk = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "");
         assert_eq!(risk.estimated_readiness, MigrationReadiness::ReviewRequired);
         assert!(!risk.warnings.is_empty());
+        assert_eq!(risk.readiness_score, 70);
     }
 
     #[test]
