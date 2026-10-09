@@ -650,7 +650,7 @@ mod tests {
                 counts.waiting,
                 counts.total
             ),
-            (3, 2, 1, 0, 2, 8)
+            (4, 1, 1, 0, 2, 8)
         );
         for (filter, expected) in [
             ("needs_attention", counts.needs_attention),

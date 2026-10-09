@@ -23,7 +23,7 @@ use uuid::Uuid;
 /// run sets are uncorrelated subqueries SQLite materializes once per query,
 /// so presenting 100,000 rows costs two set lookups each, not two index
 /// probes into `runs`. `?1` must be the project ID in every query using it.
-const EFFECTIVE_STATE: &str = "CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' ELSE m.state END";
+const EFFECTIVE_STATE: &str = "CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' WHEN m.state='verified_with_exceptions' AND NOT EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=m.id) THEN 'verification_difference' ELSE m.state END";
 const MAX_IDS_PER_QUERY: usize = 500;
 
 /// Operator-facing groups of effective mailbox states. The command center
@@ -158,7 +158,7 @@ pub struct QueueSelectionSummary {
 
 /// Columns of a presented `QueueRow` from `mailbox_jobs m` joined to
 /// `mailbox_queue_facts f`.
-const ROW_COLUMNS: &str = "m.rowid,m.id,COALESCE(f.label,''),COALESCE(f.source_host,''),m.source_mailbox,COALESCE(f.destination_host,''),m.destination_mailbox,CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' ELSE m.state END,f.destructive,m.attention_reason,COALESCE(f.policy,'')";
+const ROW_COLUMNS: &str = "m.rowid,m.id,COALESCE(f.label,''),COALESCE(f.source_host,''),m.source_mailbox,COALESCE(f.destination_host,''),m.destination_mailbox,CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' WHEN m.state='verified_with_exceptions' AND NOT EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=m.id) THEN 'verification_difference' ELSE m.state END,f.destructive,m.attention_reason,COALESCE(f.policy,'')";
 
 /// Insert or replace one row's facts; the job's own rowid keys them.
 const FACTS_UPSERT: &str = "INSERT INTO mailbox_queue_facts(job_rowid,job_id,project_id,label,source_host,destination_host,search_key,destructive,policy,state) SELECT rowid,id,project_id,?2,?3,?4,?5,?6,?7,state FROM mailbox_jobs WHERE id=?1 ON CONFLICT(job_rowid) DO UPDATE SET job_id=excluded.job_id,project_id=excluded.project_id,label=excluded.label,source_host=excluded.source_host,destination_host=excluded.destination_host,search_key=excluded.search_key,destructive=excluded.destructive,policy=excluded.policy,state=excluded.state";
@@ -579,7 +579,7 @@ impl StateStore {
         mut visit: impl FnMut(QueueScanRow),
     ) -> rusqlite::Result<()> {
         let mut statement = self.connection.prepare_cached(
-            "SELECT f.job_rowid,f.job_id,CASE WHEN f.job_id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN f.state='queued' AND f.job_id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' ELSE f.state END,f.destructive,f.state FROM mailbox_queue_facts f WHERE f.project_id=?1 ORDER BY f.job_rowid"
+            "SELECT f.job_rowid,f.job_id,CASE WHEN f.job_id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN f.state='queued' AND f.job_id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' WHEN f.state='verified_with_exceptions' AND NOT EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=f.job_id) THEN 'verification_difference' ELSE f.state END,f.destructive,f.state FROM mailbox_queue_facts f WHERE f.project_id=?1 ORDER BY f.job_rowid"
         )?;
         let mut rows = statement.query([project_id])?;
         while let Some(row) = rows.next()? {
@@ -1412,6 +1412,30 @@ mod tests {
             (counts["ready"], counts["failed"], counts["imported"]),
             (1, 1, 1)
         );
+    }
+
+    #[test]
+    fn unaccepted_exception_is_presented_as_verification_difference() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, ids) = queue(&store, 1);
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified_with_exceptions' WHERE id=?1",
+                [&ids[0]],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.queue_row(&project, &ids[0]).unwrap().unwrap().state,
+            "verification_difference"
+        );
+        let counts = store
+            .queue_state_counts(&project)
+            .unwrap()
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(counts["verification_difference"], 1);
     }
 
     #[test]
