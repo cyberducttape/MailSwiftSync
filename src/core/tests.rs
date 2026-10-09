@@ -2803,10 +2803,11 @@ fn verification_difference_requires_durable_exception_acceptance() {
         .unwrap();
     assert!(!db.all_mailboxes_verified(&project.id).unwrap());
     assert_eq!(db.mailbox_state_counts(&project.id).unwrap().verified, 0);
-    assert!(!db
-        .batch_admission_states(&project.id, std::slice::from_ref(&job))
-        .unwrap()[0]
-        .verified_terminal);
+    assert!(
+        !db.batch_admission_states(&project.id, std::slice::from_ref(&job))
+            .unwrap()[0]
+            .verified_terminal
+    );
     db.connection
         .execute(
             "UPDATE mailbox_jobs SET state='verification_difference' WHERE id=?1",
@@ -2878,10 +2879,11 @@ fn verification_difference_requires_durable_exception_acceptance() {
     assert_eq!(acceptance.operator, "operator@example");
     assert!(db.all_mailboxes_verified(&project.id).unwrap());
     assert_eq!(db.mailbox_state_counts(&project.id).unwrap().verified, 1);
-    assert!(db
-        .batch_admission_states(&project.id, std::slice::from_ref(&job))
-        .unwrap()[0]
-        .verified_terminal);
+    assert!(
+        db.batch_admission_states(&project.id, std::slice::from_ref(&job))
+            .unwrap()[0]
+            .verified_terminal
+    );
     assert_eq!(
         db.project(&project.id).unwrap().unwrap().phase,
         Phase::Complete
