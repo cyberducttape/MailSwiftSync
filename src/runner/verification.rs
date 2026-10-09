@@ -244,9 +244,9 @@ pub(crate) fn run_imap_message_verification(
     let folders = stage
         .folder_cursors()
         .map_err(|error| format!("could not read verification folder cursors: {error}"))?;
-    if durable_stage_path.is_some() {
-        stage.finish()?;
-    }
+    // Keep a durable stage on disk until the caller has committed this result
+    // to the project ledger. A crash or ledger failure after this function
+    // returns must still be resumable rather than forcing a full rescan.
     Ok(MessageVerificationResult {
         evidence,
         mismatches,

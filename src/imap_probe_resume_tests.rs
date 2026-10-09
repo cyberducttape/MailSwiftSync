@@ -267,13 +267,13 @@ fn sparse_historical_uid_space_does_not_create_empty_search_windows() {
 }
 
 #[test]
-fn unchanged_resume_fetches_only_pages_after_the_cursor() {
+fn unchanged_resume_rescans_pages_to_refresh_mutable_flags() {
     let uids = folder(PAGE * 2 + 5);
     let before = FolderServer::new(&uids, 9, PAGE * 2 + 6);
     let mut stage = interrupted(&before, 1..=PAGE, Some(PAGE));
     let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
     assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
-    assert!(server.fetched.iter().all(|uid| *uid > PAGE));
+    assert_eq!(server.fetched, uids);
     assert_eq!(staged_uids(&stage), uids);
 }
 
@@ -342,13 +342,13 @@ fn crash_after_page_insert_before_cursor_refetches_that_page_once() {
 }
 
 #[test]
-fn completed_folder_restart_reuses_an_unchanged_stage() {
+fn completed_folder_restart_rescans_an_unchanged_stage_for_flags() {
     let uids = folder(PAGE + 3);
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     scan(&mut stage, &mut FolderServer::new(&uids, 9, PAGE + 4));
     let mut server = FolderServer::new(&uids, 9, PAGE + 4);
     assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
-    assert!(server.fetched.is_empty());
+    assert_eq!(server.fetched, uids);
     assert_eq!(staged_uids(&stage), uids);
 }
 
@@ -409,6 +409,6 @@ fn body_hash_resume_keeps_fingerprints_of_checkpointed_pages() {
     assert_eq!(fingerprints.len(), uids.len());
     let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
     scan_with(&mut stage, &mut server, true);
-    assert!(server.fetched.is_empty());
+    assert_eq!(server.fetched, uids);
     assert_eq!(stage.content_fingerprints(SIDE), fingerprints);
 }

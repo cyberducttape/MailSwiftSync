@@ -591,6 +591,15 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                                 mismatches,
                             })
                             .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
+                            if let Some(path) = verification_state_path
+                                .as_deref()
+                                .map(|path| core::durable_stage_path(path, &job_id))
+                                && let Err(error) = core::MessageMetadataStage::cleanup_durable_stage(&path)
+                            {
+                                send_run_line(&tx, form, &child_run_id, &job_id, format!(
+                                    "verification evidence committed; durable stage cleanup deferred: {error}"
+                                ));
+                            }
                         }
                         Err(error) => {
                             let safe = redact_child_text(form, &error);

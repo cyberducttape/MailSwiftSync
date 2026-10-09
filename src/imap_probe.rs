@@ -371,11 +371,24 @@ impl MessageSink for StageMessageSink<'_> {
         snapshot: crate::core::FolderSnapshot,
     ) -> Result<Option<u64>, String> {
         let cursor = self.stage.resume_mailbox(self.side, mailbox, snapshot)?;
+        if cursor.is_some() {
+            // FLAGS are mutable without changing UIDVALIDITY, UIDNEXT, or
+            // EXISTS. The stage snapshot therefore cannot prove that the
+            // flags stored before an interruption are still current. Keep the
+            // durable cursor for recovery metadata, but rescan this folder
+            // from the beginning so a flag-only change is never reused as
+            // verified evidence.
+            self.stage.delete_mailbox(self.side, mailbox)?;
+            // Recreate the cursor for the fresh scan after removing the stale
+            // rows. `checkpoint_page` requires a cursor bound to this SELECT
+            // snapshot.
+            self.stage.resume_mailbox(self.side, mailbox, snapshot)?;
+        }
         self.count = self
             .stage
             .count(self.side)
             .map_err(|error| error.to_string())? as usize;
-        Ok(cursor)
+        Ok(None)
     }
 
     fn checkpoint_page(

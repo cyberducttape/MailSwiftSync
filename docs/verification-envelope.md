@@ -35,7 +35,7 @@ state a client cannot store.
 | Compared messages | Only pairs where exactly one source and one destination message share the Message-ID, expected destination folder, INTERNALDATE, and RFC822.SIZE. Duplicates, probable pairings, unmatched messages, and messages whose FETCH carried no FLAGS are not compared. The compared count against all source messages is reported as flag coverage. |
 | Documented exception | The destination lost flags, gained none, and every lost flag is one the destination folder's SELECT `PERMANENTFLAGS` cannot store (a keyword is storable when `\*` is listed; a system flag only when listed by name). This is counted as excepted, not as a failure. Without `PERMANENTFLAGS` every flag is assumed storable, as RFC 9051 requires. |
 | Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
-| Point in time | Each side is read once. A user reading or flagging mail between the source and destination scans, or after cutover, is reported as a difference. Pages kept by a resumed verification keep the flags observed when they were staged. |
+| Point in time | Each side is read once. A user reading or flagging mail between the source and destination scans, or after cutover, is reported as a difference. Because IMAP flags can change without changing UIDVALIDITY, UIDNEXT, or EXISTS, a resumed durable scan never reuses an earlier folder page: it rescans that folder's flags before producing evidence. |
 
 ## Snapshot and cutover semantics
 
@@ -77,16 +77,19 @@ retains one cursor per source and destination folder containing the folder
 snapshot (`UIDVALIDITY`, `UIDNEXT`, and `EXISTS`), the last staged UID, a
 completion flag, and the staged-row count. Each metadata or body-fingerprint
 page is committed before its cursor advances. A restart reuses only a cursor
-whose complete snapshot still matches the server; otherwise that folder is
-discarded and rescanned. This means a controller interruption during
-verification does not require the transfer engine to start over.
+whose complete snapshot still matches the server; however, mutable FLAGS are
+never reused as evidence, so a matching cursor causes that folder to be
+rescanned from its first page. If the snapshot differs, the folder is
+discarded and rescanned as well. This means a controller interruption during
+verification does not require the transfer engine to start over while avoiding
+stale flag-only results.
 
 The current product does not retain completed message metadata indefinitely.
 The `reverify` command provides an operator-invokable mailbox-level
 post-completion verification run without launching the transfer engine. A
-successful verification commits a new evidence-history row and removes the
-private stage; an interrupted or failed verification retains it for the next
-verification attempt. Batch-wide re-verification orchestration, persistent
+successful verification commits a new evidence-history row and then removes
+the private stage; an interrupted, failed, or ledger-write-failed verification
+retains it for the next verification attempt. Batch-wide re-verification orchestration, persistent
 customer-facing verification segments, and rolling digests remain future work.
 
 Body-byte totals count bytes fetched and hashed from both endpoints together;

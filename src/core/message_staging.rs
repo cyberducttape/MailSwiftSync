@@ -334,6 +334,7 @@ impl MessageMetadataStage {
         Ok(stage)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn finish(&mut self) -> Result<(), String> {
         self.retain_on_drop = false;
         let mut errors = Vec::new();
@@ -358,6 +359,18 @@ impl MessageMetadataStage {
             return Err("verification stage connection remains open after cleanup".to_owned());
         }
         Ok(())
+    }
+
+    /// Remove a completed durable stage only after its evidence has been
+    /// committed to the project ledger. Failed or interrupted verification
+    /// must leave the stage available for resume.
+    pub(crate) fn cleanup_durable_stage(path: &Path) -> Result<(), String> {
+        let errors = cleanup_stage_files(path, false);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 
     /// The open stage connection. Using a stage after `finish` is a

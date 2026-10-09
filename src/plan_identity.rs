@@ -48,24 +48,38 @@ pub(crate) fn resolve_executable(executable: &str) -> Option<PathBuf> {
     if executable.is_absolute() || executable.components().count() > 1 {
         return executable
             .is_file()
-            .then(|| std::fs::canonicalize(executable).ok())
-            .flatten();
+            .then(|| is_executable_file(executable))
+            .flatten()
+            .and_then(|()| std::fs::canonicalize(executable).ok());
     }
     let path = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&path) {
         let candidate = directory.join(executable);
-        if candidate.is_file() {
+        if candidate.is_file() && is_executable_file(&candidate).is_some() {
             return std::fs::canonicalize(candidate).ok();
         }
         #[cfg(windows)]
         if executable.extension().is_none() {
             let candidate = directory.join(format!("{}.exe", executable.display()));
-            if candidate.is_file() {
+            if candidate.is_file() && is_executable_file(&candidate).is_some() {
                 return std::fs::canonicalize(candidate).ok();
             }
         }
     }
     None
+}
+
+fn is_executable_file(path: &Path) -> Option<()> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        (metadata.permissions().mode() & 0o111 != 0).then_some(())
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file().then_some(())
+    }
 }
 
 fn file_content_identity_uncached(path: &Path) -> String {
@@ -164,6 +178,10 @@ pub(crate) fn executable_content_identity(executable: &str) -> String {
     resolve_executable(executable)
         .as_deref()
         .map(cached_executable_content_identity)
+        .or_else(|| {
+            let path = Path::new(executable.trim());
+            path.is_file().then(|| file_content_identity_uncached(path))
+        })
         .unwrap_or_else(|| "unresolved".into())
 }
 
@@ -201,6 +219,13 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("mailswiftsync-executable-{}", uuid::Uuid::new_v4()));
         std::fs::write(&path, b"engine-a").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&path, permissions).unwrap();
+        }
         let expected = executable_content_identity(&path.to_string_lossy());
         assert!(revalidate_executable(&path.to_string_lossy(), &expected).is_ok());
         std::fs::write(&path, b"engine-b").unwrap();

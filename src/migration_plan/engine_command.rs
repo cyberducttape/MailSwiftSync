@@ -44,15 +44,7 @@ pub(super) fn detect_dovecot_config_dialect(
 }
 
 pub(super) fn resolve_executable_path(executable: &str) -> Option<PathBuf> {
-    let path = Path::new(executable);
-    if path.components().count() > 1 || path.is_absolute() {
-        return path.canonicalize().ok();
-    }
-    let search_path = std::env::var_os("PATH")?;
-    std::env::split_paths(&search_path)
-        .map(|directory| directory.join(path))
-        .find(|candidate| candidate.is_file())
-        .and_then(|candidate| candidate.canonicalize().ok())
+    crate::plan_identity::resolve_executable(executable)
 }
 
 pub(super) fn append_imapc_mail_settings(args: &mut Vec<String>, dialect: DovecotConfigDialect) {
@@ -327,6 +319,10 @@ fn append_oauth_refresh_command(
     if refresh_id.is_empty() {
         return Ok(());
     }
+    #[cfg(windows)]
+    return Err(
+        "automatic OAuth refresh is not enabled on Windows until imapsync refresh-command quoting is qualified for the Windows command shell".to_owned(),
+    );
     let config = form
         .load_oauth_refresh_config(side == 1)?
         .ok_or_else(|| {

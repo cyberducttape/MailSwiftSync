@@ -284,6 +284,15 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                                 },
                             )?;
                             send_reliable_event(&tx, Event::Evidence(evidence))?;
+                            if let Some(path) = verification_stage_path
+                                .as_deref()
+                                .map(|path| core::durable_stage_path(path, &job_id))
+                                && let Err(error) = core::MessageMetadataStage::cleanup_durable_stage(&path)
+                            {
+                                send_reliable_event(&tx, Event::VerificationFailed(format!(
+                                    "verification evidence committed; durable stage cleanup deferred: {error}"
+                                )))?;
+                            }
                         }
                         Err(error) => {
                             eprintln!(

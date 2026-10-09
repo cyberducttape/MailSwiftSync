@@ -582,8 +582,8 @@ screen-reader checklist are recorded in
 - Signed portable release archives for Linux, Windows, and macOS, plus a
   deterministic signed Debian package for Linux, with checksums,
   platform signatures/notarization, and reproducible release instructions.
-  RPM and native Windows/macOS installer packages remain outside the current
-  release format.
+  The RPM package is part of the current Linux release format; native
+  Windows/macOS installer packages remain outside it.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
 - Preflight checks for DNS, TCP/TLS, authentication, folder inventory, and
   observed special-use folders are implemented for the authenticated IMAP
