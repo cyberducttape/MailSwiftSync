@@ -393,9 +393,16 @@ fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), Strin
             mailbox.job.state.as_str(),
             "verified" | "verified_with_exceptions"
         ) || mailbox.evidence.is_none()
+            || (mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_none())
     }) {
+        let reason =
+            if mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_none() {
+                "does not have a durable operator acceptance for its verification exceptions"
+            } else {
+                "does not have a verified durable result"
+            };
         return Err(format!(
-            "Customer proof is blocked: mailbox {} does not have a verified durable result.",
+            "Customer proof is blocked: mailbox {} {reason}.",
             mailbox.job.id
         ));
     }
@@ -413,6 +420,7 @@ fn is_durably_complete(snapshot: &core::ProjectReportSnapshot) -> bool {
                 mailbox.job.state.as_str(),
                 "verified" | "verified_with_exceptions"
             ) && mailbox.evidence.is_some()
+                && (mailbox.job.state != "verified_with_exceptions" || mailbox.acceptance.is_some())
         })
         && !snapshot.has_active_runs
 }
@@ -641,8 +649,17 @@ mod tests {
                 "verified_with_exceptions",
                 true
             ))
-            .is_ok()
+            .is_err()
         );
+        let mut accepted = snapshot(core::Phase::Complete, "verified_with_exceptions", true);
+        accepted.mailboxes[0].acceptance = Some(core::VerificationAcceptance {
+            job_id: "job".into(),
+            run_id: "run".into(),
+            operator: "operator".into(),
+            reason: "Reviewed bounded flag coverage".into(),
+            accepted_at: "now".into(),
+        });
+        assert!(ensure_exportable(&accepted).is_ok());
     }
 
     #[test]
