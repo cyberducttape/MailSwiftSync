@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject IMAP UIDs outside the protocol's nonzero 32-bit domain, make UID
+  range compression overflow-safe, and label exact metadata-only evidence as
+  limited confidence because message bodies were not compared.
 - Reject certificate-pinned transfer plans until the qualified external engine
   can enforce strict leaf pins on every connection and reconnect. Rust probe
   pin checks remain admission evidence, not transfer-level enforcement.

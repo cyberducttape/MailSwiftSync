@@ -1,6 +1,8 @@
 //! Bounded UID search, FETCH page planning, and exact coverage validation.
 
 use super::{MAX_MESSAGE_FETCH_RESPONSE_BYTES, MAX_UID_SET_BYTES, MESSAGE_FETCH_PAGE_SIZE};
+
+const MAX_IMAP_UID: u64 = u32::MAX as u64;
 use crate::core;
 #[cfg(test)]
 use crate::imap_protocol::is_untagged_response;
@@ -59,9 +61,13 @@ pub(super) fn encode_uid_page(uids: &[u64], max_count: usize) -> (usize, String)
     while count < uids.len().min(max_count.max(1)) {
         let start = uids[count];
         let mut end_index = count;
-        while end_index + 1 < uids.len().min(max_count.max(1))
-            && uids[end_index + 1] == uids[end_index] + 1
-        {
+        while end_index + 1 < uids.len().min(max_count.max(1)) {
+            let Some(expected_next) = uids[end_index].checked_add(1) else {
+                break;
+            };
+            if uids[end_index + 1] != expected_next {
+                break;
+            }
             end_index += 1;
         }
         let mut item = String::new();
@@ -97,12 +103,24 @@ pub(super) fn parse_uid_search_response(
         .split_whitespace()
         .skip(2)
         .map(|uid| {
-            uid.parse::<u64>()
-                .map_err(|_| format!("{host}: SEARCH {mailbox} returned invalid UID {uid}"))
+            let uid = uid
+                .parse::<u64>()
+                .map_err(|_| format!("{host}: SEARCH {mailbox} returned invalid UID {uid}"))?;
+            validate_imap_uid(uid, host, mailbox)
         })
         .collect::<Result<Vec<_>, _>>()?;
     uids.sort_unstable();
     Ok(uids)
+}
+
+fn validate_imap_uid(uid: u64, host: &str, mailbox: &str) -> Result<u64, String> {
+    if uid == 0 || uid > MAX_IMAP_UID {
+        return Err(format!(
+            "{host}: folder {mailbox} returned UID {uid} outside the IMAP 1..={} domain",
+            MAX_IMAP_UID
+        ));
+    }
+    Ok(uid)
 }
 
 /// Parse the UID values returned by a sequence-number `FETCH (... UID)`
@@ -155,12 +173,7 @@ pub(super) fn parse_uid_fetch_response(
         let uid = uid.ok_or_else(|| {
             format!("{host}: FETCH {mailbox} sequence {sequence} did not return a valid UID")
         })?;
-        if uid == 0 {
-            return Err(format!(
-                "{host}: FETCH {mailbox} sequence {sequence} returned UID zero"
-            ));
-        }
-        uids.push(uid);
+        uids.push(validate_imap_uid(uid, host, mailbox)?);
     }
     uids.sort_unstable();
     if uids.windows(2).any(|pair| pair[0] == pair[1]) {

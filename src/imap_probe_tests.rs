@@ -471,6 +471,30 @@ fn uid_search_parser_uses_actual_sparse_uids_not_exists_count() {
         super::parse_uid_search_response(response, "imap.example", "INBOX").unwrap(),
         vec![100, 104, 109]
     );
+    assert!(
+        super::parse_uid_search_response(
+            "* SEARCH 0\r\nv001 OK SEARCH completed\r\n",
+            "imap.example",
+            "INBOX"
+        )
+        .is_err()
+    );
+    assert!(
+        super::parse_uid_search_response(
+            "* SEARCH 4294967296\r\nv001 OK SEARCH completed\r\n",
+            "imap.example",
+            "INBOX"
+        )
+        .is_err()
+    );
+    assert!(
+        super::parse_uid_search_response(
+            "* SEARCH 20 10\r\nv001 OK SEARCH completed\r\n",
+            "imap.example",
+            "INBOX"
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -491,6 +515,35 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
             2
         )
         .is_err()
+    );
+    for invalid_uid in [0_u64, u32::MAX as u64 + 1, u64::MAX] {
+        let response = format!("* 1 FETCH (UID {invalid_uid})\r\nv003 OK FETCH completed\r\n");
+        assert!(
+            super::fetch_pages::parse_uid_fetch_response(&response, "imap.example", "INBOX", 1, 1)
+                .is_err(),
+            "UID {invalid_uid} must be rejected"
+        );
+    }
+    assert!(
+        super::fetch_pages::parse_uid_fetch_response(
+            "* 1 FETCH (UID 9)\r\n* 2 FETCH (UID 9)\r\nv004 OK FETCH completed\r\n",
+            "imap.example",
+            "INBOX",
+            1,
+            2
+        )
+        .is_err()
+    );
+    assert_eq!(
+        super::fetch_pages::parse_uid_fetch_response(
+            "* 1 FETCH (UID 20)\r\n* 2 FETCH (UID 10)\r\nv005 OK FETCH completed\r\n",
+            "imap.example",
+            "INBOX",
+            1,
+            2
+        )
+        .unwrap(),
+        vec![10, 20]
     );
 }
 
@@ -691,6 +744,8 @@ fn uid_pages_compress_runs_and_respect_count_and_byte_limits() {
     assert!(count > 0 && count < sparse.len());
     assert!(set.len() <= super::MAX_UID_SET_BYTES, "{}", set.len());
     assert_eq!(set.split(',').count(), count);
+    let (count, set) = super::encode_uid_page(&[u64::MAX, u64::MAX], 2);
+    assert_eq!((count, set), (2, format!("{},{}", u64::MAX, u64::MAX)));
 }
 
 #[test]

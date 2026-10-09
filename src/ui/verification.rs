@@ -733,11 +733,7 @@ fn verification_confidence_key(evidence: &crate::core::MailboxEvidence) -> &'sta
         && evidence.extra_count() == 0
         && evidence.modified_count() == 0
     {
-        if matches!(
-            evidence.verification_method(),
-            crate::core::VerificationMethod::MetadataReconciliation
-                | crate::core::VerificationMethod::BodyHash
-        ) {
+        if evidence.verification_method() == crate::core::VerificationMethod::BodyHash {
             return "ui.confidence-high";
         }
         return "ui.confidence-limited";
@@ -809,7 +805,10 @@ mod tests {
             probable_messages: 0,
             flag_verification: None,
         };
-        assert_eq!(verification_confidence_key(&evidence), "ui.confidence-high");
+        assert_eq!(
+            verification_confidence_key(&evidence),
+            "ui.confidence-limited"
+        );
         let mut changed = evidence.clone();
         changed.modified_messages = 1;
         assert_eq!(
