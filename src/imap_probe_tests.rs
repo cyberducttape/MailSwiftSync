@@ -520,8 +520,7 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
         let response = format!("* 1 FETCH (UID {invalid_uid})\r\nv003 OK FETCH completed\r\n");
         assert!(
             super::fetch_pages::parse_uid_fetch_response(&response, "imap.example", "INBOX", 1, 1)
-                .is_err(),
-            "UID {invalid_uid} must be rejected"
+                .is_err()
         );
     }
     assert!(
