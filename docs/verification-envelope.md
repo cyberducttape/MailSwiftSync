@@ -81,13 +81,13 @@ whose complete snapshot still matches the server; otherwise that folder is
 discarded and rescanned. This means a controller interruption during
 verification does not require the transfer engine to start over.
 
-The current product does not retain completed message metadata indefinitely
-and does not yet expose a separate post-completion `verify` job. A successful
-verification commits its evidence and removes the private stage; an
-interrupted or failed verification retains it for the next verification
-attempt. Persistent customer-facing verification segments, rolling digests,
-and an operator-invokable verification-only workflow remain GA work rather
-than being implied by the current checkpoint implementation.
+The current product does not retain completed message metadata indefinitely.
+The `reverify` command provides an operator-invokable mailbox-level
+post-completion verification run without launching the transfer engine. A
+successful verification commits a new evidence-history row and removes the
+private stage; an interrupted or failed verification retains it for the next
+verification attempt. Batch-wide re-verification orchestration, persistent
+customer-facing verification segments, and rolling digests remain future work.
 
 Body-byte totals count bytes fetched and hashed from both endpoints together;
 they are not the source mailbox's total stored size. The current implementation

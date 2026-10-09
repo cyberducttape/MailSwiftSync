@@ -91,6 +91,11 @@ status = "partial"
 evidence = "Plan risk assessment now shows observed source/destination quota facts, RFC 7889 APPENDLIMIT maximum-message facts, and explicit unknown-capacity states; provider-specific folder-limit and complete destination-capacity simulation is not yet guaranteed."
 
 [[production_features]]
+feature = "Independent verification-only workflow"
+status = "partial"
+evidence = "The reverify command runs mailbox-level metadata or bounded content verification without rerunning the transfer engine, preserves the original migration result, records separate evidence history, and exports differences; batch orchestration and persistent verification segments remain open."
+
+[[production_features]]
 feature = "Migration readiness score"
 status = "partial"
 evidence = "The pre-migration risk report provides an advisory scale score from supplied message/folder/size facts; live authentication, TLS, capacity, verification, maintenance-window, and provider-qualification checks remain separate hard gates."
