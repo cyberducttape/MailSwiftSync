@@ -320,6 +320,15 @@ impl OrganizationPolicy {
                     .into(),
             );
         }
+        if policy_profile == "production"
+            && crate::process::engine_execution_profile()
+                != crate::process::EngineExecutionProfile::Hardened
+        {
+            return Err(
+                "Organization policy production requires the hardened engine execution profile; explicitly select compatibility only for compatibility or lab operation."
+                    .into(),
+            );
+        }
         let source_plain = profile.source_tls.eq_ignore_ascii_case("plain");
         let destination_plain = profile.destination_tls.eq_ignore_ascii_case("plain");
         if (self.require_tls || !self.allow_plain_imap) && (source_plain || destination_plain) {

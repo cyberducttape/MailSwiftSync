@@ -60,6 +60,19 @@ pub(crate) fn assess_plan(
             },
             form.dry_run,
         ),
+        (
+            "Engine execution profile".into(),
+            match crate::process::engine_execution_profile() {
+                crate::process::EngineExecutionProfile::Hardened => {
+                    "Hardened — canonical executable resolution and restricted environment".into()
+                }
+                crate::process::EngineExecutionProfile::Compatibility => {
+                    "Compatibility — weaker executable/environment boundary; production policy rejects live admission".into()
+                }
+            },
+            crate::process::engine_execution_profile()
+                == crate::process::EngineExecutionProfile::Hardened,
+        ),
         // One derived policy for both engines: Dovecot backup mirrors,
         // imapsync --delete2 deletes, everything else keeps destination state.
         {
@@ -279,7 +292,7 @@ mod tests {
     fn assessment_keeps_local_checks_separate_from_network_readiness() {
         let form = Form::default();
         let checks = assess_plan(&form, None, None);
-        assert_eq!(checks.len(), 8);
+        assert_eq!(checks.len(), 9);
         assert_eq!(checks[0].0, "Source endpoint");
         assert_eq!(checks[1].0, "Destination endpoint");
         assert_eq!(checks[2].0, "Execution mode");

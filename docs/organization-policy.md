@@ -39,8 +39,9 @@ organization policy.
 
 `production` is the default administrative profile. It requires TLS, forbids
 destination deletion, requires metadata or body verification, requires bounded
-concurrency, rejects non-global webhook/OAuth egress, and permits only the
-built-in OAuth hosts. Use `compatibility` for an explicitly acknowledged
+concurrency, rejects non-global webhook/OAuth egress, permits only the
+built-in OAuth hosts, and requires the hardened engine execution profile. Use
+`compatibility` for an explicitly acknowledged
 legacy exception or `lab` for controlled testing; those profiles allow the
 individual policy settings to express their weaker behavior. The profile is
 stored alongside the individual settings so policy review shows which

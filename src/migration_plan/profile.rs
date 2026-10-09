@@ -27,6 +27,8 @@ pub(crate) struct FolderMappingRule {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RunProfileSnapshot {
+    #[serde(default = "default_execution_profile")]
+    pub(crate) execution_profile: String,
     pub(crate) name: String,
     pub(crate) source_host: String,
     pub(crate) source_port: String,
@@ -102,6 +104,10 @@ pub(crate) struct RunProfileSnapshot {
     /// Empty in snapshots written before the field existed.
     #[serde(default)]
     pub(crate) destination_mutation_policy: String,
+}
+
+fn default_execution_profile() -> String {
+    "hardened".into()
 }
 
 impl RunProfileSnapshot {

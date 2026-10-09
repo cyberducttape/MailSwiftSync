@@ -64,7 +64,10 @@ pub(crate) enum EngineExecutionProfile {
     Hardened,
 }
 
-static ENGINE_EXECUTION_PROFILE: AtomicU8 = AtomicU8::new(0);
+// Production-safe by default. Compatibility mode remains an explicit CLI
+// opt-in for lab/legacy environments and is rejected by the production
+// organization policy before live admission.
+static ENGINE_EXECUTION_PROFILE: AtomicU8 = AtomicU8::new(1);
 
 pub(crate) fn set_engine_execution_profile(profile: EngineExecutionProfile) {
     ENGINE_EXECUTION_PROFILE.store(
@@ -1379,6 +1382,8 @@ mod execution_profile_tests {
         assert!(!names.contains("PERL_LOCAL_LIB_ROOT"));
         assert!(!names.contains("SSL_CERT_FILE"));
         assert!(!names.contains("SSL_CERT_DIR"));
-        set_engine_execution_profile(EngineExecutionProfile::Compatibility);
+        // Preserve the production-safe process default for tests that run in
+        // this binary after the profile-specific assertions above.
+        set_engine_execution_profile(EngineExecutionProfile::Hardened);
     }
 }

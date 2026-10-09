@@ -249,7 +249,7 @@ fn print_cli_help() {
         "  reverify <state> <project-id> <mailbox-id> <source-secret-file> <destination-secret-file> [--mode metadata|content] [--differences output.csv]  Reconcile a completed mailbox without rerunning the transfer engine"
     );
     out!(
-        "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n  --execution-profile <name>    Use compatibility (default) or hardened engine environment\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
+        "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n  --execution-profile <name>    Use hardened (default) or compatibility engine environment\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
     );
     out!(
         "\nReport export:\n  post-report-state <state> <output> [project-id]  Export a durable-snapshot post-migration report"

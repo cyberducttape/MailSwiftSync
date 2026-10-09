@@ -1,9 +1,9 @@
 # Engine execution profiles
 
-MailSwiftSync normally uses the compatibility profile so existing imapsync
-installations can continue to use operator-managed Perl modules and trust
-stores. The engine still receives only the documented environment allowlist;
-application credentials and unrelated process variables are withheld.
+MailSwiftSync defaults to the hardened execution profile. Production
+organization policy also rejects compatibility mode before live admission.
+Compatibility mode remains available only as an explicit, visibly weaker
+compatibility/lab choice for existing imapsync installations.
 
 MSP and production operators can select the hardened profile for a headless
 operation:
@@ -30,5 +30,7 @@ does not replace executable SHA-256 provenance or the final pre-launch
 revalidation check. A same-UID local actor can still replace a verified file
 in the small open/hash/close-to-spawn window; descriptor-based `fexecve` or
 platform-specific equivalents would be required to eliminate that race
-completely. `compatibility` is the default profile and can be selected
-explicitly with `--execution-profile compatibility`.
+completely. Every durable run snapshot and exported production report records
+the effective profile. `compatibility` can be selected explicitly with
+`--execution-profile compatibility`, but it requires a non-production
+organization policy.

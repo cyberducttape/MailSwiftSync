@@ -95,6 +95,11 @@ impl Form {
         let snapshot = RunPlanSnapshot {
             dry_run: self.dry_run,
             profile: RunProfileSnapshot {
+                execution_profile: match crate::process::engine_execution_profile() {
+                    crate::process::EngineExecutionProfile::Hardened => "hardened",
+                    crate::process::EngineExecutionProfile::Compatibility => "compatibility",
+                }
+                .into(),
                 name: profile.name.clone(),
                 source_host: profile.source_host.clone(),
                 source_port: profile.source_port.clone(),

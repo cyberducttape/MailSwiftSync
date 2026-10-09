@@ -251,6 +251,7 @@ pub(crate) fn build_project_json(
                 "job_id": run.job_id,
                 "parent_run_id": run.parent_run_id,
                 "engine": run.engine,
+                "execution_profile": run_execution_profile(&run.plan_snapshot),
                 "engine_version": report_run.engine_version,
                 "transfer_attempt_count": report_run.transfer_attempt_count,
                 "unfinished_transfer_attempt_count": report_run.unfinished_transfer_attempt_count,
@@ -383,7 +384,7 @@ pub(crate) fn build_verification_report(
         .message_mismatches_for_run(job_id, &evidence_run_id, 500)
         .map_err(|error| error.to_string())?;
     let mut report = format!(
-        "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\n{}",
+        "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Execution profile: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\n{}",
         markdown_escape(&snapshot.project.name),
         markdown_escape(source_endpoint),
         markdown_escape(destination_endpoint),
@@ -391,6 +392,7 @@ pub(crate) fn build_verification_report(
         markdown_escape(destination_identity),
         identity_note,
         markdown_escape(&run.engine),
+        run_execution_profile(&run.plan_snapshot),
         markdown_escape(&run.id),
         markdown_escape(&run.status),
         markdown_escape(&run.started_at),
@@ -510,6 +512,7 @@ pub(crate) fn export_health(
                 "parent_run_id": run.parent_run_id,
                 "engine": run.engine,
                 "phase_at_start": run.phase_at_start,
+                "execution_profile": run_execution_profile(&run.plan_snapshot),
                 "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
                 "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                 "status": run.status,
@@ -545,6 +548,23 @@ pub(crate) fn export_health(
 fn run_destination_policy(plan_snapshot: &str) -> &'static str {
     match decode_report_run_snapshot(plan_snapshot) {
         Ok(Some(snapshot)) => snapshot.profile.destination_mutation_policy(),
+        _ => "unknown",
+    }
+}
+
+fn run_execution_profile(plan_snapshot: &str) -> &'static str {
+    let value = toml::from_str::<toml::Value>(plan_snapshot)
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .get("profile")?
+                .get("execution_profile")?
+                .as_str()
+                .map(str::to_owned)
+        });
+    match value.as_deref() {
+        Some(value) if value.eq_ignore_ascii_case("hardened") => "hardened",
+        Some(value) if value.eq_ignore_ascii_case("compatibility") => "compatibility",
         _ => "unknown",
     }
 }

@@ -18,6 +18,23 @@ fn execution_executable_sha256(plan_snapshot: &str) -> Option<String> {
         .then(|| digest.to_ascii_lowercase())
 }
 
+fn execution_profile(plan_snapshot: &str) -> &'static str {
+    let value = toml::from_str::<toml::Value>(plan_snapshot)
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .get("profile")?
+                .get("execution_profile")?
+                .as_str()
+                .map(str::to_owned)
+        });
+    match value.as_deref() {
+        Some(value) if value.eq_ignore_ascii_case("hardened") => "hardened",
+        Some(value) if value.eq_ignore_ascii_case("compatibility") => "compatibility",
+        _ => "unknown",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProviderIdentity {
     pub(crate) source_provider: String,
@@ -214,6 +231,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "run_id": run_id,
                         "migration_plan_sha256": crate::plan_identity::snapshot_sha256(&plan_snapshot),
                         "engine_binary_sha256": execution_executable_sha256(&plan_snapshot),
+                        "execution_profile": execution_profile(&plan_snapshot),
                         "scope": value.evidence_scope().label(),
                         "verification_method": value.verification_method().as_str(),
                         "verification_outcome": value.verification_outcome().as_str(),
@@ -273,6 +291,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "project_id": project.id.clone(),
                 "job_id": value.job_id,
                 "engine": value.engine,
+                "execution_profile": execution_profile(&value.plan_snapshot),
                 "engine_version": run.engine_version,
                 "phase_at_start": value.phase_at_start,
                 "status": value.status,
