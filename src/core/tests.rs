@@ -2793,6 +2793,55 @@ fn verification_difference_requires_durable_exception_acceptance() {
     db.transition(&project.id, Phase::FinalDelta).unwrap();
     db.transition(&project.id, Phase::Verification).unwrap();
     assert!(!db.all_mailboxes_verified(&project.id).unwrap());
+    let exact_recheck = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: None,
+        source_messages: 10,
+        destination_messages: 10,
+        source_bytes: 100,
+        destination_bytes: 100,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+        flag_verification: None,
+    };
+    db.begin_verification_run(&project.id, &job, "exact-recheck", "snapshot")
+        .unwrap();
+    db.finish_verification_only_run(
+        &project.id,
+        &job,
+        "exact-recheck",
+        &exact_recheck,
+        &[],
+        "reverification",
+    )
+    .unwrap();
+    assert!(
+        db.accept_verification_difference(
+            &project.id,
+            &job,
+            "operator@example",
+            "must not accept exact recheck as the old difference",
+        )
+        .is_err()
+    );
+    db.begin_verification_run(&project.id, &job, "exception-recheck", "snapshot")
+        .unwrap();
+    db.finish_verification_only_run(
+        &project.id,
+        &job,
+        "exception-recheck",
+        &evidence,
+        &[],
+        "reverification still found the recorded difference",
+    )
+    .unwrap();
     db.accept_verification_difference(
         &project.id,
         &job,
@@ -2805,7 +2854,7 @@ fn verification_difference_requires_durable_exception_acceptance() {
         Some("verified_with_exceptions")
     );
     let acceptance = db.latest_verification_acceptance(&job).unwrap().unwrap();
-    assert_eq!(acceptance.run_id, "exception-run");
+    assert_eq!(acceptance.run_id, "exception-recheck");
     assert_eq!(acceptance.operator, "operator@example");
     assert!(db.all_mailboxes_verified(&project.id).unwrap());
     assert_eq!(

@@ -194,7 +194,7 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.execute(
-            "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?15,?16,?17)",
+            "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?15,?16)",
             params![
                 job_id,
                 run_id,
@@ -600,11 +600,21 @@ impl StateStore {
         if state != "verification_difference" || phase == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let run_id: String = tx.query_row(
-            "SELECT run_id FROM evidence_history WHERE job_id=?1 ORDER BY captured_at DESC, id DESC LIMIT 1",
+        let (run_id, outcome): (String, String) = tx.query_row(
+            "SELECT run_id,verification_outcome FROM evidence_history WHERE job_id=?1 ORDER BY captured_at DESC, id DESC LIMIT 1",
             [job_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        if matches!(
+            outcome.as_str(),
+            "exact_body_match" | "exact_metadata_match"
+        ) {
+            // A later exact re-verification does not silently erase the
+            // migration state's outstanding difference. Require the operator
+            // to resolve the current verification state with a fresh, actual
+            // exception record rather than accepting stale provenance.
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         tx.execute(
             "INSERT INTO verification_acceptances(job_id,run_id,operator,reason) VALUES(?1,?2,?3,?4)",
             params![job_id, run_id, operator, reason],
