@@ -156,8 +156,10 @@ screen-reader checklist are recorded in
   batch admission; provider-tenant rate quotas and role-scoped policy
   administration remain outside this local policy file.
 - `notify-webhook` includes a deterministic event ID, event type, and
-  idempotency key. `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or its owner-only
-  file form adds an HMAC-SHA256 envelope signature.
+  idempotency key. Production organization policy requires
+  `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or its owner-only file form, which
+  adds an HMAC-SHA256 envelope signature; compatibility/lab policies may opt
+  out only for explicitly approved legacy receivers.
 - The notifier now persists a credential-free outbox record before attempting
   delivery, retries due records with bounded exponential backoff, and records
   dead-letter state after repeated failure. The outbox stores only an endpoint

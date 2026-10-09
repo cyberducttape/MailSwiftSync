@@ -17,7 +17,8 @@
 //! - `MAILSWIFTSYNC_WEBHOOK_HEADER_FILE` environment variable (path to file containing custom header as "Header-Name: value")
 //! - `MAILSWIFTSYNC_WEBHOOK_URL_FILE` environment variable (path to file containing the HTTPS URL)
 //! - `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or
-//!   `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE` (optional HMAC-SHA256 envelope signing)
+//!   `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE` (HMAC-SHA256 envelope signing;
+//!   required by the default production organization policy)
 //!
 //! If no authentication variable is configured, the webhook is anonymous. If
 //! any authentication variable is configured, the complete selected
@@ -110,6 +111,12 @@ pub(crate) fn post_json(
     let bearer_token = load_webhook_bearer_token()?;
     let custom_header = load_webhook_custom_header()?;
     let signing_secret = load_webhook_signing_secret()?;
+    if policy.require_signing && signing_secret.is_none() {
+        return Err(
+            "organization policy requires a webhook HMAC signing secret; configure MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET_FILE or select an explicit compatibility/lab policy"
+                .into(),
+        );
+    }
     let host = parsed_url
         .host_str()
         .ok_or_else(|| "the webhook URL is missing a host".to_owned())?;
@@ -624,6 +631,7 @@ mod tests {
         let policy = crate::organization_policy::OrganizationWebhookPolicy {
             allow_private_networks: true,
             allowed_domains: vec!["*.example.com".into()],
+            ..Default::default()
         };
         assert!(parse_https_url_with_policy("https://hooks.example.com", &policy).is_ok());
         assert!(parse_https_url_with_policy("https://example.com", &policy).is_err());

@@ -24,6 +24,7 @@ max_concurrency_per_credential = 2
 [webhooks]
 allow_private_networks = false
 allowed_domains = ["*.example.com"]
+require_signing = true
 
 [oauth]
 allow_custom_endpoints = false
@@ -74,6 +75,12 @@ re-resolved to bypass the check during the request. Set
 receiver. When `allowed_domains` is non-empty, the webhook host must match an
 exact entry or a `*.example.com` subdomain pattern. Keep this file owner-only;
 it is read and enforced when the endpoint is validated and before delivery.
+Production also requires `require_signing = true` and refuses delivery unless
+an HMAC-SHA256 signing secret is supplied through an owner-only secret file or
+environment variable. Rotate that secret by provisioning the replacement at
+the receiver, updating the protected file, and restarting the notifier; never
+place it in the URL, command arguments, ledger, or support bundle. A deliberate
+compatibility/lab policy may set `require_signing = false` for legacy receivers.
 
 OAuth authorization and token endpoints are restricted to the built-in Google
 and Microsoft hosts by default. All resolved addresses are checked for global

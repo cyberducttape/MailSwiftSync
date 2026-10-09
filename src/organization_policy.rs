@@ -27,7 +27,7 @@ pub(crate) struct OrganizationProviderPolicy {
     pub(crate) max_concurrency_per_credential: Option<usize>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct OrganizationWebhookPolicy {
     /// Permit non-public, reserved, loopback, link-local, or local-only
@@ -36,6 +36,25 @@ pub(crate) struct OrganizationWebhookPolicy {
     /// Optional host boundary. When non-empty, webhook hosts must match one entry.
     /// A `*.example.com` entry matches subdomains, but not `example.com` itself.
     pub(crate) allowed_domains: Vec<String>,
+    /// Require an HMAC-SHA256 signature for outbound webhook deliveries.
+    /// Production defaults this to true; compatibility/lab may explicitly
+    /// disable it for receivers that cannot validate signed envelopes.
+    #[serde(default = "default_require_webhook_signing")]
+    pub(crate) require_signing: bool,
+}
+
+impl Default for OrganizationWebhookPolicy {
+    fn default() -> Self {
+        Self {
+            allow_private_networks: false,
+            allowed_domains: Vec::new(),
+            require_signing: true,
+        }
+    }
+}
+
+fn default_require_webhook_signing() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -312,11 +331,12 @@ impl OrganizationPolicy {
                 )
                 || self.max_concurrency.is_none()
                 || self.webhooks.allow_private_networks
+                || !self.webhooks.require_signing
                 || self.oauth.allow_private_networks
                 || self.oauth.allow_custom_endpoints)
         {
             return Err(
-                "Organization policy profile production requires TLS, no destination deletion, metadata-or-body verification, bounded concurrency, public webhook/OAuth egress, and built-in OAuth endpoints; select compatibility or lab to acknowledge weaker behavior."
+                "Organization policy profile production requires TLS, no destination deletion, metadata-or-body verification, bounded concurrency, signed webhook delivery, public webhook/OAuth egress, and built-in OAuth endpoints; select compatibility or lab to acknowledge weaker behavior."
                     .into(),
             );
         }
@@ -475,7 +495,7 @@ fn canonical_provider_key(value: &str) -> Result<&'static str, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::OrganizationPolicy;
+    use super::{OrganizationPolicy, OrganizationWebhookPolicy};
     use crate::{Form, core};
 
     #[test]
@@ -487,6 +507,7 @@ mod tests {
         assert!(!policy.allow_destination_deletion);
         assert_eq!(policy.minimum_verification, "metadata");
         assert_eq!(policy.max_concurrency, Some(8));
+        assert!(policy.webhooks.require_signing);
     }
 
     #[test]
@@ -517,6 +538,29 @@ mod tests {
             error.contains("production, compatibility, or lab"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn production_webhooks_require_signing_but_compatibility_can_opt_out() {
+        let policy = OrganizationPolicy {
+            webhooks: OrganizationWebhookPolicy {
+                require_signing: false,
+                ..Default::default()
+            },
+            ..OrganizationPolicy::default()
+        };
+        let error = policy.check_form(&Form::default()).unwrap_err();
+        assert!(error.contains("signed webhook delivery"), "{error}");
+
+        let policy = OrganizationPolicy {
+            profile: "compatibility".into(),
+            webhooks: OrganizationWebhookPolicy {
+                require_signing: false,
+                ..Default::default()
+            },
+            ..OrganizationPolicy::default()
+        };
+        assert!(policy.check_form(&Form::default()).is_ok());
     }
 
     #[test]
