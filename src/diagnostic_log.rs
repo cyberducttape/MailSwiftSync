@@ -104,7 +104,10 @@ impl DiagnosticLogger {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
-        let rendered = format!("{timestamp} [{stream}] {}\n", truncate_line(line));
+        let rendered = format!(
+            "{timestamp} [{stream}] {}\n",
+            sanitize_private_metadata(&truncate_line(line))
+        );
         let length = rendered.len();
         if self
             .queued_bytes
@@ -523,6 +526,45 @@ fn pseudonym_hash(value: &str) -> String {
         .collect()
 }
 
+/// Pseudonymize mailbox and Message-ID-like values in the opt-in transcript.
+/// The live engine parser receives the original redacted line; this additional
+/// pass is deliberately limited to diagnostic persistence so evidence remains
+/// semantically complete while support logs avoid retaining identifiers.
+fn sanitize_private_metadata(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let Some(relative_at) = line[cursor..].find('@') else {
+            output.push_str(&line[cursor..]);
+            break;
+        };
+        let at = cursor + relative_at;
+        let left = line[cursor..at]
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| matches!(*ch, ' ' | '\t' | '\n' | '<' | '>' | '(' | ')' | '[' | ']' | '=' | ',' | ';' | '"' | '\''))
+            .map(|(index, _)| cursor + index + 1)
+            .unwrap_or(cursor);
+        let right = line[at..]
+            .char_indices()
+            .find(|(_, ch)| matches!(*ch, ' ' | '\t' | '\n' | '<' | '>' | '(' | ')' | '[' | ']' | ',' | ';' | '"' | '\''))
+            .map(|(index, _)| at + index)
+            .unwrap_or(line.len());
+        if left >= at || right <= at || line[left..right].contains("://") {
+            output.push_str(&line[cursor..=at]);
+            cursor = at + 1;
+            continue;
+        }
+        output.push_str(&line[cursor..left]);
+        output.push_str("[mailbox:");
+        output.push_str(&pseudonym_hash(&line[left..right]));
+        output.push(']');
+        cursor = right;
+    }
+    output
+}
+
 fn truncate_line(value: &str) -> String {
     if value.len() <= MAX_LINE_BYTES {
         return value.replace('\n', "\\n").replace('\r', "\\r");
@@ -795,5 +837,15 @@ mod tests {
         assert_eq!(hash, pseudonym_hash(identifier));
         assert_eq!(hash.len(), 24);
         assert!(!hash.contains(identifier));
+    }
+
+    #[test]
+    fn diagnostic_lines_pseudonymize_mailbox_and_message_id_values() {
+        let line = "Login user=<alice@example.test> Message-ID=<msg-42@example.test>";
+        let sanitized = sanitize_private_metadata(line);
+        assert!(!sanitized.contains("alice@example.test"));
+        assert!(!sanitized.contains("msg-42@example.test"));
+        assert_eq!(sanitized.matches("[mailbox:").count(), 2);
+        assert!(sanitized.contains("Login user=<[mailbox:"));
     }
 }

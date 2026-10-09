@@ -353,12 +353,13 @@ commands may receive `--diagnostic-log /secure/directory`. Batch execution
 writes each child mailbox run to its own owner-only transcript; filenames use
 a stable hash of the mailbox job ID rather than the ID itself. Transcripts are
 secret-redacted, capped at 8 MiB per file and 128 MiB per directory, and
-retention is limited to the newest 20 files when runs finish. The option prints
-a warning because logs are plaintext and may still contain provider, mailbox,
-folder, or message metadata. Mailbox names in transcript contents are not
-pseudonymized, logs are not encrypted or compressed, and the sanitized support
-bundle does not include them. Select logs manually for any support handoff and
-securely remove them after troubleshooting. Newly created log directories are
+retention is limited to the newest 20 files when runs finish. Email and
+Message-ID-like values in persisted transcript lines are replaced with stable
+per-value pseudonyms; other provider, folder, and message metadata may remain.
+The option still prints a warning because logs are plaintext, not encrypted or
+compressed, and the sanitized support bundle does not include them. Select
+logs manually for any support handoff and securely remove them after
+troubleshooting. Newly created log directories are
 restricted; permissions on an existing directory are not changed, so operators
 must choose an appropriately protected directory. Logging is disabled by
 default.
