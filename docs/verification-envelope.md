@@ -111,6 +111,33 @@ selecting body-hash verification for large mailboxes. A transfer can complete
 successfully while verification still stops at a safety limit, which remains
 an operator-attention outcome.
 
+## Transformation coverage
+
+Independent message verification compares the observed destination with an
+immutable expected-destination model. Identity migrations and explicit typed
+source-to-destination folder rules are currently modeled; the latter are
+captured in the plan and reused by reconciliation rather than rediscovered
+from provider heuristics.
+
+The following imapsync transformations remain outside that model and are
+blocked from exact independent certification:
+
+- automatic folder mapping (`automap`), because the engine's mapping decision
+  is not captured as an immutable run artifact;
+- folder-only migration, because the verified message scope is intentionally
+  different from the complete source scope;
+- header mutation, because the expected message identity/content transformation
+  is not modeled;
+- disabled INTERNALDATE synchronization; and
+- permitted RFC822 size mismatches.
+
+The readiness view names the specific limitation and marks the verification
+gate blocked; it never presents one of these plans as Level 2 metadata or Level
+3 body verification. Supporting another transformation requires an explicit
+expected-destination adapter plus provider qualification and regression tests
+for duplicates, reconnects, deletions, and partial failure. A preflight
+success alone is not sufficient evidence to enable it.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the

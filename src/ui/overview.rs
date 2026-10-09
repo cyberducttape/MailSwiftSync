@@ -3,6 +3,7 @@
 use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
+use crate::runner::message_verification_limitation;
 use crate::ui::confidence::{
     ConfidenceInputs, ConfidenceSection, ConfidenceState, migration_confidence,
 };
@@ -573,7 +574,11 @@ impl App {
             // only when machine-generated, verified packs are loaded here.
             provider_qualified: false,
             proof_ready,
-            verification_level: if self.form.engine() == core::Engine::Dovecot {
+            verification_level: if let Some(limitation) =
+                message_verification_limitation(&self.form)
+            {
+                limitation
+            } else if self.form.engine() == core::Engine::Dovecot {
                 "Level 1 — Aggregate evidence"
             } else if self.form.profile.body_hash_verification {
                 "Level 3 — Bounded content fingerprints"

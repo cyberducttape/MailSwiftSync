@@ -730,8 +730,8 @@ mod tests {
     use super::{
         RunContext, TerminalEvidenceSource, automap_blocks_live_certification,
         configure_process_group, infer_automap_folder_mapping, message_verification_enabled,
-        persist_engine_identity_before_launch, process_tail_text, record_process_tail,
-        resolve_imapsync_identity, run_streaming, terminal_evidence_source,
+        message_verification_limitation, persist_engine_identity_before_launch, process_tail_text,
+        record_process_tail, resolve_imapsync_identity, run_streaming, terminal_evidence_source,
         validate_body_hash_limits, validate_destination_folder_policy, wait_with_timeout,
     };
     use crate::{
@@ -872,6 +872,40 @@ mod tests {
             terminal_evidence_source(&form, true, false),
             TerminalEvidenceSource::Unavailable
         );
+    }
+
+    #[test]
+    fn unsupported_transformations_have_explicit_verification_reasons() {
+        let cases = [
+            ("folder-only", 0),
+            ("header mutation", 1),
+            ("automatic mapping", 2),
+            ("internal date", 3),
+            ("size mismatch", 4),
+        ];
+        for (name, case) in cases {
+            let mut form = unsuitable_live_form();
+            match case {
+                0 => form.profile.justfolders = true,
+                1 => form.profile.addheader = true,
+                2 => form.profile.automap = true,
+                3 => form.profile.sync_internaldates = false,
+                4 => form.profile.allowsizemismatch = true,
+                _ => unreachable!(),
+            }
+            let reason = message_verification_limitation(&form)
+                .unwrap_or_else(|| panic!("missing verification limitation for {name}"));
+            assert!(reason.starts_with("Independent verification unavailable"));
+            assert!(!message_verification_enabled(&form));
+        }
+    }
+
+    #[test]
+    fn native_dovecot_is_not_mislabeled_as_an_unsupported_transformation() {
+        let mut form = crate::Form::default();
+        form.profile.engine = crate::core::Engine::Dovecot;
+        form.profile.justfolders = true;
+        assert!(message_verification_limitation(&form).is_none());
     }
 
     #[test]

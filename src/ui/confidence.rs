@@ -192,7 +192,9 @@ pub(crate) fn migration_confidence(input: ConfidenceInputs<'_>) -> Vec<Confidenc
     findings.push(finding(
         ConfidenceSection::Verification,
         "Verification method",
-        if input.proof_ready {
+        if input.verification_level.starts_with("Independent verification unavailable") {
+            ConfidenceState::Blocked
+        } else if input.proof_ready {
             ConfidenceState::Ready
         } else {
             ConfidenceState::Unknown
@@ -207,10 +209,14 @@ pub(crate) fn migration_confidence(input: ConfidenceInputs<'_>) -> Vec<Confidenc
             }
         ),
         (
-            "Transfer success alone does not establish reconciliation.",
+            if input.verification_level.starts_with("Independent verification unavailable") {
+                "This migration transformation has no qualified expected-destination model; exact independent certification is blocked."
+            } else {
+                "Transfer success alone does not establish reconciliation."
+            },
             "Review verification",
             WorkspaceView::Verification,
-            false,
+            input.verification_level.starts_with("Independent verification unavailable"),
         ),
     ));
 
