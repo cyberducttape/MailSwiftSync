@@ -338,6 +338,10 @@ screen-reader checklist are recorded in
   [automation contract](automation-contract.md) documents the current JSON
   and durable-state rules, but a stable major-version API promise is not yet
   claimed.
+- The [production qualification environment](production-qualification-environment.md)
+  separates deterministic Dovecot evidence from disposable provider evidence
+  and defines the required fault, recovery, quota, OAuth, UIDVALIDITY, resource,
+  and verification-limit scenarios before promotion.
 - Timeout, cancellation, child-process-only imapsync passfile credentials, fresh dual-IMAPS authentication before live imapsync launches, and documented Dovecot process-visibility limits.
 
 ## Required before calling it production-ready
