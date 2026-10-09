@@ -332,6 +332,12 @@ screen-reader checklist are recorded in
   derived only from supplied message, folder, and size facts. It never clears
   authentication, TLS, capacity, verification, policy, or provider-qualification
   gates; those remain explicit pass/warning/block outcomes in preflight.
+- The [adoption qualification plan](adoption-qualification-plan.md) defines
+  the required mailbox shapes, interruptions, mutations, exact engine versions,
+  direct-imapsync baselines, and performance measurements. The
+  [automation contract](automation-contract.md) documents the current JSON
+  and durable-state rules, but a stable major-version API promise is not yet
+  claimed.
 - Timeout, cancellation, child-process-only imapsync passfile credentials, fresh dual-IMAPS authentication before live imapsync launches, and documented Dovecot process-visibility limits.
 
 ## Required before calling it production-ready
