@@ -2793,6 +2793,19 @@ fn verification_difference_requires_durable_exception_acceptance() {
     db.transition(&project.id, Phase::FinalDelta).unwrap();
     db.transition(&project.id, Phase::Verification).unwrap();
     assert!(!db.all_mailboxes_verified(&project.id).unwrap());
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET state='verified_with_exceptions' WHERE id=?1",
+            [&job],
+        )
+        .unwrap();
+    assert!(!db.all_mailboxes_verified(&project.id).unwrap());
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET state='verification_difference' WHERE id=?1",
+            [&job],
+        )
+        .unwrap();
     let exact_recheck = MailboxEvidence {
         verification_method: VerificationMethod::MetadataReconciliation,
         verification_outcome: None,

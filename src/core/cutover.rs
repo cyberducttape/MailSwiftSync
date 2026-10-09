@@ -167,7 +167,7 @@ impl StateStore {
         if phase == "complete" {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let (total, verified): (i64, i64) = tx.query_row("SELECT COUNT(*),COALESCE(SUM(state IN ('verified','verified_with_exceptions')),0) FROM mailbox_jobs WHERE project_id=?1", [project_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let (total, verified): (i64, i64) = tx.query_row("SELECT COUNT(*),COALESCE(SUM(state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id))),0) FROM mailbox_jobs WHERE project_id=?1", [project_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         if total == 0 || total != verified {
             return Err(rusqlite::Error::InvalidQuery);
         }

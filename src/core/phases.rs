@@ -30,7 +30,7 @@ impl StateStore {
                 |row| row.get(0),
             )?;
             let verified: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1 AND state IN ('verified','verified_with_exceptions')",
+                "SELECT COUNT(*) FROM mailbox_jobs j WHERE project_id=?1 AND (state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=j.id)))",
                 [id],
                 |row| row.get(0),
             )?;
@@ -70,7 +70,7 @@ impl StateStore {
         }
         let (total, verified, active_runs, active_processes): (i64, i64, i64, i64) = tx.query_row(
             "SELECT COUNT(*),
-                    COALESCE(SUM(CASE WHEN j.state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END),0),
+                    COALESCE(SUM(CASE WHEN j.state='verified' OR (j.state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=j.id)) THEN 1 ELSE 0 END),0),
                     (SELECT COUNT(*) FROM runs r WHERE r.project_id=?1 AND r.status IN ('queued','running')),
                     (SELECT COUNT(*) FROM active_processes ap JOIN runs r ON r.id=ap.run_id WHERE r.project_id=?1)
              FROM mailbox_jobs j WHERE j.project_id=?1",
