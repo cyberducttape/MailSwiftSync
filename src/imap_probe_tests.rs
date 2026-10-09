@@ -516,10 +516,13 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
         )
         .is_err()
     );
-    for invalid_uid in [0_u64, u32::MAX as u64 + 1, u64::MAX] {
-        let response = format!("* 1 FETCH (UID {invalid_uid})\r\nv003 OK FETCH completed\r\n");
+    for response in [
+        "* 1 FETCH (UID 0)\r\nv003 OK FETCH completed\r\n",
+        "* 1 FETCH (UID 4294967296)\r\nv003 OK FETCH completed\r\n",
+        "* 1 FETCH (UID 18446744073709551615)\r\nv003 OK FETCH completed\r\n",
+    ] {
         assert!(
-            super::fetch_pages::parse_uid_fetch_response(&response, "imap.example", "INBOX", 1, 1)
+            super::fetch_pages::parse_uid_fetch_response(response, "imap.example", "INBOX", 1, 1)
                 .is_err()
         );
     }
