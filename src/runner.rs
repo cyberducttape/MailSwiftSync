@@ -147,9 +147,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         launch_limiter,
     } = context;
     if imapsync_output_profile == verification::ImapsyncOutputProfile::Unknown
-        && args.iter().any(|arg| {
-            arg == "--oauthrefreshcmd1" || arg == "--oauthrefreshcmd2"
-        })
+        && args
+            .iter()
+            .any(|arg| arg == "--oauthrefreshcmd1" || arg == "--oauthrefreshcmd2")
     {
         return Err(
             "automatic OAuth refresh requires the qualified imapsync 2.314 refresh-command contract; refusing to launch an unqualified engine"

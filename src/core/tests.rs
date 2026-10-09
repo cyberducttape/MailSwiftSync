@@ -3063,18 +3063,20 @@ fn automation_work_query_is_exact_without_materializing_rows() {
             rusqlite::params![&project.id, last_job],
         )
         .unwrap();
-    assert!(db
-        .project_has_automation_safe_batch_work(&project.id)
-        .unwrap());
+    assert!(
+        db.project_has_automation_safe_batch_work(&project.id)
+            .unwrap()
+    );
     db.connection
         .execute(
             "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
             [last_job],
         )
         .unwrap();
-    assert!(!db
-        .project_has_automation_safe_batch_work(&project.id)
-        .unwrap());
+    assert!(
+        !db.project_has_automation_safe_batch_work(&project.id)
+            .unwrap()
+    );
 }
 
 #[test]

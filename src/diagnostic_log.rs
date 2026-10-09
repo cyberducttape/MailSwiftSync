@@ -543,12 +543,34 @@ fn sanitize_private_metadata(line: &str) -> String {
         let left = line[cursor..at]
             .char_indices()
             .rev()
-            .find(|(_, ch)| matches!(*ch, ' ' | '\t' | '\n' | '<' | '>' | '(' | ')' | '[' | ']' | '=' | ',' | ';' | '"' | '\''))
+            .find(|(_, ch)| {
+                matches!(
+                    *ch,
+                    ' ' | '\t'
+                        | '\n'
+                        | '<'
+                        | '>'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '='
+                        | ','
+                        | ';'
+                        | '"'
+                        | '\''
+                )
+            })
             .map(|(index, _)| cursor + index + 1)
             .unwrap_or(cursor);
         let right = line[at..]
             .char_indices()
-            .find(|(_, ch)| matches!(*ch, ' ' | '\t' | '\n' | '<' | '>' | '(' | ')' | '[' | ']' | ',' | ';' | '"' | '\''))
+            .find(|(_, ch)| {
+                matches!(
+                    *ch,
+                    ' ' | '\t' | '\n' | '<' | '>' | '(' | ')' | '[' | ']' | ',' | ';' | '"' | '\''
+                )
+            })
             .map(|(index, _)| at + index)
             .unwrap_or(line.len());
         if left >= at || right <= at || line[left..right].contains("://") {

@@ -1020,7 +1020,8 @@ pub(crate) fn headless_supervise(
             thread::sleep(poll_interval);
             continue;
         }
-        let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+        let store =
+            core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
         let actionable = store
             .latest_project()
             .map_err(|error| error.to_string())?
