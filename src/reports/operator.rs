@@ -38,7 +38,7 @@ pub(crate) fn build_project_report(
         .filter(|mailbox| needs_operator_review(&mailbox.job.state))
         .count();
     let mut report = format!(
-        "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Attention reason | Recommended action | Exception acceptance | Evidence run | Evidence | Evidence digest | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|\n",
+        "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Attention reason | Recommended action | Exception acceptance | Evidence run | Evidence | Assurance | Evidence digest | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|\n",
         markdown_escape(&project.name),
         markdown_escape(&project.id),
         markdown_escape(&project.source_endpoint),
@@ -63,7 +63,7 @@ pub(crate) fn build_project_report(
         if let Some((evidence_run_id, evidence, plan_snapshot)) = mailbox.evidence {
             let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
             report.push_str(&format!(
-                "| {} | {} | `{}` | {} | {} | {} | `{}` | {} | `{}` | {} | {} | {} | {} |\n",
+                "| {} | {} | `{}` | {} | {} | {} | `{}` | {} | {} | `{}` | {} | {} | {} | {} |\n",
                 markdown_escape(&job.source_mailbox),
                 markdown_escape(&job.destination_mailbox),
                 markdown_escape(&job.state),
@@ -72,6 +72,7 @@ pub(crate) fn build_project_report(
                 markdown_escape(&acceptance_summary),
                 markdown_escape(&evidence_run_id),
                 evidence.verification_outcome().display_label(),
+                evidence.verification_status(),
                 markdown_escape(&evidence_digest(
                     &evidence_run_id,
                     &plan_snapshot,
@@ -84,7 +85,7 @@ pub(crate) fn build_project_report(
             ));
         } else {
             report.push_str(&format!(
-                "| {} | {} | `{}` | {} | {} | {} | — | missing | — | — | — | — | — |\n",
+                "| {} | {} | `{}` | {} | {} | {} | — | missing | incomplete | — | — | — | — |\n",
                 markdown_escape(&job.source_mailbox),
                 markdown_escape(&job.destination_mailbox),
                 markdown_escape(&job.state),
@@ -384,7 +385,7 @@ pub(crate) fn build_verification_report(
         .message_mismatches_for_run(job_id, &evidence_run_id, 500)
         .map_err(|error| error.to_string())?;
     let mut report = format!(
-        "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Execution profile: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\n{}",
+        "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Execution profile: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Assurance status: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\n{}",
         markdown_escape(&snapshot.project.name),
         markdown_escape(source_endpoint),
         markdown_escape(destination_endpoint),
@@ -398,6 +399,7 @@ pub(crate) fn build_verification_report(
         markdown_escape(&run.started_at),
         markdown_escape(run.finished_at.as_deref().unwrap_or("in progress")),
         markdown_escape(&mailbox.job.state),
+        evidence.verification_status(),
         evidence.verification_outcome().display_label(),
         match evidence.evidence_scope() {
             core::EvidenceScope::EngineConfirmed => "engine-confirmed summary",

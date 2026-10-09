@@ -55,6 +55,10 @@ pub(crate) fn evidence_coverage_fields(
         evidence.verification_level().into(),
     );
     fields.insert(
+        "verification_status".into(),
+        evidence.verification_status().into(),
+    );
+    fields.insert(
         "message_coverage".into(),
         serde_json::json!({
             "checked_messages": checked,
