@@ -353,6 +353,29 @@ fn completed_folder_restart_rescans_an_unchanged_stage_for_flags() {
 }
 
 #[test]
+fn flags_only_change_between_checkpoint_and_resume_is_refetched() {
+    let uids = vec![1, 2, 3];
+    let mut first = FolderServer::new(&uids, 9, 4);
+    first.flags.insert(1, "".into());
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    scan(&mut stage, &mut first);
+
+    // UIDVALIDITY, UIDNEXT, and EXISTS are unchanged; only FLAGS changed.
+    let mut resumed = FolderServer::new(&uids, 9, 4);
+    resumed.flags.insert(1, "\\Seen".into());
+    scan(&mut stage, &mut resumed);
+
+    assert_eq!(resumed.fetched, uids);
+    let messages = stage.all_messages(SIDE).unwrap();
+    let message = messages
+        .iter()
+        .find(|(key, _)| key.uid == "1")
+        .map(|(_, message)| message)
+        .unwrap();
+    assert_eq!(message.flags.as_deref(), Some("\\Seen"));
+}
+
+#[test]
 fn resumed_scan_of_a_completed_folder_fetches_new_arrivals() {
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     assert_eq!(

@@ -84,6 +84,12 @@ discarded and rescanned as well. This means a controller interruption during
 verification does not require the transfer engine to start over while avoiding
 stale flag-only results.
 
+The current implementation deliberately chooses this safe full-folder refetch
+because it does not yet persist or negotiate `CONDSTORE`/`HIGHESTMODSEQ`
+checkpoint state. A future optimized path may use those IMAP capabilities to
+refetch only changed UIDs, but it must retain the conservative fallback for
+servers that do not advertise them.
+
 The current product does not retain completed message metadata indefinitely.
 The `reverify` command provides an operator-invokable mailbox-level
 post-completion verification run without launching the transfer engine. A
