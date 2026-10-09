@@ -329,6 +329,9 @@ impl App {
         self.pending_checkpoint = None;
         self.run_id = Some(run_id.clone());
         self.active_run = Some(active_run);
+        if let Some(run) = self.active_run.as_mut() {
+            run.verification_state_path = self.state_path.clone();
+        }
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());

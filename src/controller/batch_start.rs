@@ -117,6 +117,9 @@ impl App {
         self.run_id = Some(run_id.clone());
         self.locked_profile = Some(batch_profile.clone());
         self.active_run = Some(admission.active_run);
+        if let Some(run) = self.active_run.as_mut() {
+            run.verification_state_path = self.state_path.clone();
+        }
         // Admission recorded the children as durably queued.
         self.mark_bulk_jobs_changed();
         let worker = launch_batch_worker(BatchExecutionContext {

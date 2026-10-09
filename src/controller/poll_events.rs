@@ -445,6 +445,20 @@ impl App {
                             // terminal child state in the editable queue until
                             // the run/mailbox transaction has committed.
                             if completion_persisted {
+                                if evidence.is_some()
+                                    && let Some(path) = run
+                                        .verification_state_path
+                                        .as_deref()
+                                        .map(|path| crate::core::durable_stage_path(path, &job_id))
+                                    && let Err(error) =
+                                        crate::core::MessageMetadataStage::cleanup_durable_stage(
+                                            &path,
+                                        )
+                                {
+                                    durability_errors.push(format!(
+                                        "child evidence committed; verification stage cleanup deferred: {error}"
+                                    ));
+                                }
                                 // The durable row now carries the terminal
                                 // state; drop the in-run presentation state.
                                 self.queue.clear_transient(&job_id);

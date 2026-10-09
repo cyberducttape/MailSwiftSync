@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunKind {
@@ -23,6 +23,9 @@ pub(crate) struct ActiveRunContext {
     /// classification when engine output identifies the failing side.
     pub(crate) source_provider: String,
     pub(crate) destination_provider: String,
+    /// Base state path used to garbage-collect a durable verification stage
+    /// only after its terminal evidence transaction succeeds.
+    pub(crate) verification_state_path: Option<PathBuf>,
 }
 
 impl ActiveRunContext {

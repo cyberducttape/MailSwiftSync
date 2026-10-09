@@ -261,6 +261,7 @@ mod tests {
             credential_fingerprint: "credential-a".into(),
             source_provider: "generic".into(),
             destination_provider: "generic".into(),
+            verification_state_path: None,
         }
     }
 

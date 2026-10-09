@@ -1877,6 +1877,7 @@ fn active_run_context_rejects_foreign_process_events() {
         credential_fingerprint: String::new(),
         source_provider: "generic".into(),
         destination_provider: "generic".into(),
+        verification_state_path: None,
     };
     assert!(context.owns_process("child-a", "job-a"));
     assert!(context.owns_process("child-b", "job-b"));

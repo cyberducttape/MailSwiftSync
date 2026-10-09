@@ -479,6 +479,7 @@ mod tests {
                 credential_fingerprint: "credential-a".into(),
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
+                verification_state_path: None,
             });
             app.run_telemetry.reset(std::time::Instant::now(), 1);
             let progress = |bytes| crate::progress::TransferProgress {

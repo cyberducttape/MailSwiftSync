@@ -108,6 +108,7 @@ pub(crate) fn admit_single_run(
         credential_fingerprint: admission.credential_fingerprint,
         source_provider: admission.source_provider,
         destination_provider: admission.destination_provider,
+        verification_state_path: None,
     })
 }
 

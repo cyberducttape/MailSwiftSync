@@ -190,6 +190,22 @@ impl App {
                         Some(run_context.credential_fingerprint.clone());
                 }
                 if terminal_write_ok {
+                    if terminal_evidence.is_some()
+                        && let Some(path) = run_context
+                            .verification_state_path
+                            .as_deref()
+                            .and_then(|path| run_context.job_id.as_deref().map(|job| (path, job)))
+                            .map(|(path, job)| crate::core::durable_stage_path(path, job))
+                        && let Err(error) =
+                            crate::core::MessageMetadataStage::cleanup_durable_stage(&path)
+                    {
+                        push_visible_output(
+                            &mut self.output,
+                            format!(
+                                "[durability] Evidence committed; verification stage cleanup deferred: {error}"
+                            ),
+                        );
+                    }
                     if self.durability_recovery_pending && !cycle_had_durability_errors {
                         self.durability_error = false;
                         self.durability_recovery_pending = false;
@@ -401,6 +417,7 @@ mod tests {
                 credential_fingerprint: String::new(),
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
+                verification_state_path: None,
             });
             app.run_id = Some("limit-run".into());
             let (sender, receiver) = std::sync::mpsc::sync_channel(8);

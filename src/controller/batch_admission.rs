@@ -544,6 +544,7 @@ pub(crate) fn admit_batch_run(
         credential_fingerprint: String::new(),
         source_provider: "generic".to_owned(),
         destination_provider: "generic".to_owned(),
+        verification_state_path: None,
     })
 }
 
