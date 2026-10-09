@@ -67,6 +67,8 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Executable cutover orchestration | partial | Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI with persisted schedule/window enforcement; external MX/DNS confirmation remains an explicit operator acknowledgement. |
 | Organization policy enforcement | partial | Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, global worker concurrency, and provider-endpoint/tenant/credential runtime ceilings at preflight and batch admission; provider quota discovery and role-scoped policy administration remain open. |
 | Durable signed webhook delivery | partial | HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; notify-webhook --watch provides continuous operator-managed delivery while fleet-centralized management remains open. |
+| MSP RBAC and tenant isolation | not implemented | The local application has no authenticated multi-user control plane, role enforcement, row-level tenant boundary, or worker fencing; see `docs/msp-rbac-and-tenant-isolation.md`. |
+| PSA/ticket lifecycle integration | partial | The signed/idempotent durable webhook and lifecycle event contract are available for receiver-side automation; ticket ownership, correlation, acknowledgements, and vendor API integrations remain outside the product. |
 <!-- production-features:end -->
 
 ## Provider Qualification Matrix

@@ -127,7 +127,13 @@ under the customer's documented retention and legal-hold policy.
 The MSP service owner should review dead-letter webhooks, unresolved mailbox
 states, backup/restore drills, supported runtime versions, and open qualification
 gaps before accepting the next customer wave. Centralized fleet monitoring,
-tenant boundaries, and RBAC remain outside the current product boundary.
+tenant boundaries, and RBAC remain outside the current product boundary; see
+the [RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
+
+The webhook is a stable integration boundary for PSA automation, not a ticket
+system. Use the [PSA event contract](psa-event-contract.md) to implement
+idempotent ticket correlation and customer/technician routing in a trusted
+receiver.
 
 The `fleet-status` command is a read-only aggregation of separate local
 ledgers; it is not a scheduler, worker registry, heartbeat service, remote
