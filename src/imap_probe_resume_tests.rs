@@ -362,7 +362,7 @@ fn flags_only_change_between_checkpoint_and_resume_is_refetched() {
 
     // UIDVALIDITY, UIDNEXT, and EXISTS are unchanged; only FLAGS changed.
     let mut resumed = FolderServer::new(&uids, 9, 4);
-    resumed.flags.insert(1, "\\Seen".into());
+    resumed.flags.insert(1, "\\Seen $ClientTag".into());
     scan(&mut stage, &mut resumed);
 
     assert_eq!(resumed.fetched, uids);
@@ -372,7 +372,9 @@ fn flags_only_change_between_checkpoint_and_resume_is_refetched() {
         .find(|(key, _)| key.uid == "1")
         .map(|(_, message)| message)
         .unwrap();
-    assert_eq!(message.flags.as_deref(), Some("\\Seen"));
+    let flags = message.flags.as_deref().unwrap();
+    assert!(flags.contains("\\Seen"));
+    assert!(flags.contains("$clienttag"));
 }
 
 #[test]
