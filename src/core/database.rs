@@ -151,6 +151,31 @@ fn is_sql_identifier(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
+/// Triggers that keep the queue facts' run and acceptance counts current.
+/// Every write path to `runs` and `verification_acceptances` goes through
+/// them, so presented queue states never depend on application code paths.
+pub(crate) const QUEUE_FACT_COUNT_TRIGGERS: &str = "DROP TRIGGER IF EXISTS mailbox_queue_facts_runs_insert;
+     DROP TRIGGER IF EXISTS mailbox_queue_facts_runs_update;
+     DROP TRIGGER IF EXISTS mailbox_queue_facts_runs_delete;
+     DROP TRIGGER IF EXISTS mailbox_queue_facts_acceptances_insert;
+     DROP TRIGGER IF EXISTS mailbox_queue_facts_acceptances_delete;
+     CREATE TRIGGER mailbox_queue_facts_runs_insert AFTER INSERT ON runs WHEN NEW.job_id IS NOT NULL BEGIN
+         UPDATE mailbox_queue_facts SET runs_total=runs_total+1, runs_queued=runs_queued+(NEW.status='queued') WHERE job_id=NEW.job_id;
+     END;
+     CREATE TRIGGER mailbox_queue_facts_runs_update AFTER UPDATE OF job_id,status ON runs BEGIN
+         UPDATE mailbox_queue_facts SET runs_total=runs_total-1, runs_queued=runs_queued-(OLD.status='queued') WHERE OLD.job_id IS NOT NULL AND job_id=OLD.job_id;
+         UPDATE mailbox_queue_facts SET runs_total=runs_total+1, runs_queued=runs_queued+(NEW.status='queued') WHERE NEW.job_id IS NOT NULL AND job_id=NEW.job_id;
+     END;
+     CREATE TRIGGER mailbox_queue_facts_runs_delete AFTER DELETE ON runs WHEN OLD.job_id IS NOT NULL BEGIN
+         UPDATE mailbox_queue_facts SET runs_total=runs_total-1, runs_queued=runs_queued-(OLD.status='queued') WHERE job_id=OLD.job_id;
+     END;
+     CREATE TRIGGER mailbox_queue_facts_acceptances_insert AFTER INSERT ON verification_acceptances BEGIN
+         UPDATE mailbox_queue_facts SET acceptances=acceptances+1 WHERE job_id=NEW.job_id;
+     END;
+     CREATE TRIGGER mailbox_queue_facts_acceptances_delete AFTER DELETE ON verification_acceptances BEGIN
+         UPDATE mailbox_queue_facts SET acceptances=acceptances-1 WHERE job_id=OLD.job_id;
+     END;";
+
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
@@ -419,7 +444,8 @@ impl StateStore {
         // (named, approvable mailbox subsets with schedule and concurrency),
         // version 27 adds per-run IMAP flag verification results, version 28
         // the verification_limit_exceeded attention reason, and version 29
-        // project-scoped folder digests on message mismatches.
+        // project-scoped folder digests on message mismatches, and version 30
+        // trigger-maintained run and acceptance counts on queue facts.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -480,7 +506,7 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
                  CREATE TABLE IF NOT EXISTS transfer_passes (run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL CHECK(attempt > 0), project_id TEXT NOT NULL REFERENCES projects(id), mailbox_digest TEXT NOT NULL, pass_sequence INTEGER NOT NULL CHECK(pass_sequence > 0), pass_kind TEXT NOT NULL, engine TEXT NOT NULL, executable_identity TEXT NOT NULL, command_sha256 TEXT NOT NULL, command TEXT NOT NULL, folder_scope TEXT NOT NULL, source_range TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, outcome TEXT, delta_required INTEGER CHECK(delta_required IS NULL OR delta_required IN (0,1)), completion_evidence TEXT, emitted_state_sha256 TEXT, verification_method TEXT, verification_outcome TEXT, verified_at TEXT, PRIMARY KEY(run_id, attempt));
                  CREATE INDEX IF NOT EXISTS idx_transfer_passes_mailbox ON transfer_passes(project_id, mailbox_digest, pass_sequence);
-                 CREATE TABLE IF NOT EXISTS mailbox_queue_facts (job_rowid INTEGER PRIMARY KEY, job_id TEXT NOT NULL UNIQUE REFERENCES mailbox_jobs(id), project_id TEXT NOT NULL REFERENCES projects(id), label TEXT NOT NULL, source_host TEXT NOT NULL, destination_host TEXT NOT NULL, search_key TEXT NOT NULL, destructive INTEGER NOT NULL CHECK(destructive IN (0,1)), policy TEXT NOT NULL, state TEXT NOT NULL);
+                 CREATE TABLE IF NOT EXISTS mailbox_queue_facts (job_rowid INTEGER PRIMARY KEY, job_id TEXT NOT NULL UNIQUE REFERENCES mailbox_jobs(id), project_id TEXT NOT NULL REFERENCES projects(id), label TEXT NOT NULL, source_host TEXT NOT NULL, destination_host TEXT NOT NULL, search_key TEXT NOT NULL, destructive INTEGER NOT NULL CHECK(destructive IN (0,1)), policy TEXT NOT NULL, state TEXT NOT NULL, runs_total INTEGER NOT NULL DEFAULT 0 CHECK(runs_total >= 0), runs_queued INTEGER NOT NULL DEFAULT 0 CHECK(runs_queued >= 0), acceptances INTEGER NOT NULL DEFAULT 0 CHECK(acceptances >= 0));
                  CREATE TRIGGER IF NOT EXISTS mailbox_queue_facts_state AFTER UPDATE OF state ON mailbox_jobs BEGIN UPDATE mailbox_queue_facts SET state=NEW.state WHERE job_rowid=NEW.rowid; END;
                  CREATE INDEX IF NOT EXISTS idx_mailbox_queue_facts_project ON mailbox_queue_facts(project_id, job_rowid);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_queue ON mailbox_jobs(project_id, id, state);
@@ -497,6 +523,7 @@ impl StateStore {
         if stored_schema_version < 25 {
             Self::migrate_queue_search_index(&tx)?;
         }
+        Self::migrate_queue_fact_run_counts(&tx)?;
         tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_verification_acceptances_job ON verification_acceptances(job_id, id DESC)",
             [],
@@ -906,6 +933,48 @@ impl StateStore {
              SELECT job_rowid,search_key
              FROM mailbox_queue_facts",
             [],
+        )?;
+        Ok(())
+    }
+
+    /// Version 30: per-mailbox run and acceptance counts on the queue facts,
+    /// kept current by triggers, so the presented state of every queue row is
+    /// derived from one narrow index instead of probing `runs` per row. The
+    /// counts are recomputed whenever the migration transaction runs, which
+    /// also repairs a ledger whose triggers were missing.
+    fn migrate_queue_fact_run_counts(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        let columns = tx
+            .prepare("PRAGMA table_info(mailbox_queue_facts)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+        for (column, definition) in [
+            (
+                "runs_total",
+                "runs_total INTEGER NOT NULL DEFAULT 0 CHECK(runs_total >= 0)",
+            ),
+            (
+                "runs_queued",
+                "runs_queued INTEGER NOT NULL DEFAULT 0 CHECK(runs_queued >= 0)",
+            ),
+            (
+                "acceptances",
+                "acceptances INTEGER NOT NULL DEFAULT 0 CHECK(acceptances >= 0)",
+            ),
+        ] {
+            if !columns.contains(column) {
+                tx.execute(
+                    &format!("ALTER TABLE mailbox_queue_facts ADD COLUMN {definition}"),
+                    [],
+                )?;
+            }
+        }
+        tx.execute_batch(QUEUE_FACT_COUNT_TRIGGERS)?;
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_mailbox_queue_facts_presented ON mailbox_queue_facts(project_id, state, runs_queued, runs_total, acceptances);
+             UPDATE mailbox_queue_facts SET
+                 runs_total=(SELECT COUNT(*) FROM runs r WHERE r.job_id=mailbox_queue_facts.job_id),
+                 runs_queued=(SELECT COUNT(*) FROM runs r WHERE r.job_id=mailbox_queue_facts.job_id AND r.status='queued'),
+                 acceptances=(SELECT COUNT(*) FROM verification_acceptances a WHERE a.job_id=mailbox_queue_facts.job_id);",
         )?;
         Ok(())
     }

@@ -31,6 +31,13 @@ const DATA_INVARIANTS: &[(&str, &str)] = &[
             OR j.state<>f.state",
     ),
     (
+        "every queue fact counts exactly its job's runs, queued runs, and acceptances",
+        "SELECT COUNT(*) FROM mailbox_queue_facts f
+         WHERE f.runs_total<>(SELECT COUNT(*) FROM runs r WHERE r.job_id=f.job_id)
+            OR f.runs_queued<>(SELECT COUNT(*) FROM runs r WHERE r.job_id=f.job_id AND r.status='queued')
+            OR f.acceptances<>(SELECT COUNT(*) FROM verification_acceptances a WHERE a.job_id=f.job_id)",
+    ),
+    (
         "every batch plan is used by a mailbox in its own project",
         "SELECT COUNT(*) FROM batch_plans p
          WHERE NOT EXISTS(SELECT 1 FROM mailbox_jobs j

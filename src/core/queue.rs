@@ -24,6 +24,21 @@ use uuid::Uuid;
 /// so presenting 100,000 rows costs two set lookups each, not two index
 /// probes into `runs`. `?1` must be the project ID in every query using it.
 const EFFECTIVE_STATE: &str = "CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' WHEN m.state='verified_with_exceptions' AND NOT EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=m.id) THEN 'verification_difference' ELSE m.state END";
+/// The same presented state as `EFFECTIVE_STATE`, derived only from one
+/// narrow queue-facts row (`f`): trigger-maintained run and acceptance counts
+/// replace the per-row probes into `runs`. Presentation queries use this so
+/// counts, filters, and selections stay cheap on 100k-row queues with a run
+/// per mailbox; execution paths keep reading `mailbox_jobs` directly.
+const FACTS_EFFECTIVE_STATE: &str = "CASE WHEN f.runs_queued>0 THEN 'queued' WHEN f.state='queued' AND f.runs_total=0 THEN 'imported' WHEN f.state='verified_with_exceptions' AND f.acceptances=0 THEN 'verification_difference' ELSE f.state END";
+/// Group facts by the raw columns the presented state depends on, in
+/// `idx_mailbox_queue_facts_presented` order, so SQLite aggregates while
+/// walking the index; the outer query applies `FACTS_EFFECTIVE_STATE` to a few
+/// groups instead of 100k rows. `{predicate}` narrows the rows first.
+fn grouped_facts(predicate: &str) -> String {
+    format!(
+        "SELECT f.state, f.runs_queued, f.runs_total, f.acceptances, COUNT(*) AS n FROM mailbox_queue_facts f WHERE f.project_id=?1{predicate} GROUP BY f.state, f.runs_queued, f.runs_total, f.acceptances"
+    )
+}
 const MAX_IDS_PER_QUERY: usize = 500;
 
 /// Operator-facing groups of effective mailbox states. The command center
@@ -158,10 +173,12 @@ pub struct QueueSelectionSummary {
 
 /// Columns of a presented `QueueRow` from `mailbox_jobs m` joined to
 /// `mailbox_queue_facts f`.
-const ROW_COLUMNS: &str = "m.rowid,m.id,COALESCE(f.label,''),COALESCE(f.source_host,''),m.source_mailbox,COALESCE(f.destination_host,''),m.destination_mailbox,CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' WHEN m.state='verified_with_exceptions' AND NOT EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=m.id) THEN 'verification_difference' ELSE m.state END,f.destructive,m.attention_reason,COALESCE(f.policy,'')";
+const ROW_COLUMNS: &str = "m.rowid,m.id,COALESCE(f.label,''),COALESCE(f.source_host,''),m.source_mailbox,COALESCE(f.destination_host,''),m.destination_mailbox,CASE WHEN f.job_rowid IS NULL THEN (CASE WHEN m.id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN m.state='queued' AND m.id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' WHEN m.state='verified_with_exceptions' AND NOT EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=m.id) THEN 'verification_difference' ELSE m.state END) WHEN f.runs_queued>0 THEN 'queued' WHEN f.state='queued' AND f.runs_total=0 THEN 'imported' WHEN f.state='verified_with_exceptions' AND f.acceptances=0 THEN 'verification_difference' ELSE f.state END,f.destructive,m.attention_reason,COALESCE(f.policy,'')";
 
 /// Insert or replace one row's facts; the job's own rowid keys them.
-const FACTS_UPSERT: &str = "INSERT INTO mailbox_queue_facts(job_rowid,job_id,project_id,label,source_host,destination_host,search_key,destructive,policy,state) SELECT rowid,id,project_id,?2,?3,?4,?5,?6,?7,state FROM mailbox_jobs WHERE id=?1 ON CONFLICT(job_rowid) DO UPDATE SET job_id=excluded.job_id,project_id=excluded.project_id,label=excluded.label,source_host=excluded.source_host,destination_host=excluded.destination_host,search_key=excluded.search_key,destructive=excluded.destructive,policy=excluded.policy,state=excluded.state";
+/// A newly inserted fact starts from the job's existing runs and acceptances
+/// (legacy backfill); afterwards the count triggers keep them current.
+const FACTS_UPSERT: &str = "INSERT INTO mailbox_queue_facts(job_rowid,job_id,project_id,label,source_host,destination_host,search_key,destructive,policy,state,runs_total,runs_queued,acceptances) SELECT rowid,id,project_id,?2,?3,?4,?5,?6,?7,state,(SELECT COUNT(*) FROM runs r WHERE r.job_id=mailbox_jobs.id),(SELECT COUNT(*) FROM runs r WHERE r.job_id=mailbox_jobs.id AND r.status='queued'),(SELECT COUNT(*) FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id) FROM mailbox_jobs WHERE id=?1 ON CONFLICT(job_rowid) DO UPDATE SET job_id=excluded.job_id,project_id=excluded.project_id,label=excluded.label,source_host=excluded.source_host,destination_host=excluded.destination_host,search_key=excluded.search_key,destructive=excluded.destructive,policy=excluded.policy,state=excluded.state";
 
 fn queue_search_uses_trigrams(search: &str) -> bool {
     search.chars().count() >= 3 && !search.chars().any(char::is_control)
@@ -219,7 +236,12 @@ impl StateStore {
     #[cfg(test)]
     pub(crate) fn hide_mailbox_jobs_for_test(&self) -> rusqlite::Result<()> {
         self.connection
-            .execute_batch("ALTER TABLE mailbox_jobs RENAME TO hidden_mailbox_jobs")
+            // Presentation reads come from the facts table, durable ones
+            // from the jobs table; hide both so every queue read fails.
+            .execute_batch(
+                "ALTER TABLE mailbox_jobs RENAME TO hidden_mailbox_jobs;
+                 ALTER TABLE mailbox_queue_facts RENAME TO hidden_mailbox_queue_facts;",
+            )
     }
 
     /// Create a batch project whose rows are the queue, in one transaction.
@@ -448,7 +470,7 @@ impl StateStore {
         let search_predicate = queue_search_predicate(folded_search);
         let search_query = queue_search_query(folded_search);
         let mut statement = self.connection.prepare_cached(&format!(
-            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3)))) ORDER BY f.job_rowid"
+            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR {FACTS_EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3))) ORDER BY f.job_rowid"
         ))?;
         statement
             .query_map(
@@ -470,7 +492,7 @@ impl StateStore {
         let search_query = queue_search_query(folded_search);
         self.connection.query_row(
             &format!(
-                "SELECT COUNT(*) FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3))))"
+                "SELECT COUNT(*) FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR {FACTS_EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3)))"
             ),
             params![project_id, search_query, state_filter_json(state)],
             |row| Ok(row.get::<_, i64>(0)? as usize),
@@ -491,7 +513,7 @@ impl StateStore {
         let search_predicate = queue_search_predicate(folded_search);
         let search_query = queue_search_query(folded_search);
         let mut statement = self.connection.prepare_cached(&format!(
-            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR f.job_rowid IN (SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3)))) ORDER BY f.job_rowid LIMIT ?4 OFFSET ?5"
+            "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1 AND (?2='' OR {search_predicate}) AND (?3 IS NULL OR {FACTS_EFFECTIVE_STATE} IN (SELECT value FROM json_each(?3))) ORDER BY f.job_rowid LIMIT ?4 OFFSET ?5"
         ))?;
         statement
             .query_map(
@@ -579,7 +601,7 @@ impl StateStore {
         mut visit: impl FnMut(QueueScanRow),
     ) -> rusqlite::Result<()> {
         let mut statement = self.connection.prepare_cached(
-            "SELECT f.job_rowid,f.job_id,CASE WHEN f.job_id IN (SELECT job_id FROM runs WHERE project_id=?1 AND status='queued' AND job_id IS NOT NULL) THEN 'queued' WHEN f.state='queued' AND f.job_id NOT IN (SELECT job_id FROM runs WHERE project_id=?1 AND job_id IS NOT NULL) THEN 'imported' WHEN f.state='verified_with_exceptions' AND NOT EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=f.job_id) THEN 'verification_difference' ELSE f.state END,f.destructive,f.state FROM mailbox_queue_facts f WHERE f.project_id=?1 ORDER BY f.job_rowid"
+            &format!("SELECT f.job_rowid,f.job_id,{FACTS_EFFECTIVE_STATE},f.destructive,f.state FROM mailbox_queue_facts f WHERE f.project_id=?1 ORDER BY f.job_rowid")
         )?;
         let mut rows = statement.query([project_id])?;
         while let Some(row) = rows.next()? {
@@ -620,7 +642,8 @@ impl StateStore {
     /// Count of rows per presented state, for queue health.
     pub fn queue_state_counts(&self, project_id: &str) -> rusqlite::Result<Vec<(String, usize)>> {
         let mut statement = self.connection.prepare_cached(&format!(
-            "SELECT {EFFECTIVE_STATE} AS effective,COUNT(*) FROM mailbox_jobs m WHERE m.project_id=?1 GROUP BY effective"
+            "SELECT {FACTS_EFFECTIVE_STATE} AS effective,SUM(f.n) FROM ({}) f GROUP BY effective",
+            grouped_facts("")
         ))?;
         statement
             .query_map([project_id], |row| {
@@ -644,7 +667,7 @@ impl StateStore {
         }
         let placeholders = numbered_placeholders(states.len());
         let sql = format!(
-            "SELECT m.id FROM mailbox_jobs m WHERE m.project_id=?1 AND {EFFECTIVE_STATE} IN ({placeholders}) ORDER BY m.rowid"
+            "SELECT f.job_id FROM mailbox_queue_facts f WHERE f.project_id=?1 AND {FACTS_EFFECTIVE_STATE} IN ({placeholders}) ORDER BY f.job_rowid"
         );
         let params = std::iter::once(project_id.to_owned())
             .chain(states.iter().map(|state| (*state).to_owned()));
@@ -735,7 +758,10 @@ impl StateStore {
                 let predicate = if chunk.is_empty() {
                     String::new()
                 } else {
-                    format!(" AND m.id NOT IN ({})", numbered_placeholders(chunk.len()))
+                    format!(
+                        " AND f.job_id NOT IN ({})",
+                        numbered_placeholders(chunk.len())
+                    )
                 };
                 (predicate, chunk.to_vec())
             } else {
@@ -743,12 +769,13 @@ impl StateStore {
                     continue;
                 }
                 (
-                    format!(" AND m.id IN ({})", numbered_placeholders(chunk.len())),
+                    format!(" AND f.job_id IN ({})", numbered_placeholders(chunk.len())),
                     chunk.to_vec(),
                 )
             };
             let sql = format!(
-                "SELECT COUNT(*), COALESCE(SUM(effective='ready'),0), COALESCE(SUM(effective IN ('attention','failed','cancelled','verification_difference')),0), COALESCE(SUM(durable_state IN ('queued','preflight','ready','running','completed','verified','verified_with_exceptions','failed','cancelled','attention','delta_required','verification_difference')),0), COALESCE(SUM(durable_state='delta_required'),0) FROM (SELECT m.state AS durable_state, {EFFECTIVE_STATE} AS effective FROM mailbox_jobs m WHERE m.project_id=?1{predicate})"
+                "SELECT COALESCE(SUM(n),0), COALESCE(SUM(n*(effective='ready')),0), COALESCE(SUM(n*(effective IN ('attention','failed','cancelled','verification_difference'))),0), COALESCE(SUM(n*(durable_state IN ('queued','preflight','ready','running','completed','verified','verified_with_exceptions','failed','cancelled','attention','delta_required','verification_difference'))),0), COALESCE(SUM(n*(durable_state='delta_required')),0) FROM (SELECT f.state AS durable_state, {FACTS_EFFECTIVE_STATE} AS effective, f.n FROM ({}) f)",
+                grouped_facts(&predicate)
             );
             let params = std::iter::once(project_id.to_owned()).chain(values.iter().cloned());
             let row = self
@@ -769,7 +796,7 @@ impl StateStore {
             summary.delta_eligible += row.4;
             if !all_selected {
                 let rowid_sql = format!(
-                    "SELECT m.rowid FROM mailbox_jobs m WHERE m.project_id=?1{predicate} ORDER BY m.rowid"
+                    "SELECT f.job_rowid FROM mailbox_queue_facts f WHERE f.project_id=?1{predicate} ORDER BY f.job_rowid"
                 );
                 let params = std::iter::once(project_id.to_owned()).chain(values.iter().cloned());
                 selected_rowids.extend(
@@ -1379,6 +1406,168 @@ mod tests {
             store.queue_row(&project, &ids[1]).unwrap().unwrap().state,
             "queued"
         );
+    }
+
+    /// Presented states from the trigger-maintained fact counts must equal
+    /// the durable expression over `mailbox_jobs`/`runs` after every write
+    /// that can change them.
+    fn assert_presented_states_match_durable(store: &StateStore, project: &str) -> Vec<String> {
+        let mut presented = Vec::new();
+        store
+            .queue_scan(project, |row| presented.push(row.state))
+            .unwrap();
+        let mut durable = Vec::new();
+        store
+            .queue_durable_scan(project, |row| durable.push(row.state))
+            .unwrap();
+        assert_eq!(presented, durable);
+        let mut expected = std::collections::BTreeMap::new();
+        for state in &durable {
+            *expected.entry(state.clone()).or_insert(0) += 1;
+        }
+        let counts = store
+            .queue_state_counts(project)
+            .unwrap()
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(counts, expected);
+        store.validate_internal_invariants().unwrap();
+        presented
+    }
+
+    #[test]
+    fn fact_counts_present_the_same_states_through_the_run_lifecycle() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, ids) = queue(&store, 6);
+        let insert_run = |id: &str, job: &str, status: &str| {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES(?1,?2,?3,'imapsync',?4)",
+                    params![id, project, job, status],
+                )
+                .unwrap();
+        };
+        store.force_mailbox_state(&ids[2], "verified").unwrap();
+        store
+            .force_mailbox_state(&ids[3], "verified_with_exceptions")
+            .unwrap();
+        insert_run("admitted", &ids[1], "queued");
+        insert_run("rerun", &ids[2], "queued");
+        insert_run("evidence", &ids[3], "completed");
+        insert_run("earlier", &ids[4], "completed");
+        insert_run("withdrawn", &ids[5], "queued");
+        assert_eq!(
+            assert_presented_states_match_durable(&store, &project),
+            [
+                "imported",
+                "queued",
+                "queued",
+                "verification_difference",
+                "queued",
+                "queued"
+            ]
+        );
+
+        // Claiming a re-run reveals the durable state again; acceptance and
+        // run deletion each move one row.
+        store
+            .connection
+            .execute("UPDATE runs SET status='running' WHERE id='rerun'", [])
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO verification_acceptances(job_id,run_id,operator,reason) VALUES(?1,'evidence','operator','approved')",
+                [&ids[3]],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute("DELETE FROM runs WHERE id='withdrawn'", [])
+            .unwrap();
+        assert_eq!(
+            assert_presented_states_match_durable(&store, &project),
+            [
+                "imported",
+                "queued",
+                "verified",
+                "verified_with_exceptions",
+                "queued",
+                "imported"
+            ]
+        );
+        assert_eq!(
+            store
+                .queue_ids_by_effective_states(&project, &["imported"])
+                .unwrap(),
+            [ids[0].clone(), ids[5].clone()]
+        );
+        assert_eq!(
+            store
+                .queue_rowid_count(&project, "", Some("imported"))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store.queue_row(&project, &ids[3]).unwrap().unwrap().state,
+            "verified_with_exceptions"
+        );
+        let summary = store
+            .queue_selection_summary(&project, &[ids[0].clone()], true, &[])
+            .unwrap();
+        assert_eq!(summary.selected_loaded, 5);
+    }
+
+    #[test]
+    fn migration_restores_missing_fact_count_triggers_and_recounts() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, ids) = queue(&store, 2);
+        store
+            .connection
+            .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES('run',?1,?2,'imapsync','queued')",
+                params![project, ids[0]],
+            )
+            .unwrap();
+        // A version-29 ledger has no count triggers, so its counts are stale.
+        store
+            .connection
+            .execute_batch(
+                "DROP TRIGGER mailbox_queue_facts_runs_insert;
+                 DROP TRIGGER mailbox_queue_facts_runs_update;
+                 DROP TRIGGER mailbox_queue_facts_runs_delete;
+                 DROP TRIGGER mailbox_queue_facts_acceptances_insert;
+                 DROP TRIGGER mailbox_queue_facts_acceptances_delete;
+                 UPDATE mailbox_queue_facts SET runs_total=0, runs_queued=0;
+                 PRAGMA user_version=29;",
+            )
+            .unwrap();
+        let count_triggers = || -> i64 {
+            store
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'mailbox_queue_facts_runs_%' OR name LIKE 'mailbox_queue_facts_acceptances_%'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(count_triggers(), 0);
+        assert!(store.validate_internal_invariants().is_err());
+
+        store.migrate().unwrap();
+        assert_eq!(count_triggers(), 5);
+        assert_presented_states_match_durable(&store, &project);
+        assert_eq!(
+            store.queue_row(&project, &ids[0]).unwrap().unwrap().state,
+            "queued"
+        );
+        let version: i64 = store
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, crate::core::CURRENT_SCHEMA_VERSION);
     }
 
     #[test]

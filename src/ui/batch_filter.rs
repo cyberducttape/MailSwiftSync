@@ -280,9 +280,10 @@ pub(crate) mod tests {
         remove_benchmark_state_files(state_path);
     }
 
-    /// The release benchmark seeds a 100,000-row durable queue and measures
-    /// SQL filtering, select-all accounting, a 1,000-row state change, and
-    /// the first Mailboxes frame through the real App.
+    /// The release benchmark seeds a 100,000-row durable queue with one child
+    /// run per mailbox and measures SQL filtering, select-all accounting, a
+    /// 1,000-row state change, and the first Mailboxes frame through the real
+    /// App.
     #[test]
     #[ignore = "opt-in release UI scale benchmark; run scripts/benchmark-ui-scale.sh"]
     fn scale_ui_benchmark() {
@@ -304,6 +305,12 @@ pub(crate) mod tests {
             }),
         );
         let persist_ms = started.elapsed().as_millis();
+        // After admission every mailbox has a child run; presented states
+        // must stay cheap with them.
+        app.store
+            .insert_benchmark_runs_for_test(app.queue.project_id().unwrap())
+            .unwrap();
+        app.mark_bulk_jobs_changed();
 
         app.bulk_search = "user50000@".into();
         let started = Instant::now();
@@ -348,6 +355,89 @@ pub(crate) mod tests {
         assert!(!output.shapes.is_empty());
         eprintln!(
             "scale-ui rows={rows} filter_ms={filter_ms} selection_all_ms={selection_all_ms} state_update_ms={state_update_ms} first_frame_ms={first_frame_ms} persist_ms={persist_ms}"
+        );
+        drop(app);
+        remove_benchmark_state_files(state_path);
+    }
+
+    /// Sustained controller load: 1,000 durable mailbox state transitions
+    /// spread over 60 one-second ticks on a 100,000-row, fully selected queue
+    /// with one child run per mailbox. Each tick
+    /// commits its transitions individually (as the controller does), then
+    /// the UI refreshes its caches once and renders one Mailboxes frame, the
+    /// way repaints coalesce real updates. Reports the slowest tick and the
+    /// total busy time, which must stay well inside the minute.
+    #[test]
+    #[ignore = "opt-in release UI scale benchmark; run scripts/benchmark-ui-scale.sh"]
+    fn sustained_state_update_benchmark() {
+        use eframe::App as EframeApp;
+        use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
+        const ROWS: usize = 100_000;
+        const UPDATES: usize = 1_000;
+        const TICKS: usize = 60;
+        let state_path = temp_state("ui-sustained");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        import_rows(
+            &mut app,
+            (0..ROWS).map(|index| {
+                (
+                    format!("Mailbox {index}"),
+                    format!("user{index}@source.example"),
+                )
+            }),
+        );
+        app.store
+            .insert_benchmark_runs_for_test(app.queue.project_id().unwrap())
+            .unwrap();
+        let ids = app
+            .store
+            .mailbox_ids(app.queue.project_id().unwrap())
+            .unwrap();
+        // Operators typically select the whole queue before a live batch,
+        // which makes every refresh recompute the all-selected projection.
+        app.mark_bulk_jobs_changed();
+        app.select_all_bulk_rows();
+        app.refresh_bulk_selection_view();
+        app.active_view = crate::ui::WorkspaceView::Mailboxes;
+        let context = Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let states = ["running", "verified", "attention"];
+        let mut applied = 0;
+        let mut max_tick_ms = 0;
+        let mut busy = std::time::Duration::ZERO;
+        for tick in 0..TICKS {
+            let target = UPDATES * (tick + 1) / TICKS;
+            let started = Instant::now();
+            while applied < target {
+                // Spread transitions across the queue so they are not
+                // clustered in the first loaded page.
+                let id = &ids[(applied * 97) % ROWS];
+                app.store
+                    .force_mailbox_state(id, states[applied % states.len()])
+                    .unwrap();
+                applied += 1;
+            }
+            app.mark_bulk_jobs_changed();
+            app.refresh_bulk_filter_cache();
+            let output = context.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| EframeApp::ui(&mut app, ui, &mut frame),
+            );
+            assert!(!output.shapes.is_empty());
+            let elapsed = started.elapsed();
+            busy += elapsed;
+            max_tick_ms = max_tick_ms.max(elapsed.as_millis());
+        }
+        assert_eq!(applied, UPDATES);
+        app.bulk_state_filter = "attention".into();
+        app.refresh_bulk_filter_cache();
+        assert_eq!(app.queue.visible_count(), UPDATES / states.len());
+        eprintln!(
+            "scale-ui-sustained rows={ROWS} updates={UPDATES} ticks={TICKS} max_tick_ms={max_tick_ms} busy_ms={}",
+            busy.as_millis()
         );
         drop(app);
         remove_benchmark_state_files(state_path);

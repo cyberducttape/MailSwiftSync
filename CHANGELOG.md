@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Fail closed instead of hanging when the ledger rejects a terminal result.
+  Store invariant rejections were reported as an unexplained "Query is not
+  read-only" error and retried on every poll, so a headless live run that hit
+  one waited until its external timeout (the cause of the integration lab's
+  20-minute timeouts since 2026-10-08). Rejections now name the violated
+  invariant, and a deterministic rejection records the run as failed and the
+  mailbox for operator review with that reason; transient storage failures
+  are still retried.
+- Re-hash an engine executable whose modification time is within the
+  filesystem's timestamp granularity. The digest cache keyed on path, size, and
+  modification time could return a stale identity for a same-size rewrite in
+  the same timestamp tick (seen on Windows CI). The final pre-launch check was
+  already uncached, so a replaced binary never ran unnoticed.
+- Keep 100k-row queues responsive after admission. Presented queue states
+  probed `runs` for every row, so with one child run per mailbox each state
+  change cost about 290 ms for queue counts and 410 ms for an all-selected
+  summary, freezing the first Mailboxes frame for about 760 ms. Schema v30
+  adds trigger-maintained run, queued-run, and acceptance counts to the queue
+  facts, plus a covering index; counts, filters, selection summaries, and
+  visible pages now read that projection (16 ms each, 49 ms first frame).
+  Execution paths still read `mailbox_jobs`. Run writes pay about 22 µs each
+  for the trigger. The UI scale benchmarks now include a child run per mailbox
+  and a sustained 1,000-transitions-per-minute load on a fully selected queue,
+  which the old run-free benchmark had hidden.
 - Publish a versioned automation contract: `status`, `status --summary`, and
   `fleet-status` JSON now carry `format` and `format_version` (v1), separate
   from the SQLite `schema_version`, which changes with every storage migration

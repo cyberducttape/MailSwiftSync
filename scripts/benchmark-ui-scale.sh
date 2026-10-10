@@ -3,13 +3,15 @@ set -euo pipefail
 
 # Measures cached filtering, explicit selection, state refresh, a real
 # virtualized egui first frame, the complete application shell at 100k rows
-# (idle, with every row selected, and on a search keystroke), and a 100k-row
-# CSV import (latency and peak memory growth). Run on the release host class
+# (idle, with every row selected, and on a search keystroke), sustained
+# controller load (1,000 durable state transitions per minute, rendered as
+# they arrive), and a 100k-row CSV import (latency and peak memory growth). Run on the release host class
 # and retain the output with release evidence.
 if ! output=$(
   {
     cargo test --locked --release scale_ui_benchmark -- --ignored --nocapture --test-threads=1
     cargo test --locked --release full_shell_ui_benchmark -- --ignored --nocapture --test-threads=1
+    cargo test --locked --release sustained_state_update_benchmark -- --ignored --nocapture --test-threads=1
     cargo test --locked --release import_scale_benchmark -- --ignored --nocapture --test-threads=1
   } 2>&1
 ); then
@@ -69,6 +71,16 @@ printf 'PASS: full-shell first frame %sms <= %sms budget\n' "$full_shell_elapsed
 check_budget selected_frame_ms "${MAILSWIFTSYNC_UI_SELECTED_FRAME_BUDGET_MS:-100}" "$full_shell_line"
 check_budget search_frame_ms "${MAILSWIFTSYNC_UI_SEARCH_FRAME_BUDGET_MS:-100}" "$full_shell_line"
 
+sustained_line=$(printf '%s\n' "$output" | awk '/scale-ui-sustained rows=/ { print; exit }')
+if [[ -z "$sustained_line" ]]; then
+  echo "UI scale benchmark omitted sustained-update metrics" >&2
+  exit 1
+fi
+# One tick is a coalesced repaint after a second of controller transitions;
+# busy time is the share of the minute spent applying and rendering them.
+check_budget max_tick_ms "${MAILSWIFTSYNC_UI_SUSTAINED_TICK_BUDGET_MS:-250}" "$sustained_line"
+check_budget busy_ms "${MAILSWIFTSYNC_UI_SUSTAINED_BUSY_BUDGET_MS:-15000}" "$sustained_line"
+
 import_line=$(printf '%s\n' "$output" | awk '/scale-import rows=/ { print; exit }')
 if [[ -z "$import_line" ]]; then
   echo "Import scale benchmark omitted metrics" >&2
@@ -76,4 +88,4 @@ if [[ -z "$import_line" ]]; then
 fi
 check_budget import_ms "${MAILSWIFTSYNC_IMPORT_BUDGET_MS:-2000}" "$import_line"
 check_budget import_rss_mib "${MAILSWIFTSYNC_IMPORT_RSS_BUDGET_MIB:-256}" "$import_line" MiB
-printf 'PASS: 100k-row working frames and CSV import within budget\n'
+printf 'PASS: 100k-row working frames, sustained updates, and CSV import within budget\n'

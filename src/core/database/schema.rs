@@ -270,6 +270,9 @@ impl StateStore {
                     ("destructive", "INTEGER", true, 0),
                     ("policy", "TEXT", true, 0),
                     ("state", "TEXT", true, 0),
+                    ("runs_total", "INTEGER", true, 0),
+                    ("runs_queued", "INTEGER", true, 0),
+                    ("acceptances", "INTEGER", true, 0),
                 ],
             ),
             (
@@ -628,6 +631,51 @@ impl StateStore {
         }) {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        // Presented queue states read the facts' run and acceptance counts;
+        // without every count trigger they would silently drift.
+        for (name, table, required) in [
+            (
+                "mailbox_queue_facts_runs_insert",
+                "runs",
+                "UPDATE mailbox_queue_facts SET runs_total=runs_total+1, runs_queued=runs_queued+(NEW.status='queued') WHERE job_id=NEW.job_id",
+            ),
+            (
+                "mailbox_queue_facts_runs_update",
+                "runs",
+                "UPDATE mailbox_queue_facts SET runs_total=runs_total+1, runs_queued=runs_queued+(NEW.status='queued') WHERE NEW.job_id IS NOT NULL AND job_id=NEW.job_id",
+            ),
+            (
+                "mailbox_queue_facts_runs_delete",
+                "runs",
+                "UPDATE mailbox_queue_facts SET runs_total=runs_total-1, runs_queued=runs_queued-(OLD.status='queued') WHERE job_id=OLD.job_id",
+            ),
+            (
+                "mailbox_queue_facts_acceptances_insert",
+                "verification_acceptances",
+                "UPDATE mailbox_queue_facts SET acceptances=acceptances+1 WHERE job_id=NEW.job_id",
+            ),
+            (
+                "mailbox_queue_facts_acceptances_delete",
+                "verification_acceptances",
+                "UPDATE mailbox_queue_facts SET acceptances=acceptances-1 WHERE job_id=OLD.job_id",
+            ),
+        ] {
+            let sql: Option<String> = connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?1 AND tbl_name=?2",
+                    [name, table],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if !sql.is_some_and(|sql| {
+                sql.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .contains(required)
+            }) {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         let webhook_trigger: Option<String> = connection
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='events_webhook_outbox' AND tbl_name='events'",
@@ -792,6 +840,18 @@ impl StateStore {
                 false,
             ),
             (
+                "idx_mailbox_queue_facts_presented",
+                &[
+                    "project_id",
+                    "state",
+                    "runs_queued",
+                    "runs_total",
+                    "acceptances",
+                ],
+                false,
+                false,
+            ),
+            (
                 "idx_mailbox_jobs_project_queue",
                 &["project_id", "id", "state"],
                 false,
@@ -820,6 +880,7 @@ impl StateStore {
             ("idx_events_run_created", "events"),
             ("idx_transfer_passes_mailbox", "transfer_passes"),
             ("idx_mailbox_queue_facts_project", "mailbox_queue_facts"),
+            ("idx_mailbox_queue_facts_presented", "mailbox_queue_facts"),
             ("idx_mailbox_jobs_project_queue", "mailbox_jobs"),
             ("one_running_run_per_job", "runs"),
             ("one_active_run_per_job", "runs"),
@@ -1111,7 +1172,15 @@ impl StateStore {
                     "delta_requiredisnullordelta_requiredin(0,1)",
                 ],
             ),
-            ("mailbox_queue_facts", &["destructivein(0,1)"]),
+            (
+                "mailbox_queue_facts",
+                &[
+                    "destructivein(0,1)",
+                    "runs_total>=0",
+                    "runs_queued>=0",
+                    "acceptances>=0",
+                ],
+            ),
             (
                 "webhook_deliveries",
                 &[

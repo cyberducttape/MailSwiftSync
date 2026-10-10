@@ -83,7 +83,7 @@ pub use transfer_passes::{
 };
 pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 29;
+pub const CURRENT_SCHEMA_VERSION: i64 = 30;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 
@@ -114,11 +114,46 @@ pub(crate) fn sqlite_optional_u64(value: Option<i64>) -> rusqlite::Result<Option
     value.map(sqlite_u64).transpose()
 }
 
+/// A write the ledger refused because it would violate a durable invariant.
+/// Unlike storage failures, retrying the same write can never succeed, and
+/// the reason is part of the operator-visible error.
+#[derive(Debug)]
+pub(crate) struct LedgerRejection(pub(crate) &'static str);
+
+impl std::fmt::Display for LedgerRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "ledger rejected the write: {}", self.0)
+    }
+}
+
+impl std::error::Error for LedgerRejection {}
+
+pub(crate) fn ledger_rejection(reason: &'static str) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(LedgerRejection(reason)))
+}
+
+/// Whether an error is a deterministic invariant rejection rather than a
+/// possibly transient storage failure.
+pub(crate) fn is_ledger_rejection(error: &rusqlite::Error) -> bool {
+    matches!(error, rusqlite::Error::ToSqlConversionFailure(inner) if inner.is::<LedgerRejection>())
+}
+
 pub struct StateStore {
     connection: Connection,
 }
 
 impl StateStore {
+    /// Give every mailbox of a project one completed child run, as a
+    /// 100k-row batch has after a pass. Scale benchmarks
+    /// need this: presented queue states depend on each row's runs.
+    #[cfg(test)]
+    pub(crate) fn insert_benchmark_runs_for_test(&self, project_id: &str) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "INSERT INTO runs(id,project_id,job_id,engine,status) SELECT 'benchmark-'||id, project_id, id, 'imapsync', 'completed' FROM mailbox_jobs WHERE project_id=?1",
+            [project_id],
+        )?;
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn insert_run_for_test(
         &self,

@@ -595,19 +595,23 @@ impl StateStore {
         if preflight_plan.is_some_and(|value| {
             value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
         }) {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "preflight plan digest is not 64 hexadecimal characters",
+            ));
         }
         if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("Dovecot checkpoint is malformed"));
         }
         if checkpoint.is_some() && run_status != "completed" {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "a checkpoint can only be committed with a completed run",
+            ));
         }
         if !matches!(
             run_status,
             "completed" | "failed" | "cancelled" | "verification_failed"
         ) {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("unknown terminal run status"));
         }
         if !matches!(
             mailbox_state,
@@ -620,7 +624,7 @@ impl StateStore {
                 | "cancelled"
                 | "attention"
         ) {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("unknown terminal mailbox state"));
         }
         let attention_reason =
             attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
@@ -644,17 +648,23 @@ impl StateStore {
             _ => false,
         };
         if !terminal_pair_is_valid {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "run status and mailbox state are not a valid terminal pair",
+            ));
         }
         // Verification must be committed together with the evidence that
         // proves this run.  Merely finding an older evidence row is not
         // sufficient: otherwise a later run could reuse stale evidence and
         // manufacture `verified` through this generic terminal path.
         if mailbox_state == "verified" {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "verified requires the evidence commit path",
+            ));
         }
         if current != mailbox_state && !valid_mailbox_transition(&current, mailbox_state) {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "mailbox state transition is not allowed",
+            ));
         }
         let run_changed = tx.execute(
             "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND project_id=?4 AND job_id=?5 AND (status='running' OR (status='queued' AND ?1 IN ('cancelled','failed','verification_failed'))) ",
@@ -820,10 +830,12 @@ impl StateStore {
         if preflight_plan.is_some_and(|value| {
             value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
         }) {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "preflight plan digest is not 64 hexadecimal characters",
+            ));
         }
         if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("Dovecot checkpoint is malformed"));
         }
         let successful_preflight = mailbox_state == "ready" && preflight_plan.is_some();
         if run_status != "completed"
@@ -833,14 +845,18 @@ impl StateStore {
                     "verified" | "delta_required" | "verification_difference"
                 ))
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "evidence commit requires a completed run and an evidence-backed state",
+            ));
         }
         // `verified` is a claim about the evidence, not merely a requested
         // mailbox state. Keep this invariant in the store so a future caller
         // cannot accidentally promote mismatching aggregate evidence by
         // bypassing the current UI decision logic.
         if mailbox_state == "verified" && !value.is_exact_match() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "verified requires exactly matching evidence",
+            ));
         }
         // An explicit exact label is a durable claim even when the terminal
         // state is verification_difference. Do not allow a caller to persist
@@ -855,10 +871,14 @@ impl StateStore {
             || (value.verification_method == VerificationMethod::BodyHash
                 && value.verification_outcome != Some(VerificationOutcome::ExactBodyMatch)))
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "an exact verification label contradicts the evidence counters",
+            ));
         }
         if successful_preflight && !mismatches.is_empty() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "a successful preflight cannot carry message mismatches",
+            ));
         }
         let attention_reason =
             attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
@@ -878,7 +898,9 @@ impl StateStore {
             && !evidence_terminal_jump
             && !valid_mailbox_transition(&current, mailbox_state)
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "mailbox state transition is not allowed",
+            ));
         }
         let run_changed = tx.execute(
             "UPDATE runs SET status='completed',finished_at=CURRENT_TIMESTAMP,detail=?1 WHERE id=?2 AND project_id=?3 AND job_id=?4 AND status='running'",
@@ -977,7 +999,9 @@ impl StateStore {
                     .any(|value| value.chars().any(char::is_control))
             })
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "a message mismatch row is out of bounds or contains control characters",
+            ));
         }
         tx.execute(
             "DELETE FROM message_mismatches WHERE job_id=?1 AND run_id=?2",
@@ -991,22 +1015,30 @@ impl StateStore {
                 .source_size_bytes
                 .map(i64::try_from)
                 .transpose()
-                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                .map_err(|_| {
+                    super::ledger_rejection("a message mismatch number exceeds the ledger range")
+                })?;
             let destination_size = mismatch
                 .dest_size_bytes
                 .map(i64::try_from)
                 .transpose()
-                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                .map_err(|_| {
+                    super::ledger_rejection("a message mismatch number exceeds the ledger range")
+                })?;
             let source_uidvalidity = mismatch
                 .source_uidvalidity
                 .map(i64::try_from)
                 .transpose()
-                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                .map_err(|_| {
+                    super::ledger_rejection("a message mismatch number exceeds the ledger range")
+                })?;
             let destination_uidvalidity = mismatch
                 .destination_uidvalidity
                 .map(i64::try_from)
                 .transpose()
-                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                .map_err(|_| {
+                    super::ledger_rejection("a message mismatch number exceeds the ledger range")
+                })?;
             // Privacy boundary: by default, omit sensitive mailbox-derived metadata
             // (message IDs, folder names) from durable storage. Only UIDs, sizes, dates,
             // and fingerprints are retained for investigation. Operators should use the

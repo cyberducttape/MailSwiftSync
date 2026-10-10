@@ -14,6 +14,11 @@ use std::{
 };
 
 const MAX_EXECUTABLE_IDENTITY_CACHE: usize = 64;
+/// Filesystem timestamps are coarse (kernel clock ticks on Linux, up to two
+/// seconds on FAT), so a same-size rewrite shortly after a file was hashed can
+/// keep its metadata key. Like git's "racily clean" rule, a digest is only
+/// cached once the file's modification time is safely in the past.
+const RACY_TIMESTAMP_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ExecutableFileKey {
@@ -143,6 +148,16 @@ fn cached_executable_content_identity(path: &Path) -> String {
     let Some(key) = executable_file_key(path) else {
         return file_content_identity_uncached(path);
     };
+    let settled = key.modified_nanos.is_some_and(|modified| {
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .is_ok_and(|now| {
+                now.as_nanos().saturating_sub(modified) > RACY_TIMESTAMP_WINDOW.as_nanos()
+            })
+    });
+    if !settled {
+        return file_content_identity_uncached(path);
+    }
     let cache = EXECUTABLE_IDENTITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(identity) = cache
         .lock()
@@ -231,6 +246,31 @@ mod tests {
         std::fs::write(&path, b"engine-b").unwrap();
         let error = revalidate_executable(&path.to_string_lossy(), &expected).unwrap_err();
         assert!(error.contains("identity changed"), "{error}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn same_size_rewrites_inside_one_timestamp_tick_change_the_identity() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-executable-racy-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"engine-a").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&path, permissions).unwrap();
+        }
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        let first = executable_content_identity(&path.to_string_lossy());
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        // Same length, same modification time: only the contents differ.
+        std::fs::write(&path, b"engine-b").unwrap();
+        file.set_modified(modified).unwrap();
+        let second = executable_content_identity(&path.to_string_lossy());
+        assert_ne!(first, second);
         let _ = std::fs::remove_file(path);
     }
 }

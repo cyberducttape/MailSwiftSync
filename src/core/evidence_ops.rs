@@ -39,7 +39,9 @@ pub(super) fn upsert_evidence_projection(
     )?;
     if let Some(flags) = value.flag_verification {
         if !flags.is_consistent() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "flag verification counts are inconsistent",
+            ));
         }
         tx.execute(
             "INSERT INTO evidence_flag_verification(job_id,run_id,compared_messages,mismatched_messages,excepted_messages) VALUES(?1,?2,?3,?4,?5)",

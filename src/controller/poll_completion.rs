@@ -17,7 +17,7 @@ impl App {
                 self.receiver = None;
                 return;
             };
-            let succeeded = r.is_ok();
+            let mut succeeded = r.is_ok();
             let terminal_failure_class = |error: &str| {
                 let provider = crate::controller::failure::provider_for_sided_error(
                     &run_context.source_provider,
@@ -164,6 +164,41 @@ impl App {
                     }
                 } else {
                     self.store.finish_run(run_id, run_status, &detail)
+                };
+                // An invariant rejection is deterministic: retrying the same
+                // write would hang the controller forever. Record the run as
+                // failed and the mailbox for operator review, with the reason,
+                // so nothing is presented as verified.
+                let terminal_write = match (terminal_write, run_context.job_id.as_deref()) {
+                    (Err(error), Some(job))
+                        if crate::core::is_ledger_rejection(&error) && !was_bulk_run =>
+                    {
+                        let review_detail =
+                            format!("{detail} — the result could not be recorded: {error}");
+                        match self.store.finish_run_for_mailbox_with_checkpoint(
+                            project,
+                            job,
+                            run_id,
+                            "failed",
+                            "attention",
+                            &review_detail,
+                            None,
+                        ) {
+                            Ok(()) => {
+                                push_visible_output(
+                                    &mut self.output,
+                                    format!(
+                                        "[durability] The ledger rejected this result ({error}); the mailbox needs operator review."
+                                    ),
+                                );
+                                succeeded = false;
+                                direct_final_state = Some("attention");
+                                Ok(())
+                            }
+                            Err(_) => Err(error),
+                        }
+                    }
+                    (result, _) => result,
                 };
                 let terminal_write_ok = match terminal_write {
                     Ok(()) => true,
@@ -482,5 +517,94 @@ mod tests {
         assert_eq!(reason, Some(core::AttentionReason::VerificationIncomplete));
         assert!(detail.contains("connection reset by peer"), "{detail}");
         assert_eq!(core::VerificationLimit::from_detail(&detail), None);
+    }
+
+    #[test]
+    fn a_ledger_rejected_result_goes_to_review_instead_of_retrying_forever() {
+        with_app(|app| {
+            let project = app
+                .store
+                .create_project("rejected", "source", "destination")
+                .unwrap();
+            let job = app
+                .store
+                .add_mailbox(
+                    &project.id,
+                    "source@example.test",
+                    "destination@example.test",
+                )
+                .unwrap();
+            app.store
+                .begin_run(&project.id, &job, "rejected-run", "imapsync")
+                .unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "rejected-run".into(),
+                project_id: project.id.clone(),
+                job_id: Some(job.clone()),
+                batch_job_ids: Vec::new(),
+                batch_child_run_ids: Vec::new(),
+                batch_child_indices: Default::default(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Single,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: None,
+            });
+            app.run_id = Some("rejected-run".into());
+            // An exact label over counters that disagree violates a store
+            // invariant; no retry of this write can ever succeed.
+            let contradictory = core::MailboxEvidence {
+                verification_method: core::VerificationMethod::MetadataReconciliation,
+                verification_outcome: Some(core::VerificationOutcome::ExactMetadataMatch),
+                source_messages: 2,
+                destination_messages: 1,
+                source_bytes: 20,
+                destination_bytes: 10,
+                unmatched_messages: Some(0),
+                failed_messages: 0,
+                source_folders: 1,
+                destination_folders: 1,
+                authoritative: true,
+                missing_messages: 0,
+                extra_messages: 0,
+                modified_messages: 0,
+                probable_messages: 0,
+                flag_verification: None,
+            };
+            let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+            sender.send(Event::Evidence(contradictory)).unwrap();
+            sender
+                .send(Event::Finished(Ok(StreamOutcome::Completed)))
+                .unwrap();
+            drop(sender);
+            app.receiver = Some(receiver);
+            for _ in 0..10 {
+                app.poll();
+            }
+            assert!(app.deferred_events.is_empty());
+            assert!(!app.running());
+            let snapshot = app
+                .store
+                .project_report_snapshot(&project.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.mailboxes[0].job.state, "attention");
+            let run = snapshot
+                .runs
+                .iter()
+                .find(|run| run.run.id == "rejected-run")
+                .unwrap();
+            assert_eq!(run.run.status, "failed");
+            assert!(
+                run.run.detail.contains(
+                    "ledger rejected the write: an exact verification label contradicts the evidence counters"
+                ),
+                "{}",
+                run.run.detail
+            );
+        });
     }
 }
