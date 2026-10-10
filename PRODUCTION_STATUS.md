@@ -83,6 +83,8 @@ not become live qualification without reviewed evidence.
 <!-- provider-qualification:begin -->
 | Provider pair | Status | Last qualified | Tested engine | Limitations |
 |---|---|---|---|---|
+| cPanel/Dovecot → cPanel/Dovecot | not qualified | none | `imapsync 2.314` | Priority hosting route; no live hosting-provider evidence is bundled. The packaged Dovecot fixture is generic lab evidence only. |
+| cPanel/Dovecot → Microsoft 365 | not qualified | none | `imapsync 2.314` | Priority hosting route; no live provider-pair evidence is bundled. |
 | Google Workspace → Microsoft 365 | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
 | Microsoft 365 → Google Workspace | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |
 | Fastmail → Generic IMAP | not qualified | none | `imapsync 2.314` | No live provider-pair evidence is bundled. |

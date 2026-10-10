@@ -53,6 +53,14 @@ Current automated coverage, the 200%/High Contrast review, and the manual
 screen-reader checklist are recorded in
 [accessibility-evidence.md](accessibility-evidence.md).
 
+## Crash-recovery evidence gate
+
+Interruption scenarios, their current evidence, and the labs still required
+before 1.0 are tracked in the
+[crash-recovery validation matrix](crash-recovery-validation.md). Resume must
+never silently skip mail, create unexplained duplicates, or mark incomplete
+reconciliation as successful.
+
 ## Completed in the current hardening pass
 
 - Remote Dovecot password-in-argv execution is rejected rather than exposed by

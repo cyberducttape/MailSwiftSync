@@ -10,6 +10,20 @@ qualified_engine_version = "2.314"
 # Provider-pair qualification is evidence, not a generic product-support
 # assertion. These rows are rendered into both release-facing documents.
 [[provider_qualifications]]
+pair = "cPanel/Dovecot → cPanel/Dovecot"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "Priority hosting route; no live hosting-provider evidence is bundled. The packaged Dovecot fixture is generic lab evidence only."
+
+[[provider_qualifications]]
+pair = "cPanel/Dovecot → Microsoft 365"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "Priority hosting route; no live provider-pair evidence is bundled."
+
+[[provider_qualifications]]
 pair = "Google Workspace → Microsoft 365"
 status = "not_qualified"
 last_qualified = "none"
