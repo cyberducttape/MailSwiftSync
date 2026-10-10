@@ -14,6 +14,7 @@ const MAX_SUPPORT_MAILBOX_ROWS_TOTAL: usize = 100_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL: usize = 100_000;
 const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
+const MAX_HEADLESS_RUN_DETAIL_BYTES: usize = 4_096;
 
 /// Versioned automation output contracts. `format_version` changes only for
 /// breaking changes (removed, renamed, or retyped fields); additive fields keep
@@ -765,10 +766,27 @@ pub(crate) fn headless_execute_with_credentials(
         Some("verified") | Some("verified_with_exceptions")
     ) {
         let (code, exit_hint) = unverified_exit_status(final_state.as_deref());
+        // The durable run detail carries the reason an operator needs (for
+        // example a ledger rejection or verifier limit); the status line alone
+        // only says that review is required.
+        let run_detail = app
+            .store
+            .latest_run(&job_id)
+            .ok()
+            .flatten()
+            .map(|run| run.detail)
+            .filter(|detail| !detail.trim().is_empty())
+            .map(|detail| {
+                format!(
+                    "; run detail: {}",
+                    crate::ui::truncate_utf8(&detail, MAX_HEADLESS_RUN_DETAIL_BYTES)
+                )
+            })
+            .unwrap_or_default();
         return Err(HeadlessFailure {
             code,
             message: format!(
-                "live migration did not reach a verified terminal state: {exit_hint}; state={:?}, status={}",
+                "live migration did not reach a verified terminal state: {exit_hint}; state={:?}, status={}{run_detail}",
                 final_state, app.status.text
             ),
         });
