@@ -139,16 +139,6 @@ fn spreadsheet_safe(value: String) -> String {
     }
 }
 
-fn finish_csv(
-    writer: csv::Writer<Vec<u8>>,
-    written: usize,
-    truncated: bool,
-) -> Result<(String, usize, bool), String> {
-    let bytes = writer.into_inner().map_err(|error| error.to_string())?;
-    let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
-    Ok((text, written, truncated))
-}
-
 /// Decode the three nullable `evidence_flag_verification` columns selected by
 /// a LEFT JOIN starting at `offset`. A missing row means not verified.
 pub(super) fn flag_verification_from_row(
@@ -391,6 +381,7 @@ impl StateStore {
     /// `max_rows` rows. `folder_name` resolves a digest to a name this
     /// process observed; otherwise the digest is written. Returns the CSV,
     /// the rows written, and whether more matched.
+    #[cfg(test)]
     pub(crate) fn export_message_mismatches_csv(
         &self,
         job_id: &str,
@@ -399,7 +390,68 @@ impl StateStore {
         max_rows: usize,
         folder_name: &dyn Fn(&str) -> Option<String>,
     ) -> Result<(String, usize, bool), String> {
-        let mut writer = csv::Writer::from_writer(Vec::new());
+        let mut bytes = Vec::new();
+        let (written, truncated) = self.write_message_mismatches_csv(
+            &mut bytes,
+            job_id,
+            run_id,
+            filter,
+            max_rows,
+            folder_name,
+        )?;
+        let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+        Ok((text, written, truncated))
+    }
+
+    /// Stream every matching difference into a private, atomically replaced
+    /// CSV file, one ledger page at a time. Nothing is truncated: the export
+    /// is the complete inventory, independent of any on-screen limit.
+    pub(crate) fn export_message_mismatches_csv_file(
+        &self,
+        path: &std::path::Path,
+        job_id: &str,
+        run_id: &str,
+        filter: &MismatchFilter,
+        folder_name: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<usize, String> {
+        let mut written = 0;
+        let mut failure = None;
+        crate::atomic_artifact::write_private_atomic_with(path, |file| {
+            match self.write_message_mismatches_csv(
+                file,
+                job_id,
+                run_id,
+                filter,
+                usize::MAX,
+                folder_name,
+            ) {
+                Ok((rows, _)) => {
+                    written = rows;
+                    Ok(())
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    Err(std::io::Error::other("difference export failed"))
+                }
+            }
+        })
+        .map_err(|error| failure.take().unwrap_or_else(|| error.to_string()))?;
+        Ok(written)
+    }
+
+    /// Write matching differences as CSV to any writer, reading the ledger in
+    /// bounded pages. Returns the rows written and whether `max_rows` cut the
+    /// export short.
+    fn write_message_mismatches_csv(
+        &self,
+        output: &mut dyn std::io::Write,
+        job_id: &str,
+        run_id: &str,
+        filter: &MismatchFilter,
+        max_rows: usize,
+        folder_name: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(usize, bool), String> {
+        let mut writer = csv::Writer::from_writer(output);
         writer
             .write_record([
                 "type",
@@ -431,7 +483,8 @@ impl StateStore {
                 .map_err(|error| error.to_string())?;
             for mismatch in &page {
                 if written == max_rows {
-                    return finish_csv(writer, written, true);
+                    writer.flush().map_err(|error| error.to_string())?;
+                    return Ok((written, true));
                 }
                 writer
                     .write_record([
@@ -452,7 +505,8 @@ impl StateStore {
                 after = mismatch.key;
             }
             if !more {
-                return finish_csv(writer, written, false);
+                writer.flush().map_err(|error| error.to_string())?;
+                return Ok((written, false));
             }
         }
     }

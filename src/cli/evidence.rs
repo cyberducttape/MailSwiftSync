@@ -256,24 +256,17 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         eprintln!("Reverification failed to persist evidence: {error}");
         std::process::exit(1);
     }
-    if let Some(path) = differences {
-        let (csv, _, _) = match store.export_message_mismatches_csv(
+    if let Some(path) = differences
+        && let Err(error) = store.export_message_mismatches_csv_file(
+            &path,
             &job_id,
             &run_id,
             &core::MismatchFilter::default(),
-            1_000_000,
             &|_| None,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("Reverification completed, but difference export failed: {error}");
-                std::process::exit(1);
-            }
-        };
-        if let Err(error) = crate::atomic_artifact::write_private_atomic(&path, &csv) {
-            eprintln!("Reverification completed, but difference export failed: {error}");
-            std::process::exit(1);
-        }
+        )
+    {
+        eprintln!("Reverification completed, but difference export failed: {error}");
+        std::process::exit(1);
     }
     let result = serde_json::json!({
         "run_id": run_id,

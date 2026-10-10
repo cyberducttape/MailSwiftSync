@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Stream verification-difference CSV exports page by page into the private,
+  atomically replaced output file instead of building them in memory, and
+  export the complete inventory: the GUI's 250,000-row and the CLI's
+  1,000,000-row export caps are removed (external audit finding 8).
 - Add durable operational counters to `status --summary` and `fleet-status`:
   per-project transfer attempts, retries, attempt outcomes by failure class
   (including provider throttling), and current verification outcomes. The

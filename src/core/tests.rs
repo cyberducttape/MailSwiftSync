@@ -5864,3 +5864,104 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
         std::collections::BTreeMap::from([("exact_metadata_match".to_owned(), 1)])
     );
 }
+
+#[test]
+fn difference_file_export_streams_every_row_across_pages_into_a_private_file() {
+    use message_verification::MismatchType;
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("export", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    let run_id = "export-run";
+    db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
+    // More than two ledger pages (1,000 rows each).
+    let mismatches = (0..2_500)
+        .map(|index| MessageMismatch {
+            id: format!("m{index}"),
+            job_id: std::sync::Arc::from(job.as_str()),
+            run_id: std::sync::Arc::from(run_id),
+            mismatch_type: MismatchType::Missing,
+            source_folder: Some("INBOX".into()),
+            destination_folder: None,
+            source_uidvalidity: Some(7),
+            destination_uidvalidity: None,
+            source_uid: Some(index.to_string()),
+            dest_uid: None,
+            source_message_id: None,
+            dest_message_id: None,
+            source_size_bytes: Some(10),
+            dest_size_bytes: None,
+            source_date: None,
+            dest_date: None,
+            source_fingerprint: None,
+            destination_fingerprint: None,
+        })
+        .collect::<Vec<_>>();
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(VerificationOutcome::Missing),
+        source_messages: 2_500,
+        destination_messages: 0,
+        source_bytes: 25_000,
+        destination_bytes: 0,
+        unmatched_messages: Some(2_500),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 2_500,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+        flag_verification: None,
+    };
+    db.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
+        &project.id,
+        &job,
+        run_id,
+        "completed",
+        "verification_difference",
+        "",
+        &evidence,
+        &mismatches,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let (expected, rows, truncated) = db
+        .export_message_mismatches_csv(
+            &job,
+            run_id,
+            &MismatchFilter::default(),
+            usize::MAX,
+            &|_| None,
+        )
+        .unwrap();
+    assert_eq!((rows, truncated), (2_500, false));
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("differences.csv");
+    let written = db
+        .export_message_mismatches_csv_file(
+            &path,
+            &job,
+            run_id,
+            &MismatchFilter::default(),
+            &|_| None,
+        )
+        .unwrap();
+    assert_eq!(written, 2_500);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}

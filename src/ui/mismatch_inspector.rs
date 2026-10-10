@@ -18,7 +18,6 @@ use crate::core::{
 const PAGE_SIZE: usize = 50;
 /// Bound one CSV export; the durable detail is itself capped by the
 /// verifier's 64 MiB mismatch budget.
-const MAX_EXPORT_ROWS: usize = 250_000;
 /// Bound the process-local name map; folder inventories are bounded too.
 const MAX_OBSERVED_FOLDER_NAMES: usize = 100_000;
 
@@ -392,19 +391,13 @@ impl crate::App {
             .set_file_name("mailswiftsync-verification-differences.csv")
             .save_file()
             .ok_or("Export cancelled.")?;
-        let (csv, _, truncated) = self.store.export_message_mismatches_csv(
-            job_id,
-            run_id,
-            filter,
-            MAX_EXPORT_ROWS,
-            &|digest| self.observed_folder_names.name(digest).map(str::to_owned),
-        )?;
-        if truncated {
-            return Err(format!(
-                "more than {MAX_EXPORT_ROWS} differences match; narrow the filter and export again"
-            ));
-        }
-        crate::atomic_artifact::write_private_atomic(&path, &csv).map_err(|error| error.to_string())
+        // Streamed page by page into the private file: the export is the
+        // complete inventory, not limited by what the inspector displays.
+        self.store
+            .export_message_mismatches_csv_file(&path, job_id, run_id, filter, &|digest| {
+                self.observed_folder_names.name(digest).map(str::to_owned)
+            })
+            .map(|_| ())
     }
 }
 

@@ -7,6 +7,16 @@ use std::path::Path;
 /// then atomically replace the destination. A failed write never leaves a
 /// partially written destination artifact behind. Handles Windows and Unix.
 pub(crate) fn write_private_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    write_private_atomic_with(path, |file| file.write_all(content.as_bytes()))
+}
+
+/// As `write_private_atomic`, but the caller streams the content into the
+/// private temporary file, so large artifacts never need to be held in memory.
+/// The destination is replaced only after `write` succeeds and is synced.
+pub(crate) fn write_private_atomic_with(
+    path: &Path,
+    write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -30,8 +40,10 @@ pub(crate) fn write_private_atomic(path: &Path, content: &str) -> std::io::Resul
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(&temporary)?;
-        std::io::Write::write_all(&mut file, content.as_bytes())?;
+        let file = options.open(&temporary)?;
+        let mut buffered = std::io::BufWriter::new(file);
+        write(&mut buffered)?;
+        let file = buffered.into_inner().map_err(|error| error.into_error())?;
         file.sync_all()?;
         restrict_file_permissions(&temporary)?;
         atomic_replace(&temporary, path)?;
