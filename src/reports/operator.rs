@@ -165,10 +165,14 @@ pub(crate) fn build_project_report(
     Ok(report)
 }
 
-pub(crate) fn build_project_json(
+/// Export the operator project report as a private, atomically replaced
+/// file. Mailbox and run entries are generated and serialized one at a time,
+/// so the report is never held in memory as a JSON tree or string.
+pub(crate) fn export_project_json(
     store: &core::StateStore,
     project_id: &str,
-) -> Result<String, String> {
+    path: &std::path::Path,
+) -> Result<(), String> {
     let snapshot = store
         .project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?
@@ -176,17 +180,17 @@ pub(crate) fn build_project_json(
     if snapshot.mailboxes.is_empty() {
         return Err("The project has no mailbox jobs to report.".into());
     }
-    let project = snapshot.project;
-    let mailboxes = snapshot
-        .mailboxes
-        .into_iter()
-        .map(|mailbox| {
-            let job = mailbox.job;
+    let project = &snapshot.project;
+    let mailbox_entry =
+        |mailbox: &core::ReportMailboxSnapshot| -> Result<serde_json::Value, String> {
+            let job = &mailbox.job;
             let attention_reason = mailbox.attention_reason;
-            match mailbox.evidence {
+            match &mailbox.evidence {
                 Some((evidence_run_id, evidence, plan_snapshot)) => {
-                    let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
-                    let digest = evidence_digest(&evidence_run_id, &plan_snapshot, &evidence);
+                    let plan_snapshot = plan_snapshot
+                        .as_deref()
+                        .ok_or("The evidence run no longer exists.")?;
+                    let digest = evidence_digest(evidence_run_id, plan_snapshot, evidence);
                     let mut evidence_json = serde_json::json!({
                         "id": job.id,
                         "source_mailbox": job.source_mailbox,
@@ -224,7 +228,9 @@ pub(crate) fn build_project_json(
                     evidence_json["evidence"]
                         .as_object_mut()
                         .expect("evidence is a JSON object")
-                        .extend(crate::reports::integrity::evidence_coverage_fields(&evidence));
+                        .extend(crate::reports::integrity::evidence_coverage_fields(
+                            evidence,
+                        ));
                     Ok(evidence_json)
                 }
                 None => Ok(serde_json::json!({
@@ -238,35 +244,30 @@ pub(crate) fn build_project_json(
                     "evidence": null
                 })),
             }
+        };
+    let run_entry = |report_run: &core::ReportRunSnapshot| -> serde_json::Value {
+        let run = &report_run.run;
+        serde_json::json!({
+            "id": run.id,
+            "job_id": run.job_id,
+            "parent_run_id": run.parent_run_id,
+            "engine": run.engine,
+            "execution_profile": run_execution_profile(&run.plan_snapshot),
+            "engine_version": report_run.engine_version,
+            "transfer_attempt_count": report_run.transfer_attempt_count,
+            "unfinished_transfer_attempt_count": report_run.unfinished_transfer_attempt_count,
+            "transfer_passes": report_run.transfer_passes,
+            "phase_at_start": run.phase_at_start,
+            "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
+            "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
+            "status": run.status,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+            "verification_limit": verification_limit_json(&run.detail),
+            "detail": run.detail,
         })
-        .collect::<Result<Vec<_>, String>>()?;
-    let runs = snapshot
-        .runs
-        .into_iter()
-        .map(|report_run| {
-            let run = report_run.run;
-            Ok(serde_json::json!({
-                "id": run.id,
-                "job_id": run.job_id,
-                "parent_run_id": run.parent_run_id,
-                "engine": run.engine,
-                "execution_profile": run_execution_profile(&run.plan_snapshot),
-                "engine_version": report_run.engine_version,
-                "transfer_attempt_count": report_run.transfer_attempt_count,
-                "unfinished_transfer_attempt_count": report_run.unfinished_transfer_attempt_count,
-                "transfer_passes": report_run.transfer_passes,
-                "phase_at_start": run.phase_at_start,
-                "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
-                "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
-                "status": run.status,
-                "started_at": run.started_at,
-                "finished_at": run.finished_at,
-                "verification_limit": verification_limit_json(&run.detail),
-                "detail": run.detail,
-            }))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let value = serde_json::json!({
+    };
+    let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-project-report",
         "format_version": 2,
         "application_version": env!("CARGO_PKG_VERSION"),
@@ -278,11 +279,28 @@ pub(crate) fn build_project_json(
             "destination_endpoint": project.destination_endpoint,
             "phase": format!("{:?}", project.phase),
         },
-        "mailboxes": mailboxes,
-        "runs": runs,
         "note": "The run manifest contains every durable run for this project. Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
-    });
-    serde_json::to_string_pretty(&with_proof_digest(value)?).map_err(|e| e.to_string())
+    }) else {
+        unreachable!("a JSON object literal is an object")
+    };
+    crate::reports::integrity::write_streamed_proof(
+        path,
+        fields,
+        &[
+            ("mailboxes", &|emit| {
+                snapshot
+                    .mailboxes
+                    .iter()
+                    .try_for_each(|mailbox| emit(mailbox_entry(mailbox)?))
+            }),
+            ("runs", &|emit| {
+                snapshot
+                    .runs
+                    .iter()
+                    .try_for_each(|run| emit(run_entry(run)))
+            }),
+        ],
+    )
 }
 
 /// Structured form of a verifier safety limit recorded in a run detail, so
@@ -566,5 +584,74 @@ fn run_execution_profile(plan_snapshot: &str) -> &'static str {
         Some(value) if value.eq_ignore_ascii_case("hardened") => "hardened",
         Some(value) if value.eq_ignore_ascii_case("compatibility") => "compatibility",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod project_json_tests {
+    use super::*;
+
+    #[test]
+    fn project_json_streams_a_verifiable_report_with_every_mailbox_and_run() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("report", "source.example", "destination.example")
+            .unwrap();
+        let evidence = core::MailboxEvidence {
+            verification_method: core::VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(core::VerificationOutcome::ExactMetadataMatch),
+            source_messages: 3,
+            destination_messages: 3,
+            source_bytes: 30,
+            destination_bytes: 30,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            flag_verification: None,
+        };
+        for index in 0..3 {
+            let job = store
+                .add_mailbox(
+                    &project.id,
+                    &format!("user{index}"),
+                    &format!("user{index}"),
+                )
+                .unwrap();
+            let run = format!("run-{index}");
+            store
+                .begin_run_with_snapshot(&project.id, &job, &run, "imapsync", "dry_run = false\n")
+                .unwrap();
+            store
+                .finish_run_for_mailbox_with_evidence(
+                    &project.id,
+                    &job,
+                    &run,
+                    "completed",
+                    "verified",
+                    "",
+                    &evidence,
+                )
+                .unwrap();
+        }
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("project-report.json");
+        export_project_json(&store, &project.id, &path).unwrap();
+        crate::reports::signing::verify_file(&path, None).unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(report["format"], "mailswiftsync-project-report");
+        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 3);
+        assert_eq!(report["runs"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["verification_outcome"],
+            "exact_metadata_match"
+        );
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

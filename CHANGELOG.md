@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Stream the customer proof and operator project report instead of building
+  them in memory. Each mailbox and run entry is generated and serialized one
+  at a time in two passes (digest, then file), producing byte-for-byte the
+  same canonical digest as before, so existing proofs and verifiers are
+  unaffected. A release benchmark over 100,000 mailboxes (177 MiB proof)
+  measured export peak memory growth of 1,574 MiB before and 251 MiB after;
+  the remainder is the ledger snapshot the entries are derived from.
+- Run `reverify` through its own durable verification stage, so verification-
+  only reconciliation streams mismatches to disk like live runs (no in-memory
+  mismatch cap), resumes its fetch after a failure, and never touches a live
+  run's retained stage. The integration lab now exercises `reverify`.
 - Stream verification-difference CSV exports page by page into the private,
   atomically replaced output file instead of building them in memory, and
   export the complete inventory: the GUI's 250,000-row and the CLI's

@@ -230,8 +230,17 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         std::process::exit(1);
     }
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    let result =
-        crate::runner::run_imap_message_verification(&form, &job_id, &run_id, &cancel, None);
+    // A durable stage of its own: fetched metadata and every mismatch stay on
+    // disk (no in-memory mismatch cap), a failed run can resume its fetch, and
+    // a live run's retained stage for the same mailbox is never touched.
+    let stage_path = reverify_stage_path(&state, &job_id);
+    let result = crate::runner::run_imap_message_verification(
+        &form,
+        &job_id,
+        &run_id,
+        &cancel,
+        Some(&stage_path),
+    );
     let (evidence, mismatches, folder_count) = match result {
         Ok(crate::runner::MessageVerificationResult {
             evidence,
@@ -255,6 +264,10 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
     ) {
         eprintln!("Reverification failed to persist evidence: {error}");
         std::process::exit(1);
+    }
+    // The evidence is committed; the stage is no longer needed.
+    if let Err(error) = core::MessageMetadataStage::cleanup_durable_stage(&stage_path) {
+        eprintln!("Reverification completed; verification stage cleanup deferred: {error}");
     }
     if let Some(path) = differences
         && let Err(error) = store.export_message_mismatches_csv_file(
@@ -772,5 +785,31 @@ pub(super) fn customer_proof_command(mut arguments: std::env::ArgsOs) -> eframe:
             eprintln!("Customer-proof export failed: {error}");
             std::process::exit(1);
         }
+    }
+}
+
+/// The private verification stage used by `reverify`, separate from the
+/// mailbox's live-run stage so a retained live stage is never reused.
+fn reverify_stage_path(state: &std::path::Path, job_id: &str) -> PathBuf {
+    core::durable_stage_path(state, &format!("{job_id}-reverify"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reverify_uses_its_own_stage_beside_the_live_stage() {
+        let state = std::path::Path::new("/var/lib/mailswiftsync/state.db");
+        let job = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
+        let live = crate::core::durable_stage_path(state, job);
+        let reverify = super::reverify_stage_path(state, job);
+        assert_ne!(live, reverify);
+        assert_eq!(live.parent(), reverify.parent());
+        assert!(
+            reverify
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("-reverify.sqlite")
+        );
     }
 }

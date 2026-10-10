@@ -125,6 +125,13 @@ health, and signing/verification builders receive explicit durable inputs and
 paths; they do not construct `App`, restore a GUI profile, perform startup
 recovery, or own egui state. The GUI and headless CLI therefore share the same
 artifact code while keeping controller and presentation concerns replaceable.
+Large proofs (the customer proof and the operator project report) are written
+by streaming: each mailbox and run entry is generated and serialized one at a
+time, first into a SHA-256 hasher over the canonical compact, key-sorted JSON
+and then into the private, atomically replaced file, so the digest is
+identical to hashing the whole document in memory while only one entry is
+resident. The ledger snapshot the entries are derived from is still loaded in
+full; verification and signing of an existing proof parse the whole file.
 
 Each run also stores the project phase observed at admission. This is immutable
 provenance for reports and incident review, not a claim that the current engine

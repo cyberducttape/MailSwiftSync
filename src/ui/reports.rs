@@ -41,8 +41,7 @@ impl App {
             .set_file_name("mailswiftsync-project-report.json")
             .save_file()
             .ok_or("Report export cancelled.")?;
-        let report = reports::operator::build_project_json(&self.store, project_id)?;
-        write_private_atomic(&path, &report).map_err(|e| e.to_string())
+        reports::operator::export_project_json(&self.store, project_id, &path)
     }
 
     pub(crate) fn export_post_migration_report(&self) -> Result<(), String> {

@@ -1,8 +1,7 @@
-use crate::atomic_artifact::write_private_atomic;
 use crate::branding::OperatorBranding;
 use crate::{
     core,
-    reports::integrity::{evidence_coverage_fields, evidence_digest, with_proof_digest},
+    reports::integrity::{evidence_coverage_fields, evidence_digest, write_streamed_proof},
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -216,20 +215,21 @@ pub(crate) fn export_from_store_with_options_and_identity(
         })
         .count();
     let project = snapshot.project;
-    let mailboxes = snapshot
-        .mailboxes
-        .into_iter()
-        .map(|mailbox| {
-            let job = mailbox.job;
-            let evidence = match mailbox.evidence {
+    // Each mailbox and run entry is generated on demand and serialized
+    // immediately; the proof is never materialized as one JSON tree.
+    let mailbox_entry =
+        |mailbox: &core::ReportMailboxSnapshot| -> Result<serde_json::Value, String> {
+            let job = &mailbox.job;
+            let evidence = match &mailbox.evidence {
                 Some((run_id, value, plan_snapshot)) => {
                     let plan_snapshot = plan_snapshot
+                        .as_deref()
                         .ok_or("The customer proof refers to a missing evidence run.")?;
                     let mut evidence = serde_json::json!({
                         "run_id": run_id,
-                        "migration_plan_sha256": crate::plan_identity::snapshot_sha256(&plan_snapshot),
-                        "engine_binary_sha256": execution_executable_sha256(&plan_snapshot),
-                        "execution_profile": execution_profile(&plan_snapshot),
+                        "migration_plan_sha256": crate::plan_identity::snapshot_sha256(plan_snapshot),
+                        "engine_binary_sha256": execution_executable_sha256(plan_snapshot),
+                        "execution_profile": execution_profile(plan_snapshot),
                         "scope": value.evidence_scope().label(),
                         "verification_method": value.verification_method().as_str(),
                         "verification_outcome": value.verification_outcome().as_str(),
@@ -237,7 +237,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "verification_level": value.verification_outcome().display_label(),
                         "evidence_level": value.verification_outcome().display_label(),
                         "reason": value.verification_reason(),
-                        "evidence_digest": evidence_digest(&run_id, &plan_snapshot, &value),
+                        "evidence_digest": evidence_digest(run_id, plan_snapshot, value),
                         "source_folders": value.source_folders,
                         "destination_folders": value.destination_folders,
                         "source_messages": value.source_messages,
@@ -260,7 +260,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                     evidence
                         .as_object_mut()
                         .expect("evidence is a JSON object")
-                        .extend(evidence_coverage_fields(&value));
+                        .extend(evidence_coverage_fields(value));
                     Some(evidence)
                 }
                 None => None,
@@ -270,7 +270,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "source_mailbox": job.source_mailbox,
                 "destination_mailbox": job.destination_mailbox,
                 "state": job.state,
-                "verification_acceptance": mailbox.acceptance.map(|value| serde_json::json!({
+                "verification_acceptance": mailbox.acceptance.as_ref().map(|value| serde_json::json!({
                     "run_id": value.run_id,
                     "operator": value.operator,
                     "reason": value.reason,
@@ -278,32 +278,27 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 })),
                 "evidence": evidence,
             }))
+        };
+    let run_entry = |run: &core::ReportRunSnapshot| -> serde_json::Value {
+        let value = &run.run;
+        serde_json::json!({
+            "run_id": value.id,
+            "project_id": project.id.clone(),
+            "job_id": value.job_id,
+            "engine": value.engine,
+            "execution_profile": execution_profile(&value.plan_snapshot),
+            "engine_version": run.engine_version,
+            "phase_at_start": value.phase_at_start,
+            "status": value.status,
+            "started_at": value.started_at,
+            "finished_at": value.finished_at,
+            "diagnostic_stream_complete": run.diagnostic_lines_dropped.map(|count| count == 0),
+            "dropped_presentation_lines": run.diagnostic_lines_dropped,
+            "transfer_attempt_count": run.transfer_attempt_count,
+            "unfinished_transfer_attempt_count": run.unfinished_transfer_attempt_count,
         })
-        .collect::<Result<Vec<_>, String>>()?;
-    let run_manifest = snapshot
-        .runs
-        .into_iter()
-        .map(|run| {
-            let value = run.run;
-            Ok(serde_json::json!({
-                "run_id": value.id,
-                "project_id": project.id.clone(),
-                "job_id": value.job_id,
-                "engine": value.engine,
-                "execution_profile": execution_profile(&value.plan_snapshot),
-                "engine_version": run.engine_version,
-                "phase_at_start": value.phase_at_start,
-                "status": value.status,
-                "started_at": value.started_at,
-                "finished_at": value.finished_at,
-                "diagnostic_stream_complete": run.diagnostic_lines_dropped.map(|count| count == 0),
-                "dropped_presentation_lines": run.diagnostic_lines_dropped,
-                "transfer_attempt_count": run.transfer_attempt_count,
-                "unfinished_transfer_attempt_count": run.unfinished_transfer_attempt_count,
-            }))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let value = with_proof_digest(serde_json::json!({
+    };
+    let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-customer-proof",
         "format_version": 1,
         "application_version": env!("CARGO_PKG_VERSION"),
@@ -365,12 +360,28 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "contact": branding.contact.trim(),
             })
         },
-        "mailboxes": mailboxes,
-        "runs": run_manifest,
         "note": "This customer proof contains no passwords, credential references, endpoints, plan snapshots, executable paths, or diagnostic details. Aggregate and engine-confirmed evidence are not independent message-level reconciliation. Verify the proof digest, and add an Ed25519 signature before treating it as an authenticated artifact."
-    }))?;
-    let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    write_private_atomic(path, &report).map_err(|e| e.to_string())
+    }) else {
+        unreachable!("a JSON object literal is an object")
+    };
+    write_streamed_proof(
+        path,
+        fields,
+        &[
+            ("mailboxes", &|emit| {
+                snapshot
+                    .mailboxes
+                    .iter()
+                    .try_for_each(|mailbox| emit(mailbox_entry(mailbox)?))
+            }),
+            ("runs", &|emit| {
+                snapshot
+                    .runs
+                    .iter()
+                    .try_for_each(|run| emit(run_entry(run)))
+            }),
+        ],
+    )
 }
 
 /// Customer proof is a deliverable for a durably completed migration, not a
@@ -803,6 +814,109 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["issued_by"]["name"], "Acme Managed Services");
         assert_eq!(value["issued_by"]["contact"], "support@acme.example");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// Peak memory of a customer-proof export over 100,000 verified mailboxes,
+    /// each with a run carrying a realistic ~2 KB plan snapshot. Run with
+    /// `cargo test --release customer_proof_export_memory_benchmark -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "opt-in release memory benchmark"]
+    fn customer_proof_export_memory_benchmark() {
+        // Building the fixture dominates the runtime (about 28 minutes for
+        // 100,000 mailboxes); set MAILSWIFTSYNC_EXPORT_BENCH_MAILBOXES lower
+        // for a quicker, proportionally scaled measurement.
+        let mailboxes: usize = std::env::var("MAILSWIFTSYNC_EXPORT_BENCH_MAILBOXES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(100_000);
+        fn rss_kib(field: &str) -> u64 {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|status| {
+                    status
+                        .lines()
+                        .find(|line| line.starts_with(field))?
+                        .split_whitespace()
+                        .nth(1)?
+                        .parse()
+                        .ok()
+                })
+                .unwrap_or(0)
+        }
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("export-benchmark", "source.example", "destination.example")
+            .unwrap();
+        let snapshot = format!(
+            "dry_run = false\n\n[profile]\nname = \"benchmark\"\n# {}\n",
+            "x".repeat(2_000)
+        );
+        let evidence = core::MailboxEvidence {
+            verification_method: core::VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(core::VerificationOutcome::ExactMetadataMatch),
+            source_messages: 1_000,
+            destination_messages: 1_000,
+            source_bytes: 100_000,
+            destination_bytes: 100_000,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 5,
+            destination_folders: 5,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            flag_verification: None,
+        };
+        for index in 0..mailboxes {
+            let job = store
+                .add_mailbox(
+                    &project.id,
+                    &format!("user{index}@source.example"),
+                    &format!("user{index}@destination.example"),
+                )
+                .unwrap();
+            let run = format!("run-{index}");
+            store
+                .begin_run_with_snapshot(&project.id, &job, &run, "imapsync", &snapshot)
+                .unwrap();
+            store
+                .finish_run_for_mailbox_with_evidence(
+                    &project.id,
+                    &job,
+                    &run,
+                    "completed",
+                    "verified",
+                    "",
+                    &evidence,
+                )
+                .unwrap();
+        }
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("customer-proof.json");
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
+        let before = rss_kib("VmRSS:");
+        let started = std::time::Instant::now();
+        export_from_store_with_options(
+            &store,
+            &project.id,
+            &path,
+            true,
+            &OperatorBranding::default(),
+        )
+        .unwrap();
+        let elapsed = started.elapsed().as_millis();
+        let peak = rss_kib("VmHWM:");
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        eprintln!(
+            "customer-proof-export mailboxes={mailboxes} file_mib={} elapsed_ms={elapsed} rss_before_mib={} peak_mib={} growth_mib={}",
+            bytes / (1024 * 1024),
+            before / 1024,
+            peak / 1024,
+            peak.saturating_sub(before) / 1024
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 }

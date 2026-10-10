@@ -106,6 +106,123 @@ pub(crate) fn with_proof_digest(mut value: serde_json::Value) -> Result<serde_js
     Ok(value)
 }
 
+/// A JSON array produced on demand, one element at a time. It is generated
+/// twice by `write_streamed_proof` (once for the digest, once for the file),
+/// so it must yield the same elements both times.
+pub(crate) type LazyArray<'a> =
+    &'a dyn Fn(&mut dyn FnMut(serde_json::Value) -> Result<(), String>) -> Result<(), String>;
+
+/// Write a proof object whose large arrays are never materialized. The bytes
+/// hashed for `proof_digest` are exactly those `with_proof_digest` hashes for
+/// the equivalent in-memory object: compact JSON with object keys in sorted
+/// order. Only one array element is resident at a time.
+pub(crate) fn write_streamed_proof(
+    path: &std::path::Path,
+    fields: serde_json::Map<String, serde_json::Value>,
+    arrays: &[(&str, LazyArray<'_>)],
+) -> Result<(), String> {
+    if fields.contains_key("proof_digest")
+        || fields.contains_key("proof_signature")
+        || arrays.iter().any(|(key, _)| fields.contains_key(*key))
+    {
+        return Err("A streamed proof has a duplicated or reserved field.".into());
+    }
+    let mut hasher = HashingWriter(sha2::Sha256::default());
+    serde_json::to_writer(
+        &mut hasher,
+        &StreamedProof {
+            fields: &fields,
+            arrays,
+            digest: None,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let digest = crate::reports::integrity::hex_encode(&sha2::Digest::finalize(hasher.0));
+    let mut failure = None;
+    crate::atomic_artifact::write_private_atomic_with(path, |file| {
+        serde_json::to_writer_pretty(
+            file,
+            &StreamedProof {
+                fields: &fields,
+                arrays,
+                digest: Some(&digest),
+            },
+        )
+        .map_err(|error| {
+            let message = error.to_string();
+            failure = Some(message.clone());
+            std::io::Error::other(message)
+        })
+    })
+    .map_err(|error| failure.take().unwrap_or_else(|| error.to_string()))
+}
+
+struct HashingWriter(sha2::Sha256);
+
+impl std::io::Write for HashingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        sha2::Digest::update(&mut self.0, bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct StreamedProof<'a> {
+    fields: &'a serde_json::Map<String, serde_json::Value>,
+    arrays: &'a [(&'a str, LazyArray<'a>)],
+    digest: Option<&'a str>,
+}
+
+impl serde::Serialize for StreamedProof<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        // Sorted keys, exactly as a serde_json map serializes them.
+        let mut keys = self
+            .fields
+            .keys()
+            .map(String::as_str)
+            .chain(self.arrays.iter().map(|(key, _)| *key))
+            .chain(self.digest.map(|_| "proof_digest"))
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        let mut map = serializer.serialize_map(Some(keys.len()))?;
+        for key in keys {
+            if let Some(value) = self.fields.get(key) {
+                map.serialize_entry(key, value)?;
+            } else if let Some((_, array)) = self.arrays.iter().find(|(name, _)| *name == key) {
+                map.serialize_entry(key, &LazySequence(*array))?;
+            } else if let Some(digest) = self.digest {
+                map.serialize_entry(key, digest)?;
+            }
+        }
+        map.end()
+    }
+}
+
+struct LazySequence<'a>(LazyArray<'a>);
+
+impl serde::Serialize for LazySequence<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error as _, SerializeSeq};
+        let mut sequence = serializer.serialize_seq(None)?;
+        let mut element_error = None;
+        let produced = (self.0)(&mut |value| {
+            sequence.serialize_element(&value).map_err(|error| {
+                let message = error.to_string();
+                element_error = Some(error);
+                message
+            })
+        });
+        if let Some(error) = element_error {
+            return Err(error);
+        }
+        produced.map_err(S::Error::custom)?;
+        sequence.end()
+    }
+}
+
 pub(crate) fn canonical_signed_proof_payload(value: &serde_json::Value) -> Result<String, String> {
     let mut unsigned = value.clone();
     let signature = unsigned
@@ -136,4 +253,61 @@ pub(crate) fn hex_decode<const N: usize>(value: &str) -> Result<[u8; N], String>
             .map_err(|_| "invalid hexadecimal signature material".to_owned())?;
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod streamed_proof_tests {
+    use super::*;
+
+    #[test]
+    fn streamed_proofs_carry_exactly_the_in_memory_digest_and_verify() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("proof.json");
+        let serde_json::Value::Object(fields) = serde_json::json!({
+            "format": "mailswiftsync-customer-proof",
+            "zeta": {"nested": [1, 2, {"b": true, "a": null}]},
+            "alpha": "é ünïcode \u{1F4E7}",
+            "number": 18_446_744_073_709_551_615_u64,
+        }) else {
+            unreachable!()
+        };
+        let items = (0..2_500)
+            .map(|index| serde_json::json!({"index": index, "label": format!("mailbox {index}")}))
+            .collect::<Vec<_>>();
+        let emit_items = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
+            items.iter().cloned().try_for_each(emit)
+        };
+        let emit_none = |_: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| Ok(());
+        write_streamed_proof(
+            &path,
+            fields.clone(),
+            &[("mailboxes", &emit_items), ("runs", &emit_none)],
+        )
+        .unwrap();
+
+        let mut expected = serde_json::Value::Object(fields);
+        expected["mailboxes"] = serde_json::Value::Array(items.clone());
+        expected["runs"] = serde_json::json!([]);
+        let expected = with_proof_digest(expected).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written, expected);
+        crate::reports::signing::verify_file(&path, None).unwrap();
+
+        // An element that fails to generate aborts the export; no file
+        // replaces the previous artifact.
+        let failing = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
+            emit(serde_json::json!(1))?;
+            Err("missing evidence run".to_owned())
+        };
+        let error = write_streamed_proof(&path, serde_json::Map::new(), &[("mailboxes", &failing)])
+            .unwrap_err();
+        assert!(error.contains("missing evidence run"), "{error}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&path).unwrap())
+                .unwrap(),
+            expected
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
 }

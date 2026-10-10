@@ -817,6 +817,38 @@ run_product customer-proof "$state" "$proof" \
   --scenario-ids basic-small,idempotent-delta
 run_product verify "$proof"
 echo "PASS: packaged customer proof exported and verified"
+
+if [[ "$test_engine" != Dovecot ]]; then
+  # Verification-only reconciliation of the completed mailbox: no transfer
+  # engine runs, mismatches stream through a private durable stage, and the
+  # stage is removed once the evidence is committed.
+  reverify_status="$(run_product status "$state")"
+  reverify_ids="$(grep -o '"id": "[^"]*"' <<<"$reverify_status" | head -n 2 | sed 's/.*"id": "\([^"]*\)"/\1/')"
+  reverify_project="$(sed -n 1p <<<"$reverify_ids")"
+  reverify_job="$(sed -n 2p <<<"$reverify_ids")"
+  if [[ -z "$reverify_project" || -z "$reverify_job" ]]; then
+    echo "FAIL: could not read project and mailbox IDs for reverification" >&2
+    exit 1
+  fi
+  reverify_differences="$app_runtime/reverify-differences.csv"
+  reverify_result="$(run_product reverify "$state" "$reverify_project" "$reverify_job" \
+    "$source_secret" "$destination_secret" --mode metadata --differences "$reverify_differences")"
+  printf '%s\n' "$reverify_result"
+  if ! grep -Eq '"missing_messages": ?0([^0-9]|$)' <<<"$reverify_result" \
+    || ! grep -Eq '"extra_messages": ?0([^0-9]|$)' <<<"$reverify_result"; then
+    echo "FAIL: reverification of the verified mailbox reported differences" >&2
+    exit 1
+  fi
+  if [[ ! -s "$reverify_differences" ]]; then
+    echo "FAIL: reverification did not write its differences export" >&2
+    exit 1
+  fi
+  if compgen -G "$(dirname -- "$state")/verification-stages/*-reverify.sqlite*" >/dev/null; then
+    echo "FAIL: reverification left its verification stage behind" >&2
+    exit 1
+  fi
+  echo "PASS: verification-only reconciliation streamed through a durable stage and cleaned it up"
+fi
 if [[ "$test_engine" != Dovecot ]]; then
   if ! grep -Eq '"compared_messages": [1-9]' "$proof" \
     || ! grep -Eq '"mismatched_messages": 0([^0-9]|$)' "$proof"; then
