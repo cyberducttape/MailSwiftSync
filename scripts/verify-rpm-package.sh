@@ -11,6 +11,7 @@ for required in \
   "/usr/share/doc/mailswiftsync/README.md" \
   "/usr/share/doc/mailswiftsync/INSTALL.md" \
   "/usr/share/doc/mailswiftsync/LICENSE" \
+  "/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt" \
   "/usr/share/man/man1/mailswiftsync.1.gz" \
   "/usr/share/bash-completion/completions/mailswiftsync" \
   "/usr/share/zsh/site-functions/_mailswiftsync" \

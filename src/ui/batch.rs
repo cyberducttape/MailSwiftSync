@@ -210,7 +210,8 @@ impl App {
                 ui.label(
                     RichText::new(self.language.message("ui.no-bulk-mailbox-list-loaded"))
                         .size(17.0)
-                        .strong(),
+                        .strong()
+                        .family(crate::ui::fonts::semibold()),
                 );
                 ui.label(
                     self.language
@@ -266,7 +267,7 @@ impl App {
                             .text("{} mailbox jobs in scope")
                             .replace("{}", &self.queue.len().to_string()),
                     )
-                    .strong(),
+                    .strong().family(crate::ui::fonts::medium()),
                 );
                 if ui
                     .add_enabled(
@@ -721,6 +722,11 @@ impl App {
             let table_width = ui.available_width();
             let show_endpoints = table_width >= 760.0;
             let show_operator_action = table_width >= 1100.0;
+            // Resizable columns draw permanent dividers in the border colour;
+            // soften them so rows read as rows, not a spreadsheet grid.
+            let divider = ui.visuals().widgets.noninteractive.bg_stroke;
+            ui.visuals_mut().widgets.noninteractive.bg_stroke.color =
+                divider.color.gamma_multiply(0.35);
             let mut table = TableBuilder::new(ui)
                 .striped(true)
                 .resizable(true)
@@ -748,7 +754,7 @@ impl App {
                     }
                     for label in labels {
                         header.col(|ui| {
-                            ui.strong(self.language.text(label));
+                            crate::ui::table_header(ui, self.language.text(label));
                         });
                     }
                 })
@@ -841,7 +847,7 @@ impl App {
                         }
                         row.col(|ui| {
                             let (badge, color) = job_state_badge(job_state, colors);
-                            ui.label(RichText::new(self.language.text(badge)).color(color));
+                            crate::ui::status_label(ui, self.language.text(badge), color);
                         });
                         if show_operator_action {
                             row.col(|ui| {
@@ -867,6 +873,7 @@ impl App {
                         }
                     });
                 });
+            ui.visuals_mut().widgets.noninteractive.bg_stroke = divider;
             let (start, end) = rendered.get();
             if start != usize::MAX {
                 self.bulk_rendered_range = (start, end);
@@ -935,7 +942,10 @@ impl App {
                     }));
                 }
             });
-            if !self.running() && ui.button(self.language.text(next.button_label)).clicked() {
+            // The workflow's recommended next step is the page's primary action.
+            if !self.running()
+                && crate::ui::primary_button(ui, self.language.text(next.button_label)).clicked()
+            {
                 self.active_view = next.destination;
             }
             if summary.unresolved() > 0 {
@@ -968,7 +978,7 @@ impl App {
         let mut apply_destination = false;
         crate::ui::card(ui, |ui| {
             egui::CollapsingHeader::new(
-                RichText::new(self.language.message("ui.queue-settings")).strong(),
+                RichText::new(self.language.message("ui.queue-settings")).strong().family(crate::ui::fonts::medium()),
             )
             .id_salt("queue_settings")
             .show(ui, |ui| {
@@ -1205,7 +1215,12 @@ impl App {
                 .on_hover_text(full);
         };
         crate::ui::card(ui, |ui| {
-            line(ui, RichText::new(&job.label).strong());
+            line(
+                ui,
+                RichText::new(&job.label)
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
             line(ui, RichText::new(format!("{} →", job.source_user)));
             line(ui, RichText::new(&job.destination_user));
             line(ui, RichText::new(format!("{} →", job.source_host)));
@@ -1213,7 +1228,7 @@ impl App {
             let (badge, color) =
                 job_state_badge(self.queue.presented_state(job), self.theme_colors());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(self.language.text(badge)).color(color));
+                crate::ui::status_label(ui, self.language.text(badge), color);
                 ui.separator();
                 ui.add(
                     egui::Label::new(RichText::new(self.language.text(policy.label())).color(
@@ -1256,19 +1271,42 @@ impl App {
                 crate::ui::pill(ui, self.language.text(badge), color);
             });
             ui.separator();
-            ui.strong(self.language.message("ui.source-0e570ca6"));
-            line(ui, RichText::new(&job.source_user).strong());
+            ui.label(
+                egui::RichText::new(self.language.message("ui.source-0e570ca6"))
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
+            line(
+                ui,
+                RichText::new(&job.source_user)
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
             line(ui, RichText::new(&job.source_host).small());
             ui.add_space(4.0);
-            ui.strong(self.language.message("ui.destination-293d404a"));
-            line(ui, RichText::new(&job.destination_user).strong());
+            ui.label(
+                egui::RichText::new(self.language.message("ui.destination-293d404a"))
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
+            line(
+                ui,
+                RichText::new(&job.destination_user)
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
             line(ui, RichText::new(&job.destination_host).small());
             ui.add_space(4.0);
-            ui.strong(self.language.message("ui.migration-behavior"));
+            ui.label(
+                egui::RichText::new(self.language.message("ui.migration-behavior"))
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
             line(
                 ui,
                 RichText::new(self.language.text(policy.label()))
                     .strong()
+                    .family(crate::ui::fonts::medium())
                     .color(if removes {
                         self.theme_colors().danger
                     } else {
@@ -1287,7 +1325,13 @@ impl App {
             );
             if let Some((_, inventory, snapshot)) = evidence.and_then(|row| row.evidence.as_ref()) {
                 ui.add_space(4.0);
-                ui.strong(self.language.message("ui.recorded-verification-inventory"));
+                ui.label(
+                    egui::RichText::new(
+                        self.language.message("ui.recorded-verification-inventory"),
+                    )
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+                );
                 line(
                     ui,
                     RichText::new(
@@ -1332,6 +1376,7 @@ impl App {
             ui.label(
                 RichText::new(self.language.text(title).to_owned())
                     .strong()
+                    .family(crate::ui::fonts::medium())
                     .color(colors.danger),
             );
             ui.label(RichText::new(error).color(colors.text_secondary));

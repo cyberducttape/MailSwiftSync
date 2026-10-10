@@ -68,6 +68,15 @@ pub(crate) use workspace::preferred_project_id;
 pub(crate) use workspace::{OwnedRefreshOptions, WorkspaceSnapshot, WorkspaceView};
 mod app;
 
+/// An egui context with the app's fonts and styles installed, for tests that
+/// render real views.
+#[cfg(test)]
+pub(crate) fn styled_test_context() -> egui::Context {
+    let context = egui::Context::default();
+    install_style(&context);
+    context
+}
+
 /// Grouped content on a raised, softly bordered surface. Every page and
 /// dialog uses this instead of `Ui::group`, so the palette decides whether
 /// cards are rounded and filled (modern) or square and outlined (retro).
@@ -103,19 +112,32 @@ pub(crate) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
             dark
         };
     ui.add(
-        egui::Button::new(egui::RichText::new(text).color(text_color).strong())
-            .fill(fill)
-            .stroke(egui::Stroke::NONE),
+        egui::Button::new(
+            egui::RichText::new(text)
+                .color(text_color)
+                .strong()
+                .family(crate::ui::fonts::medium()),
+        )
+        .fill(fill)
+        .stroke(egui::Stroke::NONE),
     )
 }
 
-/// Small uppercase label that introduces a section inside a card.
+/// Column heading in a data table: the overline style, so headers read as
+/// structure rather than as data.
+pub(crate) fn table_header(ui: &mut egui::Ui, text: &str) {
+    section_label(ui, text);
+}
+
+/// Small uppercase label that introduces a section inside a card: medium
+/// weight with open tracking, the way an overline reads in print.
 pub(crate) fn section_label(ui: &mut egui::Ui, text: &str) {
     let color = ui.visuals().weak_text_color();
     ui.label(
         egui::RichText::new(text.to_uppercase())
-            .small()
-            .strong()
+            .family(fonts::medium())
+            .size(11.5)
+            .extra_letter_spacing(0.8)
             .color(color),
     );
 }
@@ -299,11 +321,17 @@ pub(crate) fn nav_item(
             icon_color,
             16.0,
         );
+        // Regular weight for the list, medium for the current page.
+        let font = if selected {
+            egui::FontId::new(14.0, fonts::medium())
+        } else {
+            egui::TextStyle::Body.resolve(ui.style())
+        };
         ui.painter().text(
             egui::pos2(rect.left() + 38.0, center_y),
             egui::Align2::LEFT_CENTER,
             label,
-            egui::TextStyle::Button.resolve(ui.style()),
+            font,
             text_color,
         );
     }
@@ -360,9 +388,43 @@ pub(crate) fn nav_icon_item(
 
 /// Compact rounded status tag. Drawn as one atomic widget so wrapped rows
 /// can measure it and move it to the next line as a whole.
+/// Lay out status text whose leading glyph (✓ ● ○ ↻ ≠ ! × ? ◌ ⚠) is drawn in
+/// the symbols family, so status icons share one weight while the words stay
+/// in the interface typeface. Text without a leading glyph is unchanged.
+pub(crate) fn status_text(text: &str, color: egui::Color32, size: f32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let format = |family: egui::FontFamily| egui::TextFormat {
+        font_id: egui::FontId::new(size, family),
+        color,
+        valign: egui::Align::Center,
+        ..Default::default()
+    };
+    let glyph_end = text
+        .char_indices()
+        .next()
+        .filter(|(_, first)| !first.is_alphanumeric() && !first.is_whitespace())
+        .and_then(|(_, first)| {
+            let after = first.len_utf8();
+            text[after..].starts_with(' ').then_some(after)
+        });
+    match glyph_end {
+        Some(end) => {
+            job.append(&text[..end], 0.0, format(fonts::symbols()));
+            job.append(&text[end..], 0.0, format(egui::FontFamily::Proportional));
+        }
+        None => job.append(text, 0.0, format(egui::FontFamily::Proportional)),
+    }
+    job
+}
+
+/// A status label: glyph in the symbols family, words in the UI typeface.
+pub(crate) fn status_label(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui::Response {
+    let size = egui::TextStyle::Body.resolve(ui.style()).size;
+    ui.label(status_text(text, color, size))
+}
+
 pub(crate) fn pill(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui::Response {
-    let font = egui::FontId::proportional(11.5);
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(status_text(text, color, 11.5)));
     let padding = egui::vec2(9.0, 3.0);
     let size = galley.size() + padding * 2.0;
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -415,15 +477,19 @@ pub(crate) fn stepper(
     let widest_title = steps
         .iter()
         .map(|(title, _, _)| {
-            egui::WidgetText::from(egui::RichText::new(*title).strong())
-                .into_galley(
-                    ui,
-                    Some(egui::TextWrapMode::Extend),
-                    f32::INFINITY,
-                    egui::TextStyle::Body,
-                )
-                .size()
-                .x
+            egui::WidgetText::from(
+                egui::RichText::new(*title)
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            )
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Body,
+            )
+            .size()
+            .x
         })
         .fold(0.0_f32, f32::max);
     if widest_title + 8.0 > column_width {
@@ -435,7 +501,12 @@ pub(crate) fn stepper(
                 StepState::Pending => (index + 1).to_string(),
             };
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(marker).strong().color(color));
+                ui.label(
+                    egui::RichText::new(marker)
+                        .strong()
+                        .family(crate::ui::fonts::medium())
+                        .color(color),
+                );
                 let title_text =
                     egui::RichText::new(*title).color(if *state == StepState::Pending {
                         pending
@@ -443,7 +514,7 @@ pub(crate) fn stepper(
                         ui.visuals().strong_text_color()
                     });
                 ui.label(if *state == StepState::Current {
-                    title_text.strong()
+                    title_text.strong().family(crate::ui::fonts::medium())
                 } else {
                     title_text
                 });
@@ -528,7 +599,7 @@ pub(crate) fn stepper(
                         ui.visuals().strong_text_color()
                     });
                 ui.label(if *state == StepState::Current {
-                    title_text.strong()
+                    title_text.strong().family(crate::ui::fonts::medium())
                 } else {
                     title_text
                 });
@@ -542,16 +613,14 @@ pub(crate) fn stepper(
 
 /// Page title with a secondary description line.
 pub(crate) fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-    let accent = ui.visuals().widgets.active.bg_fill;
-    ui.horizontal(|ui| {
-        let (marker, _) = ui.allocate_exact_size(egui::vec2(4.0, 34.0), egui::Sense::hover());
-        ui.painter().rect_filled(marker, 2.0, accent);
-        ui.add_space(4.0);
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new(title).size(25.0).strong());
-            ui.label(egui::RichText::new(subtitle).color(ui.visuals().weak_text_color()));
-        });
-    });
+    ui.label(
+        egui::RichText::new(title)
+            .family(fonts::semibold())
+            .size(24.0)
+            .extra_letter_spacing(-0.2),
+    );
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(subtitle).color(ui.visuals().weak_text_color()));
     ui.add_space(20.0);
 }
 

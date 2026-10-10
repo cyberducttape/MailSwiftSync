@@ -41,9 +41,8 @@ impl Harness {
         if high_contrast {
             app.theme = crate::ui::ThemeKind::HighContrast;
         }
-        let context = Context::default();
+        let context = crate::ui::styled_test_context();
         context.enable_accesskit();
-        crate::ui::install_style(&context);
         Self {
             app,
             context,

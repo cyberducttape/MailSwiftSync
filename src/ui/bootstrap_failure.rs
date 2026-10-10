@@ -25,7 +25,11 @@ impl eframe::App for BootstrapFailureScreen {
             ui.add_space(8.0);
             ui.label(language.text("ui.bootstrap-failure-summary"));
             ui.add_space(8.0);
-            ui.strong(language.text("ui.bootstrap-failure-details"));
+            ui.label(
+                egui::RichText::new(language.text("ui.bootstrap-failure-details"))
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
             ui.monospace(&self.failure.durable);
             ui.monospace(&self.failure.temporary);
             ui.add_space(12.0);
@@ -53,7 +57,7 @@ mod tests {
             },
             UiLanguage::English,
         );
-        let context = egui::Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         let output = context.run_ui(egui::RawInput::default(), |ui| {
             screen.ui(ui, &mut frame);

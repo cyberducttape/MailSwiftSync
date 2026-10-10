@@ -31,6 +31,7 @@ impl App {
                 ui.label(
                     RichText::new(self.language.message("ui.durable-workspace-unavailable"))
                         .strong()
+                        .family(crate::ui::fonts::medium())
                         .color(colors.danger),
                 );
                 ui.label(self.language.message("ui.mailswiftsync-cannot-open-its-durable-workspace-this-session-is-temporary-l-8737d30905"));
@@ -67,6 +68,7 @@ impl App {
                     ui.label(
                         RichText::new(self.language.text("Queue status unavailable"))
                             .strong()
+                            .family(crate::ui::fonts::medium())
                             .color(colors.danger),
                     );
                     ui.label(RichText::new(error).color(colors.text_secondary));
@@ -140,7 +142,7 @@ impl App {
                     self.language.message("ui.batch-queue-loaded")
                 } else {
                     self.language.message("ui.no-project-yet")
-                }).size(17.0).strong());
+                }).size(17.0).strong().family(crate::ui::fonts::semibold()));
                 ui.label(RichText::new(if project.is_some() {
                     self.language.message("ui.state-is-durable-and-ready-for-review")
                 } else if has_bulk_jobs {
@@ -153,10 +155,10 @@ impl App {
                 ui.set_min_width(ui.available_width());
                 crate::ui::section_label(ui, self.language.message("ui.mailboxes-814bfa48"));
                 if !has_mailboxes {
-                    ui.label(RichText::new(self.language.message("ui.none-configured")).size(17.0).strong());
+                    ui.label(RichText::new(self.language.message("ui.none-configured")).size(17.0).strong().family(crate::ui::fonts::semibold()));
                     ui.label(RichText::new(self.language.message("ui.use-mailboxes-to-review-scope-before-running-anything")).color(colors.text_secondary));
                 } else if !has_durable_jobs {
-                    ui.label(RichText::new(self.language.message("ui.mailbox-jobs-in-scope").replace("{}", &batch_summary.total.to_string())).size(17.0).strong());
+                    ui.label(RichText::new(self.language.message("ui.mailbox-jobs-in-scope").replace("{}", &batch_summary.total.to_string())).size(17.0).strong().family(crate::ui::fonts::semibold()));
                     ui.label(
                         RichText::new(self.language
                             .text("{} imported · {} queued · {} preflight · {} ready · {} attention · {} unresolved")
@@ -170,7 +172,7 @@ impl App {
                     );
                     ui.label(RichText::new(self.language.message("ui.imported-rows-are-not-durable-until-preflight-admission-succeeds")).small().color(colors.text_secondary));
                 } else {
-                    ui.label(RichText::new(self.language.message("ui.total").replace("{}", &mailbox_counts.total.to_string())).size(17.0).strong());
+                    ui.label(RichText::new(self.language.message("ui.total").replace("{}", &mailbox_counts.total.to_string())).size(17.0).strong().family(crate::ui::fonts::semibold()));
                     ui.label(
                         RichText::new(self.language
                             .text("{} ready · {} running · {} verified")
@@ -196,7 +198,7 @@ impl App {
                     self.language.message("ui.review-required")
                 } else {
                     self.language.message("ui.not-available")
-                }).size(17.0).strong().color(if proof_ready { colors.success } else { colors.text_primary }));
+                }).size(17.0).strong().family(crate::ui::fonts::semibold()).color(if proof_ready { colors.success } else { colors.text_primary }));
                 ui.label(RichText::new(if proof_ready {
                     self.language.message("ui.open-verification-to-export-the-customer-safe-evidence-artifact")
                 } else {
@@ -334,7 +336,11 @@ impl App {
                 .num_columns(2)
                 .spacing([18.0, 7.0])
                 .show(ui, |ui| {
-                    ui.label(RichText::new(self.language.message("ui.plan-readiness")).strong());
+                    ui.label(
+                        RichText::new(self.language.message("ui.plan-readiness"))
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
+                    );
                     ui.label(RichText::new(format!("{configured}/{total}")).color(
                         if configured == total {
                             colors.success
@@ -344,7 +350,11 @@ impl App {
                     ));
                     ui.end_row();
 
-                    ui.label(RichText::new(self.language.message("ui.preflight-status")).strong());
+                    ui.label(
+                        RichText::new(self.language.message("ui.preflight-status"))
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
+                    );
                     let preflight_status = if self.preflight.is_empty() {
                         self.language.message("ui.not-assessed").to_owned()
                     } else if preflight_blockers > 0 {
@@ -365,7 +375,11 @@ impl App {
                     );
                     ui.end_row();
 
-                    ui.label(RichText::new(self.language.message("ui.account-tests")).strong());
+                    ui.label(
+                        RichText::new(self.language.message("ui.account-tests"))
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
+                    );
                     ui.label(
                         RichText::new(if accounts_current {
                             self.language.message("ui.current-for-plan")
@@ -386,7 +400,11 @@ impl App {
                     );
                     ui.end_row();
 
-                    ui.label(RichText::new(self.language.message("ui.mailbox-attention")).strong());
+                    ui.label(
+                        RichText::new(self.language.message("ui.mailbox-attention"))
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
+                    );
                     ui.label(RichText::new(attention_count.to_string()).color(
                         if attention_count > 0 {
                             colors.warning
@@ -398,7 +416,8 @@ impl App {
 
                     ui.label(
                         RichText::new(self.language.message("ui.selected-batch-eligibility"))
-                            .strong(),
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
                     );
                     let eligibility = if selected == 0 {
                         self.language.message("ui.no-mailboxes-selected").to_owned()
@@ -419,7 +438,9 @@ impl App {
                     ui.end_row();
 
                     ui.label(
-                        RichText::new(self.language.message("ui.planned-verification")).strong(),
+                        RichText::new(self.language.message("ui.planned-verification"))
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
                     );
                     ui.label(self.language.message(verification_key));
                     ui.end_row();
@@ -429,7 +450,8 @@ impl App {
                             self.language
                                 .message("ui.destination-mutation-policy-summary"),
                         )
-                        .strong(),
+                        .strong()
+                        .family(crate::ui::fonts::medium()),
                     );
                     ui.label(
                         RichText::new(self.language.text(destination_policy.label())).color(
@@ -654,7 +676,8 @@ impl App {
                                 "{symbol} {}",
                                 self.language.text(finding.label)
                             ))
-                            .strong(),
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
                         );
                         ui.label(RichText::new(label).color(color));
                         ui.end_row();
@@ -697,7 +720,9 @@ impl App {
                             {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(
-                                        RichText::new(self.language.text(finding.label)).strong(),
+                                        RichText::new(self.language.text(finding.label))
+                                            .strong()
+                                            .family(crate::ui::fonts::medium()),
                                     );
                                     ui.label(&finding.evidence);
                                     if ui
@@ -725,6 +750,7 @@ impl App {
             ui.label(
                 RichText::new(self.language.message("ui.insecure-source-transport"))
                     .strong()
+                    .family(crate::ui::fonts::medium())
                     .color(self.theme_colors().danger),
             );
             ui.label(
@@ -774,6 +800,7 @@ impl App {
                 ui.label(
                     RichText::new(self.language.message("ui.attention-center"))
                         .strong()
+                        .family(crate::ui::fonts::medium())
                         .color(colors.warning),
                 );
                 ui.label(
@@ -897,6 +924,7 @@ impl App {
                             .message("ui.process-ownership-review-required"),
                     )
                     .strong()
+                    .family(crate::ui::fonts::medium())
                     .color(self.theme_colors().danger),
                 );
                 ui.label(self.language.message("ui.mailswiftsync-could-not-prove-that-a-previously-recorded-migration-process-c8d2a03624"));
@@ -930,6 +958,7 @@ impl App {
                 ui.label(
                     RichText::new(self.language.message("ui.historical-project-read-only"))
                         .strong()
+                        .family(crate::ui::fonts::medium())
                         .color(self.theme_colors().info),
                 );
                 ui.label(self.language.message("ui.you-are-viewing-durable-history-for-this-project-the-editable-migration-pla-7ce9c8cb0f"));
@@ -1000,9 +1029,9 @@ impl App {
                 egui::Grid::new("overview_preflight_controls")
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.strong(self.language.message("ui.check"));
-                        ui.strong(self.language.message("ui.result"));
-                        ui.strong(self.language.message("ui.action"));
+                        crate::ui::table_header(ui, self.language.message("ui.check"));
+                        crate::ui::table_header(ui, self.language.message("ui.result"));
+                        crate::ui::table_header(ui, self.language.message("ui.action"));
                         ui.end_row();
                         for (name, detail, passed) in &self.preflight {
                             let status = ui.label(
@@ -1017,7 +1046,11 @@ impl App {
                                     "ui.preflight-check-not-satisfied-may-block-readiness",
                                 ));
                             }
-                            ui.label(RichText::new(name).strong());
+                            ui.label(
+                                RichText::new(name)
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
+                            );
                             ui.label(detail);
                             if !passed {
                                 let fix_button = ui.add_enabled(
@@ -1130,7 +1163,8 @@ impl App {
             ui.label(
                 RichText::new(self.language.message("ui.start-your-first-migration"))
                     .size(18.0)
-                    .strong(),
+                    .strong()
+                    .family(crate::ui::fonts::semibold()),
             );
             ui.label(RichText::new(self.language.message("ui.mailswiftsync-guides-every-migration-through-a-reviewable-preflight-before-219ddd077f")).color(colors.text_secondary));
         }
@@ -1151,6 +1185,7 @@ impl App {
         ui.label(
             RichText::new(self.language.message("ui.recommended-next-step"))
                 .strong()
+                .family(crate::ui::fonts::medium())
                 .color(colors.text_secondary),
         );
         ui.add_enabled_ui(!self.workspace_read_only, |ui| match primary {

@@ -91,8 +91,9 @@ impl eframe::App for App {
                     ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new("MailSwiftSync")
+                            .family(crate::ui::fonts::semibold())
                             .size(17.0)
-                            .strong()
+                            .extra_letter_spacing(-0.1)
                             .color(colors.info),
                     );
                     ui.add_space(8.0);
@@ -104,7 +105,11 @@ impl eframe::App for App {
                         .as_ref()
                         .map(|project| project.name.as_str())
                         .unwrap_or_else(|| self.language.message("ui.no-project-selected"));
-                    ui.label(egui::RichText::new(project_name).strong());
+                    ui.label(
+                        egui::RichText::new(project_name)
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
+                    );
                     if let Some(project) = self.ui_snapshot.project.as_ref() {
                         crate::ui::pill(
                             ui,
@@ -139,6 +144,7 @@ impl eframe::App for App {
                                 egui::RichText::new(status_text)
                                     .small()
                                     .strong()
+                                    .family(crate::ui::fonts::medium())
                                     .color(status_tint),
                             )
                             .fill(status_tint.gamma_multiply(0.12))
@@ -461,7 +467,7 @@ crate::ui::name_modal(ui, &modal_heading);
         crate::ui::card(ui, |ui| {
             egui::CollapsingHeader::new(
                 egui::RichText::new(self.language.message("ui.advanced-migration-settings"))
-                    .strong(),
+                    .strong().family(crate::ui::fonts::medium()),
             )
             .id_salt("advanced_migration_settings")
             .show(ui, |ui| {
@@ -705,7 +711,7 @@ crate::ui::name_modal(ui, &modal_heading);
                         "⚠ {}",
                         self.language.message("ui.destination-state-may-be-removed")
                     ))
-                    .strong()
+                    .strong().family(crate::ui::fonts::medium())
                     .color(colors.danger),
                 );
                 ui.label(
@@ -1024,7 +1030,7 @@ crate::ui::name_modal(ui, &modal_heading);
                 );
                 ui.label(
                     egui::RichText::new(runbook.provider)
-                        .strong()
+                        .strong().family(crate::ui::fonts::medium())
                         .color(self.theme_colors().info),
                 );
                 egui::ScrollArea::vertical()
@@ -1037,7 +1043,7 @@ crate::ui::name_modal(ui, &modal_heading);
                                     "{}. {}",
                                     step.step_number, step.action
                                 ))
-                                .strong(),
+                                .strong().family(crate::ui::fonts::medium()),
                             );
                             ui.label(format!("{} {}", self.language.message("ui.why"), step.why));
                             ui.label(format!(
@@ -1050,7 +1056,7 @@ crate::ui::name_modal(ui, &modal_heading);
                             ui.separator();
                             ui.label(
                                 egui::RichText::new(self.language.message("ui.known-provider-issues"))
-                                    .strong()
+                                    .strong().family(crate::ui::fonts::medium())
                                     .color(self.theme_colors().warning),
                             );
                             for issue in &runbook.known_issues {
@@ -1143,7 +1149,7 @@ mod workflow_tests {
     fn active_migration_cancels_window_close_request() {
         use crate::ui::App;
         use eframe::App as EframeApp;
-        use eframe::egui::{Context, RawInput, ViewportCommand, ViewportEvent, ViewportId};
+        use eframe::egui::{RawInput, ViewportCommand, ViewportEvent, ViewportId};
 
         let state_path = std::env::temp_dir().join(format!(
             "mailswiftsync-close-guard-{}.db",
@@ -1152,7 +1158,7 @@ mod workflow_tests {
         let mut app = App::from_state_path(Some(&state_path));
         let (_sender, receiver) = std::sync::mpsc::channel();
         app.receiver = Some(receiver);
-        let context = Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         let mut input = RawInput::default();
         input

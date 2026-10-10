@@ -125,7 +125,8 @@ impl App {
                         .replace("{}", &counts.total.to_string()),
                 )
                 .size(20.0)
-                .strong(),
+                .strong()
+                .family(crate::ui::fonts::semibold()),
             );
             ui.add_space(6.0);
             ui.columns(2, |columns| {
@@ -173,12 +174,14 @@ impl App {
                     .show(&mut columns[0], |ui| {
                         for (glyph, key, count, color, filter) in buckets {
                             let label = self.language.message(key);
+                            let tint = if count > 0 {
+                                color
+                            } else {
+                                colors.text_secondary
+                            };
+                            let size = egui::TextStyle::Body.resolve(ui.style()).size;
                             let text =
-                                RichText::new(format!("{glyph}  {label}")).color(if count > 0 {
-                                    color
-                                } else {
-                                    colors.text_secondary
-                                });
+                                crate::ui::status_text(&format!("{glyph}  {label}"), tint, size);
                             let response = ui
                                 .add_enabled(count > 0, egui::Button::new(text).frame(false))
                                 .on_hover_text(self.language.message("ui.bucket-open-filtered"));
@@ -186,7 +189,11 @@ impl App {
                             if response.clicked() {
                                 open_filter = Some(filter);
                             }
-                            ui.label(RichText::new(count.to_string()).strong());
+                            ui.label(
+                                RichText::new(count.to_string())
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
+                            );
                             ui.end_row();
                         }
                     });
@@ -229,7 +236,11 @@ impl App {
                     .show(right, |ui| {
                         for (label, value, detail) in figures {
                             ui.label(RichText::new(label).color(colors.text_secondary));
-                            ui.label(RichText::new(value).strong());
+                            ui.label(
+                                RichText::new(value)
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
+                            );
                             ui.end_row();
                             if !detail.is_empty() {
                                 ui.label("");

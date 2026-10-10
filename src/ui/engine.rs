@@ -79,7 +79,8 @@ impl App {
                     .text("imapsync {} engine")
                     .replace("{}", QUALIFIED_IMAPSYNC_VERSION),
             )
-            .strong(),
+            .strong()
+            .family(crate::ui::fonts::medium()),
         );
         let busy = self.engine_setup_receiver.is_some();
         let plan = crate::engine_install::plan_for_host();

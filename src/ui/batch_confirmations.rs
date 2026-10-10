@@ -272,7 +272,7 @@ crate::ui::name_modal(ui, &modal_heading);
                         .replacen("{}", &summary.hidden_selection_count.to_string(), 1),
                 );
                 ui.label(
-                    RichText::new(self.language.message("ui.sample-of-selected-mailboxes")).strong(),
+                    RichText::new(self.language.message("ui.sample-of-selected-mailboxes")).strong().family(crate::ui::fonts::medium()),
                 );
                 for (label, source, destination) in &selected_samples {
                     ui.label(
@@ -352,7 +352,7 @@ crate::ui::name_modal(ui, &modal_heading);
                                 .text("⚠ {} selected mailbox(es) use destination mirror or --delete2: destination-only messages/mailboxes may be removed or replaced.")
                                 .replace("{}", &summary.destructive_count.to_string()),
                         )
-                        .strong()
+                        .strong().family(crate::ui::fonts::medium())
                         .color(self.theme_colors().danger),
                     );
                     ui.checkbox(
@@ -374,7 +374,7 @@ crate::ui::name_modal(ui, &modal_heading);
                         RichText::new(self.language.text(
                             "⚠ Selected destination names differ only by case on a provider whose account-name case rules are unknown. They may be the same mailbox; verify the provider identities before proceeding. Acknowledged case-only aliases must run at concurrency 1.",
                         ))
-                        .strong()
+                        .strong().family(crate::ui::fonts::medium())
                         .color(self.theme_colors().warning),
                     );
                     ui.checkbox(

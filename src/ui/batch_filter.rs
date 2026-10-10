@@ -288,7 +288,7 @@ pub(crate) mod tests {
     #[ignore = "opt-in release UI scale benchmark; run scripts/benchmark-ui-scale.sh"]
     fn scale_ui_benchmark() {
         use eframe::App as EframeApp;
-        use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
+        use eframe::egui::{Pos2, RawInput, Rect, vec2};
         let rows = 100_000;
         let state_path = temp_state("ui-scale");
         let mut app = crate::App::from_state_path(Some(&state_path));
@@ -341,7 +341,7 @@ pub(crate) mod tests {
         app.bulk_state_filter = "all".into();
 
         app.active_view = crate::ui::WorkspaceView::Mailboxes;
-        let context = Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         let first_frame_started = Instant::now();
         let output = context.run_ui(
@@ -371,7 +371,7 @@ pub(crate) mod tests {
     #[ignore = "opt-in release UI scale benchmark; run scripts/benchmark-ui-scale.sh"]
     fn sustained_state_update_benchmark() {
         use eframe::App as EframeApp;
-        use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
+        use eframe::egui::{Pos2, RawInput, Rect, vec2};
         const ROWS: usize = 100_000;
         const UPDATES: usize = 1_000;
         const TICKS: usize = 60;
@@ -399,7 +399,7 @@ pub(crate) mod tests {
         app.select_all_bulk_rows();
         app.refresh_bulk_selection_view();
         app.active_view = crate::ui::WorkspaceView::Mailboxes;
-        let context = Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         let states = ["running", "verified", "attention"];
         let mut applied = 0;
@@ -447,7 +447,7 @@ pub(crate) mod tests {
     #[ignore = "opt-in release full-shell benchmark; run scripts/benchmark-ui-scale.sh"]
     fn full_shell_ui_benchmark() {
         use eframe::App as EframeApp;
-        use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
+        use eframe::egui::{Pos2, RawInput, Rect, vec2};
         let rows = 100_000;
         let state_path = temp_state("ui-shell-scale");
         let mut app = crate::App::from_state_path(Some(&state_path));
@@ -462,7 +462,7 @@ pub(crate) mod tests {
         );
         app.active_view = crate::ui::WorkspaceView::Mailboxes;
 
-        let context = Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         let mut timed_frame = |app: &mut crate::App| {
             let started = Instant::now();
@@ -500,14 +500,14 @@ pub(crate) mod tests {
         use crate::App;
         use crate::ui::WorkspaceView;
         use eframe::App as EframeApp;
-        use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
+        use eframe::egui::{Pos2, RawInput, Rect, vec2};
 
         let state_path = std::env::temp_dir().join(format!(
             "mailswiftsync-overview-regression-{}.db",
             uuid::Uuid::new_v4()
         ));
         let mut app = App::from_state_path(Some(&state_path));
-        let context = Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         for view in [
             WorkspaceView::Overview,
@@ -538,12 +538,12 @@ pub(crate) mod tests {
     fn pending_background_work_schedules_repaints() {
         use crate::App;
         use eframe::App as EframeApp;
-        use eframe::egui::{Context, Pos2, RawInput, Rect, ViewportId, vec2};
+        use eframe::egui::{Pos2, RawInput, Rect, ViewportId, vec2};
 
         let state_path =
             std::env::temp_dir().join(format!("mailswiftsync-repaint-{}.db", uuid::Uuid::new_v4()));
         let mut app = App::from_state_path(Some(&state_path));
-        let context = Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         let mut repaint_delay = |app: &mut App| {
             let output = context.run_ui(

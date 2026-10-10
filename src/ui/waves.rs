@@ -111,7 +111,8 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(format!("{}. {}", wave.position + 1, wave.settings.name))
-                            .strong(),
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
                     );
                     crate::ui::pill(ui, self.language.message(status_key(status)), status_color);
                     ui.label(

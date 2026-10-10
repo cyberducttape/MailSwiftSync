@@ -104,7 +104,9 @@ impl ThemeColors {
             egui::Visuals::light()
         };
         let stroke = |color| Stroke::new(1.0, color);
-        let (widget_radius, window_radius) = if self.modern { (4, 10) } else { (3, 3) };
+        // Widgets stay at 4 px: egui draws checkboxes with the same radius,
+        // and anything larger turns a 14 px box into a circle.
+        let (widget_radius, window_radius) = if self.modern { (4, 12) } else { (3, 3) };
         let quiet_border = self.quiet_border();
         let widget = |bg_fill, weak_bg_fill, border, fg| egui::style::WidgetVisuals {
             bg_fill,
@@ -151,7 +153,9 @@ impl ThemeColors {
         visuals.selection.stroke = stroke(self.on_selection());
         visuals.popup_shadow.color = Color32::from_black_alpha(if dark_mode { 160 } else { 70 });
         visuals.button_frame = true;
-        visuals.collapsing_header_frame = true;
+        // Modern packs show disclosure sections as plain rows with a chevron;
+        // retro packs keep the framed bar of their era.
+        visuals.collapsing_header_frame = !self.modern;
         visuals.striped = true;
         visuals
     }
@@ -433,30 +437,33 @@ fn lerp_color(from: Color32, to: Color32, amount: f32) -> Color32 {
 /// Spacing and type scale shared by every page and dialog.
 pub(crate) fn install_style(ctx: &egui::Context) {
     use egui::{FontFamily, FontId, TextStyle};
+    // The text styles below name the bundled weight families; installing
+    // both together means no context can have one without the other (egui
+    // panics on an unbound font family).
+    super::fonts::install(ctx);
+    // One type scale for the whole app: IBM Plex Sans regular for reading,
+    // medium for controls, semibold for headings (see `ui::fonts`).
     ctx.all_styles_mut(|style| {
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(10.0, 4.0);
-        style.spacing.interact_size.y = 24.0;
-        style.spacing.window_margin = egui::Margin::same(14);
+        style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+        style.spacing.button_padding = egui::vec2(12.0, 5.0);
+        style.spacing.interact_size.y = 28.0;
+        style.spacing.window_margin = egui::Margin::same(16);
         style.spacing.menu_margin = egui::Margin::same(8);
         style.spacing.indent = 16.0;
         style.text_styles = [
             (
                 TextStyle::Heading,
-                FontId::new(20.0, FontFamily::Proportional),
+                FontId::new(18.0, super::fonts::semibold()),
             ),
-            (TextStyle::Body, FontId::new(13.5, FontFamily::Proportional)),
-            (
-                TextStyle::Button,
-                FontId::new(13.5, FontFamily::Proportional),
-            ),
+            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(14.0, super::fonts::medium())),
             (
                 TextStyle::Small,
-                FontId::new(11.5, FontFamily::Proportional),
+                FontId::new(12.0, FontFamily::Proportional),
             ),
             (
                 TextStyle::Monospace,
-                FontId::new(12.5, FontFamily::Monospace),
+                FontId::new(13.0, FontFamily::Monospace),
             ),
         ]
         .into();
@@ -657,7 +664,10 @@ mod tests {
             assert_eq!(visuals.widgets.hovered.bg_stroke.color, colors.info);
             assert_eq!(visuals.widgets.active.bg_stroke.color, colors.info);
             assert_eq!(visuals.window_stroke.color, colors.border);
-            assert!(visuals.button_frame && visuals.collapsing_header_frame);
+            assert!(visuals.button_frame);
+            // Modern packs draw disclosure rows without a frame; retro packs
+            // keep the framed bar of their era.
+            assert_eq!(visuals.collapsing_header_frame, !colors.modern);
         }
     }
 

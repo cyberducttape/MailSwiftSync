@@ -28,6 +28,17 @@ for document in "${root_documents[@]}"; do
   cp "$document" "$bundle_dir/"
 done
 
+# The automation contract links its golden field fixtures; integrators need
+# them to validate status JSON against the published contract.
+for fixture in tests/fixtures/automation/*.json; do
+  mkdir -p "$bundle_dir/$(dirname "$fixture")"
+  cp "$fixture" "$bundle_dir/$fixture"
+done
+
+# The bundled IBM Plex fonts ship under the SIL Open Font License, which
+# requires its text to accompany every copy of the binary.
+cp assets/fonts/OFL.txt "$bundle_dir/OFL-IBM-Plex.txt"
+
 linked_artifact=capabilities.toml
 {
   if [[ ! -f "$linked_artifact" ]]; then
@@ -51,6 +62,15 @@ distribution_documents=(
   docs/bulk-migrations-template.csv
   docs/distribution/INSTALL.md
   docs/distribution/SERVICE.md
+  docs/automation-contract.md
+  docs/crash-recovery-validation.md
+  docs/msp-operations-runbook.md
+  docs/durability-and-concurrency-validation.md
+  docs/release-upgrade-validation.md
+  docs/adoption-qualification-plan.md
+  docs/production-qualification-environment.md
+  docs/msp-rbac-and-tenant-isolation.md
+  docs/psa-event-contract.md
 )
 for document in "${distribution_documents[@]}"; do
   if [[ ! -f "$document" ]]; then

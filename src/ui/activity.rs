@@ -320,7 +320,7 @@ crate::ui::name_modal(ui, &modal_heading);
                             "Run", "Mailbox", "Stage", "Engine", "Status", "Started", "Finished",
                             "Detail",
                         ] {
-                            ui.strong(self.language.text(label));
+                            crate::ui::table_header(ui, self.language.text(label));
                         }
                         ui.end_row();
                     });

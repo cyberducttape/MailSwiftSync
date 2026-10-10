@@ -186,7 +186,11 @@ impl crate::App {
             crate::ui::section_label(ui, language.message("ui.mailbox-migration-evidence"));
             ui.columns(card.facts.len(), |columns| {
                 for (column, fact) in columns.iter_mut().zip(card.facts.iter()) {
-                    column.label(RichText::new(language.message(fact.label)).strong());
+                    column.label(
+                        RichText::new(language.message(fact.label))
+                            .strong()
+                            .family(crate::ui::fonts::medium()),
+                    );
                     let status = match &fact.detail {
                         Some(detail) => format!("{} ({detail})", language.message(fact.status)),
                         None => language.message(fact.status).to_owned(),
@@ -195,7 +199,11 @@ impl crate::App {
                 }
             });
             ui.add_space(6.0);
-            ui.label(RichText::new(language.message("ui.operator-conclusion")).strong());
+            ui.label(
+                RichText::new(language.message("ui.operator-conclusion"))
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
             ui.label(
                 RichText::new(language.message(card.conclusion))
                     .color(tone_color(card.conclusion_tone)),
@@ -264,7 +272,9 @@ impl crate::App {
                     .show(ui, |ui| {
                         let all = ui.selectable_label(
                             filter.folder_digest.is_none(),
-                            RichText::new(language.message("ui.all-folders")).strong(),
+                            RichText::new(language.message("ui.all-folders"))
+                                .strong()
+                                .family(crate::ui::fonts::medium()),
                         );
                         crate::ui::name_control(&all, language.message("ui.all-folders"));
                         if all.clicked() {
@@ -272,7 +282,9 @@ impl crate::App {
                         }
                         for mismatch_type in TYPES {
                             ui.label(
-                                RichText::new(language.message(type_key(mismatch_type))).strong(),
+                                RichText::new(language.message(type_key(mismatch_type)))
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
                             );
                         }
                         ui.end_row();
@@ -342,7 +354,11 @@ impl crate::App {
                             "ui.destination-uid",
                             "ui.size-and-date",
                         ] {
-                            ui.label(RichText::new(language.message(key)).strong());
+                            ui.label(
+                                RichText::new(language.message(key))
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
+                            );
                         }
                         ui.end_row();
                         for mismatch in &self.mismatch_inspector.rows {

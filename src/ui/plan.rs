@@ -42,7 +42,8 @@ impl App {
                             .text("Project: {}")
                             .replace("{}", &self.form.profile.name),
                     )
-                    .strong(),
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
                 );
                 ui.label(format!(
                     "{}  →  {}",
@@ -79,6 +80,7 @@ impl App {
                 ui.label(
                     RichText::new(self.language.text(policy.warning()))
                         .strong()
+                        .family(crate::ui::fonts::medium())
                         .color(if removes {
                             self.theme_colors().danger
                         } else {

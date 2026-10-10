@@ -123,7 +123,13 @@ impl App {
             } else {
                 language.text("Destination account")
             };
-            ui.label(RichText::new(title).size(16.0).strong().color(color));
+            ui.label(
+                RichText::new(title)
+                    .size(16.0)
+                    .strong()
+                    .family(crate::ui::fonts::semibold())
+                    .color(color),
+            );
             if local_dovecot {
                 ui.label(
                     RichText::new(language.message("ui.local-dovecot-account"))
@@ -1128,7 +1134,9 @@ impl App {
     /// of requiring a freshly copied token every time.
     fn oauth_refresh_section(&mut self, ui: &mut egui::Ui, editable: bool) {
         ui.label(
-            RichText::new(self.language.message("ui.automatic-oauth-refresh-optional")).strong(),
+            RichText::new(self.language.message("ui.automatic-oauth-refresh-optional"))
+                .strong()
+                .family(crate::ui::fonts::medium()),
         );
         ui.label(
             RichText::new(

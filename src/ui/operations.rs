@@ -348,6 +348,7 @@ impl App {
             ui.label(
                 RichText::new(format!("{icon} {text}"))
                     .strong()
+                    .family(crate::ui::fonts::medium())
                     .color(color),
             );
         });
@@ -509,6 +510,7 @@ impl App {
                         .replace("{}", &format_estimate(failure.at.elapsed()))
                 ))
                 .strong()
+                .family(crate::ui::fonts::medium())
                 .color(colors.danger),
             );
             if !failure.detail.is_empty() {
@@ -572,7 +574,12 @@ fn tile_rows(
 fn stat_tile(ui: &mut egui::Ui, label: &str, value: &str, detail: &str, size: f32) {
     let muted = ui.visuals().weak_text_color();
     ui.label(RichText::new(label).small().color(muted));
-    ui.label(RichText::new(value).size(size).strong());
+    ui.label(
+        RichText::new(value)
+            .size(size)
+            .strong()
+            .family(crate::ui::fonts::medium()),
+    );
     ui.label(RichText::new(detail).small().color(muted));
 }
 

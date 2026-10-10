@@ -59,6 +59,7 @@ fi
 required_documents=(
   README.md
   LICENSE
+  OFL-IBM-Plex.txt
   PROVIDER_SETUP.md
   OAUTH_SETUP.md
   CAPABILITY_MANIFEST.md

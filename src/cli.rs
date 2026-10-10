@@ -77,7 +77,6 @@ pub(crate) fn run() -> eframe::Result<()> {
                 ..Default::default()
             },
             Box::new(|creation| {
-                crate::ui::fonts::install(&creation.egui_ctx);
                 crate::ui::install_style(&creation.egui_ctx);
                 #[allow(unused_mut)]
                 let mut app = match App::try_from_state_path(None) {

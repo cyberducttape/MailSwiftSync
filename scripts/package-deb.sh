@@ -45,6 +45,8 @@ install -m 0644 README.md LICENSE PRODUCTION_STATUS.md \
   "$stage/usr/share/doc/mailswiftsync/"
 install -m 0644 docs/distribution/INSTALL.md \
   "$stage/usr/share/doc/mailswiftsync/INSTALL.md"
+install -m 0644 assets/fonts/OFL.txt \
+  "$stage/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt"
 install -m 0644 docs/distribution/mailswiftsync.1 \
   "$stage/usr/share/man/man1/mailswiftsync.1"
 gzip -n -9 "$stage/usr/share/man/man1/mailswiftsync.1"

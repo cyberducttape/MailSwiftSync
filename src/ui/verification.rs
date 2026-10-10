@@ -33,57 +33,60 @@ impl App {
                         self.ui_snapshot.is_stale(),
                     )
                 });
-                if ui
-                    .button(self.language.message("ui.export-project-report"))
-                    .clicked()
-                {
-                    self.report_export_result("Project report", self.export_project_report());
-                }
-                if ui
-                    .button(self.language.message("ui.export-project-json"))
-                    .clicked()
-                {
-                    self.report_export_result("Project JSON", self.export_project_json());
-                }
-                if ui
-                    .button(self.language.message("ui.export-post-migration-report"))
-                    .clicked()
-                {
-                    self.report_export_result(
-                        "Post-migration report",
-                        self.export_post_migration_report(),
-                    );
-                }
-                if ui
-                    .add_enabled(
-                        proof_ready,
-                        egui::Button::new(self.language.message("ui.export-customer-proof-json")),
-                    )
-                    .on_disabled_hover_text(
-                        self.language.message("ui.customer-proof-becomes-available-after-the-durable-project-is-complete-ever-891f123df0"),
-                    )
-                    .clicked()
-                {
-                    self.report_export_result("Customer proof", self.export_customer_proof());
-                }
-                if ui
-                    .button(self.language.message("ui.export-support-bundle"))
-                    .clicked()
-                {
-                    self.report_export_result(
-                        "Support bundle",
-                        self.export_support_bundle_dialog(),
-                    );
-                }
-                if ui
-                    .button(self.language.message("ui.export-project-health"))
-                    .clicked()
-                {
-                    self.report_export_result(
-                        "Project health export",
-                        self.export_project_health(),
-                    );
-                }
+                // One wrapping row of export actions instead of a column.
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button(self.language.message("ui.export-project-report"))
+                        .clicked()
+                    {
+                        self.report_export_result("Project report", self.export_project_report());
+                    }
+                    if ui
+                        .button(self.language.message("ui.export-project-json"))
+                        .clicked()
+                    {
+                        self.report_export_result("Project JSON", self.export_project_json());
+                    }
+                    if ui
+                        .button(self.language.message("ui.export-post-migration-report"))
+                        .clicked()
+                    {
+                        self.report_export_result(
+                            "Post-migration report",
+                            self.export_post_migration_report(),
+                        );
+                    }
+                    if ui
+                        .add_enabled(
+                            proof_ready,
+                            egui::Button::new(self.language.message("ui.export-customer-proof-json")),
+                        )
+                        .on_disabled_hover_text(
+                            self.language.message("ui.customer-proof-becomes-available-after-the-durable-project-is-complete-ever-891f123df0"),
+                        )
+                        .clicked()
+                    {
+                        self.report_export_result("Customer proof", self.export_customer_proof());
+                    }
+                    if ui
+                        .button(self.language.message("ui.export-support-bundle"))
+                        .clicked()
+                    {
+                        self.report_export_result(
+                            "Support bundle",
+                            self.export_support_bundle_dialog(),
+                        );
+                    }
+                    if ui
+                        .button(self.language.message("ui.export-project-health"))
+                        .clicked()
+                    {
+                        self.report_export_result(
+                            "Project health export",
+                            self.export_project_health(),
+                        );
+                    }
+                });
                 if let Some(project) = self.ui_snapshot.project.as_ref() {
                     if customer_proof_ready(
                         project.phase,
@@ -249,9 +252,18 @@ impl App {
                                 .min_col_width(140.0)
                                 .show(ui, |ui| {
                                     if visible_rows.start == 0 {
-                                        ui.strong(self.language.message("ui.mailbox"));
-                                        ui.strong(self.language.message("ui.evidence-03867aea"));
-                                        ui.strong(self.language.message("ui.result"));
+                                        crate::ui::table_header(
+                                            ui,
+                                            self.language.message("ui.mailbox"),
+                                        );
+                                        crate::ui::table_header(
+                                            ui,
+                                            self.language.message("ui.evidence-03867aea"),
+                                        );
+                                        crate::ui::table_header(
+                                            ui,
+                                            self.language.message("ui.result"),
+                                        );
                                         ui.end_row();
                                     }
                                     for row in visible_rows {
@@ -289,8 +301,10 @@ impl App {
                                             self.job_id = Some(mailbox.job.id.clone());
                                         }
                                         ui.label(&evidence_label);
-                                        ui.label(
-                                            RichText::new(self.language.text(badge)).color(color),
+                                        crate::ui::status_label(
+                                            ui,
+                                            self.language.text(badge),
+                                            color,
                                         );
                                         ui.end_row();
                                     }
@@ -413,7 +427,11 @@ impl App {
                     ),
                 ] {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(label).strong());
+                        ui.label(
+                            RichText::new(label)
+                                .strong()
+                                .family(crate::ui::fonts::medium()),
+                        );
                         ui.label(value);
                     });
                 }
@@ -427,7 +445,9 @@ impl App {
                         }));
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(self.language.message("ui.transfer-status")).strong(),
+                                RichText::new(self.language.message("ui.transfer-status"))
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
                             );
                             ui.label(self.language.message(if assurance.transfer_completed {
                                 "ui.completed-4ddb3e96"
@@ -438,7 +458,8 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(self.language.message("ui.recorded-evidence-level"))
-                                    .strong(),
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
                             );
                             ui.label(self.language.message(verification_level_key(
                                 evidence.verification_method(),
@@ -447,13 +468,17 @@ impl App {
                         });
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(self.language.message("ui.confidence")).strong(),
+                                RichText::new(self.language.message("ui.confidence"))
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
                             );
                             ui.label(self.language.message(confidence));
                         });
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(self.language.message("ui.body-equality")).strong(),
+                                RichText::new(self.language.message("ui.body-equality"))
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
                             );
                             ui.label(self.language.message(
                                 if evidence.evidence_scope()
@@ -602,7 +627,11 @@ impl App {
                             ),
                         ] {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(label).strong());
+                                ui.label(
+                                    RichText::new(label)
+                                        .strong()
+                                        .family(crate::ui::fonts::medium()),
+                                );
                                 ui.label(value);
                             });
                         }
@@ -681,6 +710,7 @@ impl App {
                                         .message("ui.verified-with-exceptions-7ec28107"),
                                 )
                                 .strong()
+                                .family(crate::ui::fonts::medium())
                                 .color(colors.warning),
                             );
                             ui.label(

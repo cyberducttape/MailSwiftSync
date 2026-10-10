@@ -46,6 +46,7 @@ impl App {
                     ui.label(
                         RichText::new(self.language.message("ui.unqualified"))
                             .strong()
+                            .family(crate::ui::fonts::medium())
                             .color(colors.warning),
                     );
                 });
@@ -57,10 +58,16 @@ impl App {
             } else {
                 route_label.to_owned()
             };
-            ui.label(RichText::new(pair).size(16.0).strong());
+            ui.label(
+                RichText::new(pair)
+                    .size(16.0)
+                    .strong()
+                    .family(crate::ui::fonts::semibold()),
+            );
             ui.label(
                 RichText::new(self.language.message("ui.community-unqualified-path"))
                     .strong()
+                    .family(crate::ui::fonts::medium())
                     .color(colors.warning),
             );
             ui.label(
@@ -291,7 +298,8 @@ impl App {
             ui.label(
                 RichText::new(self.language.message("ui.proposed-execution"))
                     .small()
-                    .strong(),
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
             );
             ui.label(
                 RichText::new(self.language.text(
@@ -373,7 +381,12 @@ mod namespace_detail_tests {
 }
 
 fn simulation_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.label(RichText::new(label).small().strong());
+    ui.label(
+        RichText::new(label)
+            .small()
+            .strong()
+            .family(crate::ui::fonts::medium()),
+    );
     ui.label(value);
     ui.end_row();
 }

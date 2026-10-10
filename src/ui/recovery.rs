@@ -441,7 +441,11 @@ impl App {
     fn recovery_rows_table(&mut self, ui: &mut egui::Ui, project_id: &str) {
         let colors = self.theme_colors();
         for row in &self.recovery.rows {
-            ui.label(RichText::new(&row.label).strong());
+            ui.label(
+                RichText::new(&row.label)
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
             ui.label(
                 RichText::new(format!("{} → {}", row.source_user, row.destination_user))
                     .small()
@@ -561,7 +565,7 @@ mod tests {
         assert_eq!(app.recovery.rows.len(), failed.count);
         // The open group's mailbox list renders in a real frame.
         app.active_view = WorkspaceView::Recovery;
-        let context = egui::Context::default();
+        let context = crate::ui::styled_test_context();
         let mut frame = eframe::Frame::_new_kittest();
         let output = context.run_ui(
             egui::RawInput {

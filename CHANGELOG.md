@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Professional typography and visual polish for the desktop interface: IBM
+  Plex Sans and Plex Mono are bundled (unmodified, SIL OFL; license shipped as
+  `OFL-IBM-Plex.txt` in archives and packages) with real medium and semibold
+  weights for emphasis, headings, and titles; a 14 px body type scale; overline
+  table headers and softened column dividers; status glyphs drawn in one symbol
+  family; the workflow's recommended step as a filled primary action; export
+  actions in a wrapping row; and frameless disclosure rows on modern themes.
+  The release bundle now also includes every document the bundled docs link.
 - Stream the customer proof and operator project report instead of building
   them in memory. Each mailbox and run entry is generated and serialized one
   at a time in two passes (digest, then file), producing byte-for-byte the

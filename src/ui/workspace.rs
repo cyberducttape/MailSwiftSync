@@ -476,7 +476,8 @@ impl App {
                 self.historical_mailbox_offset + 1,
                 (self.historical_mailbox_offset as usize + page_len).min(total_jobs)
             ))
-            .strong(),
+            .strong()
+            .family(crate::ui::fonts::medium()),
         );
         let jobs = &self.ui_snapshot.jobs;
         egui::ScrollArea::vertical().max_height(520.0).show_rows(
@@ -488,9 +489,15 @@ impl App {
                     .striped(true)
                     .show(ui, |ui| {
                         if rows.start == 0 {
-                            ui.strong(self.language.message("ui.source-0e570ca6"));
-                            ui.strong(self.language.message("ui.destination-293d404a"));
-                            ui.strong(self.language.message("ui.state-a3b50c47"));
+                            crate::ui::table_header(
+                                ui,
+                                self.language.message("ui.source-0e570ca6"),
+                            );
+                            crate::ui::table_header(
+                                ui,
+                                self.language.message("ui.destination-293d404a"),
+                            );
+                            crate::ui::table_header(ui, self.language.message("ui.state-a3b50c47"));
                             ui.end_row();
                         }
                         for index in rows {
@@ -498,7 +505,7 @@ impl App {
                             ui.label(&job.source_mailbox);
                             ui.label(&job.destination_mailbox);
                             let (badge, color) = job_state_badge(&job.state, colors);
-                            ui.label(RichText::new(self.language.text(badge)).color(color));
+                            crate::ui::status_label(ui, self.language.text(badge), color);
                             ui.end_row();
                         }
                     });
@@ -588,10 +595,10 @@ impl App {
                 );
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     egui::Grid::new("project_browser").striped(true).show(ui, |ui| {
-                        ui.strong(self.language.message("ui.project-98595978"));
-                        ui.strong(self.language.message("ui.phase"));
-                        ui.strong(self.language.message("ui.source-0e570ca6"));
-                        ui.strong(self.language.message("ui.destination-293d404a"));
+                        crate::ui::table_header(ui, self.language.message("ui.project-98595978"));
+                        crate::ui::table_header(ui, self.language.message("ui.phase"));
+                        crate::ui::table_header(ui, self.language.message("ui.source-0e570ca6"));
+                        crate::ui::table_header(ui, self.language.message("ui.destination-293d404a"));
                         ui.end_row();
                         for &index in &self.project_visible_indices {
                             let project = &self.ui_snapshot.projects[index];
