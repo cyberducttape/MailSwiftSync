@@ -80,8 +80,9 @@ pub(crate) use state::valid_mailbox_transition;
 pub use state::{AttentionReason, MailboxState, OperationalState, Phase};
 #[allow(unused_imports)]
 pub use transfer_passes::{
-    EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
-    TransferPassIntent, TransferPassRecord, TransferProgressSnapshot, folder_digest, sha256_hex,
+    EngineCompletionCounters, PassSide, ProjectOperationMetrics, TransferPassCompletion,
+    TransferPassFolder, TransferPassIntent, TransferPassRecord, TransferProgressSnapshot,
+    folder_digest, sha256_hex,
 };
 pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};

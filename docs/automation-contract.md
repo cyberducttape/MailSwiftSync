@@ -26,6 +26,17 @@ every field path with its allowed JSON types; `[]` marks array elements and
 `attention_reason_counts`). The output is credential-free but still
 customer-sensitive.
 
+Each project in `status --summary` (and therefore in `fleet-status`) carries
+an `operations` object of durable counters for monitoring and alerting:
+`transfer_attempts`, `retried_attempts`, `attempt_outcomes` (by durable
+outcome: `completed`, `delta_required`, `failed:<class>` such as
+`failed:capacity` for provider throttling or connection limits and
+`failed:transport` for network failures, or `unfinished` for running or
+interrupted attempts), and `verification_outcomes` (current outcome per
+mailbox with evidence). Mailbox state counts and `attention_reason_counts`
+give the recovery backlog. Alert on rates between successive polls rather than
+on absolute totals.
+
 `schema_version` is the SQLite ledger schema version. It changes whenever the
 storage schema migrates and is **not** a compatibility signal: dispatch on
 `format` and `format_version` instead.

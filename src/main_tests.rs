@@ -3307,7 +3307,8 @@ fn assert_automation_contract(fixture: &str, output: &serde_json::Value) {
             );
         }
     }
-    for path in declared.keys() {
+    // A map's value path is observable only when the map has entries.
+    for path in declared.keys().filter(|path| !path.ends_with("{}")) {
         assert!(
             shape.contains_key(path),
             "automation field {path:?} is declared by the fixture but missing; removing or renaming it is a breaking change that requires a new format_version"

@@ -437,3 +437,54 @@ impl StateStore {
 fn sql_u64(value: u64) -> rusqlite::Result<i64> {
     i64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))
 }
+
+/// Durable operational counters for one project, for automation and
+/// alerting. Every value is derived from committed ledger rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectOperationMetrics {
+    /// Engine attempts started, across every pass and retry.
+    pub transfer_attempts: usize,
+    /// Attempts after the first within a pass (automatic or operator retries).
+    pub retried_attempts: usize,
+    /// Attempts by durable outcome (`completed`, `delta_required`,
+    /// `failed:<class>` such as `failed:capacity` for provider throttling,
+    /// or `unfinished` for running or interrupted attempts).
+    pub attempt_outcomes: std::collections::BTreeMap<String, usize>,
+    /// Current verification outcome per mailbox with evidence.
+    pub verification_outcomes: std::collections::BTreeMap<String, usize>,
+}
+
+impl StateStore {
+    pub fn project_operation_metrics(
+        &self,
+        project_id: &str,
+    ) -> rusqlite::Result<ProjectOperationMetrics> {
+        let mut metrics = ProjectOperationMetrics::default();
+        let (attempts, retried): (i64, i64) = self.connection.query_row(
+            "SELECT COUNT(*),COALESCE(SUM(attempt>1),0) FROM transfer_passes WHERE project_id=?1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        metrics.transfer_attempts = super::sqlite_usize(attempts)?;
+        metrics.retried_attempts = super::sqlite_usize(retried)?;
+        let mut statement = self.connection.prepare(
+            "SELECT COALESCE(outcome,'unfinished'),COUNT(*) FROM transfer_passes WHERE project_id=?1 GROUP BY 1",
+        )?;
+        for row in statement.query_map([project_id], |row| {
+            Ok((row.get::<_, String>(0)?, super::sqlite_usize(row.get(1)?)?))
+        })? {
+            let (outcome, count) = row?;
+            metrics.attempt_outcomes.insert(outcome, count);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT e.verification_outcome,COUNT(*) FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1 GROUP BY 1",
+        )?;
+        for row in statement.query_map([project_id], |row| {
+            Ok((row.get::<_, String>(0)?, super::sqlite_usize(row.get(1)?)?))
+        })? {
+            let (outcome, count) = row?;
+            metrics.verification_outcomes.insert(outcome, count);
+        }
+        Ok(metrics)
+    }
+}

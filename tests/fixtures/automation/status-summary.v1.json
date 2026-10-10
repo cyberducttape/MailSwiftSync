@@ -1,7 +1,7 @@
 {
   "format": "mailswiftsync-status-summary",
   "format_version": 1,
-  "description": "Golden v1 contract for `mailswiftsync status --summary`. Paths use [] for array elements and {} for map values; '|' separates allowed types. Add new fields here (additive, same version); never remove, rename, or retype a field without a new format_version.",
+  "description": "Golden v1 contract for `mailswiftsync status --summary`. Paths use [] for array elements and {} for map values; '|' separates allowed types; map value paths ({}) are checked whenever a map has entries. Add new fields here (additive, same version); never remove, rename, or retype a field without a new format_version.",
   "fields": {
     "active_processes": "array",
     "active_processes[]": "object",
@@ -35,6 +35,13 @@
     "projects[].mailbox_state_counts.total": "integer",
     "projects[].mailbox_state_counts.verified": "integer",
     "projects[].name": "string",
+    "projects[].operations": "object",
+    "projects[].operations.attempt_outcomes": "map",
+    "projects[].operations.attempt_outcomes{}": "integer",
+    "projects[].operations.retried_attempts": "integer",
+    "projects[].operations.transfer_attempts": "integer",
+    "projects[].operations.verification_outcomes": "map",
+    "projects[].operations.verification_outcomes{}": "integer",
     "projects[].phase": "string",
     "projects[].source_endpoint": "string",
     "projects_truncated": "boolean",

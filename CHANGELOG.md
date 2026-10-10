@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add durable operational counters to `status --summary` and `fleet-status`:
+  per-project transfer attempts, retries, attempt outcomes by failure class
+  (including provider throttling), and current verification outcomes. The
+  fields are additive within automation contract v1 (external audit finding 9).
 - Show cutover readiness in the live batch confirmation: outstanding queue
   rows that need attention, verification differences, or a delta pass, and an
   explicit statement that destination capacity is not checked per mailbox in

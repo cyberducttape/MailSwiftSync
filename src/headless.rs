@@ -83,6 +83,7 @@ pub(crate) struct HeadlessProjectSummary {
     pub(crate) phase: String,
     pub(crate) mailbox_state_counts: core::MailboxStateCounts,
     pub(crate) attention_reason_counts: std::collections::BTreeMap<String, usize>,
+    pub(crate) operations: core::ProjectOperationMetrics,
 }
 
 pub(crate) struct HeadlessCredentials {
@@ -386,6 +387,9 @@ pub(crate) fn headless_status_summary(
         let attention_reason_counts = store
             .mailbox_attention_reason_counts(&project.id)
             .map_err(|error| error.to_string())?;
+        let operations = store
+            .project_operation_metrics(&project.id)
+            .map_err(|error| error.to_string())?;
         summaries.push(HeadlessProjectSummary {
             id: project.id,
             name: project.name,
@@ -395,6 +399,7 @@ pub(crate) fn headless_status_summary(
             phase: project.phase.as_str().to_owned(),
             mailbox_state_counts,
             attention_reason_counts,
+            operations,
         });
     }
     let (active_processes, active_processes_truncated) = store

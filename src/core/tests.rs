@@ -5817,3 +5817,50 @@ fn fully_exact_evidence_still_refuses_an_exception_acceptance() {
             .is_err()
     );
 }
+
+#[test]
+fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("metrics", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "metrics-run", "imapsync")
+        .unwrap();
+    for (attempt, outcome) in [
+        (1, Some("failed:capacity")),
+        (2, Some("completed")),
+        (3, None),
+    ] {
+        db.connection
+            .execute(
+                "INSERT INTO transfer_passes(run_id,attempt,project_id,mailbox_digest,pass_sequence,pass_kind,engine,executable_identity,command_sha256,command,folder_scope,source_range,outcome) VALUES('metrics-run',?1,?2,'digest',1,'imapsync_sync','imapsync','identity','sha','[]','all','full_mailbox',?3)",
+                params![attempt, project.id, outcome],
+            )
+            .unwrap();
+    }
+    db.record_evidence_for_run(
+        &job,
+        "metrics-run",
+        &flag_evidence(VerificationOutcome::ExactMetadataMatch, None),
+    )
+    .unwrap();
+
+    let metrics = db.project_operation_metrics(&project.id).unwrap();
+    assert_eq!(metrics.transfer_attempts, 3);
+    assert_eq!(metrics.retried_attempts, 2);
+    assert_eq!(
+        metrics.attempt_outcomes,
+        std::collections::BTreeMap::from([
+            ("completed".to_owned(), 1),
+            ("failed:capacity".to_owned(), 1),
+            ("unfinished".to_owned(), 1),
+        ])
+    );
+    assert_eq!(
+        metrics.verification_outcomes,
+        std::collections::BTreeMap::from([("exact_metadata_match".to_owned(), 1)])
+    );
+}

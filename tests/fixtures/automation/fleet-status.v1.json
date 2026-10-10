@@ -1,7 +1,7 @@
 {
   "format": "mailswiftsync-fleet-status",
   "format_version": 1,
-  "description": "Golden v1 contract for `mailswiftsync fleet-status`. Paths use [] for array elements and {} for map values; '|' separates allowed types. Add new fields here (additive, same version); never remove, rename, or retype a field without a new format_version.",
+  "description": "Golden v1 contract for `mailswiftsync fleet-status`. Paths use [] for array elements and {} for map values; '|' separates allowed types; map value paths ({}) are checked whenever a map has entries. Add new fields here (additive, same version); never remove, rename, or retype a field without a new format_version.",
   "fields": {
     "format": "string",
     "format_version": "integer",
@@ -42,6 +42,13 @@
     "ledgers[].summary.projects[].mailbox_state_counts.total": "integer",
     "ledgers[].summary.projects[].mailbox_state_counts.verified": "integer",
     "ledgers[].summary.projects[].name": "string",
+    "ledgers[].summary.projects[].operations": "object",
+    "ledgers[].summary.projects[].operations.attempt_outcomes": "map",
+    "ledgers[].summary.projects[].operations.attempt_outcomes{}": "integer",
+    "ledgers[].summary.projects[].operations.retried_attempts": "integer",
+    "ledgers[].summary.projects[].operations.transfer_attempts": "integer",
+    "ledgers[].summary.projects[].operations.verification_outcomes": "map",
+    "ledgers[].summary.projects[].operations.verification_outcomes{}": "integer",
     "ledgers[].summary.projects[].phase": "string",
     "ledgers[].summary.projects[].source_endpoint": "string",
     "ledgers[].summary.projects_truncated": "boolean",
