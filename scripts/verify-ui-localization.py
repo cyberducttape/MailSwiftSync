@@ -12,9 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 UI_DIR = ROOT / "src" / "ui"
 LOCALES_DIR = ROOT / "locales"
 ENGLISH_FILE = tomllib.loads((LOCALES_DIR / "en.toml").read_text(encoding="utf-8"))
-GERMAN_FILE = tomllib.loads((LOCALES_DIR / "de.toml").read_text(encoding="utf-8"))
 ENGLISH = ENGLISH_FILE["messages"]
-GERMAN = GERMAN_FILE["messages"]
+# Every translated catalog must cover exactly the English stable keys.
+TRANSLATIONS = {
+    code: (name, tomllib.loads((LOCALES_DIR / f"{code}.toml").read_text(encoding="utf-8")))
+    for code, name in (("de", "German"), ("id", "Indonesian"))
+}
 
 # Product/protocol names and visual separators are intentionally not translated.
 RAW_LITERAL_ALLOWLIST = {
@@ -112,61 +115,58 @@ def main() -> int:
     }
     english_sources = set(ENGLISH.values())
     missing = sorted(source_copy - english_sources)
-    missing_german = sorted(key for key in ENGLISH if key not in GERMAN)
-    extra_german = sorted(key for key in GERMAN if key not in ENGLISH)
     # Duplicate English labels are safe only when they resolve to the same
     # localized text. Stable keys can intentionally name the same UI concept
     # from different surfaces (for example Source/Destination); differing
     # translations for one English source would make source-based lookup
     # ambiguous and nondeterministic.
-    duplicate_english = sorted(
-        text
-        for text in english_sources
-        if list(ENGLISH.values()).count(text) > 1
-        and len({GERMAN[key] for key, value in ENGLISH.items() if value == text}) > 1
-    )
+    translation_errors: list[str] = []
+    for code, (name, locale_file) in TRANSLATIONS.items():
+        messages = locale_file["messages"]
+        if locale_file.get("meta", {}).get("language") != code:
+            translation_errors.append(f"{name} locale metadata language identifier is invalid")
+        for key in sorted(key for key in ENGLISH if key not in messages):
+            translation_errors.append(f"missing {name} locale message: {key!r}")
+        for key in sorted(key for key in messages if key not in ENGLISH):
+            translation_errors.append(f"{name} locale has unknown message: {key!r}")
+        for text in sorted(
+            text
+            for text in english_sources
+            if list(ENGLISH.values()).count(text) > 1
+            and len({messages[key] for key, value in ENGLISH.items() if value == text and key in messages}) > 1
+        ):
+            translation_errors.append(f"English locale source copy is ambiguous in {name}: {text!r}")
+        for key in sorted(
+            key
+            for key in ENGLISH.keys() & messages.keys()
+            if set(re.findall(r"\{[^{}]+\}", ENGLISH[key]))
+            != set(re.findall(r"\{[^{}]+\}", messages[key]))
+        ):
+            translation_errors.append(f"English/{name} format placeholders differ: {key!r}")
     invalid_ids = sorted(
         key
         for key in ENGLISH
         if not re.fullmatch(r"(?:ui|mailbox|migration|verification)\.[a-z0-9]+(?:-[a-z0-9]+)*", key)
     )
     missing_stable = sorted(key for key in stable_keys if key not in ENGLISH)
-    placeholder_mismatch = sorted(
-        key
-        for key in ENGLISH.keys() & GERMAN.keys()
-        if set(re.findall(r"\{[^{}]+\}", ENGLISH[key]))
-        != set(re.findall(r"\{[^{}]+\}", GERMAN[key]))
-    )
     raw = raw_ui_literals()
-    metadata_ok = (
-        ENGLISH_FILE.get("meta", {}).get("language") == "en"
-        and GERMAN_FILE.get("meta", {}).get("language") == "de"
-    )
+    metadata_ok = ENGLISH_FILE.get("meta", {}).get("language") == "en"
     if (
         missing
-        or missing_german
-        or extra_german
-        or duplicate_english
+        or translation_errors
         or invalid_ids
         or missing_stable
-        or placeholder_mismatch
         or not metadata_ok
         or raw
     ):
         for key in missing:
             print(f"missing English locale source copy: {key!r}", file=sys.stderr)
-        for key in missing_german:
-            print(f"missing German locale message: {key!r}", file=sys.stderr)
-        for key in extra_german:
-            print(f"German locale has unknown message: {key!r}", file=sys.stderr)
-        for text in duplicate_english:
-            print(f"English locale source copy is ambiguous: {text!r}", file=sys.stderr)
+        for error in translation_errors:
+            print(error, file=sys.stderr)
         for key in invalid_ids:
             print(f"locale key is not a stable ui.* identifier: {key!r}", file=sys.stderr)
         for key in missing_stable:
             print(f"stable UI message key is absent from locale catalogs: {key!r}", file=sys.stderr)
-        for key in placeholder_mismatch:
-            print(f"English/German format placeholders differ: {key!r}", file=sys.stderr)
         if not metadata_ok:
             print("locale metadata language identifiers are invalid", file=sys.stderr)
         for violation in raw:

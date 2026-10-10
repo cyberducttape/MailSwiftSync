@@ -1317,6 +1317,7 @@ mod tests {
         for language in [
             crate::ui::language::UiLanguage::English,
             crate::ui::language::UiLanguage::German,
+            crate::ui::language::UiLanguage::Indonesian,
         ] {
             for (_, title_key, detail_key) in LIFECYCLE {
                 let title = language.message(title_key);

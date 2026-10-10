@@ -7,17 +7,19 @@ pub(crate) enum UiLanguage {
     #[default]
     English,
     German,
+    Indonesian,
 }
 
 impl UiLanguage {
     pub(crate) fn all() -> &'static [Self] {
-        &[Self::English, Self::German]
+        &[Self::English, Self::German, Self::Indonesian]
     }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::English => "English",
             Self::German => "Deutsch (teilweise)",
+            Self::Indonesian => "Bahasa Indonesia (sebagian)",
         }
     }
 
@@ -35,7 +37,7 @@ impl UiLanguage {
         if self == Self::English {
             return None;
         }
-        locale_catalog().translate_source(source)
+        locale_catalog().translate_source(self, source)
     }
 
     /// Resolve a stable locale key, falling back to the English catalog.
@@ -60,6 +62,7 @@ struct LocaleCatalog {
     source_keys: std::collections::HashMap<String, String>,
     english: std::collections::HashMap<String, String>,
     german: std::collections::HashMap<String, String>,
+    indonesian: std::collections::HashMap<String, String>,
 }
 
 impl LocaleCatalog {
@@ -68,10 +71,14 @@ impl LocaleCatalog {
             .expect("built-in English locale catalog must be valid");
         let german: LocaleFile = toml::from_str(include_str!("../../locales/de.toml"))
             .expect("built-in German locale catalog must be valid");
+        let indonesian: LocaleFile = toml::from_str(include_str!("../../locales/id.toml"))
+            .expect("built-in Indonesian locale catalog must be valid");
         assert_eq!(english.meta.language, "en");
         assert_eq!(german.meta.language, "de");
+        assert_eq!(indonesian.meta.language, "id");
         assert_eq!(english.meta.display_name, "English");
         assert_eq!(german.meta.display_name, "Deutsch (teilweise)");
+        assert_eq!(indonesian.meta.display_name, "Bahasa Indonesia (sebagian)");
         let source_keys = english
             .messages
             .iter()
@@ -81,20 +88,28 @@ impl LocaleCatalog {
             source_keys,
             english: english.messages,
             german: german.messages,
+            indonesian: indonesian.messages,
         }
     }
 
-    fn translate_source(&'static self, source: &str) -> Option<&'static str> {
+    fn catalog(
+        &'static self,
+        language: UiLanguage,
+    ) -> &'static std::collections::HashMap<String, String> {
+        match language {
+            UiLanguage::English => &self.english,
+            UiLanguage::German => &self.german,
+            UiLanguage::Indonesian => &self.indonesian,
+        }
+    }
+
+    fn translate_source(&'static self, language: UiLanguage, source: &str) -> Option<&'static str> {
         let key = self.source_keys.get(source)?;
-        self.german.get(key).map(String::as_str)
+        self.catalog(language).get(key).map(String::as_str)
     }
 
     fn message(&'static self, language: UiLanguage, key: &str) -> Option<&'static str> {
-        let catalog = match language {
-            UiLanguage::English => &self.english,
-            UiLanguage::German => &self.german,
-        };
-        catalog
+        self.catalog(language)
             .get(key)
             .or_else(|| self.english.get(key))
             .map(String::as_str)
@@ -111,6 +126,8 @@ fn locale_catalog() -> &'static LocaleCatalog {
 mod tests {
     use super::UiLanguage;
 
+    const TRANSLATED: [UiLanguage; 2] = [UiLanguage::German, UiLanguage::Indonesian];
+
     #[test]
     fn language_catalog_keeps_english_default_and_german_shell_labels() {
         assert_eq!(UiLanguage::English.text("Overview"), "Overview");
@@ -124,6 +141,21 @@ mod tests {
         assert_eq!(UiLanguage::German.label(), "Deutsch (teilweise)");
         assert_eq!(
             UiLanguage::German.text("untranslated technical detail"),
+            "untranslated technical detail"
+        );
+    }
+
+    #[test]
+    fn language_catalog_provides_indonesian_shell_labels() {
+        assert_eq!(UiLanguage::Indonesian.text("Overview"), "Ringkasan");
+        assert_eq!(UiLanguage::Indonesian.text("ui.overview"), "Ringkasan");
+        assert_eq!(UiLanguage::Indonesian.lookup("Idle"), Some("Siaga"));
+        assert_eq!(
+            UiLanguage::Indonesian.label(),
+            "Bahasa Indonesia (sebagian)"
+        );
+        assert_eq!(
+            UiLanguage::Indonesian.text("untranslated technical detail"),
             "untranslated technical detail"
         );
     }
@@ -470,11 +502,13 @@ mod tests {
             "× Cancelled",
             "? Unknown",
         ] {
-            assert_ne!(
-                UiLanguage::German.text(key),
-                key,
-                "missing German translation: {key}"
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(key),
+                    key,
+                    "missing {language:?} translation: {key}"
+                );
+            }
         }
     }
 
@@ -488,11 +522,9 @@ mod tests {
             Policy::ExplicitDeleteMissingSourceMessages,
         ] {
             for text in [policy.label(), policy.warning()] {
-                assert_ne!(
-                    UiLanguage::German.text(text),
-                    text,
-                    "missing German: {text}"
-                );
+                for language in TRANSLATED {
+                    assert_ne!(language.text(text), text, "missing {language:?}: {text}");
+                }
             }
         }
     }
@@ -521,11 +553,13 @@ mod tests {
             "{} delta required",
             "{} unresolved",
         ] {
-            assert_ne!(
-                UiLanguage::German.text(key),
-                key,
-                "missing German batch-health translation: {key}"
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(key),
+                    key,
+                    "missing {language:?} batch-health translation: {key}"
+                );
+            }
         }
     }
 
@@ -535,11 +569,13 @@ mod tests {
             "Evidence includes bounded RFC822 body fingerprints from both accounts; provider-specific qualification remains required.",
             "Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared.",
         ] {
-            assert_ne!(
-                UiLanguage::German.text(key),
-                key,
-                "missing German verification explanation: {key}"
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(key),
+                    key,
+                    "missing {language:?} verification explanation: {key}"
+                );
+            }
         }
     }
 
@@ -562,11 +598,13 @@ mod tests {
             "Verification failed",
             "Accepted by {operator} at {time}: {reason}",
         ] {
-            assert_ne!(
-                UiLanguage::German.text(key),
-                key,
-                "missing German verification detail translation: {key}"
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(key),
+                    key,
+                    "missing {language:?} verification detail translation: {key}"
+                );
+            }
         }
     }
 
@@ -599,11 +637,13 @@ mod tests {
             "ui.close-inspector",
             "ui.additional-themes",
         ] {
-            assert_ne!(
-                UiLanguage::German.message(key),
-                UiLanguage::English.message(key),
-                "missing German UI translation: {key}"
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.message(key),
+                    UiLanguage::English.message(key),
+                    "missing {language:?} UI translation: {key}"
+                );
+            }
         }
     }
 
@@ -614,18 +654,22 @@ mod tests {
             crate::core::Engine::Dovecot,
             crate::core::Engine::ImapSync,
         ] {
-            assert_ne!(
-                UiLanguage::German.text(engine.label()),
-                engine.label(),
-                "missing German engine label: {}",
-                engine.label()
-            );
-            assert_ne!(
-                UiLanguage::German.text(engine.description()),
-                engine.description(),
-                "missing German engine description: {}",
-                engine.description()
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(engine.label()),
+                    engine.label(),
+                    "missing {language:?} engine label: {}",
+                    engine.label()
+                );
+            }
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(engine.description()),
+                    engine.description(),
+                    "missing {language:?} engine description: {}",
+                    engine.description()
+                );
+            }
         }
         for strategy in [
             crate::migration_plan::DovecotMigrationStrategy::InitialMirror,
@@ -633,17 +677,21 @@ mod tests {
             crate::migration_plan::DovecotMigrationStrategy::FinalPreservationPass,
             crate::migration_plan::DovecotMigrationStrategy::DestinationAlreadyActive,
         ] {
-            assert_ne!(
-                UiLanguage::German.text(strategy.label()),
-                strategy.label(),
-                "missing German Dovecot strategy label: {}",
-                strategy.label()
-            );
-            assert_ne!(
-                UiLanguage::German.text(strategy.description()),
-                strategy.description(),
-                "missing German Dovecot strategy description"
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(strategy.label()),
+                    strategy.label(),
+                    "missing {language:?} Dovecot strategy label: {}",
+                    strategy.label()
+                );
+            }
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(strategy.description()),
+                    strategy.description(),
+                    "missing {language:?} Dovecot strategy description"
+                );
+            }
         }
         for reason in [
             crate::core::AttentionReason::Interrupted,
@@ -659,17 +707,21 @@ mod tests {
             crate::core::AttentionReason::MessageRejected,
             crate::core::AttentionReason::Unknown,
         ] {
-            assert_ne!(
-                UiLanguage::German.text(reason.label()),
-                reason.label(),
-                "missing German attention label: {}",
-                reason.label()
-            );
-            assert_ne!(
-                UiLanguage::German.text(reason.recommended_action()),
-                reason.recommended_action(),
-                "missing German attention action"
-            );
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(reason.label()),
+                    reason.label(),
+                    "missing {language:?} attention label: {}",
+                    reason.label()
+                );
+            }
+            for language in TRANSLATED {
+                assert_ne!(
+                    language.text(reason.recommended_action()),
+                    reason.recommended_action(),
+                    "missing {language:?} attention action"
+                );
+            }
         }
         for interruption in [
             crate::core::recovery_dashboard::InterruptionReason::ProcessTerminated,
@@ -679,11 +731,13 @@ mod tests {
             for step in
                 crate::core::recovery_dashboard::RecoveryPlanner::generate_guidance(interruption)
             {
-                assert_ne!(
-                    UiLanguage::German.text(step),
-                    step,
-                    "missing German recovery guidance: {step}"
-                );
+                for language in TRANSLATED {
+                    assert_ne!(
+                        language.text(step),
+                        step,
+                        "missing {language:?} recovery guidance: {step}"
+                    );
+                }
             }
         }
     }

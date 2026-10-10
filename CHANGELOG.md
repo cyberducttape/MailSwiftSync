@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a Bahasa Indonesia desktop language pack (`locales/id.toml`), selectable
+  in Settings → Appearance → Language and marked partial until a native
+  reviewer signs it off. The localization check now enforces key, placeholder,
+  and source-copy parity for every translated catalog.
 - Production-readiness stopping point (2026-10-09): durable verification
   exception acceptance is now required before completion, cutover, queue,
   headless-success, report, and operator-status paths can present a run as

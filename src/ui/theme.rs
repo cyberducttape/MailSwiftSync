@@ -740,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn appearance_preferences_default_legacy_files_to_english_and_read_german() {
+    fn appearance_preferences_default_legacy_files_to_english_and_read_translations() {
         let legacy: AppearancePreferences =
             toml::from_str("dark_mode = true\nui_scale = 1.0\n").unwrap();
         assert_eq!(legacy.language, super::super::UiLanguage::English);
@@ -748,6 +748,10 @@ mod tests {
         let german: AppearancePreferences =
             toml::from_str("language = 'German'\ndark_mode = true\nui_scale = 1.0\n").unwrap();
         assert_eq!(german.language, super::super::UiLanguage::German);
+
+        let indonesian: AppearancePreferences =
+            toml::from_str("language = 'Indonesian'\ndark_mode = true\nui_scale = 1.0\n").unwrap();
+        assert_eq!(indonesian.language, super::super::UiLanguage::Indonesian);
     }
 
     #[test]

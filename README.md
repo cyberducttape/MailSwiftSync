@@ -371,11 +371,11 @@ means the requested operation reached its documented terminal condition.
 
 For Linux headless deployments, see the [container deployment guide](docs/container.md).
 
-The desktop interface has an English catalog and a German catalog that is
-currently partial. Locale copy lives in `locales/en.toml` and
-`locales/de.toml`, keyed by stable message identifiers. The selector
-marks German as partial so it is not mistaken for a fully reviewed release
-locale. Choose the language in **Settings → Appearance → Language**; the
+The desktop interface has an English catalog plus German and Bahasa
+Indonesia catalogs that are currently partial. Locale copy lives in
+`locales/en.toml`, `locales/de.toml`, and `locales/id.toml`, keyed by stable
+message identifiers. The selector marks German and Bahasa Indonesia as partial
+so neither is mistaken for a fully reviewed release locale. Choose the language in **Settings → Appearance → Language**; the
 choice is saved with the local appearance preferences. The localization
 coverage check validates catalog parity, source-copy coverage, stable keys,
 and format placeholders. Command-line output, protocol diagnostics, and
