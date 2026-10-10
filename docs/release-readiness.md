@@ -319,7 +319,7 @@ screen-reader checklist are recorded in
 - Explicit Dovecot-native and imapsync engine paths.
 - Dry-run default and explicit confirmation before destination changes.
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
-- CSV/XLSX validation queue with bounded 1–256 worker concurrency and a conservative default of 2. Legacy XLS is rejected because Calamine materializes it before application resource checks.
+- CSV/XLSX validation queue with bounded 1–32 worker concurrency (higher values require a separately qualified fleet runner) and a conservative default of 2. Legacy XLS is rejected because Calamine materializes it before application resource checks.
 - Bounded transient retries for validation and live work; the Activity view
   reports retry attempt/max-retry budget, and exhaustion is recorded as an
   explicit terminal reason. Authentication and configuration failures stop

@@ -2,7 +2,7 @@
 
 ## 1. Choose the right engine
 
-Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available. MailSwiftSync then prepares a destination-side `doveadm` command using `imapc` for the remote source. Choose **imapsync fallback** when the destination is another arbitrary IMAP server. Use the **Engine** toggle on the **Plan** page, or **Choose migration engine…** in the **Tools** row for the guided choice, including the conservative default.
+Choose **Local Dovecot migration (doveadm)** when the destination is managed by Dovecot on this host and administrative access is available. MailSwiftSync then prepares a destination-side `doveadm` command using `imapc` for the remote source. Keep **Standard IMAP migration (imapsync)**, the conservative default, when the destination is another arbitrary IMAP server. Both options are under **Advanced migration settings → Migration method** on the **Plan** page; **Choose migration engine…** in that section's **Tools** row gives the guided choice.
 
 ## 2. Keep Dry run / preflight checked
 
@@ -16,10 +16,10 @@ The **imapsync options** card on the **Plan** page exposes the most common optio
 
 | Setting | What it does |
 | --- | --- |
-| Map standard folders automatically | Adds `--automap` to map common folders such as Sent and Trash. |
-| Folders only | Adds `--justfolders`; useful for checking folder structure without messages. |
-| Add Message-ID header when needed | Adds `--addheader`; this can help imapsync identify messages that lack a usable Message-ID. |
-| Extra imapsync options | Accepts only the application’s safe allowlist of non-connection tuning options and the general debug flag. Protocol-level `debugimap1`/`debugimap2` output is rejected because transformed authentication data cannot be covered by literal secret redaction. Connection, credential, TLS, dry-run, destructive deletion, logging, and unknown flags are rejected; bulk spreadsheets cannot provide this field. |
+| Map standard folders automatically | Adds `--automap` to map common folders such as Sent and Trash. Live runs with automap are rejected, because the engine's resolved mapping cannot be verified independently; use it only to explore mapping in preflight, then express the mapping as **Typed folder mappings**. |
+| Folders only | Adds `--justfolders`; useful for checking folder structure without messages. Independent message verification is unavailable for these runs. |
+| Add Message-ID header when needed | Adds `--addheader`; this can help imapsync identify messages that lack a usable Message-ID. Independent message verification is unavailable for these runs because the header change is not modeled. |
+| Extra imapsync options | Accepts only the application’s safe allowlist of non-connection tuning options. Every debug flag (`debug`, `debugimap1`, `debugimap2`) is rejected because engine debug output can carry customer-sensitive protocol data that literal secret redaction cannot reliably cover. Connection, credential, TLS, dry-run, destructive deletion, logging, and unknown flags are rejected; bulk spreadsheets cannot provide this field. |
 | Performance throttles | In the **Advanced** dialog, optional message/byte-per-second targets are passed to imapsync; for batches MailSwiftSync divides them across workers and globally paces process starts. A finite batch target must be at least the worker count, and plans whose runtime divisor would exceed that budget are rejected; `0` means unlimited. These controls do not affect Dovecot-native runs. |
 | Process timeout | Bounds one migration process from 1 to 720 hours. Increase it for very large or slow mailboxes; cancellation remains available at any time. |
 
@@ -35,22 +35,20 @@ Click **Preview command**. Confirm:
 - Passwords show as dots, never readable text. imapsync receives them through short-lived owner-only passfiles, not command-line values or environment variables.
 - For imapsync, the generated plan explicitly forces `--ssl1`/`--ssl2` for IMAPS and `--tls1` for STARTTLS; it does not permit automatic cleartext fallback. A deliberately configured plain source is shown as an insecure-transport warning, defaults to port 143 when no port is supplied, and requires an explicit acknowledgement before any authenticated operation, including dry preflight. MailSwiftSync also passes `--nolog` so imapsync does not create an unmanaged persistent log outside the application journal.
 
-For private enterprise PKI, enter a PEM **CA bundle** under **Connection details**
-for either endpoint. In imapsync mode, the bundle is added to the TLS readiness
-probe and to imapsync's `SSL_ca_file` setting; public roots remain enabled. An
-optional 64-character **Certificate pin (SHA-256)** for the leaf certificate is checked after the TLS
-handshake and blocks both readiness and live re-authentication on mismatch.
-Trust settings are part of the plan fingerprint, so changing them requires a
-new preflight. Never disable certificate verification to work around an
-untrusted private CA. Dovecot-native mode accepts a source CA bundle for its
-`imapc` source, but certificate pins are not enforced by the native engine and
-are rejected during validation.
+For private enterprise PKI, enter a PEM **CA bundle** under **Advanced
+connection settings** for either endpoint. In imapsync mode, the bundle is
+added to the TLS readiness probe and to imapsync's `SSL_ca_file` setting;
+public roots remain enabled. Trust settings are part of the plan fingerprint,
+so changing them requires a new preflight. Never disable certificate
+verification to work around an untrusted private CA. Dovecot-native mode
+accepts a source CA bundle for its `imapc` source.
 
-For imapsync, the pin protects MailSwiftSync's authenticated readiness proof
-and live-admission re-authentication. The external transfer engine receives
-the CA-validation settings but does not currently consume MailSwiftSync's leaf
-certificate pin; its transfer connection therefore remains CA-validated rather
-than pin-bound.
+The optional 64-character **Certificate pin (SHA-256)** field is checked by
+MailSwiftSync's own readiness probe, but plans that set a pin are currently
+rejected for transfer with either engine: neither the qualified imapsync
+backend nor native Dovecot can enforce a leaf pin on every transfer connection
+and reconnect, and MailSwiftSync will not present a pin it cannot enforce.
+Remove the pin before preflight; transfer connections are CA-validated.
 
 ## 5. Run validation
 

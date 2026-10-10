@@ -104,6 +104,8 @@ host before scheduling a customer migration window.
 
 This deployment pattern is appropriate for restart-aware supervision of work
 that has already passed MailSwiftSync’s durable gates. Automatic token refresh
-does not replace provider OAuth consent or initial refresh-token provisioning,
+does not replace provider OAuth consent or initial refresh-token provisioning
+(run `mailswiftsync oauth-authorize` once per account, or use the desktop
+**Connect … account** flow),
 and it does not make remote Dovecot execution available. Independent approval
 of Attention rows remains an operator responsibility.

@@ -7,8 +7,8 @@ engine or configure a mail server.
 
 1. Download the archive and its adjacent `.sha256` file from the same GitHub
    release. Keep both files in the same directory and use the archive matching
-   the host (`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`,
-   `aarch64-apple-darwin`, or `x86_64-apple-darwin`).
+   the host (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+   `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, or `x86_64-apple-darwin`).
 2. Verify the archive before extracting it.
 
 On Linux:
@@ -133,8 +133,10 @@ known endpoints. Keep the dry preflight, live confirmation, and evidence
 review gates in place; a service-manager deployment is not equivalent to
 unattended production approval. Encrypted imapsync runs include independent
 message-level reconciliation (metadata by default, optional bounded body
-hashing); it has not yet been qualified against live providers. Provider OAuth
-consent and secret-safe remote Dovecot execution are not included yet. Portable release archives are signed when the release signing
+hashing); it has not yet been qualified against live providers. Browser OAuth
+consent with PKCE for Google Workspace and Microsoft 365 is included (desktop
+and `mailswiftsync oauth-authorize`) but not yet qualified against live
+tenants; secret-safe remote Dovecot execution is not included. Portable release archives are signed when the release signing
 environment is configured; Linux releases include signed-checksum Debian and RPM
 packages for x86_64 and aarch64, while native Windows/macOS installer packages
 are not currently published.

@@ -19,8 +19,9 @@ The live form always runs a fresh preflight in the same process before
 promotion and retains the normal durable plan/credential gates. It is suitable
 for a service wrapper or scheduled job with an external timeout and log
 capture. Batch commands require a complete queue already imported and
-validated in the GUI. These commands are not yet a persistent scheduler or
-independent supervisor.
+validated in the GUI. For a maintenance window that must outlive the desktop,
+run the foreground `supervise` controller under a service manager (step 10
+below); it is a supervisor process, not a remote scheduler or API.
 
 A live run whose plan can remove destination-only state (a Dovecot mirror
 strategy or imapsync `--delete2`) refuses to start unless the command adds
@@ -36,7 +37,7 @@ attention. Every other failure, including all batch-mode failures, exits `1`.
 
 - Use one operator session on a locked-down host. Do not run a second MailSwiftSync instance against the same workspace; if the instance-lock message appears, close the existing owner and do not delete the lock file.
 - Confirm `imapsync` and local `doveadm` are installed at the expected versions and paths. Remote Dovecot execution is unavailable until a secret-safe broker exists.
-- Confirm outbound access only to the source, destination, and any approved SSH target. Check NTP, disk space, and the configured process timeout for the actual migration window.
+- Confirm outbound access only to the source and destination IMAP endpoints (and, for OAuth, the provider's token endpoint). Check NTP, disk space, and the configured process timeout for the actual migration window.
 - Keep plain source transport disabled. Remote Dovecot execution is unavailable; use local doveadm or imapsync.
 
 Before a high-value wave, create a verified ledger backup while no other
@@ -100,9 +101,11 @@ stateful-resume token. Live `sync`/`backup` passes provide the last committed
 value to `doveadm -s`; the initial pass uses an empty state, and a newly
 emitted state is committed atomically with the child result. Dry preflight and
 failed or cancelled runs do not advance it. This is an engine resume
-optimization, not UIDVALIDITY-aware message evidence: after recovery, review
-the resulting evidence and run another delta or verification pass when the
-destination is not yet reconciled.
+optimization: the checkpoint is bound to a digest of the source and
+destination UIDVALIDITY context and is refused when that context changes, but
+it is not message-level evidence. After recovery, review the resulting
+evidence and run another delta or verification pass when the destination is
+not yet reconciled.
 
 ## During execution
 
@@ -119,7 +122,7 @@ destination is not yet reconciled.
 
 1. Restart MailSwiftSync and wait for startup recovery to finish. A matching recorded Unix process group is reaped before the interrupted run is made retryable.
 2. Expect interrupted jobs to move to **Attention** and runs to become abandoned. This is conservative recovery, not proof that a transfer failed or succeeded.
-3. Review each Attention item, its classified failure/output, and the destination before retrying. Use the batch queue’s default unresolved-only retry behavior; never enable the explicit Verified re-run option without documenting why.
+3. Review each Attention item, its classified failure/output, and the destination before retrying. **Recovery** groups these mailboxes by durable reason with the recommended action. Retry with **Select unresolved**, which never selects Verified rows; select a Verified row only deliberately, and document why.
 4. Confirm no migration engine remains active outside the application. Linux uses process-group identity checks and Windows uses Job Object ownership with kill-on-close. macOS remains a weaker platform path; prefer a Unix admin host for production windows there.
 5. Re-enter credentials as required, rerun preflight when the plan or credentials changed, and export the resulting evidence after the retry.
 

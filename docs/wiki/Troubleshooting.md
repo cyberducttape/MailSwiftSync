@@ -10,7 +10,7 @@ Check the server name, username, and password for the affected side. Many provid
 
 ## Folder mapping is wrong
 
-Click **Run preflight** and examine the **Activity** log. Enable **Map standard folders automatically** in the **imapsync options** card first. The Extra imapsync options field is intentionally limited to MailSwiftSync’s documented tuning options; unsupported mapping flags must be handled through a typed product control or a reviewed engine-specific workflow.
+Click **Run preflight** and examine the **Activity** log. Express the intended mapping as **Typed folder mappings** under **Advanced migration settings**: exact source-to-destination rules and exclusions are part of the immutable plan and are reused by independent verification. **Map standard folders automatically** can help you explore the mapping during preflight, but live runs with automap are rejected because its resolved mapping cannot be verified. The Extra imapsync options field is intentionally limited to MailSwiftSync’s documented tuning options; unsupported mapping flags must be handled through a typed product control or a reviewed engine-specific workflow.
 
 ## The destination has unexpected mail
 

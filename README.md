@@ -81,11 +81,11 @@ The default live imapsync result is labeled `Metadata reconciled — message bod
 - `imapsync` fallback for arbitrary IMAP endpoints.
 - Batch admission through hierarchical rate domains (global → provider → tenant → credential → mailbox, per side). A capacity or rate-limit failure pauses the throttled mailbox on the reporting side and halves its concurrency (AIMD); a credential, tenant, provider, or the whole batch is paused only after two distinct children of it are throttled within two minutes, so one customer's throttled tenant does not slow another tenant on the same endpoints. Domains recover additively after later successes. The limiter learns only from observed failures in the current batch; no provider-specific quotas are encoded or live-qualified.
 - Batch scheduling separates a ready queue (served round-robin across source tenants), a timer queue, and the execution workers. A mailbox whose rate domain is cooling down, or that is waiting out a retry backoff, is parked in the timer queue instead of holding a worker, so other tenants keep running during one tenant's cooldown.
-- CSV/XLSX batch queue with bounded operator-selected concurrency (1–256 workers; conservative default 2), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states. Engine workers remain OS-thread/process based; large deployments should qualify provider, tenant, credential, and global ceilings rather than treating the maximum as a universal recommendation. Legacy XLS imports are disabled because the parser cannot be bounded safely before worksheet materialization.
+- CSV/XLSX batch queue with bounded operator-selected concurrency (1–32 workers; conservative default 2), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states. Engine workers remain OS-thread/process based; large deployments should qualify provider, tenant, credential, and global ceilings rather than treating the maximum as a universal recommendation. Legacy XLS imports are disabled because the parser cannot be bounded safely before worksheet materialization.
 - Explicit imapsync message and byte throttles for provider-friendly single-mailbox runs.
 - Configurable per-process timeout (1–720 hours) so large mailboxes can run longer than the default while hung jobs remain bounded.
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
-- Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
+- Actionable failure classification in worker output and durable run details: authentication, quota, capacity/rate limit, transport, configuration, message, verification, cancellation, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
 - Metadata-level message mismatch reports with durable missing, extra, and modified counts; optional encrypted-imapsync forensic mode can additionally hash every fetched RFC822 body within explicit per-message and total-byte bounds.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
@@ -98,9 +98,11 @@ The default live imapsync result is labeled `Metadata reconciled — message bod
 
 Experimental or planned:
 
-- Native Dovecot execution is implemented and wired, but remains experimental
-  until its integration fixture and recovery scenarios pass in CI. The
-  capability manifest tracks this separately from code and wiring status.
+- Native Dovecot execution is implemented, wired, and exercised by the packaged
+  Dovecot (mdbox) integration fixture in CI, but remains experimental until
+  live provider, Maildir target-storage, and recovery qualification are
+  published. The capability manifest tracks this separately from code and
+  wiring status.
 - Hosted-provider qualification and unattended secret brokering beyond the OS
   keyring. The GUI and `mailswiftsync oauth-authorize` both use an
   authorization-code flow with PKCE against the operator's own registered
@@ -183,7 +185,7 @@ MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its a
 
 ### 2. Download or build MailSwiftSync
 
-For released binaries, see [GitHub Releases](https://github.com/cyberducttape/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives plus signed-checksum Linux Debian and RPM packages, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Every release tag must exactly equal `v` plus Cargo's package version (currently `v0.1.0-alpha.1`), so prerelease identifiers remain part of the binary and report provenance.
+For released binaries, see [GitHub Releases](https://github.com/cyberducttape/MailSwiftSync/releases). The release workflow produces portable Linux x86_64/aarch64, Windows x86_64, and macOS arm64/x86_64 archives plus signed-checksum Linux Debian and RPM packages, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Every release tag must exactly equal `v` plus Cargo's package version (currently `v0.1.0-alpha.1`), so prerelease identifiers remain part of the binary and report provenance.
 
 For contributors or users building from source:
 
@@ -202,7 +204,7 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 
 ### 3. First migration
 
-1. Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available; otherwise choose **imapsync fallback**.
+1. On **Plan**, open **Advanced migration settings → Migration method**. Keep **Standard IMAP migration (imapsync)** for arbitrary IMAP endpoints; choose **Local Dovecot migration (doveadm)** only when the destination is managed by Dovecot on this host and administrative access is available. **Choose migration engine…** in the same section explains the choice.
 2. On **Plan**, enter source details in the left card and destination details in the right card.
    For imapsync, destination transport is typed separately: implicit TLS defaults to port 993 and STARTTLS defaults to port 143; enter an explicit destination port when the provider uses a nonstandard endpoint.
 3. Leave **Dry run / preflight** checked and click **Preview command** to review the redacted command.
@@ -220,7 +222,7 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 ## Security model
 
 - **Local first.** The app does not relay mail data through a MailSwiftSync service; it invokes the selected local or destination-side engine only when you start a run.
-- **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
+- **No saved passwords in profiles or the ledger.** Profiles retain only server, username, selected options, and optional OS-keyring reference IDs. Password fields begin empty on every launch unless you explicitly load a credential from the OS keyring.
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination. Runs have durable identities; on Unix, startup reconciliation terminates recorded interrupted process groups before exposing them for retry.
 - **Single-owner state.** An exclusive application lock protects the project database. If another MailSwiftSync window is open, close that window rather than deleting the lock file; the second session cannot start a migration without durable ownership.
 - **Descendant containment.** Linux uses owned sessions/process groups and Windows uses a kill-on-close Job Object for engine descendants. macOS deliberately fails closed when it cannot prove ownership and should use a Unix admin host for high-stakes windows.
@@ -370,6 +372,9 @@ live commands return nonzero when work remains unresolved; a zero exit status
 means the requested operation reached its documented terminal condition.
 
 For Linux headless deployments, see the [container deployment guide](docs/container.md).
+The image uses `/var/lib/mailswiftsync` for durable state and an isolated
+`/run/user/10001` runtime directory for short-lived secrets; mount that path as
+owner-only tmpfs rather than a persistent volume.
 
 The desktop interface has an English catalog plus German and Bahasa
 Indonesia catalogs that are currently partial. Locale copy lives in
@@ -380,13 +385,13 @@ choice is saved with the local appearance preferences. The localization
 coverage check validates catalog parity, source-copy coverage, stable keys,
 and format placeholders. Command-line output, protocol diagnostics, and
 generated evidence reports remain in English.
-The image uses `/var/lib/mailswiftsync` for durable state and an isolated
-`/run/user/10001` runtime directory for short-lived secrets; mount that path as
-owner-only tmpfs rather than a persistent volume.
 
 `status` emits secret-free JSON containing project/mailbox states and recorded
 process identities. For large ledgers, `status --summary` emits a bounded
 projection with exact per-project mailbox state counts and no mailbox rows.
+`status`, `status --summary`, and `fleet-status` follow the versioned
+[automation contract](docs/automation-contract.md): dispatch on `format` and
+`format_version`, not on the ledger `schema_version`.
 `recover` takes the application lock, verifies recorded
 process ownership before signalling anything, preserves identities it cannot
 prove, and applies the same conservative recovery transition as GUI startup.
@@ -535,7 +540,7 @@ See the [release-readiness criteria](docs/release-readiness.md) for the boundary
 
 Click **Advanced** on the **Plan** page to add common imapsync flags with understandable descriptions: internal-date sync, UID matching, cache usage, fast I/O, and size-mismatch tolerance. The `--delete2` control is visually marked destructive because it can remove destination messages that do not exist on the source.
 
-The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, subscription, and the general `debug` flag). Protocol-level `debugimap1` and `debugimap2` flags are rejected because transformed or protocol-authentication output cannot be covered by literal secret redaction. Numeric options are parsed and bounded before launch; endpoint, credential, TLS, preflight, destructive deletion, logging, execution, and unknown options are rejected. Test every change with a preflight first. The command preview shows the final arguments with passwords and OAuth tokens redacted. Bulk spreadsheets cannot provide this field.
+The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, and subscription). Every debug flag, including `debug`, `debugimap1`, and `debugimap2`, is rejected because engine debug output can carry customer-sensitive protocol data that literal secret redaction cannot reliably cover. Numeric options are parsed and bounded before launch; endpoint, credential, TLS, preflight, destructive deletion, logging, execution, and unknown options are rejected. Test every change with a preflight first. The command preview shows the final arguments with passwords and OAuth tokens redacted. Bulk spreadsheets cannot provide this field.
 
 ## Packaging
 
