@@ -3393,3 +3393,38 @@ fn automation_contract_rejects_removed_retyped_and_undeclared_fields() {
         );
     }
 }
+
+#[test]
+fn a_failure_after_credentials_are_written_removes_them_for_both_engines() {
+    use crate::migration_plan::{FAIL_AFTER_CREDENTIALS, FAILED_CREDENTIAL_DIRECTORY};
+    let mut dovecot = dovecot_form();
+    dovecot.profile.dovecot_config = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("Cargo.toml")
+        .to_string_lossy()
+        .into_owned();
+    dovecot.dry_run = false;
+    dovecot.source_password = String::from("dovecot-source-credential").into();
+    let mut imapsync = dovecot_form();
+    imapsync.profile.engine = core::Engine::ImapSync;
+    imapsync.source_password = String::from("imapsync-source-credential").into();
+    imapsync.destination_password = String::from("imapsync-destination-credential").into();
+
+    for (engine, form) in [("dovecot", dovecot), ("imapsync", imapsync)] {
+        FAIL_AFTER_CREDENTIALS.with(|fail| fail.set(true));
+        let result = form.validated_plan().unwrap().prepared_command();
+        FAIL_AFTER_CREDENTIALS.with(|fail| fail.set(false));
+        assert!(result.is_err(), "{engine}: injected failure must surface");
+        let (directory, source_written) = FAILED_CREDENTIAL_DIRECTORY
+            .with(|slot| slot.borrow_mut().take())
+            .unwrap_or_else(|| panic!("{engine}: injection point was not reached"));
+        assert!(
+            source_written,
+            "{engine}: credentials existed before the failure"
+        );
+        assert!(
+            !directory.exists(),
+            "{engine}: credential directory {} was left behind",
+            directory.display()
+        );
+    }
+}

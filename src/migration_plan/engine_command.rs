@@ -200,23 +200,17 @@ impl ValidatedPlan<'_> {
                 "Dovecot command preparation requires a detected configuration dialect".to_owned()
             })?;
             let secret_dir = create_secret_directory()?;
+            // Owns the credential directory from creation: every early return
+            // below removes it, until cleanup is handed to the prepared command.
+            let cleanup = crate::credentials::CleanupGuard::new(vec![secret_dir.clone()]);
             let source_file = secret_dir.join("source.secret");
-            let runtime_config = write_secret_file(&source_file, form.source_password.as_str())
-                .map_err(|error| format!("could not prepare source credential file: {error}"))
-                .and_then(|()| {
-                    write_dovecot_runtime_config(
-                        &secret_dir,
-                        &form.profile.dovecot_config,
-                        &source_file,
-                    )
-                });
-            let runtime_config = match runtime_config {
-                Ok(path) => path,
-                Err(error) => {
-                    let _ = std::fs::remove_dir_all(&secret_dir);
-                    return Err(error);
-                }
-            };
+            write_secret_file(&source_file, form.source_password.as_str())
+                .map_err(|error| format!("could not prepare source credential file: {error}"))?;
+            let runtime_config = write_dovecot_runtime_config(
+                &secret_dir,
+                &form.profile.dovecot_config,
+                &source_file,
+            )?;
             let config_path = runtime_config.to_string_lossy();
             let (executable, args) = form.command_with_checkpoint_and_mode_and_config(
                 false,
@@ -225,6 +219,8 @@ impl ValidatedPlan<'_> {
                 Some(&config_path),
                 dovecot_dialect,
             )?;
+            #[cfg(test)]
+            fail_after_credentials_for_test(&secret_dir)?;
             let verification = if form.dry_run {
                 Vec::new()
             } else {
@@ -237,34 +233,25 @@ impl ValidatedPlan<'_> {
             return Ok(PreparedCommand {
                 executable,
                 args,
-                cleanup: vec![secret_dir],
+                cleanup: cleanup.disarm(),
                 env: Vec::new(),
                 verification,
             });
         }
         let mut args = engine::imapsync_args(&form.profile, form.dry_run, throttle_divisor)?;
         let secret_dir = create_secret_directory()?;
+        let cleanup = crate::credentials::CleanupGuard::new(vec![secret_dir.clone()]);
         let source_file = secret_dir.join("source.secret");
         let destination_file = secret_dir.join("destination.secret");
-        if let Err(error) = write_secret_file(&source_file, form.source_password.as_str())
+        write_secret_file(&source_file, form.source_password.as_str())
             .and_then(|_| write_secret_file(&destination_file, form.destination_password.as_str()))
-        {
-            let _ = std::fs::remove_dir_all(&secret_dir);
-            return Err(format!(
-                "Could not prepare temporary credential files: {error}"
-            ));
-        }
+            .map_err(|error| format!("Could not prepare temporary credential files: {error}"))?;
         if auth_method_is_oauth(&form.profile.source_auth) {
             args.extend([
                 "--oauthaccesstoken1".into(),
                 source_file.to_string_lossy().into_owned(),
             ]);
-            if let Err(error) =
-                append_oauth_refresh_command(&mut args, 1, form, &secret_dir, &source_file)
-            {
-                let _ = std::fs::remove_dir_all(&secret_dir);
-                return Err(error);
-            }
+            append_oauth_refresh_command(&mut args, 1, form, &secret_dir, &source_file)?;
         } else {
             args.extend([
                 "--passfile1".into(),
@@ -276,26 +263,46 @@ impl ValidatedPlan<'_> {
                 "--oauthaccesstoken2".into(),
                 destination_file.to_string_lossy().into_owned(),
             ]);
-            if let Err(error) =
-                append_oauth_refresh_command(&mut args, 2, form, &secret_dir, &destination_file)
-            {
-                let _ = std::fs::remove_dir_all(&secret_dir);
-                return Err(error);
-            }
+            append_oauth_refresh_command(&mut args, 2, form, &secret_dir, &destination_file)?;
         } else {
             args.extend([
                 "--passfile2".into(),
                 destination_file.to_string_lossy().into_owned(),
             ]);
         }
+        #[cfg(test)]
+        fail_after_credentials_for_test(&secret_dir)?;
         Ok(PreparedCommand {
             executable: form.profile.imapsync_path.clone(),
             args,
-            cleanup: vec![secret_dir],
+            cleanup: cleanup.disarm(),
             env: Vec::new(),
             verification: Vec::new(),
         })
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fails command preparation after the credential files exist, so tests
+    /// can prove an error at that point leaves no credentials behind.
+    pub(crate) static FAIL_AFTER_CREDENTIALS: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    /// The credential directory and whether its source credential existed
+    /// when the injected failure fired.
+    pub(crate) static FAILED_CREDENTIAL_DIRECTORY: std::cell::RefCell<Option<(PathBuf, bool)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn fail_after_credentials_for_test(secret_dir: &Path) -> Result<(), String> {
+    if !FAIL_AFTER_CREDENTIALS.with(std::cell::Cell::get) {
+        return Ok(());
+    }
+    let source_written = secret_dir.join("source.secret").is_file();
+    FAILED_CREDENTIAL_DIRECTORY
+        .with(|slot| *slot.borrow_mut() = Some((secret_dir.to_path_buf(), source_written)));
+    Err("injected failure after credential files were written".into())
 }
 
 /// Give qualified imapsync a protected refresh configuration and token path.

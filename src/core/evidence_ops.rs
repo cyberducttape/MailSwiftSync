@@ -602,15 +602,24 @@ impl StateStore {
         if state != "verification_difference" || phase == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let (run_id, outcome): (String, String) = tx.query_row(
-            "SELECT run_id,verification_outcome FROM evidence_history WHERE job_id=?1 ORDER BY captured_at DESC, id DESC LIMIT 1",
+        // Fully exact means exact messages and complete, clean flag coverage.
+        // Exact messages with partial or excepted flags remain a genuine,
+        // acceptable difference.
+        let (run_id, outcome, flags_complete): (String, String, bool) = tx.query_row(
+            "SELECT h.run_id,h.verification_outcome,
+                    f.job_id IS NULL OR (f.mismatched_messages=0 AND f.excepted_messages=0 AND f.compared_messages=h.source_messages)
+             FROM evidence_history h
+             LEFT JOIN evidence_flag_verification f ON f.job_id=h.job_id AND f.run_id=h.run_id
+             WHERE h.job_id=?1 ORDER BY h.captured_at DESC, h.id DESC LIMIT 1",
             [job_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        if matches!(
-            outcome.as_str(),
-            "exact_body_match" | "exact_metadata_match"
-        ) {
+        if flags_complete
+            && matches!(
+                outcome.as_str(),
+                "exact_body_match" | "exact_metadata_match"
+            )
+        {
             // A later exact re-verification does not silently erase the
             // migration state's outstanding difference. Require the operator
             // to resolve the current verification state with a fresh, actual

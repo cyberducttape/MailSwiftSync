@@ -858,14 +858,21 @@ impl StateStore {
                 "verified requires exactly matching evidence",
             ));
         }
-        // An explicit exact label is a durable claim even when the terminal
-        // state is verification_difference. Do not allow a caller to persist
-        // that label with counters that describe a different result and rely
-        // on the next database reopen to discover the contradiction.
+        // An explicit exact label is a durable claim about the messages even
+        // when the terminal state is verification_difference. Do not allow a
+        // caller to persist that label with message counters that describe a
+        // different result and rely on the next database reopen to discover
+        // the contradiction. Lost or altered flags make the label
+        // FlagsChanged, but partial or excepted flag coverage is a separate
+        // dimension: exact messages with such coverage are a valid, reviewable
+        // result (displayed as verified with exceptions), not a contradiction.
         if matches!(
             value.verification_outcome,
             Some(VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch)
-        ) && (!value.is_exact_match()
+        ) && (!value.message_result_is_exact()
+            || value
+                .flag_verification
+                .is_some_and(|flags| flags.mismatched_messages > 0)
             || (value.verification_method == VerificationMethod::AggregateEngine
                 && !value.authoritative)
             || (value.verification_method == VerificationMethod::BodyHash

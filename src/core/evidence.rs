@@ -715,6 +715,18 @@ impl VerificationEvidence {
         if exact { 100 } else { 85 }
     }
 
+    /// Whether the message-level counters support an exact message label:
+    /// aggregate totals agree and no message is failed, unresolved, probable,
+    /// missing, extra, or modified. Flag fidelity is a separate dimension and
+    /// is deliberately not part of this check.
+    pub fn message_result_is_exact(&self) -> bool {
+        self.aggregate_totals_match()
+            && self.failed_messages == 0
+            && self.unmatched_messages == Some(0)
+            && self.probable_messages == 0
+            && !self.has_message_level_mismatch()
+    }
+
     pub fn is_exact_match(&self) -> bool {
         matches!(
             self.verification_outcome(),

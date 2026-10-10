@@ -2066,3 +2066,143 @@ fn reset_discards_intermediates_left_by_an_aborted_reconciliation() {
             .unwrap();
     assert_eq!(summary.total_source, 1);
 }
+
+/// Acceptance matrix: every deliberately introduced integrity defect is either
+/// detected by metadata reconciliation (level 2), or is outside that level
+/// (identical metadata, different body) and then detected by bounded body
+/// fingerprints (level 3). No defect may produce a clean result at the level
+/// that claims to cover it.
+#[test]
+fn every_injected_integrity_defect_is_detected_or_outside_the_selected_level() {
+    fn message(id: Option<&str>, uid: &str, size: u64, date: &str) -> ExtractedMessage {
+        ExtractedMessage {
+            message_id: id.map(str::to_owned),
+            uid: Some(uid.to_owned()),
+            size_bytes: Some(size),
+            internal_date: Some(date.to_owned()),
+            flags: None,
+        }
+    }
+    let baseline = || {
+        let mut messages = HashMap::new();
+        messages.insert(
+            key("1"),
+            message(Some("<a@example.test>"), "1", 100, "2024-01-01"),
+        );
+        messages.insert(
+            key("2"),
+            message(Some("<b@example.test>"), "2", 200, "2024-01-02"),
+        );
+        // Two distinct source messages share a Message-ID.
+        messages.insert(
+            key("3"),
+            message(Some("<dup@example.test>"), "3", 300, "2024-01-03"),
+        );
+        messages.insert(
+            key("4"),
+            message(Some("<dup@example.test>"), "4", 301, "2024-01-04"),
+        );
+        messages
+    };
+    let fingerprints = |messages: &HashMap<MailboxMessageKey, ExtractedMessage>| {
+        messages
+            .iter()
+            .map(|(key, message)| {
+                (
+                    key.clone(),
+                    format!("body-{}", message.message_id.clone().unwrap_or_default()),
+                )
+            })
+            .collect::<HashMap<_, _>>()
+    };
+    let source = baseline();
+    let clean = |summary: &VerificationSummary| {
+        summary.metadata_matches == summary.total_source
+            && summary.total_source == summary.total_destination
+            && summary.missing_count == 0
+            && summary.extra_count == 0
+            && summary.duplicated_count == 0
+            && summary.changed_count == 0
+            && summary.probable_matches == 0
+    };
+
+    type Defect = fn(&mut HashMap<MailboxMessageKey, ExtractedMessage>);
+    let metadata_defects: [(&str, Defect); 8] = [
+        ("missing message", |dest| {
+            dest.remove(&key("2"));
+        }),
+        ("unexpected message", |dest| {
+            dest.insert(
+                key("9"),
+                message(Some("<new@example.test>"), "9", 900, "2024-02-01"),
+            );
+        }),
+        ("duplicated copy", |dest| {
+            dest.insert(
+                key("9"),
+                message(Some("<a@example.test>"), "9", 100, "2024-01-01"),
+            );
+        }),
+        ("altered INTERNALDATE", |dest| {
+            dest.get_mut(&key("1")).unwrap().internal_date = Some("2025-06-30".into());
+        }),
+        ("altered size", |dest| {
+            dest.get_mut(&key("1")).unwrap().size_bytes = Some(101);
+        }),
+        ("message moved to another folder", |dest| {
+            let moved = dest.remove(&key("2")).unwrap();
+            dest.insert(MailboxMessageKey::new("Archive", "2"), moved);
+        }),
+        ("Message-ID stripped on destination", |dest| {
+            dest.get_mut(&key("1")).unwrap().message_id = None;
+        }),
+        ("one of two duplicate Message-IDs lost", |dest| {
+            dest.remove(&key("4"));
+        }),
+    ];
+    for (name, inject) in metadata_defects {
+        let mut destination = baseline();
+        inject(&mut destination);
+        let (_, summary) = MessageVerification::detect_mismatches_with_folder_mapping(
+            "matrix-job",
+            "matrix-run",
+            &source,
+            &destination,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(
+            !clean(&summary),
+            "{name}: metadata reconciliation reported clean: {summary:?}"
+        );
+    }
+
+    // Identical metadata, different body: outside level 2 by construction.
+    let destination = baseline();
+    let (_, metadata_only) = MessageVerification::detect_mismatches_with_folder_mapping(
+        "matrix-job",
+        "matrix-run",
+        &source,
+        &destination,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert!(clean(&metadata_only), "{metadata_only:?}");
+    let source_bodies = fingerprints(&source);
+    let mut destination_bodies = fingerprints(&destination);
+    destination_bodies.insert(key("2"), "tampered-body".into());
+    let (_, with_bodies) = MessageVerification::detect_mismatches_with_content_fingerprints(
+        "matrix-job",
+        "matrix-run",
+        &source,
+        &destination,
+        &source_bodies,
+        &destination_bodies,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert!(
+        !clean(&with_bodies),
+        "identical metadata with a different body passed body-fingerprint verification: {with_bodies:?}"
+    );
+}

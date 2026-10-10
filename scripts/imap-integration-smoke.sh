@@ -481,8 +481,11 @@ This message must remain attributable after folder renaming.
 EOF
 
 # Two distinct messages with the same Message-ID exercise multiplicity-aware
-# reconciliation.  Their sizes/dates differ, so a verifier must not collapse
-# them into one identity or report the second as an unrelated extra.
+# reconciliation. Their Date headers differ, but Dovecot derives INTERNALDATE
+# from the Maildir file time and both bodies have the same size, so the pair is
+# identical on (Message-ID, folder, INTERNALDATE, RFC822.SIZE). The verifier
+# must match them as a multiset and compare their flags as a multiset, without
+# collapsing them into one identity or reporting the second as an extra.
 for suffix in one two; do
   duplicate_message="$workspace/source/mail/$user/Maildir/new/duplicate-$suffix.eml"
   if [[ "$suffix" == one ]]; then

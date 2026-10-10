@@ -109,6 +109,13 @@ impl CleanupGuard {
     pub fn new(paths: Vec<PathBuf>) -> Self {
         Self { paths }
     }
+
+    /// Hand cleanup of the guarded paths to their next owner (for example a
+    /// prepared command whose execution guard removes them after the run).
+    /// Until this is called, every early return removes them.
+    pub fn disarm(mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.paths)
+    }
 }
 
 impl Drop for CleanupGuard {

@@ -211,7 +211,8 @@ m365_live = false
 production_supported = false
 
 # Independent IMAP FLAGS comparison (system flags and custom keywords) for
-# unambiguous message pairs, with PERMANENTFLAGS-derived provider exceptions.
+# unambiguous message pairs and, as multisets, identical duplicate groups,
+# with PERMANENTFLAGS-derived provider exceptions.
 # The generic lab exercises it, but it has not yet run there.
 [capabilities.flag_keyword_verification]
 code = "implemented"

@@ -5725,3 +5725,95 @@ fn verification_drill_down_groups_pages_and_exports_without_storing_names() {
         .unwrap();
     assert_eq!((written, truncated), (4, true));
 }
+
+#[test]
+fn exact_messages_with_partial_flag_coverage_are_stored_for_review_and_acceptable() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("partial-flags", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "partial-run", "imapsync")
+        .unwrap();
+    // Every message matched, but flags could be compared for only five of six.
+    let partial = flag_evidence(
+        VerificationOutcome::ExactMetadataMatch,
+        Some(FlagVerification {
+            compared_messages: 5,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        }),
+    );
+    assert!(!partial.is_exact_match());
+    assert!(partial.message_result_is_exact());
+    db.finish_run_for_mailbox_with_evidence(
+        &project.id,
+        &job,
+        "partial-run",
+        "completed",
+        "verification_difference",
+        "",
+        &partial,
+    )
+    .unwrap();
+    assert_eq!(
+        db.mailbox_state(&job).unwrap().as_deref(),
+        Some("verification_difference")
+    );
+    db.validate_internal_invariants().unwrap();
+    db.accept_verification_difference(&project.id, &job, "operator", "two unflagged duplicates")
+        .unwrap();
+    assert_eq!(
+        db.mailbox_state(&job).unwrap().as_deref(),
+        Some("verified_with_exceptions")
+    );
+}
+
+#[test]
+fn fully_exact_evidence_still_refuses_an_exception_acceptance() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db.create_project("exact", "source", "destination").unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "difference-run", "imapsync")
+        .unwrap();
+    let difference = flag_evidence(
+        VerificationOutcome::FlagsChanged,
+        Some(FlagVerification {
+            compared_messages: 6,
+            mismatched_messages: 1,
+            excepted_messages: 0,
+        }),
+    );
+    db.finish_run_for_mailbox_with_evidence(
+        &project.id,
+        &job,
+        "difference-run",
+        "completed",
+        "verification_difference",
+        "",
+        &difference,
+    )
+    .unwrap();
+    // A later, fully exact re-verification must not be used to accept the
+    // outstanding difference.
+    db.insert_run_for_test(&project.id, Some(&job), "exact-rerun", "imapsync")
+        .unwrap();
+    let exact = flag_evidence(
+        VerificationOutcome::ExactMetadataMatch,
+        Some(FlagVerification {
+            compared_messages: 6,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        }),
+    );
+    db.record_evidence_for_run(&job, "exact-rerun", &exact)
+        .unwrap();
+    assert!(
+        db.accept_verification_difference(&project.id, &job, "operator", "stale")
+            .is_err()
+    );
+}

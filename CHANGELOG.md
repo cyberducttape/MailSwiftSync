@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Fix the integration lab's live verification, which the ledger had rejected
+  since 2026-10-08 with "an exact verification label contradicts the evidence
+  counters". Two duplicate messages identical on Message-ID, folder,
+  INTERNALDATE, and size matched as a multiset, but flag verification skipped
+  them, so partial flag coverage turned an exact message label into a stored
+  contradiction. Identical duplicate groups are now compared as multisets of
+  flag sets (a lost or altered flag is still detected), the store's exact-label
+  invariant checks the message counters it describes while still rejecting
+  real flag mismatches, and exact messages with partial or excepted flag
+  coverage can be accepted as reviewed exceptions.
+- Remove temporary credential directories on every command-preparation error
+  through an ownership guard, instead of per-exit cleanup that a later error
+  could bypass (external audit finding). A regression test injects a failure
+  after the credential files exist for both engines.
+- Add an integrity-defect acceptance test: missing, unexpected, duplicated,
+  re-dated, resized, moved, Message-ID-stripped, and lost-duplicate messages
+  are detected by metadata reconciliation, and identical metadata with a
+  different body is detected by bounded body fingerprints.
 - Fail closed instead of hanging when the ledger rejects a terminal result.
   Store invariant rejections were reported as an unexplained "Query is not
   read-only" error and retried on every poll, so a headless live run that hit

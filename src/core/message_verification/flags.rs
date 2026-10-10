@@ -53,10 +53,14 @@ pub(crate) fn compare_flag_sets(
 impl MessageVerification {
     /// Compare FLAGS for every message pair whose identity is unambiguous:
     /// exactly one source and one destination message share the Message-ID,
-    /// expected destination folder, INTERNALDATE, and RFC822.SIZE. Duplicates
-    /// and probable pairings are left uncompared rather than guessed, so the
-    /// compared count is the flag-verification coverage. The pass leaves the
-    /// stage unchanged and can be rerun.
+    /// expected destination folder, INTERNALDATE, and RFC822.SIZE. Groups of
+    /// identical duplicates (the same identity on both sides, the same number
+    /// of times) are compared as multisets of flag sets: no observer can tell
+    /// which copy is which, but a lost or altered flag still changes the
+    /// multiset. Probable pairings and groups whose sizes differ are left
+    /// uncompared rather than guessed, so the compared count is the
+    /// flag-verification coverage. The pass leaves the stage unchanged and can
+    /// be rerun.
     pub(crate) fn verify_staged_flags(
         stage: &MessageMetadataStage,
         folder_mapping: &HashMap<String, String>,
@@ -80,7 +84,18 @@ impl MessageVerification {
             )
             .map_err(|error| format!("could not stage folder mapping: {error}"))?;
         }
-        let result = Self::compare_staged_flag_pairs(connection);
+        let result = Self::compare_staged_flag_pairs(connection).and_then(|pairs| {
+            let groups = Self::compare_staged_duplicate_flag_groups(connection)?;
+            Ok(FlagVerification {
+                compared_messages: pairs
+                    .compared_messages
+                    .saturating_add(groups.compared_messages),
+                mismatched_messages: pairs
+                    .mismatched_messages
+                    .saturating_add(groups.mismatched_messages),
+                excepted_messages: pairs.excepted_messages,
+            })
+        });
         crate::core::stage_sql::execute_batch(connection, "DROP TABLE staged_flag_folder_mapping;")
             .map_err(|error| format!("could not release flag verification rows: {error}"))?;
         result
@@ -143,6 +158,115 @@ impl MessageVerification {
     }
 }
 
+impl MessageVerification {
+    /// Compare identical-duplicate groups as multisets of canonical flag sets.
+    /// Rows stream in group order, so only one group is held in memory. A
+    /// group with any unreported FLAGS is skipped. A differing multiset counts
+    /// every message of the group as mismatched; exceptions are not inferred
+    /// for groups because no single destination copy can be attributed.
+    fn compare_staged_duplicate_flag_groups(
+        connection: &rusqlite::Connection,
+    ) -> Result<FlagVerification, String> {
+        let mut statement = crate::core::stage_sql::prepare(
+            connection,
+            "WITH source AS (
+                    SELECT s.message_id,COALESCE(m.destination,s.mailbox) AS mailbox,
+                           s.date_key,s.size_bytes,s.flags
+                    FROM staged_messages s
+                    LEFT JOIN staged_flag_folder_mapping m ON m.source=s.mailbox
+                    WHERE s.side=0 AND s.message_id IS NOT NULL
+                      AND s.date_key IS NOT NULL AND s.size_bytes IS NOT NULL
+                 ), destination AS (
+                    SELECT message_id,mailbox,date_key,size_bytes,flags
+                    FROM staged_messages
+                    WHERE side=1 AND message_id IS NOT NULL
+                      AND date_key IS NOT NULL AND size_bytes IS NOT NULL
+                 ), source_groups AS (
+                    SELECT message_id,mailbox,date_key,size_bytes,COUNT(*) AS n
+                    FROM source GROUP BY message_id,mailbox,date_key,size_bytes
+                    HAVING COUNT(*)>1
+                 ), destination_groups AS (
+                    SELECT message_id,mailbox,date_key,size_bytes,COUNT(*) AS n
+                    FROM destination GROUP BY message_id,mailbox,date_key,size_bytes
+                    HAVING COUNT(*)>1
+                 ), groups AS (
+                    SELECT s.message_id,s.mailbox,s.date_key,s.size_bytes
+                    FROM source_groups s
+                    JOIN destination_groups d
+                      ON d.message_id=s.message_id AND d.mailbox=s.mailbox
+                     AND d.date_key=s.date_key AND d.size_bytes=s.size_bytes
+                    WHERE s.n=d.n
+                 )
+                 SELECT g.message_id,g.mailbox,g.date_key,g.size_bytes,0,s.flags
+                 FROM groups g JOIN source s
+                   ON s.message_id=g.message_id AND s.mailbox=g.mailbox
+                  AND s.date_key=g.date_key AND s.size_bytes=g.size_bytes
+                 UNION ALL
+                 SELECT g.message_id,g.mailbox,g.date_key,g.size_bytes,1,d.flags
+                 FROM groups g JOIN destination d
+                   ON d.message_id=g.message_id AND d.mailbox=g.mailbox
+                  AND d.date_key=g.date_key AND d.size_bytes=g.size_bytes
+                 ORDER BY 1,2,3,4,5",
+        )
+        .map_err(|error| format!("could not prepare duplicate flag verification: {error}"))?;
+        let mut rows = statement
+            .query([])
+            .map_err(|error| format!("could not query duplicate flag groups: {error}"))?;
+        let mut result = FlagVerification::default();
+        let mut current: Option<(String, String, String, i64)> = None;
+        let mut sides: [Vec<Option<String>>; 2] = [Vec::new(), Vec::new()];
+        let finish = |sides: &mut [Vec<Option<String>>; 2], result: &mut FlagVerification| {
+            let [source, destination] = sides;
+            let canonical = |flags: &mut Vec<Option<String>>| -> Option<Vec<String>> {
+                let mut sets = flags
+                    .drain(..)
+                    .map(|set| {
+                        set.map(|set| {
+                            let mut tokens = set.split_whitespace().collect::<Vec<_>>();
+                            tokens.sort_unstable();
+                            tokens.dedup();
+                            tokens.join(" ")
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                sets.sort_unstable();
+                Some(sets)
+            };
+            if let (Some(source), Some(destination)) = (canonical(source), canonical(destination)) {
+                let count = source.len() as u64;
+                result.compared_messages = result.compared_messages.saturating_add(count);
+                if source != destination {
+                    result.mismatched_messages = result.mismatched_messages.saturating_add(count);
+                }
+            }
+        };
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| format!("could not read duplicate flag group: {error}"))?
+        {
+            let key = (
+                row.get::<_, String>(0).map_err(|error| error.to_string())?,
+                row.get::<_, String>(1).map_err(|error| error.to_string())?,
+                row.get::<_, String>(2).map_err(|error| error.to_string())?,
+                row.get::<_, i64>(3).map_err(|error| error.to_string())?,
+            );
+            if current.as_ref() != Some(&key) {
+                if current.is_some() {
+                    finish(&mut sides, &mut result);
+                }
+                current = Some(key);
+            }
+            let side: i64 = row.get(4).map_err(|error| error.to_string())?;
+            let flags: Option<String> = row.get(5).map_err(|error| error.to_string())?;
+            sides[usize::from(side == 1)].push(flags);
+        }
+        if current.is_some() {
+            finish(&mut sides, &mut result);
+        }
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_identities_are_not_compared_and_the_stage_is_unchanged() {
+    fn identical_duplicates_are_compared_as_flag_multisets_and_the_stage_is_unchanged() {
         let mut stage = MessageMetadataStage::open_in_memory().unwrap();
         stage_side(
             &mut stage,
@@ -216,11 +340,13 @@ mod tests {
                 ("INBOX", 3, "<one@x>", "\\Flagged"),
             ],
         );
+        // The duplicate pair carries {\Seen, none} on both sides: the same
+        // multiset, so all three messages are compared and clean.
         let result = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
         assert_eq!(
             result,
             FlagVerification {
-                compared_messages: 1,
+                compared_messages: 3,
                 mismatched_messages: 0,
                 excepted_messages: 0,
             }
@@ -250,5 +376,50 @@ mod tests {
             compare_flag_sets("\\Draft", "", Some("\\Seen \\*")),
             Excepted
         );
+    }
+
+    #[test]
+    fn a_flag_lost_from_an_identical_duplicate_is_a_mismatch() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage_side(
+            &mut stage,
+            StagedMessageSide::Source,
+            &[
+                ("INBOX", 1, "<dup@x>", "\\Seen"),
+                ("INBOX", 2, "<dup@x>", "\\Flagged"),
+            ],
+        );
+        stage_side(
+            &mut stage,
+            StagedMessageSide::Destination,
+            &[
+                ("INBOX", 1, "<dup@x>", "\\Seen"),
+                ("INBOX", 2, "<dup@x>", ""),
+            ],
+        );
+        let result = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
+        assert_eq!(result.compared_messages, 2);
+        assert_eq!(result.mismatched_messages, 2);
+    }
+
+    #[test]
+    fn duplicate_groups_of_different_sizes_are_left_uncompared() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage_side(
+            &mut stage,
+            StagedMessageSide::Source,
+            &[("INBOX", 1, "<dup@x>", ""), ("INBOX", 2, "<dup@x>", "")],
+        );
+        stage_side(
+            &mut stage,
+            StagedMessageSide::Destination,
+            &[
+                ("INBOX", 1, "<dup@x>", ""),
+                ("INBOX", 2, "<dup@x>", ""),
+                ("INBOX", 3, "<dup@x>", ""),
+            ],
+        );
+        let result = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
+        assert_eq!(result.compared_messages, 0);
     }
 }
