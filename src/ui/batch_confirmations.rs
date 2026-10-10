@@ -237,6 +237,10 @@ crate::ui::name_modal(ui, &modal_heading);
             .unwrap_or(true)
         });
 
+        // Cutover readiness facts for the whole queue. An unreadable queue is
+        // shown as unknown rather than as zero outstanding work.
+        let queue_review = self.bulk_queue_summary().ok();
+
         let stored_identity = self.bulk_confirmation_identity.clone();
         let mut close = false;
 
@@ -302,6 +306,43 @@ crate::ui::name_modal(ui, &modal_heading);
                     self.language
                         .text("Worker concurrency: {}")
                         .replace("{}", &summary.concurrency.to_string()),
+                );
+                match queue_review {
+                    Some(queue) => {
+                        let outstanding = queue.attention
+                            + queue.failed
+                            + queue.cancelled
+                            + queue.verification_difference
+                            + queue.delta_required;
+                        ui.label(
+                            RichText::new(
+                                self.language
+                                    .text("Outstanding in this queue: {} need attention · {} verification differences · {} delta required")
+                                    .replace("{}", &(queue.attention + queue.failed + queue.cancelled).to_string())
+                                    .replacen("{}", &queue.verification_difference.to_string(), 1)
+                                    .replacen("{}", &queue.delta_required.to_string(), 1),
+                            )
+                            .color(if outstanding > 0 {
+                                self.theme_colors().warning
+                            } else {
+                                self.theme_colors().text_secondary
+                            }),
+                        );
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new(self.language.text(
+                                "Outstanding queue review could not be read; resolve the queue error before a cutover pass.",
+                            ))
+                            .color(self.theme_colors().danger),
+                        );
+                    }
+                }
+                ui.label(
+                    RichText::new(self.language.text(
+                        "Destination capacity is not checked per mailbox in batch mode; confirm quota headroom with each provider before the final delta.",
+                    ))
+                    .color(self.theme_colors().text_secondary),
                 );
                 let removes_destination_state = summary.destructive_count > 0;
                 if removes_destination_state {

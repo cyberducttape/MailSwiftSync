@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Show cutover readiness in the live batch confirmation: outstanding queue
+  rows that need attention, verification differences, or a delta pass, and an
+  explicit statement that destination capacity is not checked per mailbox in
+  batch mode (external audit finding 9). An unreadable queue is reported as
+  unknown, never as zero outstanding work.
 - Stream verification mismatches instead of holding them in memory. Durable
   live runs now write every mismatch row to the verification stage and the
   terminal commit streams them into the ledger in the same transaction, so a

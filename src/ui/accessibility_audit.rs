@@ -487,3 +487,26 @@ fn failed_preflight_remediation_opens_the_plan_from_the_keyboard() {
     }]);
     assert!(matches!(harness.app.active_view, WorkspaceView::Plan));
 }
+
+#[test]
+fn live_batch_confirmation_shows_cutover_readiness() {
+    let mut harness = Harness::new(1.0, false);
+    crate::ui::debug_scene::demo_data(&mut harness.app);
+    harness.app.select_all_bulk_rows();
+    harness.app.bulk_mode = crate::controller::BatchExecutionMode::Live;
+    harness.app.bulk_live_confirm_open = true;
+    let nodes = harness.tree();
+    let text = nodes
+        .values()
+        .filter_map(|node| node.label().or_else(|| node.value()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("Outstanding in this queue:"),
+        "the confirmation does not report outstanding queue review:\n{text}"
+    );
+    assert!(
+        text.contains("Destination capacity is not checked per mailbox"),
+        "the confirmation does not state the capacity boundary:\n{text}"
+    );
+}
