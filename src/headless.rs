@@ -15,8 +15,19 @@ const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL: usize = 100_000;
 const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
 
+/// Versioned automation output contracts. `format_version` changes only for
+/// breaking changes (removed, renamed, or retyped fields); additive fields keep
+/// the version. `schema_version` remains the SQLite ledger schema and is not a
+/// compatibility signal for callers. See docs/automation-contract.md.
+pub(crate) const STATUS_FORMAT: &str = "mailswiftsync-status";
+pub(crate) const STATUS_SUMMARY_FORMAT: &str = "mailswiftsync-status-summary";
+pub(crate) const FLEET_STATUS_FORMAT: &str = "mailswiftsync-fleet-status";
+pub(crate) const AUTOMATION_FORMAT_VERSION: u32 = 1;
+
 #[derive(Debug, Serialize)]
 pub(crate) struct HeadlessStatus {
+    pub(crate) format: &'static str,
+    pub(crate) format_version: u32,
     pub(crate) schema_version: i64,
     pub(crate) active_processes: Vec<core::ActiveProcess>,
     pub(crate) active_processes_truncated: bool,
@@ -49,6 +60,8 @@ pub(crate) struct HeadlessMailboxStatus {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct HeadlessStatusSummary {
+    pub(crate) format: &'static str,
+    pub(crate) format_version: u32,
     pub(crate) schema_version: i64,
     pub(crate) active_processes: Vec<core::ActiveProcess>,
     pub(crate) active_processes_truncated: bool,
@@ -305,6 +318,8 @@ pub(crate) fn headless_status(
         .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
         .map_err(|error| error.to_string())?;
     Ok(HeadlessStatus {
+        format: STATUS_FORMAT,
+        format_version: AUTOMATION_FORMAT_VERSION,
         schema_version: core::CURRENT_SCHEMA_VERSION,
         active_processes,
         active_processes_truncated,
@@ -385,6 +400,8 @@ pub(crate) fn headless_status_summary(
         .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
         .map_err(|error| error.to_string())?;
     Ok(HeadlessStatusSummary {
+        format: STATUS_SUMMARY_FORMAT,
+        format_version: AUTOMATION_FORMAT_VERSION,
         schema_version: core::CURRENT_SCHEMA_VERSION,
         active_processes,
         active_processes_truncated,
@@ -401,6 +418,8 @@ const FLEET_MAX_SCAN_DEPTH: usize = 8;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct FleetStatus {
+    pub(crate) format: &'static str,
+    pub(crate) format_version: u32,
     pub(crate) root: String,
     pub(crate) ledger_count: usize,
     pub(crate) totals: core::MailboxStateCounts,
@@ -499,6 +518,8 @@ pub(crate) fn fleet_status(root: &std::path::Path) -> Result<FleetStatus, String
         }
     }
     Ok(FleetStatus {
+        format: FLEET_STATUS_FORMAT,
+        format_version: AUTOMATION_FORMAT_VERSION,
         root: root.display().to_string(),
         ledger_count: ledgers.len(),
         totals,

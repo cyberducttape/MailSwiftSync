@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Publish a versioned automation contract: `status`, `status --summary`, and
+  `fleet-status` JSON now carry `format` and `format_version` (v1), separate
+  from the SQLite `schema_version`, which changes with every storage migration
+  and was never a safe compatibility signal. Golden field fixtures under
+  `tests/fixtures/automation/` and a CI test reject removed, renamed, retyped,
+  or undeclared fields; `docs/automation-contract.md` documents the policy.
 - Add a Bahasa Indonesia desktop language pack (`locales/id.toml`), selectable
   in Settings → Appearance → Language and marked partial until a native
   reviewer signs it off. The localization check now enforces key, placeholder,

@@ -127,8 +127,8 @@ evidence = "HTTPS webhook delivery now has deterministic event IDs, idempotency 
 
 [[production_features]]
 feature = "Automation contract"
-status = "partial"
-evidence = "Status JSON, durable-state semantics, exit handling, and webhook integration guidance are documented; a published major-version compatibility promise and golden schema fixtures remain open."
+status = "implemented"
+evidence = "status, status --summary, and fleet-status JSON carry a format identifier and format_version separate from the SQLite schema version; golden v1 field fixtures and a CI test reject removed, renamed, retyped, or undeclared fields, and docs/automation-contract.md publishes the compatibility policy. Other CLI JSON outputs (reports, certificates, exports) carry their own format markers and are outside this contract."
 
 [[production_features]]
 feature = "MSP RBAC and tenant isolation"

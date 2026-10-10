@@ -3222,3 +3222,174 @@ fn durable_state_path_never_falls_back_to_temporary_storage() {
     let empty_override = persistent_state_path_from(Some(OsString::new()), None).unwrap_err();
     assert!(empty_override.contains("set but empty"));
 }
+
+/// Flatten JSON into `path -> type` pairs. Array elements share the `[]`
+/// path segment; declared map paths stop recursion and type their values.
+fn automation_contract_shape(
+    value: &serde_json::Value,
+    path: &str,
+    maps: &std::collections::BTreeMap<String, String>,
+    shape: &mut std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+) {
+    use serde_json::Value;
+    let kind = match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_u64() || number.is_i64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) if maps.contains_key(path) => "map",
+        Value::Object(_) => "object",
+    };
+    if !path.is_empty() {
+        shape
+            .entry(path.to_owned())
+            .or_default()
+            .insert(kind.to_owned());
+    }
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                automation_contract_shape(item, &format!("{path}[]"), maps, shape);
+            }
+        }
+        Value::Object(entries) if maps.contains_key(path) => {
+            for item in entries.values() {
+                automation_contract_shape(item, &format!("{path}{{}}"), maps, shape);
+            }
+        }
+        Value::Object(entries) => {
+            for (key, item) in entries {
+                let child = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                automation_contract_shape(item, &child, maps, shape);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Validate one automation output against its golden fixture. Every
+/// declared field must be present with a declared type (so removals,
+/// renames, and type changes fail), and every emitted field must be
+/// declared (so additions are deliberate and reviewed in the fixture).
+fn assert_automation_contract(fixture: &str, output: &serde_json::Value) {
+    let fixture: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    assert_eq!(output["format"], fixture["format"]);
+    assert_eq!(output["format_version"], fixture["format_version"]);
+    let declared = fixture["fields"].as_object().unwrap();
+    let maps = declared
+        .iter()
+        .filter(|(_, kind)| kind.as_str() == Some("map"))
+        .map(|(path, _)| (path.clone(), String::new()))
+        .collect();
+    let mut shape = std::collections::BTreeMap::new();
+    automation_contract_shape(output, "", &maps, &mut shape);
+    for (path, kinds) in &shape {
+        let allowed = declared
+            .get(path)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "undeclared automation field {path:?}; additive changes must be added to the fixture"
+                )
+            })
+            .split('|')
+            .collect::<std::collections::BTreeSet<_>>();
+        for kind in kinds {
+            assert!(
+                allowed.contains(kind.as_str()),
+                "automation field {path:?} has type {kind}, fixture allows {allowed:?}"
+            );
+        }
+    }
+    for path in declared.keys() {
+        assert!(
+            shape.contains_key(path),
+            "automation field {path:?} is declared by the fixture but missing; removing or renaming it is a breaking change that requires a new format_version"
+        );
+    }
+}
+
+/// Ledger whose status output exercises every contract field: an
+/// attention reason, an active process, and a populated mailbox page.
+fn automation_contract_ledger(directory: &std::path::Path) -> (std::path::PathBuf, String) {
+    create_private_test_directory(directory);
+    let state = directory.join("state.db");
+    let db = core::StateStore::open(&state).unwrap();
+    let project = db
+        .create_project("contract", "source.example", "destination.example")
+        .unwrap();
+    let interrupted = db
+        .add_mailbox(&project.id, "interrupted-user", "interrupted-user")
+        .unwrap();
+    db.begin_run(&project.id, &interrupted, "run-abandoned", "imapsync")
+        .unwrap();
+    db.recover_abandoned_jobs().unwrap();
+    let active = db
+        .add_mailbox(&project.id, "active-user", "active-user")
+        .unwrap();
+    db.begin_run(&project.id, &active, "run-active", "imapsync")
+        .unwrap();
+    db.register_process(&core::ActiveProcess {
+        run_id: "run-active".into(),
+        job_id: active,
+        pid: 4242,
+        start_ticks: Some(7),
+        process_group: Some(4242),
+        session_id: Some(4242),
+        executable: "imapsync".into(),
+    })
+    .unwrap();
+    (state, project.id)
+}
+
+#[test]
+fn automation_outputs_match_their_versioned_golden_contracts() {
+    let directory = std::env::temp_dir().join(format!("mailswiftsync-contract-{}", Uuid::new_v4()));
+    let (state, project_id) = automation_contract_ledger(&directory);
+
+    let status = serde_json::to_value(headless_status(&state, Some(&project_id)).unwrap()).unwrap();
+    assert_automation_contract(
+        include_str!("../tests/fixtures/automation/status.v1.json"),
+        &status,
+    );
+    let summary =
+        serde_json::to_value(headless::headless_status_summary(&state, Some(&project_id)).unwrap())
+            .unwrap();
+    assert_automation_contract(
+        include_str!("../tests/fixtures/automation/status-summary.v1.json"),
+        &summary,
+    );
+    // A non-ledger candidate exercises the `unreadable[]` contract fields.
+    std::fs::write(directory.join("junk.db"), b"not a database").unwrap();
+    let fleet = serde_json::to_value(headless::fleet_status(&directory).unwrap()).unwrap();
+    assert_eq!(fleet["unreadable"].as_array().unwrap().len(), 1);
+    assert_automation_contract(
+        include_str!("../tests/fixtures/automation/fleet-status.v1.json"),
+        &fleet,
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn automation_contract_rejects_removed_retyped_and_undeclared_fields() {
+    let fixture = r#"{"format":"x","format_version":1,"fields":{
+        "format":"string","format_version":"integer","count":"integer","note":"string|null"}}"#;
+    let valid = serde_json::json!({"format":"x","format_version":1,"count":3,"note":null});
+    assert_automation_contract(fixture, &valid);
+    for broken in [
+        serde_json::json!({"format":"x","format_version":1,"note":null}),
+        serde_json::json!({"format":"x","format_version":1,"count":"3","note":null}),
+        serde_json::json!({"format":"x","format_version":1,"count":3,"note":null,"new":1}),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| assert_automation_contract(fixture, &broken)).is_err(),
+            "{broken}"
+        );
+    }
+}
