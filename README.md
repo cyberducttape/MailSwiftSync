@@ -275,7 +275,9 @@ verification input. It also enforces a conservative estimated
 bounded UID-window enumeration; it no longer materializes a mailbox-wide
 `UID SEARCH ALL` response. Fetched metadata is staged in a private SQLite
 database and reconciled in bounded batches, so the live path does not retain
-both account-wide message maps in Rust. Mismatch detail remains bounded; the
+both account-wide message maps in Rust. Mismatch rows are written to that
+stage and streamed into the ledger by the terminal commit, so mismatch volume
+is bounded by disk rather than memory and no finding is dropped; the
 opt-in body path deliberately loads only bounded metadata maps after hashing,
 and live large-provider qualification remains outstanding. The current
 implementation ceilings are 1,000,000 messages per endpoint for metadata

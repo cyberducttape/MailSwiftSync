@@ -856,9 +856,27 @@ impl MessageMetadataStage {
                  DROP TABLE IF EXISTS staged_probable_source;
                  DROP TABLE IF EXISTS staged_probable_destination;
                  DROP TABLE IF EXISTS staged_probable_pairs;
-                 DROP TABLE IF EXISTS staged_duplicate_ids;",
+                 DROP TABLE IF EXISTS staged_duplicate_ids;
+                 DROP TABLE IF EXISTS staged_mismatches;",
             )
             .map_err(|error| error.to_string())
+    }
+
+    /// Distinct folder names referenced by the staged mismatches (bounded by
+    /// the account's folder count), for this session's drill-down labels.
+    pub(crate) fn staged_mismatch_folders(&self) -> Result<Vec<String>, String> {
+        let connection = self.connection_ref().map_err(|error| error.to_string())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT source_folder FROM staged_mismatches WHERE source_folder IS NOT NULL
+                 UNION SELECT destination_folder FROM staged_mismatches WHERE destination_folder IS NOT NULL",
+            )
+            .map_err(|error| format!("could not read staged mismatch folders: {error}"))?;
+        let folders = statement
+            .query_map([], |row| row.get(0))
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<String>>>())
+            .map_err(|error| format!("could not read staged mismatch folders: {error}"))?;
+        Ok(folders)
     }
 
     pub(crate) fn count(&self, side: StagedMessageSide) -> rusqlite::Result<u64> {

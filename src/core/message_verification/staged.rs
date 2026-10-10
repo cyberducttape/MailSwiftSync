@@ -53,24 +53,63 @@ pub(super) fn mark_stage_matched(
     .map_err(|error| format!("could not mark staged message as matched: {error}"))
 }
 
+/// Stage one mismatch row; reconciliation keeps no mismatch detail in memory.
 pub(super) fn append_stage_mismatch(
-    mismatches: &mut Vec<MessageMismatch>,
+    connection: &rusqlite::Connection,
     mismatch: MessageMismatch,
-    estimated_bytes: &mut usize,
+    staged: &mut u64,
 ) -> Result<(), String> {
-    append_mismatch_with_budget(mismatches, mismatch, estimated_bytes)
+    insert_staged_mismatch(connection, &mismatch)?;
+    *staged = staged.saturating_add(1);
+    Ok(())
 }
 
 impl MessageVerification {
-    /// Reconcile metadata staged in SQLite. The live adapter uses this path
-    /// for large accounts so only one bounded batch and one candidate row are
-    /// resident in Rust at a time.
+    /// Reconcile staged metadata and return its mismatches in memory, under
+    /// the estimated mismatch-detail budget. Durable live runs use
+    /// `reconcile_stage` instead and stream the staged rows into the ledger.
     pub(crate) fn detect_mismatches_from_stage(
         job_id: &str,
         run_id: &str,
         stage: &MessageMetadataStage,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        let (_, summary) = Self::reconcile_stage(job_id, run_id, stage, folder_mapping)?;
+        let job_context: Arc<str> = Arc::from(job_id);
+        let run_context: Arc<str> = Arc::from(run_id);
+        let mut mismatches = Vec::new();
+        let mut estimated_bytes = 0usize;
+        let mut budget_error = None;
+        visit_staged_mismatches(
+            stage.connection()?,
+            &job_context,
+            &run_context,
+            &mut |mismatch| {
+                append_mismatch_with_budget(&mut mismatches, mismatch.clone(), &mut estimated_bytes)
+                    .map_err(|error| {
+                        budget_error = Some(error);
+                        rusqlite::Error::InvalidQuery
+                    })
+            },
+        )
+        .map_err(|error| {
+            budget_error
+                .take()
+                .unwrap_or_else(|| format!("could not read staged mismatches: {error}"))
+        })?;
+        Ok((mismatches, summary))
+    }
+
+    /// Reconcile metadata staged in SQLite, writing every mismatch to the
+    /// stage's `staged_mismatches` table. Only one bounded batch and one
+    /// candidate row are resident in Rust at a time, and mismatch volume is
+    /// bounded by disk, not memory. Returns the staged mismatch count.
+    pub(crate) fn reconcile_stage(
+        job_id: &str,
+        run_id: &str,
+        stage: &MessageMetadataStage,
+        folder_mapping: &HashMap<String, String>,
+    ) -> Result<(u64, VerificationSummary), String> {
         let connection = stage.connection()?;
         // One transaction for the whole pass. A durable stage runs with FULL
         // synchronization, so autocommitting each matched-row insert costs a
@@ -84,8 +123,10 @@ impl MessageVerification {
                 // database. TEMP tables may spill into SQLite's process-wide
                 // temporary directory when temp_store=FILE, escaping the
                 // per-run permissions and cleanup lifecycle.
-                "CREATE TABLE staged_matched(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
-                 CREATE TABLE staged_folder_mapping(source TEXT PRIMARY KEY, destination TEXT NOT NULL);",
+                &format!("CREATE TABLE staged_matched(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
+                 CREATE TABLE staged_folder_mapping(source TEXT PRIMARY KEY, destination TEXT NOT NULL);
+                 DROP TABLE IF EXISTS staged_mismatches;
+                 {STAGED_MISMATCHES_TABLE};"),
             )
             .map_err(|error| format!("could not initialize staged reconciliation: {error}"))?;
         for (source, destination) in folder_mapping {
@@ -108,8 +149,7 @@ impl MessageVerification {
 
         let job_context: Arc<str> = Arc::from(job_id);
         let run_context: Arc<str> = Arc::from(run_id);
-        let mut mismatches = Vec::new();
-        let mut estimated_bytes = 0usize;
+        let mut staged_mismatches = 0_u64;
         // Pair exact Message-ID/folder/date/size groups in SQLite. Ranked
         // rows are materialized and indexed before joining: joining two
         // unindexed window-function CTEs made SQLite choose a quadratic plan
@@ -244,7 +284,7 @@ impl MessageVerification {
                 let (source, destination) =
                     pair.map_err(|error| format!("could not decode changed staged pair: {error}"))?;
                 append_stage_mismatch(
-                    &mut mismatches,
+                    connection,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -254,7 +294,7 @@ impl MessageVerification {
                         Some(&source.message),
                         Some(&destination.message),
                     ),
-                    &mut estimated_bytes,
+                    &mut staged_mismatches,
                 )?;
                 changed_count = changed_count.saturating_add(1);
             }
@@ -315,7 +355,7 @@ impl MessageVerification {
                 mark_stage_matched(connection, StagedMessageSide::Source, &source)?;
                 mark_stage_matched(connection, StagedMessageSide::Destination, &destination)?;
                 append_stage_mismatch(
-                    &mut mismatches,
+                    connection,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -325,7 +365,7 @@ impl MessageVerification {
                         Some(&source.message),
                         Some(&destination.message),
                     ),
-                    &mut estimated_bytes,
+                    &mut staged_mismatches,
                 )?;
                 changed_count = changed_count.saturating_add(1);
             }
@@ -411,7 +451,7 @@ impl MessageVerification {
             after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
             for source in batch {
                 append_stage_mismatch(
-                    &mut mismatches,
+                    connection,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -421,7 +461,7 @@ impl MessageVerification {
                         Some(&source.message),
                         None,
                     ),
-                    &mut estimated_bytes,
+                    &mut staged_mismatches,
                 )?;
                 missing_count = missing_count.saturating_add(1);
             }
@@ -456,7 +496,7 @@ impl MessageVerification {
                     MismatchType::Extra
                 };
                 append_stage_mismatch(
-                    &mut mismatches,
+                    connection,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -466,7 +506,7 @@ impl MessageVerification {
                         None,
                         Some(&destination.message),
                     ),
-                    &mut estimated_bytes,
+                    &mut staged_mismatches,
                 )?;
                 if duplicated {
                     duplicated_count = duplicated_count.saturating_add(1);
@@ -503,7 +543,7 @@ impl MessageVerification {
             .commit()
             .map_err(|error| format!("could not finish staged reconciliation: {error}"))?;
         Ok((
-            mismatches,
+            staged_mismatches,
             VerificationSummary {
                 total_source,
                 total_destination,

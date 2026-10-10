@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Stream verification mismatches instead of holding them in memory. Durable
+  live runs now write every mismatch row to the verification stage and the
+  terminal commit streams them into the ledger in the same transaction, so a
+  mapping error that mismatches most of a 500k-message mailbox records every
+  finding instead of failing at the 64 MiB in-memory detail budget. A stage
+  that changed after reconciliation is rejected. Ephemeral and body-hash runs
+  keep the in-memory budget (external audit findings 6 and 8).
 - Fix the integration lab's live verification, which the ledger had rejected
   since 2026-10-08 with "an exact verification label contradicts the evidence
   counters". Two duplicate messages identical on Message-ID, folder,

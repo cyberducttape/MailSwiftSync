@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use eframe::egui::{self, RichText};
 
 use crate::core::{
-    MailboxEvidence, MessageMismatch, MismatchFilter, MismatchFolderSummary, MismatchType,
-    ReportMailboxSnapshot, StoredMismatch,
+    MailboxEvidence, MismatchFilter, MismatchFolderSummary, MismatchType, ReportMailboxSnapshot,
+    StoredMismatch,
 };
 
 const PAGE_SIZE: usize = 50;
@@ -46,18 +46,14 @@ pub(crate) struct ObservedFolderNames(HashMap<String, String>);
 
 impl ObservedFolderNames {
     /// Remember the folder names of mismatches about to be persisted.
-    pub(crate) fn observe(&mut self, project_id: &str, mismatches: &[MessageMismatch]) {
-        for folder in mismatches
-            .iter()
-            .flat_map(|mismatch| [&mismatch.source_folder, &mismatch.destination_folder])
-            .flatten()
-        {
+    pub(crate) fn observe(&mut self, project_id: &str, mismatches: &crate::core::MismatchSet) {
+        for folder in mismatches.folder_names() {
             if self.0.len() >= MAX_OBSERVED_FOLDER_NAMES {
                 return;
             }
             self.0
-                .entry(crate::core::folder_digest(project_id, folder))
-                .or_insert_with(|| folder.clone());
+                .entry(crate::core::folder_digest(project_id, &folder))
+                .or_insert(folder);
         }
     }
 
@@ -486,7 +482,7 @@ mod tests {
             names.label(Some(&digest), "unknown"),
             format!("#{}", &digest[..12])
         );
-        let mismatch = MessageMismatch {
+        let mismatch = crate::core::MessageMismatch {
             id: "m".into(),
             job_id: "job".into(),
             run_id: "run".into(),
@@ -506,7 +502,10 @@ mod tests {
             source_fingerprint: None,
             destination_fingerprint: None,
         };
-        names.observe("project", std::slice::from_ref(&mismatch));
+        names.observe(
+            "project",
+            &crate::core::MismatchSet::InMemory(vec![mismatch.clone()]),
+        );
         assert_eq!(names.label(Some(&digest), "unknown"), "Sent Items");
         // Digests are project-scoped.
         let other = crate::core::folder_digest("other", "Sent Items");

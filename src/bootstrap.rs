@@ -476,7 +476,7 @@ impl App {
             active_view: WorkspaceView::Overview,
             pending_evidence: None,
             pending_verification_failure: None,
-            pending_mismatches: Vec::new(),
+            pending_mismatches: core::MismatchSet::default(),
             pending_batch_evidence: HashMap::new(),
             pending_batch_mismatches: HashMap::new(),
             pending_checkpoint: None,

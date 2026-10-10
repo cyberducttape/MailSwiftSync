@@ -175,18 +175,9 @@ impl StateStore {
         job_id: &str,
         run_id: &str,
         value: &MailboxEvidence,
-        mismatches: &[MessageMismatch],
+        mismatches: &(impl super::MismatchSource + ?Sized),
         detail: &str,
     ) -> rusqlite::Result<()> {
-        if mismatches.len() > 1_000_000
-            || mismatches.iter().any(|mismatch| {
-                mismatch.job_id.as_ref() != job_id
-                    || mismatch.run_id.as_ref() != run_id
-                    || mismatch.id.is_empty()
-            })
-        {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
             "UPDATE runs SET status='completed',finished_at=CURRENT_TIMESTAMP,detail=?1 WHERE id=?2 AND project_id=?3 AND job_id=?4 AND status='running'",
@@ -238,7 +229,16 @@ impl StateStore {
         let mut insert = tx.prepare_cached(
             "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,source_folder_digest,destination_folder_digest) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14,?15,?16)",
         )?;
-        for mismatch in mismatches {
+        // Stream and validate each row; a rejection rolls back the commit.
+        mismatches.try_for_each_mismatch(&mut |mismatch| {
+            if mismatch.job_id.as_ref() != job_id
+                || mismatch.run_id.as_ref() != run_id
+                || mismatch.id.is_empty()
+            {
+                return Err(super::ledger_rejection(
+                    "a mismatch row belongs to a different run or has no identity",
+                ));
+            }
             insert.execute(params![
                 mismatch.id,
                 job_id,
@@ -279,7 +279,8 @@ impl StateStore {
                     .as_deref()
                     .map(|folder| super::folder_digest(project_id, folder)),
             ])?;
-        }
+            Ok(())
+        })?;
         drop(insert);
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'verification_finished',?3)",

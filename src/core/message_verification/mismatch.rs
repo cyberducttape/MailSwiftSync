@@ -228,3 +228,243 @@ mod tests {
         );
     }
 }
+
+/// Columns of the stage table that holds one reconciliation's mismatches.
+/// The stage is the same private, owner-only database that already holds the
+/// fetched metadata, so staging mismatch detail adds no new exposure; the
+/// ledger insert applies the privacy boundary (no Message-IDs, folder digests).
+pub(crate) const STAGED_MISMATCHES_TABLE: &str = "CREATE TABLE staged_mismatches(
+    ordinal INTEGER PRIMARY KEY,
+    id TEXT NOT NULL,
+    mismatch_type TEXT NOT NULL,
+    source_folder TEXT, destination_folder TEXT,
+    source_uidvalidity INTEGER, destination_uidvalidity INTEGER,
+    source_uid TEXT, dest_uid TEXT,
+    source_message_id TEXT, dest_message_id TEXT,
+    source_size_bytes INTEGER, dest_size_bytes INTEGER,
+    source_date TEXT, dest_date TEXT,
+    source_fingerprint TEXT, destination_fingerprint TEXT)";
+
+fn sqlite_optional_u64_to_i64(value: Option<u64>) -> Result<Option<i64>, String> {
+    value
+        .map(|value| {
+            i64::try_from(value).map_err(|_| "a mismatch number exceeds SQLite range".to_owned())
+        })
+        .transpose()
+}
+
+/// Append one mismatch to the stage table (no in-memory accumulation).
+pub(crate) fn insert_staged_mismatch(
+    connection: &rusqlite::Connection,
+    mismatch: &MessageMismatch,
+) -> Result<(), String> {
+    crate::core::stage_sql::prepare_cached(
+        connection,
+        "INSERT INTO staged_mismatches(id,mismatch_type,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_fingerprint,destination_fingerprint) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+    )
+    .and_then(|mut statement| {
+        statement.execute(params![
+            mismatch.id,
+            mismatch.mismatch_type.as_str(),
+            mismatch.source_folder,
+            mismatch.destination_folder,
+            sqlite_optional_u64_to_i64(mismatch.source_uidvalidity)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?,
+            sqlite_optional_u64_to_i64(mismatch.destination_uidvalidity)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?,
+            mismatch.source_uid,
+            mismatch.dest_uid,
+            mismatch.source_message_id,
+            mismatch.dest_message_id,
+            sqlite_optional_u64_to_i64(mismatch.source_size_bytes)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?,
+            sqlite_optional_u64_to_i64(mismatch.dest_size_bytes)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?,
+            mismatch.source_date,
+            mismatch.dest_date,
+            mismatch.source_fingerprint,
+            mismatch.destination_fingerprint,
+        ])
+    })
+    .map(|_| ())
+    .map_err(|error| format!("could not stage message mismatch: {error}"))
+}
+
+/// Visit staged mismatches in reconciliation order, one row at a time.
+pub(crate) fn visit_staged_mismatches(
+    connection: &rusqlite::Connection,
+    job_id: &Arc<str>,
+    run_id: &Arc<str>,
+    visit: &mut dyn FnMut(&MessageMismatch) -> rusqlite::Result<()>,
+) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare(
+        "SELECT id,mismatch_type,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_fingerprint,destination_fingerprint FROM staged_mismatches ORDER BY ordinal",
+    )?;
+    let mut rows = statement.query([])?;
+    let unsigned = |value: Option<i64>| -> rusqlite::Result<Option<u64>> {
+        value
+            .map(|value| u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()
+    };
+    while let Some(row) = rows.next()? {
+        let mismatch_type =
+            MismatchType::parse(&row.get::<_, String>(1)?).ok_or(rusqlite::Error::InvalidQuery)?;
+        let mismatch = MessageMismatch {
+            id: row.get(0)?,
+            job_id: Arc::clone(job_id),
+            run_id: Arc::clone(run_id),
+            mismatch_type,
+            source_folder: row.get(2)?,
+            destination_folder: row.get(3)?,
+            source_uidvalidity: unsigned(row.get(4)?)?,
+            destination_uidvalidity: unsigned(row.get(5)?)?,
+            source_uid: row.get(6)?,
+            dest_uid: row.get(7)?,
+            source_message_id: row.get(8)?,
+            dest_message_id: row.get(9)?,
+            source_size_bytes: unsigned(row.get(10)?)?,
+            dest_size_bytes: unsigned(row.get(11)?)?,
+            source_date: row.get(12)?,
+            dest_date: row.get(13)?,
+            source_fingerprint: row.get(14)?,
+            destination_fingerprint: row.get(15)?,
+        };
+        visit(&mismatch)?;
+    }
+    Ok(())
+}
+
+/// A reconciliation's mismatches: in memory for small or ephemeral stages, or
+/// left in a durable verification stage and streamed into the ledger by the
+/// terminal commit, so mismatch volume never has to fit in memory.
+#[derive(Debug, Clone)]
+pub enum MismatchSet {
+    InMemory(Vec<MessageMismatch>),
+    Staged {
+        stage_path: std::path::PathBuf,
+        job_id: Arc<str>,
+        run_id: Arc<str>,
+        count: u64,
+        /// Distinct folder names named by the mismatches (bounded by the
+        /// account's folder count), for this session's drill-down labels.
+        folders: Vec<String>,
+    },
+}
+
+impl Default for MismatchSet {
+    fn default() -> Self {
+        Self::InMemory(Vec::new())
+    }
+}
+
+impl MismatchSet {
+    /// Folder names referenced by these mismatches.
+    pub fn folder_names(&self) -> Vec<String> {
+        match self {
+            Self::InMemory(mismatches) => {
+                let mut names = mismatches
+                    .iter()
+                    .flat_map(|mismatch| {
+                        [
+                            mismatch.source_folder.clone(),
+                            mismatch.destination_folder.clone(),
+                        ]
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>();
+                names.sort_unstable();
+                names.dedup();
+                names
+            }
+            Self::Staged { folders, .. } => folders.clone(),
+        }
+    }
+}
+
+/// A source of mismatches the ledger can count and stream without requiring
+/// them all in memory.
+pub trait MismatchSource {
+    fn mismatch_count(&self) -> u64;
+    fn try_for_each_mismatch(
+        &self,
+        visit: &mut dyn FnMut(&MessageMismatch) -> rusqlite::Result<()>,
+    ) -> rusqlite::Result<()>;
+}
+
+impl MismatchSource for [MessageMismatch] {
+    fn mismatch_count(&self) -> u64 {
+        self.len() as u64
+    }
+    fn try_for_each_mismatch(
+        &self,
+        visit: &mut dyn FnMut(&MessageMismatch) -> rusqlite::Result<()>,
+    ) -> rusqlite::Result<()> {
+        self.iter().try_for_each(visit)
+    }
+}
+
+impl<const N: usize> MismatchSource for [MessageMismatch; N] {
+    fn mismatch_count(&self) -> u64 {
+        self.as_slice().mismatch_count()
+    }
+    fn try_for_each_mismatch(
+        &self,
+        visit: &mut dyn FnMut(&MessageMismatch) -> rusqlite::Result<()>,
+    ) -> rusqlite::Result<()> {
+        self.as_slice().try_for_each_mismatch(visit)
+    }
+}
+
+impl MismatchSource for Vec<MessageMismatch> {
+    fn mismatch_count(&self) -> u64 {
+        self.as_slice().mismatch_count()
+    }
+    fn try_for_each_mismatch(
+        &self,
+        visit: &mut dyn FnMut(&MessageMismatch) -> rusqlite::Result<()>,
+    ) -> rusqlite::Result<()> {
+        self.as_slice().try_for_each_mismatch(visit)
+    }
+}
+
+impl MismatchSource for MismatchSet {
+    fn mismatch_count(&self) -> u64 {
+        match self {
+            Self::InMemory(mismatches) => mismatches.len() as u64,
+            Self::Staged { count, .. } => *count,
+        }
+    }
+    fn try_for_each_mismatch(
+        &self,
+        visit: &mut dyn FnMut(&MessageMismatch) -> rusqlite::Result<()>,
+    ) -> rusqlite::Result<()> {
+        match self {
+            Self::InMemory(mismatches) => mismatches.try_for_each_mismatch(visit),
+            Self::Staged {
+                stage_path,
+                job_id,
+                run_id,
+                count,
+                ..
+            } => {
+                let connection = rusqlite::Connection::open_with_flags(
+                    stage_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )?;
+                let mut visited = 0_u64;
+                visit_staged_mismatches(&connection, job_id, run_id, &mut |mismatch| {
+                    visited = visited.saturating_add(1);
+                    visit(mismatch)
+                })?;
+                // The stage must still hold exactly what reconciliation
+                // produced; anything else is not the evidence being committed.
+                if visited != *count {
+                    return Err(crate::core::ledger_rejection(
+                        "staged mismatch evidence changed before its commit",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+}

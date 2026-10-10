@@ -2206,3 +2206,181 @@ fn every_injected_integrity_defect_is_detected_or_outside_the_selected_level() {
         "identical metadata with a different body passed body-fingerprint verification: {with_bodies:?}"
     );
 }
+
+/// Populate a stage with 300 source messages; the destination lacks 100 of
+/// them and holds 50 unrelated extras, so reconciliation finds 150 mismatches.
+fn mismatching_stage(stage: &mut MessageMetadataStage) {
+    let source = (0..300)
+        .map(|index| {
+            let uid = index.to_string();
+            (
+                MailboxMessageKey::new("INBOX", &uid),
+                message(
+                    Some(&format!("<m{index}@x>")),
+                    &uid,
+                    100 + index,
+                    "2024-01-01",
+                ),
+            )
+        })
+        .collect::<ExtractedMessages>();
+    let destination = (0..250)
+        .map(|index| {
+            let uid = index.to_string();
+            if index < 200 {
+                (
+                    MailboxMessageKey::new("INBOX", &uid),
+                    message(
+                        Some(&format!("<m{index}@x>")),
+                        &uid,
+                        100 + index,
+                        "2024-01-01",
+                    ),
+                )
+            } else {
+                (
+                    MailboxMessageKey::new("INBOX", &uid),
+                    message(
+                        Some(&format!("<extra{index}@x>")),
+                        &uid,
+                        9_000 + index,
+                        "2024-02-01",
+                    ),
+                )
+            }
+        })
+        .collect::<ExtractedMessages>();
+    stage
+        .insert_messages(StagedMessageSide::Source, &source)
+        .unwrap();
+    stage
+        .insert_messages(StagedMessageSide::Destination, &destination)
+        .unwrap();
+}
+
+/// Commit mismatches for a fresh run and return the ledger rows. `build`
+/// receives the committing job ID, which every mismatch row must carry.
+/// A committed mismatch row: type, source UID, and destination UID.
+type CommittedMismatchRow = (String, Option<String>, Option<String>);
+
+fn committed_mismatch_rows(
+    build: impl FnOnce(&str) -> MismatchSet,
+) -> rusqlite::Result<Vec<CommittedMismatchRow>> {
+    let store = crate::core::StateStore::in_memory().unwrap();
+    let project = store
+        .create_project("stream", "source", "destination")
+        .unwrap();
+    let job = store
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    store
+        .begin_run(&project.id, &job, "run", "imapsync")
+        .unwrap();
+    let evidence = crate::core::MailboxEvidence {
+        verification_method: crate::core::VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(crate::core::VerificationOutcome::Missing),
+        source_messages: 300,
+        destination_messages: 250,
+        source_bytes: 0,
+        destination_bytes: 0,
+        unmatched_messages: Some(150),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 100,
+        extra_messages: 50,
+        modified_messages: 0,
+        probable_messages: 0,
+        flag_verification: None,
+    };
+    let mismatches = build(&job);
+    store.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
+        &project.id,
+        &job,
+        "run",
+        "completed",
+        "verification_difference",
+        "",
+        &evidence,
+        &mismatches,
+        None,
+        None,
+    )?;
+    let mut statement = store
+        .connection
+        .prepare("SELECT mismatch_type,source_uid,dest_uid FROM message_mismatches ORDER BY mismatch_type,source_uid,dest_uid")
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    Ok(rows)
+}
+
+#[test]
+fn staged_mismatches_stream_into_the_ledger_exactly_like_in_memory_ones() {
+    let mut in_memory_stage = MessageMetadataStage::open_in_memory().unwrap();
+    mismatching_stage(&mut in_memory_stage);
+    let (in_memory, summary) = MessageVerification::detect_mismatches_from_stage(
+        "job",
+        "run",
+        &in_memory_stage,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!((summary.missing_count, summary.extra_count), (100, 50));
+    assert_eq!(in_memory.len(), 150);
+
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("verification.sqlite");
+    let mut durable = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+    mismatching_stage(&mut durable);
+    let (count, staged_summary) =
+        MessageVerification::reconcile_stage("job", "run", &durable, &HashMap::new()).unwrap();
+    assert_eq!(count, 150);
+    assert_eq!(staged_summary.missing_count, summary.missing_count);
+    assert_eq!(staged_summary.extra_count, summary.extra_count);
+    let folders = durable.staged_mismatch_folders().unwrap();
+    assert_eq!(folders, ["INBOX"]);
+    drop(durable);
+
+    let staged = |path: std::path::PathBuf, count: u64| {
+        let folders = folders.clone();
+        move |job: &str| MismatchSet::Staged {
+            stage_path: path,
+            job_id: Arc::from(job),
+            run_id: Arc::from("run"),
+            count,
+            folders,
+        }
+    };
+    let streamed = committed_mismatch_rows(staged(path.clone(), count)).unwrap();
+    let held = committed_mismatch_rows(|job| {
+        MismatchSet::InMemory(
+            in_memory
+                .iter()
+                .cloned()
+                .map(|mut mismatch| {
+                    mismatch.job_id = Arc::from(job);
+                    mismatch.run_id = Arc::from("run");
+                    mismatch
+                })
+                .collect(),
+        )
+    })
+    .unwrap();
+    assert_eq!(streamed.len(), 150);
+    assert_eq!(streamed, held);
+
+    // A stage that no longer holds exactly the reconciled rows is not the
+    // evidence being committed; the commit is rejected as a whole.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute("DELETE FROM staged_mismatches WHERE ordinal=1", [])
+        .unwrap();
+    let error = committed_mismatch_rows(staged(path.clone(), count)).unwrap_err();
+    assert!(crate::core::is_ledger_rejection(&error), "{error}");
+    let _ = std::fs::remove_dir_all(directory);
+}

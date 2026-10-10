@@ -628,7 +628,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                         job_id: job_id.clone(),
                         child_run_id: child_run_id.clone(),
                         evidence,
-                        mismatches: Vec::new(),
+                        mismatches: core::MismatchSet::default(),
                     })
                     .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
                 }
@@ -678,7 +678,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                             job_id: job_id.clone(),
                             child_run_id: child_run_id.clone(),
                             evidence: verification_result.evidence,
-                            mismatches: Vec::new(),
+                            mismatches: core::MismatchSet::default(),
                         },
                     )?;
                 }

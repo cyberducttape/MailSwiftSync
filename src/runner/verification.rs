@@ -159,23 +159,48 @@ pub(crate) fn run_imap_message_verification(
         let destination_fingerprints =
             stage.content_fingerprints(core::StagedMessageSide::Destination);
         // The reconciler refuses incomplete or orphaned fingerprint coverage.
-        core::MessageVerification::detect_mismatches_with_content_fingerprints(
-            job_id,
-            run_id,
-            &source_messages,
-            &destination_messages,
-            &source_fingerprints,
-            &destination_fingerprints,
-            &folder_mapping,
-        )?
+        let (mismatches, summary) =
+            core::MessageVerification::detect_mismatches_with_content_fingerprints(
+                job_id,
+                run_id,
+                &source_messages,
+                &destination_messages,
+                &source_fingerprints,
+                &destination_fingerprints,
+                &folder_mapping,
+            )?;
+        (core::MismatchSet::InMemory(mismatches), summary)
     } else {
         stage.reset_reconciliation()?;
-        core::MessageVerification::detect_mismatches_from_stage(
-            job_id,
-            run_id,
-            &stage,
-            &folder_mapping,
-        )?
+        if let Some(stage_path) = durable_stage_path {
+            // Mismatches stay in the durable stage, which is retained until
+            // the terminal commit streams them into the ledger.
+            let (count, summary) = core::MessageVerification::reconcile_stage(
+                job_id,
+                run_id,
+                &stage,
+                &folder_mapping,
+            )?;
+            let folders = stage.staged_mismatch_folders()?;
+            (
+                core::MismatchSet::Staged {
+                    stage_path: stage_path.to_path_buf(),
+                    job_id: Arc::from(job_id),
+                    run_id: Arc::from(run_id),
+                    count,
+                    folders,
+                },
+                summary,
+            )
+        } else {
+            let (mismatches, summary) = core::MessageVerification::detect_mismatches_from_stage(
+                job_id,
+                run_id,
+                &stage,
+                &folder_mapping,
+            )?;
+            (core::MismatchSet::InMemory(mismatches), summary)
+        }
     };
     // Flag fidelity is its own dimension: it never forms or changes message
     // pairings, and it reports how many messages it could compare.
@@ -257,7 +282,7 @@ pub(crate) fn run_imap_message_verification(
 /// Outcome of independent message-level verification of one mailbox.
 pub(crate) struct MessageVerificationResult {
     pub(crate) evidence: core::MailboxEvidence,
-    pub(crate) mismatches: Vec<core::MessageMismatch>,
+    pub(crate) mismatches: core::MismatchSet,
     /// Per-folder verification cursors; folder names never leave the process.
     pub(crate) folders: Vec<core::FolderCursor>,
 }

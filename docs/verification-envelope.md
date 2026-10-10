@@ -6,7 +6,7 @@ provider, mailbox shape, or host has been qualified at that size.
 
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
-| Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Mismatch detail has a separate estimated 64 MiB cap. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; operators need adequate free space for the private SQLite stage. |
+| Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Mismatch rows are staged on disk and streamed into the ledger for durable runs; ephemeral and body-hash runs keep an estimated 64 MiB in-memory mismatch cap. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; operators need adequate free space for the private SQLite stage. |
 | Body fingerprint proof | Up to 100,000 messages per endpoint are admitted before requesting the next body page and loaded into the forensic reconciler. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The 100,000-message guard is a message-count ceiling, not evidence that 100,000 large bodies fit within the byte budget or a memory guarantee. |
 
 The latest release-mode durable-stage benchmark on a local real-disk
@@ -205,7 +205,7 @@ project report exposes it per run as `verification_limit` (`code`,
 | `body_hash_message_count` | 100,000 messages per endpoint in body-hash mode | No | Disable body-hash verification to obtain metadata evidence |
 | `body_hash_message_size` | Per-message body-hash bound | No | Raise the bound (up to 64 MiB) or disable body hashing |
 | `body_hash_total_size` | Total body-hash bound | No | Raise the bound (up to 8 GiB) or disable body hashing |
-| `reconciliation_state` | Reconciliation state or 64 MiB mismatch detail | No | Inspect the transfer and run another delta pass |
+| `reconciliation_state` | Reconciliation state, or 64 MiB in-memory mismatch detail (ephemeral or body-hash runs) | No | Inspect the transfer and run another delta pass |
 | `deadline` | Verification exceeded the migration timeout | Yes | Rerun to resume from staged pages, or raise the timeout |
 
 "Rerun resumes" means the retained verification stage lets the next run pick

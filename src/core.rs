@@ -66,7 +66,9 @@ pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, Mailbox
 pub(crate) use message_staging::{
     FolderCursor, FolderSnapshot, MessageMetadataStage, StagedMessageSide, durable_stage_path,
 };
-pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
+pub(crate) use message_verification::{
+    MessageMismatch, MessageVerification, MismatchSet, MismatchSource, MismatchType,
+};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxPage,
     MailboxStateCounts, MailboxStatusPage, Project, ProjectListItem, RunListItem, RunSummary,

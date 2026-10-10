@@ -286,7 +286,7 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         "extra_messages": evidence.extra_messages,
         "modified_messages": evidence.modified_messages,
         "probable_messages": evidence.probable_messages,
-        "mismatch_rows": mismatches.len(),
+        "mismatch_rows": core::MismatchSource::mismatch_count(&mismatches),
         "note": "Verification-only observation; the original migration result is unchanged and differences may reflect legitimate post-migration activity."
     });
     out!("{result}");

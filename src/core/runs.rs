@@ -760,7 +760,7 @@ impl StateStore {
         mailbox_state: &str,
         detail: &str,
         value: &MailboxEvidence,
-        mismatches: &[MessageMismatch],
+        mismatches: &(impl super::MismatchSource + ?Sized),
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
         self.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
@@ -823,7 +823,7 @@ impl StateStore {
         mailbox_state: &str,
         detail: &str,
         value: &MailboxEvidence,
-        mismatches: &[MessageMismatch],
+        mismatches: &(impl super::MismatchSource + ?Sized),
         preflight_plan: Option<&str>,
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
@@ -882,7 +882,7 @@ impl StateStore {
                 "an exact verification label contradicts the evidence counters",
             ));
         }
-        if successful_preflight && !mismatches.is_empty() {
+        if successful_preflight && mismatches.mismatch_count() != 0 {
             return Err(super::ledger_rejection(
                 "a successful preflight cannot carry message mismatches",
             ));
@@ -943,73 +943,6 @@ impl StateStore {
             verification_outcome,
             authoritative,
         )?;
-        if mismatches.len() > 1_000_000
-            || mismatches.iter().any(|mismatch| {
-                mismatch.job_id.as_ref() != job_id
-                    || mismatch.run_id.as_ref() != run_id
-                    || mismatch.id.is_empty()
-                    || mismatch.id.len() > 256
-                    || mismatch
-                        .source_uid
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 256)
-                    || mismatch
-                        .dest_uid
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 256)
-                    || mismatch
-                        .source_folder
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 4096)
-                    || mismatch
-                        .destination_folder
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 4096)
-                    || mismatch
-                        .source_message_id
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 4096)
-                    || mismatch
-                        .dest_message_id
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 4096)
-                    || mismatch
-                        .source_date
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 256)
-                    || mismatch
-                        .dest_date
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 256)
-                    || mismatch
-                        .source_fingerprint
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 128)
-                    || mismatch
-                        .destination_fingerprint
-                        .as_deref()
-                        .is_some_and(|value| value.len() > 128)
-                    || [
-                        mismatch.source_uid.as_deref(),
-                        mismatch.dest_uid.as_deref(),
-                        mismatch.source_folder.as_deref(),
-                        mismatch.destination_folder.as_deref(),
-                        mismatch.source_message_id.as_deref(),
-                        mismatch.dest_message_id.as_deref(),
-                        mismatch.source_date.as_deref(),
-                        mismatch.dest_date.as_deref(),
-                        mismatch.source_fingerprint.as_deref(),
-                        mismatch.destination_fingerprint.as_deref(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|value| value.chars().any(char::is_control))
-            })
-        {
-            return Err(super::ledger_rejection(
-                "a message mismatch row is out of bounds or contains control characters",
-            ));
-        }
         tx.execute(
             "DELETE FROM message_mismatches WHERE job_id=?1 AND run_id=?2",
             params![job_id, run_id],
@@ -1017,7 +950,14 @@ impl StateStore {
         let mut insert = tx.prepare_cached(
             "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,source_folder_digest,destination_folder_digest) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14,?15,?16)",
         )?;
-        for mismatch in mismatches {
+        // Stream rows (possibly from a durable verification stage) and validate
+        // each before inserting it; any rejection rolls back the whole commit.
+        mismatches.try_for_each_mismatch(&mut |mismatch| {
+            if mismatch_row_is_invalid(mismatch, job_id, run_id) {
+                return Err(super::ledger_rejection(
+                    "a message mismatch row is out of bounds or contains control characters",
+                ));
+            }
             let source_size = mismatch
                 .source_size_bytes
                 .map(i64::try_from)
@@ -1076,7 +1016,8 @@ impl StateStore {
                 digest(&mismatch.source_folder),
                 digest(&mismatch.destination_folder),
             ])?;
-        }
+            Ok(())
+        })?;
         drop(insert);
         tx.execute(
             "UPDATE mailbox_jobs SET state=?1,attention_reason=?2,preflight_plan=COALESCE(?3,preflight_plan),checkpoint=COALESCE(?4,checkpoint) WHERE id=?5 AND project_id=?6",
@@ -1097,4 +1038,67 @@ impl StateStore {
         )?;
         tx.commit()
     }
+}
+
+/// Bounds and control-character checks for one persisted mismatch row.
+fn mismatch_row_is_invalid(mismatch: &MessageMismatch, job_id: &str, run_id: &str) -> bool {
+    mismatch.job_id.as_ref() != job_id
+        || mismatch.run_id.as_ref() != run_id
+        || mismatch.id.is_empty()
+        || mismatch.id.len() > 256
+        || mismatch
+            .source_uid
+            .as_deref()
+            .is_some_and(|value| value.len() > 256)
+        || mismatch
+            .dest_uid
+            .as_deref()
+            .is_some_and(|value| value.len() > 256)
+        || mismatch
+            .source_folder
+            .as_deref()
+            .is_some_and(|value| value.len() > 4096)
+        || mismatch
+            .destination_folder
+            .as_deref()
+            .is_some_and(|value| value.len() > 4096)
+        || mismatch
+            .source_message_id
+            .as_deref()
+            .is_some_and(|value| value.len() > 4096)
+        || mismatch
+            .dest_message_id
+            .as_deref()
+            .is_some_and(|value| value.len() > 4096)
+        || mismatch
+            .source_date
+            .as_deref()
+            .is_some_and(|value| value.len() > 256)
+        || mismatch
+            .dest_date
+            .as_deref()
+            .is_some_and(|value| value.len() > 256)
+        || mismatch
+            .source_fingerprint
+            .as_deref()
+            .is_some_and(|value| value.len() > 128)
+        || mismatch
+            .destination_fingerprint
+            .as_deref()
+            .is_some_and(|value| value.len() > 128)
+        || [
+            mismatch.source_uid.as_deref(),
+            mismatch.dest_uid.as_deref(),
+            mismatch.source_folder.as_deref(),
+            mismatch.destination_folder.as_deref(),
+            mismatch.source_message_id.as_deref(),
+            mismatch.dest_message_id.as_deref(),
+            mismatch.source_date.as_deref(),
+            mismatch.dest_date.as_deref(),
+            mismatch.source_fingerprint.as_deref(),
+            mismatch.destination_fingerprint.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value.chars().any(char::is_control))
 }

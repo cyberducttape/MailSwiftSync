@@ -206,7 +206,7 @@ particular target.
    - IMAP flags and custom keywords are compared for unambiguously matched message pairs and, as multisets, for identical duplicate groups, with PERMANENTFLAGS-derived provider exceptions and reported coverage; this has not yet run in the generic lab or against live providers
    - Bounded fetch pages, account/message limits, and any unstable folder fail closed; partial account evidence is not emitted
    - Live verification stages fetched metadata in SQLite and reconciles it in bounded batches; the estimated 256 MiB fetched-state budget is an admission guard, not a whole-process peak-memory guarantee
-   - Large-account/provider qualification remains outstanding; mismatch details are still accumulated for evidence persistence, and durable per-message checkpoint restart semantics remain future work
+   - Large-account/provider qualification remains outstanding. Durable live runs stage every mismatch row and stream them into the ledger at the terminal commit (no in-memory cap); ephemeral and body-hash runs keep the estimated 64 MiB in-memory budget. Durable per-message checkpoint restart semantics remain future work
 
 2. **Provider-specific throttling is not qualified**
    - Configurations are defined for Gmail, O365, Fastmail

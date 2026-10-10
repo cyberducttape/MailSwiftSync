@@ -129,7 +129,7 @@ pub(crate) enum Event {
         job_id: String,
         child_run_id: String,
         evidence: core::MailboxEvidence,
-        mismatches: Vec<core::MessageMismatch>,
+        mismatches: core::MismatchSet,
     },
     Checkpoint {
         run_id: String,
@@ -140,7 +140,7 @@ pub(crate) enum Event {
     MessageMismatches {
         run_id: String,
         job_id: String,
-        mismatches: Vec<core::MessageMismatch>,
+        mismatches: core::MismatchSet,
     },
     VerificationFailed(String),
     /// Cumulative, content-free engine progress for one process. Snapshots

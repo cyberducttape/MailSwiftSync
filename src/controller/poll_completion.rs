@@ -251,7 +251,7 @@ impl App {
                     // result.
                     self.pending_evidence = None;
                     self.pending_verification_failure = None;
-                    self.pending_mismatches.clear();
+                    self.pending_mismatches = core::MismatchSet::default();
                     self.pending_checkpoint = None;
                 }
                 // A terminal run commit is the boundary between an external
