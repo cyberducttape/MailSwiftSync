@@ -872,11 +872,12 @@ pub(crate) fn compare_files(
             &mut categories,
         )?;
         let result = compare_staged(&staging.connection, &categories)?;
-        let text = serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?;
-        write_private_atomic(output, &text).map_err(|e| e.to_string())?;
         Ok(result)
     })();
-    finish_staging_operation(result, staging.finish())
+    let result = finish_staging_operation(result, staging.finish())?;
+    let text = serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?;
+    write_private_atomic(output, &text).map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 #[cfg(test)]
