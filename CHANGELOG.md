@@ -8,6 +8,9 @@
   unqualified verification result by automation.
 - Version the standalone `reverify` JSON envelope with a stable format name and
   format version, aligning it with the documented automation contract.
+- Centralize standalone reverify result construction and add a regression for
+  partial flag coverage, keeping the machine-readable assurance status aligned
+  with the evidence model.
 - Apply exact-evidence consistency checks to standalone re-verification
   history, preventing contradictory message counters from being persisted as
   an exact audit result.

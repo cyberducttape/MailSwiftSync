@@ -331,7 +331,19 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         eprintln!("Reverification completed, but difference export failed: {error}");
         std::process::exit(1);
     }
-    let result = serde_json::json!({
+    let result = reverify_result_json(&evidence, &run_id, &mode, folder_count, &mismatches);
+    out!("{result}");
+    Ok(())
+}
+
+fn reverify_result_json(
+    evidence: &core::MailboxEvidence,
+    run_id: &str,
+    mode: &str,
+    folder_count: usize,
+    mismatches: &core::MismatchSet,
+) -> serde_json::Value {
+    serde_json::json!({
         "format": "mailswiftsync.reverify",
         "format_version": 1,
         "run_id": run_id,
@@ -355,11 +367,10 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         "extra_messages": evidence.extra_messages,
         "modified_messages": evidence.modified_messages,
         "probable_messages": evidence.probable_messages,
-        "mismatch_rows": core::MismatchSource::mismatch_count(&mismatches),
+        "mismatch_rows": core::MismatchSource::mismatch_count(mismatches),
+        "folders": folder_count,
         "note": "Verification-only observation; the original migration result is unchanged and differences may reflect legitimate post-migration activity."
-    });
-    out!("{result}");
-    Ok(())
+    })
 }
 
 pub(super) fn verify_certificate_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
@@ -859,6 +870,45 @@ fn reverify_stage_path(state: &std::path::Path, job_id: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    fn exact_metadata_evidence() -> crate::core::MailboxEvidence {
+        crate::core::MailboxEvidence {
+            verification_method: crate::core::VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(crate::core::VerificationOutcome::ExactMetadataMatch),
+            source_messages: 4,
+            destination_messages: 4,
+            source_bytes: 40,
+            destination_bytes: 40,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            flag_verification: None,
+        }
+    }
+
+    #[test]
+    fn reverify_json_exposes_partial_flag_coverage_as_an_exception() {
+        let mut evidence = exact_metadata_evidence();
+        evidence.flag_verification = Some(crate::core::FlagVerification {
+            compared_messages: 2,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        });
+        let mismatches = crate::core::MismatchSet::default();
+        let output = super::reverify_result_json(&evidence, "run-1", "metadata", 3, &mismatches);
+        assert_eq!(output["format"], "mailswiftsync.reverify");
+        assert_eq!(output["format_version"], 1);
+        assert_eq!(output["verification_status"], "verified_with_exceptions");
+        assert_eq!(output["message_coverage"]["checked"], 4);
+        assert_eq!(output["flag_verification"]["compared"], 2);
+        assert_eq!(output["flag_verification"]["total"], 4);
+    }
+
     #[test]
     fn reverify_uses_its_own_stage_beside_the_live_stage() {
         let state = std::path::Path::new("/var/lib/mailswiftsync/state.db");
