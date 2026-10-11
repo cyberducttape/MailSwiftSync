@@ -179,7 +179,8 @@ impl StateStore {
             || (value.verification_method == VerificationMethod::AggregateEngine
                 && !value.authoritative)
             || (value.verification_method == VerificationMethod::BodyHash
-                && outcome != VerificationOutcome::ExactBodyMatch))
+                && outcome != VerificationOutcome::ExactBodyMatch)
+            || !value.is_exact_match())
         {
             return Err(super::ledger_rejection(
                 "an exact verification label contradicts the evidence counters",

@@ -1759,7 +1759,11 @@ fn evidence_projection_migration_backfills_its_latest_history_run() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
-        flag_verification: None,
+        flag_verification: Some(FlagVerification {
+            compared_messages: 1,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        }),
     };
     db.finish_run_for_mailbox_with_evidence(
         &project.id,
@@ -2876,7 +2880,11 @@ fn verification_difference_requires_durable_exception_acceptance() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
-        flag_verification: None,
+        flag_verification: Some(FlagVerification {
+            compared_messages: 10,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        }),
     };
     db.begin_verification_run(&project.id, &job, "exact-recheck", "snapshot")
         .unwrap();

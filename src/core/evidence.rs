@@ -491,12 +491,25 @@ impl VerificationEvidence {
     }
 
     fn has_flag_mismatch(&self) -> bool {
-        self.flag_verification.is_some_and(|flags| {
-            flags.mismatched_messages > 0
-                || flags.excepted_messages > 0
-                || flags.compared_messages != self.source_messages
-                || !flags.is_consistent()
-        })
+        match self.flag_verification {
+            None => self.flag_coverage_is_required(),
+            Some(flags) => self.flag_difference_is_present(flags),
+        }
+    }
+
+    fn flag_coverage_is_required(&self) -> bool {
+        self.source_messages > 0
+            && matches!(
+                self.verification_method,
+                VerificationMethod::MetadataReconciliation | VerificationMethod::BodyHash
+            )
+    }
+
+    fn flag_difference_is_present(&self, flags: FlagVerification) -> bool {
+        flags.mismatched_messages > 0
+            || flags.excepted_messages > 0
+            || flags.compared_messages != self.source_messages
+            || !flags.is_consistent()
     }
 
     fn has_verification_exception(&self) -> bool {
@@ -591,7 +604,10 @@ impl VerificationEvidence {
             VerificationOutcome::ProbableMatch
         } else if self.unmatched_messages.is_some_and(|count| count > 0) {
             VerificationOutcome::Ambiguous
-        } else if self.has_flag_mismatch() {
+        } else if self
+            .flag_verification
+            .is_some_and(|flags| self.flag_difference_is_present(flags))
+        {
             VerificationOutcome::FlagsChanged
         } else if self.aggregate_totals_match() {
             if self.verification_method == VerificationMethod::BodyHash {
@@ -717,9 +733,10 @@ impl VerificationEvidence {
     }
 
     /// Whether the message-level counters support an exact message label:
-    /// aggregate totals agree and no message is failed, unresolved, probable,
-    /// missing, extra, or modified. Flag fidelity is a separate dimension and
-    /// is deliberately not part of this check.
+    /// Aggregate totals agree and no message is failed, unresolved, probable,
+    /// missing, extra, or modified. For non-empty metadata/body evidence,
+    /// complete flag/keyword coverage is also required; an absent flag
+    /// dimension cannot produce an unqualified exact result.
     pub fn message_result_is_exact(&self) -> bool {
         self.aggregate_totals_match()
             && self.failed_messages == 0
@@ -961,7 +978,11 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
-            flag_verification: None,
+            flag_verification: Some(FlagVerification {
+                compared_messages: 2,
+                mismatched_messages: 0,
+                excepted_messages: 0,
+            }),
         };
         assert_eq!(
             evidence.verification_outcome(),
@@ -1133,6 +1154,12 @@ mod tests {
             evidence.flag_verification_label(),
             "Flags and keywords not verified"
         );
+        assert!(!evidence.is_exact_match());
+
+        evidence.verification_method = VerificationMethod::AggregateEngine;
+        assert!(evidence.is_exact_match());
+
+        evidence.verification_method = VerificationMethod::MetadataReconciliation;
 
         evidence.flag_verification = Some(super::FlagVerification {
             compared_messages: evidence.source_messages,

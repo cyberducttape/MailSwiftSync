@@ -614,7 +614,11 @@ mod project_json_tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
-            flag_verification: None,
+            flag_verification: Some(core::FlagVerification {
+                compared_messages: 3,
+                mismatched_messages: 0,
+                excepted_messages: 0,
+            }),
         };
         for index in 0..21 {
             let job = store
