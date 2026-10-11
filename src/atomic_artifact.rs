@@ -46,6 +46,11 @@ pub(crate) fn write_private_atomic_with(
         let file = buffered.into_inner().map_err(|error| error.into_error())?;
         file.sync_all()?;
         restrict_file_permissions(&temporary)?;
+        // Windows ReplaceFileW/MoveFileExW can reject a source file that is
+        // still open, even though POSIX rename permits it. Flush and close
+        // the completed temporary artifact before handing it to the replace
+        // operation.
+        drop(file);
         atomic_replace(&temporary, path)?;
         // ReplaceFileW preserves security attributes from the old destination.
         // Re-apply the private ACL/mode to the final path so an old permissive
