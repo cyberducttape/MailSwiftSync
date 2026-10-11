@@ -38,6 +38,9 @@
 - Fix verification-scale benchmark result matching so keyed output fields are
   parsed independently of benchmark dimension order; successful scoped runs
   no longer fail as missing results.
+- Reset IMAP verifier reconnect budgets after a folder completes, so isolated
+  session drops across a large folder inventory do not exhaust recovery for
+  later folders while repeated failures on one path still fail closed.
 - Harden opt-in diagnostic transcript redaction for secret-shaped key/value
   fields and bearer-style authorization values that are not in the controller's
   known-secret set.

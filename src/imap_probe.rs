@@ -1198,15 +1198,17 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     let mut total_exists = 0_u64;
     let mut incomplete_folders = HashMap::new();
     let mut incomplete_folder_count = 0_usize;
-    let mut session_reconnects = 0_usize;
-    const MAX_SESSION_RECONNECTS: usize = 3;
+    let mut consecutive_session_reconnects = 0_usize;
+    const MAX_CONSECUTIVE_SESSION_RECONNECTS: usize = 3;
 
     // Process folders on one authenticated connection when possible. A
     // session-fatal transport error gets a bounded reconnect/re-authentication
     // attempt and retries the failed folder; the folder's own stability
-    // checks still decide whether its staged evidence is usable. This avoids
-    // making every folder a separate connection while allowing providers to
-    // close long-lived sessions safely.
+    // checks still decide whether its staged evidence is usable. The budget
+    // is consecutive rather than account-global: a provider may legitimately
+    // close a long-lived session once per folder, but repeated failures on the
+    // same recovery path still fail closed. The verification deadline remains
+    // the total bound on all reconnect work.
     for mailbox in mailboxes {
         budget.check()?;
         let result = loop {
@@ -1220,9 +1222,10 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                 sink,
             ) {
                 Err(MailboxFetchError::SessionFatal(error))
-                    if session_reconnects < MAX_SESSION_RECONNECTS =>
+                    if consecutive_session_reconnects < MAX_CONSECUTIVE_SESSION_RECONNECTS =>
                 {
-                    session_reconnects = session_reconnects.saturating_add(1);
+                    consecutive_session_reconnects =
+                        consecutive_session_reconnects.saturating_add(1);
                     let reconnected: Result<_, String> = (|| {
                         let (new_stream, new_greeting) = connect_tls_stream_with_budget(
                             host,
@@ -1249,7 +1252,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                         }
                         Err(reconnect_error) => {
                             break Err(MailboxFetchError::SessionFatal(format!(
-                                "{error}; reconnect attempt {session_reconnects} failed: {reconnect_error}"
+                                "{error}; reconnect attempt {consecutive_session_reconnects} failed: {reconnect_error}"
                             )));
                         }
                     }
@@ -1259,6 +1262,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
         };
         match result {
             Ok(folder_exists) => {
+                consecutive_session_reconnects = 0;
                 total_exists = total_exists.saturating_add(folder_exists);
                 if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
                     let _ = stream.write_all(b"a999 LOGOUT\r\n");
