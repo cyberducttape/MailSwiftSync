@@ -218,7 +218,10 @@ new metadata verifier against real accounts.
 ### Audit & Compliance ✅ VERIFIED
 - ✅ Migration lifecycle, state, and aggregate evidence events are stored durably; verbose engine transcripts remain bounded diagnostics
 - ✅ Operator acceptance recorded with timestamp
-- ✅ No message content in logs
+- ✅ No message bodies in logs, events, or reports; protected mailbox
+  identifiers, folder digests, message metadata, and content-derived
+  fingerprints remain in restricted ledger/staging state and are covered by
+  retention and support-bundle controls
 - ✅ Customer proof export with integrity validation
 - ✅ Support bundle for diagnostics
 
