@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject reverification difference-export flags that omit their required path,
+  so the command cannot silently skip a requested CSV export.
 - Fail closed during schema migration when the ledger file cannot be inspected
   for the required pre-migration backup, rather than treating the error as an
   empty database.

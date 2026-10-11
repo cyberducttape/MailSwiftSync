@@ -2,6 +2,28 @@
 
 use super::*;
 
+fn required_path_option(
+    value: Option<std::ffi::OsString>,
+    option: &str,
+) -> Result<PathBuf, String> {
+    let value = value.ok_or_else(|| format!("{option} requires a path argument"))?;
+    if value.is_empty() {
+        return Err(format!("{option} requires a non-empty path argument"));
+    }
+    Ok(PathBuf::from(value))
+}
+
+fn required_path_option_or_exit(
+    value: Option<std::ffi::OsString>,
+    option: &str,
+    command: &str,
+) -> PathBuf {
+    required_path_option(value, option).unwrap_or_else(|error| {
+        eprintln!("{command}: {error}");
+        std::process::exit(2);
+    })
+}
+
 pub(super) fn parse_trusted_public_key_argument(
     value: Option<OsString>,
 ) -> Result<Option<String>, &'static str> {
@@ -141,9 +163,17 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
                 .and_then(|value| value.into_string().ok())
                 .unwrap_or_default();
         } else if let Some(value) = argument.strip_prefix("--differences=") {
-            differences = Some(PathBuf::from(value));
+            differences = Some(required_path_option_or_exit(
+                Some(value.into()),
+                "--differences",
+                "Reverification refused",
+            ));
         } else if argument == "--differences" {
-            differences = arguments.next().map(PathBuf::from);
+            differences = Some(required_path_option_or_exit(
+                arguments.next(),
+                "--differences",
+                "Reverification refused",
+            ));
         } else {
             eprintln!("Reverification refused: unknown option {argument}");
             std::process::exit(2);
@@ -489,9 +519,17 @@ pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe:
                 .and_then(|value| value.into_string().ok())
                 .unwrap_or_default();
         } else if let Some(value) = argument.strip_prefix("--differences-dir=") {
-            differences_dir = Some(PathBuf::from(value));
+            differences_dir = Some(required_path_option_or_exit(
+                Some(value.into()),
+                "--differences-dir",
+                "Batch reverification refused",
+            ));
         } else if argument == "--differences-dir" {
-            differences_dir = arguments.next().map(PathBuf::from);
+            differences_dir = Some(required_path_option_or_exit(
+                arguments.next(),
+                "--differences-dir",
+                "Batch reverification refused",
+            ));
         } else {
             eprintln!("Batch reverification refused: unknown option {argument}");
             std::process::exit(2);
@@ -1107,6 +1145,25 @@ fn reverify_stage_path(state: &std::path::Path, job_id: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reverification_difference_path_options_require_nonempty_values() {
+        assert!(
+            super::required_path_option(None, "--differences")
+                .unwrap_err()
+                .contains("requires a path argument")
+        );
+        assert!(
+            super::required_path_option(Some("".into()), "--differences-dir")
+                .unwrap_err()
+                .contains("non-empty path")
+        );
+        assert_eq!(
+            super::required_path_option(Some("results/differences.csv".into()), "--differences")
+                .unwrap(),
+            std::path::PathBuf::from("results/differences.csv")
+        );
+    }
+
     fn exact_metadata_evidence() -> crate::core::MailboxEvidence {
         crate::core::MailboxEvidence {
             verification_method: crate::core::VerificationMethod::MetadataReconciliation,
