@@ -151,6 +151,13 @@ fn is_sql_identifier(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
+fn should_backup_database(path: &Path, migration_or_repair: bool) -> std::io::Result<bool> {
+    if !migration_or_repair {
+        return Ok(false);
+    }
+    Ok(std::fs::metadata(path)?.len() > 0)
+}
+
 /// Triggers that keep the queue facts' run and acceptance counts current.
 /// Every write path to `runs` and `verification_acceptances` goes through
 /// them, so presented queue states never depend on application code paths.
@@ -200,11 +207,11 @@ impl StateStore {
         let current_schema_needs_repair = stored_schema_version == CURRENT_SCHEMA_VERSION
             && (!Self::current_schema_is_clean(&store.connection)
                 || Self::validate_schema_layout(&store.connection).is_err());
-        if (stored_schema_version < CURRENT_SCHEMA_VERSION || current_schema_needs_repair)
-            && std::fs::metadata(path)
-                .map(|metadata| metadata.len() > 0)
-                .unwrap_or(false)
-        {
+        let migration_or_repair =
+            stored_schema_version < CURRENT_SCHEMA_VERSION || current_schema_needs_repair;
+        let should_backup = should_backup_database(path, migration_or_repair)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        if should_backup {
             // Preserve the exact pre-migration ledger before any schema
             // rewrite. The backup is unique and non-overwriting, so a failed
             // upgrade never destroys the last recovery artifact.
@@ -1343,6 +1350,35 @@ mod database_identity_tests {
         std::fs::rename(&replacement, &path).unwrap();
         let error = verify_database_identity(&path, identity).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod migration_backup_tests {
+    use super::should_backup_database;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn backup_decision_propagates_metadata_errors_instead_of_treating_them_as_empty() {
+        let missing = std::env::temp_dir().join(format!(
+            "mailswiftsync-missing-upgrade-ledger-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let error = should_backup_database(&missing, true).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+        assert!(!should_backup_database(&missing, false).unwrap());
+    }
+
+    #[test]
+    fn backup_decision_skips_empty_files_and_preserves_nonempty_files() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let empty = directory.join("empty.db");
+        let populated = directory.join("populated.db");
+        std::fs::write(&empty, []).unwrap();
+        std::fs::write(&populated, b"ledger").unwrap();
+        assert!(!should_backup_database(&empty, true).unwrap());
+        assert!(should_backup_database(&populated, true).unwrap());
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

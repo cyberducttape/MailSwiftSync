@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fail closed during schema migration when the ledger file cannot be inspected
+  for the required pre-migration backup, rather than treating the error as an
+  empty database.
 - Clarify that verification restart cursors record folder context but do not
   reuse staged message rows; mutable flags require a full folder rescan.
 - Redact embedded URI userinfo in opt-in diagnostic transcripts while
