@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Compare duplicate-message FLAGS with streaming frequency maps, retaining one
+  key per distinct canonical flag set instead of one entry per message.
 - Enforce full folder rescans after verification restarts: staged message rows
   and body fingerprints are atomically discarded even when UIDVALIDITY,
   UIDNEXT, and EXISTS are unchanged. Clarify retry guidance so durable cursors

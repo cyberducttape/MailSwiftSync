@@ -214,31 +214,27 @@ impl MessageVerification {
             .map_err(|error| format!("could not query duplicate flag groups: {error}"))?;
         let mut result = FlagVerification::default();
         let mut current: Option<(String, String, String, i64)> = None;
-        let mut sides: [Vec<Option<String>>; 2] = [Vec::new(), Vec::new()];
-        let finish = |sides: &mut [Vec<Option<String>>; 2], result: &mut FlagVerification| {
-            let [source, destination] = sides;
-            let canonical = |flags: &mut Vec<Option<String>>| -> Option<Vec<String>> {
-                let mut sets = flags
-                    .drain(..)
-                    .map(|set| {
-                        set.map(|set| {
-                            let mut tokens = set.split_whitespace().collect::<Vec<_>>();
-                            tokens.sort_unstable();
-                            tokens.dedup();
-                            tokens.join(" ")
-                        })
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                sets.sort_unstable();
-                Some(sets)
-            };
-            if let (Some(source), Some(destination)) = (canonical(source), canonical(destination)) {
-                let count = source.len() as u64;
+        // Fetch parsing stores FLAGS in canonical sorted/deduplicated form.
+        // Borrow each SQLite value and allocate only when a previously unseen
+        // combination enters a group's frequency map, avoiding one retained
+        // String per duplicate message and a second sort of the group.
+        let mut sides: [HashMap<String, u64>; 2] = [HashMap::new(), HashMap::new()];
+        let mut side_counts = [0_u64; 2];
+        let mut complete = true;
+        let finish = |sides: &mut [HashMap<String, u64>; 2],
+                      side_counts: &mut [u64; 2],
+                      complete: &mut bool,
+                      result: &mut FlagVerification| {
+            if *complete && side_counts[0] == side_counts[1] {
+                let count = side_counts[0];
                 result.compared_messages = result.compared_messages.saturating_add(count);
-                if source != destination {
+                if sides[0] != sides[1] {
                     result.mismatched_messages = result.mismatched_messages.saturating_add(count);
                 }
             }
+            sides.iter_mut().for_each(HashMap::clear);
+            side_counts.fill(0);
+            *complete = true;
         };
         while let Some(row) = rows
             .next()
@@ -252,16 +248,31 @@ impl MessageVerification {
             );
             if current.as_ref() != Some(&key) {
                 if current.is_some() {
-                    finish(&mut sides, &mut result);
+                    finish(&mut sides, &mut side_counts, &mut complete, &mut result);
                 }
                 current = Some(key);
             }
             let side: i64 = row.get(4).map_err(|error| error.to_string())?;
-            let flags: Option<String> = row.get(5).map_err(|error| error.to_string())?;
-            sides[usize::from(side == 1)].push(flags);
+            let side = match side {
+                0 => 0,
+                1 => 1,
+                _ => return Err("invalid side in duplicate flag group".to_owned()),
+            };
+            side_counts[side] = side_counts[side].saturating_add(1);
+            let flags = row.get_ref(5).map_err(|error| error.to_string())?;
+            if flags.data_type() == rusqlite::types::Type::Null {
+                complete = false;
+                continue;
+            }
+            let flags = flags.as_str().map_err(|error| error.to_string())?;
+            if let Some(count) = sides[side].get_mut(flags) {
+                *count = count.saturating_add(1);
+            } else {
+                sides[side].insert(flags.to_owned(), 1);
+            }
         }
         if current.is_some() {
-            finish(&mut sides, &mut result);
+            finish(&mut sides, &mut side_counts, &mut complete, &mut result);
         }
         Ok(result)
     }
@@ -356,6 +367,38 @@ mod tests {
             MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap(),
             result
         );
+    }
+
+    #[test]
+    fn large_duplicate_group_compares_repeated_flag_sets_incrementally() {
+        const DUPLICATES: u64 = 2_048;
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        let source = (0..DUPLICATES)
+            .map(|uid| {
+                (
+                    "INBOX",
+                    uid + 1,
+                    "<large-dup@x>",
+                    if uid % 2 == 0 { "\\Seen" } else { "" },
+                )
+            })
+            .collect::<Vec<_>>();
+        let destination = (0..DUPLICATES)
+            .map(|uid| {
+                (
+                    "INBOX",
+                    uid + 10_000,
+                    "<large-dup@x>",
+                    if uid % 2 == 0 { "" } else { "\\Seen" },
+                )
+            })
+            .collect::<Vec<_>>();
+        stage_side(&mut stage, StagedMessageSide::Source, &source);
+        stage_side(&mut stage, StagedMessageSide::Destination, &destination);
+
+        let result = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
+        assert_eq!(result.compared_messages, DUPLICATES);
+        assert_eq!(result.mismatched_messages, 0);
     }
 
     #[test]
