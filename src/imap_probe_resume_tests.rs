@@ -190,6 +190,57 @@ impl Read for FolderServer {
     }
 }
 
+struct DisconnectedStream;
+
+enum SessionStream {
+    Disconnected,
+    Folder(Box<FolderServer>),
+}
+
+impl Write for DisconnectedStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Read for DisconnectedStream {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "scripted connection reset",
+        ))
+    }
+}
+
+impl Write for SessionStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Disconnected => Ok(bytes.len()),
+            Self::Folder(server) => server.write(bytes),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Disconnected => Ok(()),
+            Self::Folder(server) => server.flush(),
+        }
+    }
+}
+
+impl Read for SessionStream {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Disconnected => DisconnectedStream.read(buffer),
+            Self::Folder(server) => server.read(buffer),
+        }
+    }
+}
+
 fn scan_with(
     stage: &mut MessageMetadataStage,
     server: &mut FolderServer,
@@ -225,6 +276,130 @@ fn scan_with(
 
 fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer) -> u64 {
     scan_with(stage, server, false, false)
+}
+
+fn scan_with_session_reconnect<S, R>(
+    stage: &mut MessageMetadataStage,
+    stream: &mut S,
+    condstore_enabled: &mut bool,
+    reconnect: &mut R,
+) -> Result<u64, MailboxFetchError>
+where
+    S: Read + Write,
+    R: FnMut() -> Result<(S, bool), String>,
+{
+    let cancelled = AtomicBool::new(false);
+    let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
+    let state_budget = MessageStateBudget::new();
+    let count = stage.count(SIDE).unwrap() as usize;
+    let mut sink = StageMessageSink {
+        stage,
+        side: SIDE,
+        count,
+    };
+    let mut consecutive_reconnects = 0;
+    fetch_mailbox_with_session_reconnect(
+        stream,
+        "imap.example.test",
+        "INBOX",
+        &budget,
+        &state_budget,
+        None,
+        condstore_enabled,
+        &mut consecutive_reconnects,
+        reconnect,
+        &mut sink,
+    )
+}
+
+#[test]
+fn fatal_session_reauthenticates_and_retries_the_failed_folder() {
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    let mut stream = SessionStream::Disconnected;
+    let mut condstore_enabled = false;
+    let mut reconnect_calls = 0;
+    let mut reconnect = || {
+        reconnect_calls += 1;
+        let mut server = FolderServer::new(&[1], 9, 2);
+        server.condstore = true;
+        server.flags.insert(1, "\\Seen $ClientTag".into());
+        Ok((SessionStream::Folder(Box::new(server)), true))
+    };
+
+    assert_eq!(
+        scan_with_session_reconnect(
+            &mut stage,
+            &mut stream,
+            &mut condstore_enabled,
+            &mut reconnect
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(reconnect_calls, 1);
+    assert!(condstore_enabled, "capabilities must refresh after re-auth");
+    let SessionStream::Folder(server) = stream else {
+        panic!("reconnected session was not installed");
+    };
+    assert_eq!(server.fetch_commands, 1);
+    let message = stage
+        .all_messages(SIDE)
+        .unwrap()
+        .remove(&MailboxMessageKey::with_uidvalidity("INBOX", 9, "1"))
+        .unwrap();
+    let flags = message.flags.unwrap();
+    assert!(flags.contains("\\Seen"));
+    assert!(flags.contains("$clienttag"));
+}
+
+#[test]
+fn reconnect_authentication_failure_keeps_the_folder_unverified() {
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    let mut stream = SessionStream::Disconnected;
+    let mut condstore_enabled = false;
+    let mut reconnect_calls = 0;
+    let mut reconnect = || {
+        reconnect_calls += 1;
+        Err("scripted authentication rejected".to_owned())
+    };
+
+    let result = scan_with_session_reconnect(
+        &mut stage,
+        &mut stream,
+        &mut condstore_enabled,
+        &mut reconnect,
+    );
+    let Err(MailboxFetchError::SessionFatal(error)) = result else {
+        panic!("reconnect authentication failure must remain a fatal session error");
+    };
+    assert!(error.contains("reconnect attempt 1 failed"));
+    assert!(error.contains("authentication rejected"));
+    assert_eq!(reconnect_calls, 1);
+    assert_eq!(stage.count(SIDE).unwrap(), 0);
+}
+
+#[test]
+fn session_reconnect_attempts_are_bounded() {
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    let mut stream = SessionStream::Disconnected;
+    let mut condstore_enabled = false;
+    let mut reconnect_calls = 0;
+    let mut reconnect = || {
+        reconnect_calls += 1;
+        Ok((SessionStream::Disconnected, false))
+    };
+
+    assert!(matches!(
+        scan_with_session_reconnect(
+            &mut stage,
+            &mut stream,
+            &mut condstore_enabled,
+            &mut reconnect
+        ),
+        Err(MailboxFetchError::SessionFatal(_))
+    ));
+    assert_eq!(reconnect_calls, 3);
+    assert_eq!(stage.count(SIDE).unwrap(), 0);
 }
 
 fn staged_uids(stage: &MessageMetadataStage) -> Vec<u64> {
