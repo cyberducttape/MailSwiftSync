@@ -166,7 +166,8 @@ impl App {
         // immediate cleanup safe when there are no unverified owners. If an
         // owner remains ambiguous, retain young directories and apply only
         // the seven-day fallback age policy.
-        let cleanup_warning = if persistence_warning.is_none() {
+        let cleanup_skipped = persistence_warning.is_some();
+        let cleanup_warning = if !cleanup_skipped {
             if unverified_processes.is_empty() {
                 cleanup_reconciled_secret_directories(&secret_runtime_base())
             } else {
@@ -180,6 +181,11 @@ impl App {
             || vec!["Ready. Start with Preflight against a test destination mailbox.".into()],
             |warning| vec![warning, "WARNING: this session is not durable.".into()],
         );
+        if cleanup_skipped {
+            initial_output_lines.push(
+                "WARNING: residual credential cleanup was skipped because durable process ownership could not be established; private temporary files may remain.".into(),
+            );
+        }
         if let Some(error) = cleanup_warning {
             initial_output_lines.push(format!(
                 "WARNING: residual credential cleanup was incomplete; sensitive temporary files may remain: {error}"
