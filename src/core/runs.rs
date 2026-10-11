@@ -35,11 +35,44 @@ impl StateStore {
     /// Start a verification-only run without changing the mailbox's
     /// migration state. This keeps post-migration audits independent from
     /// the original transfer lifecycle.
+    #[cfg(test)]
     pub fn begin_verification_run(
         &self,
         project_id: &str,
         job_id: &str,
         run_id: &str,
+        plan_snapshot: &str,
+    ) -> rusqlite::Result<()> {
+        self.begin_verification_run_with_baseline(project_id, job_id, run_id, None, plan_snapshot)
+    }
+
+    /// Start an audit run tied to a completed transfer baseline. The
+    /// relationship is persisted in `parent_run_id` so later evidence can
+    /// distinguish a post-migration certification from an unrelated mailbox
+    /// observation.
+    pub fn begin_verification_run_from_transfer(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        transfer_run_id: &str,
+        plan_snapshot: &str,
+    ) -> rusqlite::Result<()> {
+        self.begin_verification_run_with_baseline(
+            project_id,
+            job_id,
+            run_id,
+            Some(transfer_run_id),
+            plan_snapshot,
+        )
+    }
+
+    fn begin_verification_run_with_baseline(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        transfer_run_id: Option<&str>,
         plan_snapshot: &str,
     ) -> rusqlite::Result<()> {
         if plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES {
@@ -59,6 +92,16 @@ impl StateStore {
         if active {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        if let Some(transfer_run_id) = transfer_run_id {
+            let valid_baseline: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND engine IN ('imapsync','dovecot') AND status='completed')",
+                params![transfer_run_id, project_id, job_id],
+                |row| row.get(0),
+            )?;
+            if !valid_baseline {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         ensure_no_active_destination_lock_conflict(
             &tx,
             &[normalized_destination_lock_identity(
@@ -68,8 +111,8 @@ impl StateStore {
             &BTreeSet::from([job_id.to_owned()]),
         )?;
         tx.execute(
-            "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,'imap-verification',?4,?5,'running')",
-            params![run_id, project_id, job_id, phase, plan_snapshot],
+            "INSERT INTO runs(id,project_id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,?4,'imap-verification',?5,?6,'running')",
+            params![run_id, project_id, job_id, transfer_run_id, phase, plan_snapshot],
         )?;
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'verification_started',?3)",

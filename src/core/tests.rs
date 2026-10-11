@@ -3192,6 +3192,23 @@ fn latest_completed_transfer_run_excludes_reverification_history() {
     let baseline = db.latest_completed_transfer_run(&job).unwrap().unwrap();
     assert_eq!(baseline.id, "transfer");
     assert_eq!(baseline.engine, "imapsync");
+
+    db.begin_verification_run_from_transfer(
+        &project.id,
+        &job,
+        "audit-linked",
+        &baseline.id,
+        &baseline.plan_snapshot,
+    )
+    .unwrap();
+    assert_eq!(
+        db.run("audit-linked")
+            .unwrap()
+            .unwrap()
+            .parent_run_id
+            .as_deref(),
+        Some("transfer")
+    );
 }
 
 #[test]

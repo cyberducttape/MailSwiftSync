@@ -9,6 +9,9 @@
 - Prevent verification-only runs from starting against an actively migrating
   job's destination, and make cutover lookup failures fail closed rather than
   being interpreted as an absent cutover workflow.
+- Persist the completed transfer run as re-verification provenance and report
+  a distinct `ledger_persistence_failed` diagnostic when a failed scan cannot
+  be finalized durably.
 - Bound streamed proof generation to the same 32 MiB envelope enforced by
   proof verification and signing. Oversized customer/operator artifacts now
   fail closed instead of being emitted in a form the product cannot verify.

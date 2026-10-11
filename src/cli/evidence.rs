@@ -250,9 +250,13 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         std::process::exit(2);
     }
     let run_id = uuid::Uuid::new_v4().to_string();
-    if let Err(error) =
-        store.begin_verification_run(&project_id, &job_id, &run_id, &previous_run.plan_snapshot)
-    {
+    if let Err(error) = store.begin_verification_run_from_transfer(
+        &project_id,
+        &job_id,
+        &run_id,
+        &previous_run.id,
+        &previous_run.plan_snapshot,
+    ) {
         eprintln!("Reverification refused: could not begin durable verification run: {error}");
         std::process::exit(1);
     }
@@ -275,7 +279,13 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
             folders,
         }) => (evidence, mismatches, folders.len()),
         Err(error) => {
-            let _ = store.finish_run(&run_id, "verification_failed", &error);
+            if let Err(persistence_error) = store.finish_run(&run_id, "verification_failed", &error)
+            {
+                eprintln!(
+                    "Reverification failed: {error}; ledger_persistence_failed for run {run_id}: {persistence_error}"
+                );
+                std::process::exit(1);
+            }
             eprintln!("Reverification failed: {error}");
             std::process::exit(1);
         }
