@@ -752,6 +752,27 @@ impl VerificationEvidence {
             && !self.has_message_level_mismatch()
     }
 
+    /// Validate the durable claim represented by an exact result label. This
+    /// is shared by transfer and verification-only commits so their ledger
+    /// invariants cannot drift apart. Partial or provider-exception flag
+    /// coverage remains reviewable; entirely missing required coverage does
+    /// not.
+    pub(crate) fn exact_label_is_consistent(&self, outcome: VerificationOutcome) -> bool {
+        self.message_result_is_exact()
+            && matches!(
+                outcome,
+                VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch
+            )
+            && self
+                .flag_verification
+                .is_none_or(|flags| flags.mismatched_messages == 0)
+            && (self.verification_method != VerificationMethod::AggregateEngine
+                || self.authoritative)
+            && (self.verification_method != VerificationMethod::BodyHash
+                || outcome == VerificationOutcome::ExactBodyMatch)
+            && !self.flag_coverage_is_missing()
+    }
+
     pub fn is_exact_match(&self) -> bool {
         matches!(
             self.verification_outcome(),

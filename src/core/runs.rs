@@ -917,19 +917,12 @@ impl StateStore {
         // FlagsChanged, but partial or excepted flag coverage is a separate
         // dimension: exact messages with such coverage are a valid, reviewable
         // result (displayed as verified with exceptions), not a contradiction.
-        if matches!(
-            value.verification_outcome,
-            Some(VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch)
-        ) && (!value.message_result_is_exact()
-            || value
-                .flag_verification
-                .is_some_and(|flags| flags.mismatched_messages > 0)
-            || (value.verification_method == VerificationMethod::AggregateEngine
-                && !value.authoritative)
-            || (value.verification_method == VerificationMethod::BodyHash
-                && value.verification_outcome != Some(VerificationOutcome::ExactBodyMatch))
-            || value.flag_coverage_is_missing())
-        {
+        if value.verification_outcome.is_some_and(|outcome| {
+            matches!(
+                outcome,
+                VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch
+            ) && !value.exact_label_is_consistent(outcome)
+        }) {
             return Err(super::ledger_rejection(
                 "an exact verification label contradicts the evidence counters",
             ));

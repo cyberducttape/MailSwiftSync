@@ -172,15 +172,7 @@ impl StateStore {
         if matches!(
             outcome,
             VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch
-        ) && (!value.message_result_is_exact()
-            || value
-                .flag_verification
-                .is_some_and(|flags| flags.mismatched_messages > 0)
-            || (value.verification_method == VerificationMethod::AggregateEngine
-                && !value.authoritative)
-            || (value.verification_method == VerificationMethod::BodyHash
-                && outcome != VerificationOutcome::ExactBodyMatch)
-            || value.flag_coverage_is_missing())
+        ) && !value.exact_label_is_consistent(outcome)
         {
             return Err(super::ledger_rejection(
                 "an exact verification label contradicts the evidence counters",
