@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix the headless Docker build by copying the tracked bundled font assets
+  required by the shared UI code at compile time; the packaged IMAP
+  qualification image now contains the same build inputs as local releases.
 - Pseudonymize customer-controlled project identifiers in opt-in diagnostic
   filenames and headers; raw project names remain out of support transcripts.
 - Resolve the stale Linux packaging roadmap wording so the shipped RPM package

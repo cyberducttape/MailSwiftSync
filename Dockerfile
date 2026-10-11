@@ -31,6 +31,11 @@ ENV MAILSWIFTSYNC_GIT_SHA=$MAILSWIFTSYNC_GIT_SHA
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
 COPY locales ./locales
+# The desktop crate embeds the bundled Plex fonts at compile time. Keep the
+# build context complete even for the headless runtime image; the binary still
+# contains the shared UI code and `include_bytes!` resolves these paths while
+# compiling.
+COPY assets ./assets
 RUN cargo build --locked --release
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
