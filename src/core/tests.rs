@@ -2843,6 +2843,8 @@ fn verification_difference_requires_durable_exception_acceptance() {
         "reverification",
     )
     .unwrap();
+    let (_, reverified) = db.latest_evidence_for_run(&job).unwrap().unwrap();
+    assert!(!reverified.authoritative);
     assert!(
         db.accept_verification_difference(
             &project.id,

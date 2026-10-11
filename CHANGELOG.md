@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve the verifier's authoritative/non-authoritative evidence flag in
+  standalone re-verification history; audit records can no longer upgrade
+  metadata observations into authoritative evidence.
 - Make customer and operator JSON exports distinguish verification tier,
   outcome label, evidence scope, and overall assurance status instead of
   placing the same outcome text in multiple level fields.

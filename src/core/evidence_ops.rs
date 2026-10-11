@@ -177,7 +177,7 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.execute(
-            "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?14,?15,?16)",
+            "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 job_id,
                 run_id,
@@ -191,6 +191,7 @@ impl StateStore {
                 sqlite_i64(value.failed_messages)?,
                 sqlite_i64(value.source_folders)?,
                 sqlite_i64(value.destination_folders)?,
+                value.authoritative,
                 sqlite_i64(value.missing_messages)?,
                 sqlite_i64(value.extra_messages)?,
                 sqlite_i64(value.modified_messages)?,
