@@ -233,9 +233,10 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "scope": value.evidence_scope().label(),
                         "verification_method": value.verification_method().as_str(),
                         "verification_outcome": value.verification_outcome().as_str(),
+                        "verification_outcome_label": value.verification_outcome().display_label(),
                         "verification_status": value.verification_status(),
-                        "verification_level": value.verification_outcome().display_label(),
-                        "evidence_level": value.verification_outcome().display_label(),
+                        "verification_level": value.verification_level(),
+                        "evidence_level": value.evidence_level(),
                         "reason": value.verification_reason(),
                         "evidence_digest": evidence_digest(run_id, plan_snapshot, value),
                         "source_folders": value.source_folders,
@@ -574,6 +575,18 @@ mod tests {
         assert_eq!(
             evidence["verification_tier"],
             "Level 1 — Aggregate evidence — individual messages not compared"
+        );
+        assert_eq!(
+            evidence["verification_level"],
+            "Level 1 — Aggregate evidence — individual messages not compared"
+        );
+        assert_eq!(
+            evidence["verification_outcome_label"],
+            "Exact metadata match — message bodies not compared"
+        );
+        assert_eq!(
+            evidence["evidence_level"],
+            "Engine-confirmed exact match — not message-body proof"
         );
         assert_eq!(evidence["message_coverage"]["checked_messages"], 0);
         assert_eq!(evidence["message_coverage"]["complete"], false);

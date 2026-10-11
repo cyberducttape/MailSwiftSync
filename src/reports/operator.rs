@@ -204,8 +204,9 @@ pub(crate) fn export_project_json(
                             "scope": evidence.evidence_scope().label(),
                             "verification_method": evidence.verification_method().as_str(),
                             "verification_outcome": evidence.verification_outcome().as_str(),
-                            "verification_level": evidence.verification_outcome().display_label(),
-                            "evidence_level": evidence.verification_outcome().display_label(),
+                            "verification_outcome_label": evidence.verification_outcome().display_label(),
+                            "verification_level": evidence.verification_level(),
+                            "evidence_level": evidence.evidence_level(),
                             "reason": evidence.verification_reason(),
                             "authoritative": evidence.authoritative,
                             "evidence_digest": digest,
@@ -651,6 +652,18 @@ mod project_json_tests {
         assert_eq!(
             report["mailboxes"][0]["evidence"]["verification_outcome"],
             "exact_metadata_match"
+        );
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["verification_level"],
+            "Level 2 — Per-message metadata reconciliation — bodies not compared"
+        );
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["verification_outcome_label"],
+            "Exact metadata match — message bodies not compared"
+        );
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["evidence_level"],
+            "Aggregate match — not message-body proof"
         );
         let _ = std::fs::remove_dir_all(directory);
     }

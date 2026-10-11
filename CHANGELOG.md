@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make customer and operator JSON exports distinguish verification tier,
+  outcome label, evidence scope, and overall assurance status instead of
+  placing the same outcome text in multiple level fields.
 - Reject symlinked customer-proof files in the provider qualification gate, so
   accepted evidence bundles remain self-contained and reproducible.
 - Batch transfer-pass, folder, and progress reads during complete report
