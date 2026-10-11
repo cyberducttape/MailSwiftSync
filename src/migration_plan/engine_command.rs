@@ -203,37 +203,43 @@ impl ValidatedPlan<'_> {
             // Owns the credential directory from creation: every early return
             // below removes it, until cleanup is handed to the prepared command.
             let cleanup = crate::credentials::CleanupGuard::new(vec![secret_dir.clone()]);
-            let source_file = secret_dir.join("source.secret");
-            write_secret_file(&source_file, form.source_password.as_str())
-                .map_err(|error| format!("could not prepare source credential file: {error}"))?;
-            let runtime_config = write_dovecot_runtime_config(
-                &secret_dir,
-                &form.profile.dovecot_config,
-                &source_file,
-            )?;
-            let config_path = runtime_config.to_string_lossy();
-            let (executable, args) = form.command_with_checkpoint_and_mode_and_config(
-                false,
-                checkpoint,
-                form.dry_run,
-                Some(&config_path),
-                dovecot_dialect,
-            )?;
-            #[cfg(test)]
-            fail_after_credentials_for_test(&secret_dir)?;
-            let verification = if form.dry_run {
-                Vec::new()
-            } else {
-                form.dovecot_verification_commands_with_config(
+            let preparation = (|| {
+                let source_file = secret_dir.join("source.secret");
+                write_secret_file(&source_file, form.source_password.as_str()).map_err(
+                    |error| format!("could not prepare source credential file: {error}"),
+                )?;
+                let runtime_config = write_dovecot_runtime_config(
+                    &secret_dir,
+                    &form.profile.dovecot_config,
+                    &source_file,
+                )?;
+                let config_path = runtime_config.to_string_lossy();
+                let (executable, args) = form.command_with_checkpoint_and_mode_and_config(
                     false,
+                    checkpoint,
+                    form.dry_run,
                     Some(&config_path),
                     dovecot_dialect,
-                )
-            };
+                )?;
+                #[cfg(test)]
+                fail_after_credentials_for_test(&secret_dir)?;
+                let verification = if form.dry_run {
+                    Vec::new()
+                } else {
+                    form.dovecot_verification_commands_with_config(
+                        false,
+                        Some(&config_path),
+                        dovecot_dialect,
+                    )
+                };
+                Ok((executable, args, verification))
+            })();
+            let ((executable, args, verification), cleanup) =
+                finish_command_preparation(cleanup, preparation)?;
             return Ok(PreparedCommand {
                 executable,
                 args,
-                cleanup: cleanup.disarm(),
+                cleanup,
                 env: Vec::new(),
                 verification,
             });
@@ -241,44 +247,65 @@ impl ValidatedPlan<'_> {
         let mut args = engine::imapsync_args(&form.profile, form.dry_run, throttle_divisor)?;
         let secret_dir = create_secret_directory()?;
         let cleanup = crate::credentials::CleanupGuard::new(vec![secret_dir.clone()]);
-        let source_file = secret_dir.join("source.secret");
-        let destination_file = secret_dir.join("destination.secret");
-        write_secret_file(&source_file, form.source_password.as_str())
-            .and_then(|_| write_secret_file(&destination_file, form.destination_password.as_str()))
-            .map_err(|error| format!("Could not prepare temporary credential files: {error}"))?;
-        if auth_method_is_oauth(&form.profile.source_auth) {
-            args.extend([
-                "--oauthaccesstoken1".into(),
-                source_file.to_string_lossy().into_owned(),
-            ]);
-            append_oauth_refresh_command(&mut args, 1, form, &secret_dir, &source_file)?;
-        } else {
-            args.extend([
-                "--passfile1".into(),
-                source_file.to_string_lossy().into_owned(),
-            ]);
-        }
-        if auth_method_is_oauth(&form.profile.destination_auth) {
-            args.extend([
-                "--oauthaccesstoken2".into(),
-                destination_file.to_string_lossy().into_owned(),
-            ]);
-            append_oauth_refresh_command(&mut args, 2, form, &secret_dir, &destination_file)?;
-        } else {
-            args.extend([
-                "--passfile2".into(),
-                destination_file.to_string_lossy().into_owned(),
-            ]);
-        }
-        #[cfg(test)]
-        fail_after_credentials_for_test(&secret_dir)?;
+        let preparation = (|| {
+            let source_file = secret_dir.join("source.secret");
+            let destination_file = secret_dir.join("destination.secret");
+            write_secret_file(&source_file, form.source_password.as_str())
+                .and_then(|_| {
+                    write_secret_file(&destination_file, form.destination_password.as_str())
+                })
+                .map_err(|error| {
+                    format!("Could not prepare temporary credential files: {error}")
+                })?;
+            if auth_method_is_oauth(&form.profile.source_auth) {
+                args.extend([
+                    "--oauthaccesstoken1".into(),
+                    source_file.to_string_lossy().into_owned(),
+                ]);
+                append_oauth_refresh_command(&mut args, 1, form, &secret_dir, &source_file)?;
+            } else {
+                args.extend([
+                    "--passfile1".into(),
+                    source_file.to_string_lossy().into_owned(),
+                ]);
+            }
+            if auth_method_is_oauth(&form.profile.destination_auth) {
+                args.extend([
+                    "--oauthaccesstoken2".into(),
+                    destination_file.to_string_lossy().into_owned(),
+                ]);
+                append_oauth_refresh_command(&mut args, 2, form, &secret_dir, &destination_file)?;
+            } else {
+                args.extend([
+                    "--passfile2".into(),
+                    destination_file.to_string_lossy().into_owned(),
+                ]);
+            }
+            #[cfg(test)]
+            fail_after_credentials_for_test(&secret_dir)?;
+            Ok(())
+        })();
+        let (_, cleanup) = finish_command_preparation(cleanup, preparation)?;
         Ok(PreparedCommand {
             executable: form.profile.imapsync_path.clone(),
             args,
-            cleanup: cleanup.disarm(),
+            cleanup,
             env: Vec::new(),
             verification: Vec::new(),
         })
+    }
+}
+
+fn finish_command_preparation<T>(
+    mut cleanup: crate::credentials::CleanupGuard,
+    result: Result<T, String>,
+) -> Result<(T, Vec<PathBuf>), String> {
+    match result {
+        Ok(value) => Ok((value, cleanup.disarm())),
+        Err(preparation_error) => match cleanup.cleanup_now() {
+            Ok(()) => Err(preparation_error),
+            Err(cleanup_error) => Err(format!("{preparation_error}; {cleanup_error}")),
+        },
     }
 }
 
