@@ -664,7 +664,19 @@ run_product() {
   if (( scale_messages > 0 )); then
     command_timeout=2400
   fi
-  MAILSWIFTSYNC_DEBUG_PROCESS_WAIT=1 timeout --kill-after=15s "$command_timeout" "$binary" "$@" 2>&1 | LC_ALL=C awk -v path="$product_log" '
+  # The command output is piped through awk for bounded logging. Bash reports
+  # only the last process's status for a background pipeline, so waiting on
+  # awk alone would turn a timed-out/failed MailSwiftSync process into a
+  # successful harness step. Preserve the timeout command's status through a
+  # private side channel while awk drains the output.
+  local status_file="$workspace/run-product-status-${BASHPID}-${RANDOM}"
+  (
+    set +e
+    MAILSWIFTSYNC_DEBUG_PROCESS_WAIT=1 timeout --kill-after=15s "$command_timeout" "$binary" "$@"
+    command_status=$?
+    printf '%s\n' "$command_status" > "$status_file"
+    exit "$command_status"
+  ) 2>&1 | LC_ALL=C awk -v path="$product_log" '
     {
       print
       fflush()
@@ -711,6 +723,11 @@ run_product() {
   local monitor_pid=$!
   local pipeline_status=0
   wait "$pipeline_pid" || pipeline_status=$?
+  if [[ -s "$status_file" ]] && read -r command_status < "$status_file" \
+    && [[ "$command_status" =~ ^[0-9]+$ ]]; then
+    pipeline_status="$command_status"
+  fi
+  rm -f -- "$status_file"
   kill "$monitor_pid" 2>/dev/null || true
   wait "$monitor_pid" 2>/dev/null || true
   if [[ -n "$progress_file" ]]; then
