@@ -1107,7 +1107,10 @@ mod tests {
             "client-value",
             "api-value",
         ] {
-            assert!(!sanitized.contains(secret), "leaked {secret}: {sanitized}");
+            assert!(
+                !sanitized.contains(secret),
+                "credential-like test value remained in diagnostic output"
+            );
         }
         assert_eq!(sanitized.matches("[REDACTED]").count(), 4);
     }
