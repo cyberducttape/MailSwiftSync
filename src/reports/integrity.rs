@@ -4,8 +4,11 @@ use crate::{core, plan_identity::snapshot_sha256};
 
 /// Keep generated proof artifacts within the bounded input envelope used by
 /// the verifier and signer. A streamed writer must never successfully produce
-/// a file that the corresponding commands refuse to read.
-pub(crate) const MAX_PROOF_BYTES: u64 = 32 * 1024 * 1024;
+/// a file that the corresponding commands refuse to read. Verification and
+/// signing stream the file (see `reports::canonical`), so this bounds disk
+/// and time rather than memory; it covers a 100,000-mailbox project with
+/// several runs per mailbox.
+pub(crate) const MAX_PROOF_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub(crate) fn evidence_digest(
     run_id: &str,
@@ -126,6 +129,15 @@ pub(crate) fn write_streamed_proof(
     fields: serde_json::Map<String, serde_json::Value>,
     arrays: &[(&str, LazyArray<'_>)],
 ) -> Result<(), String> {
+    write_streamed_proof_within(path, fields, arrays, MAX_PROOF_BYTES)
+}
+
+fn write_streamed_proof_within(
+    path: &std::path::Path,
+    fields: serde_json::Map<String, serde_json::Value>,
+    arrays: &[(&str, LazyArray<'_>)],
+    limit: u64,
+) -> Result<(), String> {
     if fields.contains_key("proof_digest")
         || fields.contains_key("proof_signature")
         || arrays.iter().any(|(key, _)| fields.contains_key(*key))
@@ -133,7 +145,7 @@ pub(crate) fn write_streamed_proof(
         return Err("A streamed proof has a duplicated or reserved field.".into());
     }
     let mut hasher = HashingWriter(sha2::Sha256::default());
-    let mut limited_hasher = SizeLimitedWriter::new(&mut hasher);
+    let mut limited_hasher = SizeLimitedWriter::new(&mut hasher, limit);
     serde_json::to_writer(
         &mut limited_hasher,
         &StreamedProof {
@@ -146,7 +158,7 @@ pub(crate) fn write_streamed_proof(
     let digest = crate::reports::integrity::hex_encode(&sha2::Digest::finalize(hasher.0));
     let mut failure = None;
     crate::atomic_artifact::write_private_atomic_with(path, |file| {
-        let mut limited_file = SizeLimitedWriter::new(file);
+        let mut limited_file = SizeLimitedWriter::new(file, limit);
         serde_json::to_writer_pretty(
             &mut limited_file,
             &StreamedProof {
@@ -179,11 +191,16 @@ impl std::io::Write for HashingWriter {
 struct SizeLimitedWriter<'a> {
     inner: &'a mut dyn std::io::Write,
     written: u64,
+    limit: u64,
 }
 
 impl<'a> SizeLimitedWriter<'a> {
-    fn new(inner: &'a mut dyn std::io::Write) -> Self {
-        Self { inner, written: 0 }
+    fn new(inner: &'a mut dyn std::io::Write, limit: u64) -> Self {
+        Self {
+            inner,
+            written: 0,
+            limit,
+        }
     }
 }
 
@@ -192,10 +209,10 @@ impl std::io::Write for SizeLimitedWriter<'_> {
         let length = u64::try_from(bytes.len()).map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::FileTooLarge, "proof chunk is too large")
         })?;
-        if length > MAX_PROOF_BYTES.saturating_sub(self.written) {
+        if length > self.limit.saturating_sub(self.written) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::FileTooLarge,
-                format!("proof exceeds the {MAX_PROOF_BYTES}-byte limit"),
+                format!("proof exceeds the {}-byte limit", self.limit),
             ));
         }
         let written = self.inner.write(bytes)?;
@@ -260,21 +277,6 @@ impl serde::Serialize for LazySequence<'_> {
         produced.map_err(S::Error::custom)?;
         sequence.end()
     }
-}
-
-pub(crate) fn canonical_signed_proof_payload(value: &serde_json::Value) -> Result<String, String> {
-    let mut unsigned = value.clone();
-    let signature = unsigned
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?
-        .get_mut("proof_signature");
-    if let Some(signature) = signature {
-        signature
-            .as_object_mut()
-            .ok_or("Migration proof signature must be an object.")?
-            .remove("signature");
-    }
-    serde_json::to_string(&unsigned).map_err(|error| error.to_string())
 }
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -359,15 +361,16 @@ mod streamed_proof_tests {
         );
 
         let oversized = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
-            emit(serde_json::json!("x".repeat(MAX_PROOF_BYTES as usize)))
+            emit(serde_json::json!("x".repeat(64 * 1024)))
         };
-        let error =
-            write_streamed_proof(&path, serde_json::Map::new(), &[("mailboxes", &oversized)])
-                .unwrap_err();
-        assert!(
-            error.contains("32 MiB") || error.contains("33554432"),
-            "{error}"
-        );
+        let error = write_streamed_proof_within(
+            &path,
+            serde_json::Map::new(),
+            &[("mailboxes", &oversized)],
+            32 * 1024,
+        )
+        .unwrap_err();
+        assert!(error.contains("32768-byte limit"), "{error}");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&path).unwrap())
                 .unwrap(),

@@ -353,10 +353,11 @@ fn append_oauth_refresh_command(
     if refresh_id.is_empty() {
         return Ok(());
     }
-    #[cfg(windows)]
-    return Err(
-        "automatic OAuth refresh is not enabled on Windows until imapsync refresh-command quoting is qualified for the Windows command shell".to_owned(),
-    );
+    if cfg!(windows) {
+        return Err(
+            "automatic OAuth refresh is not enabled on Windows until imapsync refresh-command quoting is qualified for the Windows command shell".to_owned(),
+        );
+    }
     let config = form
         .load_oauth_refresh_config(side == 1)?
         .ok_or_else(|| {

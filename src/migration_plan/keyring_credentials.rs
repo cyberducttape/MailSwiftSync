@@ -257,6 +257,19 @@ impl Form {
         if !auth_method_is_oauth(auth_method) {
             return Ok(OAuthRefreshOutcome::NotConfigured);
         }
+        let refresh_id = if source {
+            self.profile.source_oauth_refresh_credential_id.trim()
+        } else {
+            self.profile.destination_oauth_refresh_credential_id.trim()
+        }
+        .to_owned();
+        if refresh_id.is_empty() {
+            return Ok(OAuthRefreshOutcome::NotConfigured);
+        }
+        // Concurrent launches and imapsync reconnect callbacks may share this
+        // credential. Hold its cross-process lock from reading the latest
+        // refresh token until any rotated replacement is persisted.
+        let _refresh_lock = crate::oauth_refresh::durable::acquire_oauth_refresh_lock(&refresh_id)?;
         let recovery_key = self.oauth_refresh_recovery_key(source);
         if let Some(recovery_key) = recovery_key.as_deref()
             && let Some(recovery) = crate::oauth_refresh::take_refresh_recovery(recovery_key)?
@@ -285,21 +298,39 @@ impl Form {
                 expires_in: recovery.expires_in,
             });
         }
-        let Some(config) = self.load_oauth_refresh_config(source)? else {
+        let Some(mut config) = self.load_oauth_refresh_config(source)? else {
             return Ok(OAuthRefreshOutcome::NotConfigured);
         };
+        // A reconnect callback that could not reach the keyring leaves its
+        // rotated token in durable recovery; the stored one is consumed.
+        let durable_recovery = crate::oauth_refresh::durable::oauth_refresh_recovery_path(
+            &crate::oauth_refresh::durable::oauth_refresh_recovery_directory()?,
+            &refresh_id,
+        );
+        if let Some(recovered) = crate::oauth_refresh::durable::recover_pending_oauth_refresh(
+            &durable_recovery,
+            &config,
+            |config| self.store_oauth_refresh_config(source, config),
+        )? {
+            config = recovered;
+        }
         let side = if source { "source" } else { "destination" };
         let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
             .map_err(|error| format!("Could not refresh the {side} OAuth access token: {error}"))?;
         let expires_in = refreshed.expires_in;
         if let Some(rotated_refresh_token) = refreshed.refresh_token {
+            let previous = config.clone();
             let rotated = crate::oauth_refresh::OAuthRefreshConfig {
                 refresh_token: rotated_refresh_token,
                 ..config
             };
-            if let Err(error) = persist_rotated_refresh_config_with_retry(&rotated, |config| {
-                self.store_oauth_refresh_config(source, config)
-            }) {
+            if let Err(error) = crate::oauth_refresh::durable::persist_rotated_oauth_refresh(
+                &durable_recovery,
+                None,
+                &previous,
+                &rotated,
+                |config| self.store_oauth_refresh_config(source, config),
+            ) {
                 let recovery = crate::oauth_refresh::OAuthRefreshRecovery {
                     config: rotated,
                     access_token: refreshed.access_token,

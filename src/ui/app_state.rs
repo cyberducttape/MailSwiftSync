@@ -163,6 +163,9 @@ pub(crate) struct App {
     /// the run is admitted.
     pub(crate) live_auth_receiver: Option<Receiver<Result<LiveAuthProof, String>>>,
     pub(crate) manual_oauth_refresh_receiver: Option<Receiver<ManualOAuthRefreshResult>>,
+    /// A streamed report export running on its own read-only connection:
+    /// the artifact name and the export result.
+    pub(crate) report_export_receiver: Option<Receiver<(&'static str, Result<(), String>)>>,
     /// Engine install/check worker for the engine dialog.
     pub(crate) engine_setup_receiver: Option<Receiver<crate::ui::engine::EngineSetupMessage>>,
     pub(crate) engine_setup_progress: Option<crate::engine_install::InstallProgress>,
@@ -592,6 +595,7 @@ impl App {
             || self.capability_receiver.is_some()
             || self.live_auth_receiver.is_some()
             || self.manual_oauth_refresh_receiver.is_some()
+            || self.report_export_receiver.is_some()
             || self
                 .snapshot_worker
                 .as_ref()

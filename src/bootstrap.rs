@@ -447,6 +447,7 @@ impl App {
             capability_staleness_checked_at: None,
             live_auth_receiver: None,
             manual_oauth_refresh_receiver: None,
+            report_export_receiver: None,
             keyring_operation_receiver: None,
             engine_setup_receiver: None,
             engine_setup_progress: None,
