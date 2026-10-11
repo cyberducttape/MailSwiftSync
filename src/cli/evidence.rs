@@ -262,6 +262,19 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         &mismatches,
         &detail,
     ) {
+        // The terminal evidence transaction is atomic and rolls back its
+        // initial status update on any persistence failure. Close the run
+        // explicitly so a failed ledger write cannot leave a permanently
+        // active verification run blocking the next retry. Keep the stage:
+        // it may still contain useful page checkpoints for the retry.
+        let failure_detail = format!("verification-only evidence persistence failed: {error}");
+        if let Err(finalize_error) =
+            store.finish_run(&run_id, "verification_failed", &failure_detail)
+        {
+            eprintln!(
+                "Reverification failed to persist evidence and could not finalize run state: {finalize_error}"
+            );
+        }
         eprintln!("Reverification failed to persist evidence: {error}");
         std::process::exit(1);
     }
