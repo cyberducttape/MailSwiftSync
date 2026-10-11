@@ -118,8 +118,10 @@ reconciliation as successful.
   tagged `LIST` completion alone cannot pass discovery.
 - Verification differences have a durable, audited `Verified with exceptions`
   workflow with operator, reason, timestamp, and evidence-run linkage.
-- Machine-readable proof exports include the complete durable run manifest;
-  activity views remain intentionally bounded.
+- Machine-readable proof exports include the complete durable run manifest up
+  to the explicit 100,000-run export ceiling; exports above that bound fail
+  closed rather than silently omitting history. Activity views remain
+  intentionally bounded to recent runs.
 - Proof artifacts support Ed25519 signatures with owner-only PKCS#8 key files
   and verifier trust pins; unsigned exports are explicitly labeled
   integrity-only.

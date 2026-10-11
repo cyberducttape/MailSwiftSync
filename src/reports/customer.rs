@@ -83,7 +83,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
     provider_identity: Option<&ProviderIdentity>,
 ) -> Result<(), String> {
     let snapshot = store
-        .project_report_snapshot(project_id)
+        .complete_project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
     if !allow_incomplete {

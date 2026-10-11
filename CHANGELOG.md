@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make machine-readable customer and operator exports use a complete durable
+  run manifest instead of the bounded recent-run view. Export snapshots now
+  load every run up to a 100,000-run safety ceiling and fail closed above it;
+  interactive/controller snapshots remain bounded to the newest 20 runs.
 - Finalize a verification-only run as `verification_failed` when its terminal
   evidence transaction cannot be committed, while retaining the durable stage
   for retry; failed reverify persistence can no longer leave a permanently

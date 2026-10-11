@@ -2,11 +2,31 @@ use super::*;
 
 const MAX_REPORT_PAGE_ROWS: u32 = 1_000;
 const MAX_REPORT_SNAPSHOT_MAILBOXES: i64 = 100_000;
+const MAX_REPORT_SNAPSHOT_RUNS: i64 = 100_000;
 
 impl StateStore {
     pub fn project_report_snapshot(
         &self,
         project_id: &str,
+    ) -> rusqlite::Result<Option<ProjectReportSnapshot>> {
+        self.project_report_snapshot_with_run_limit(project_id, 20)
+    }
+
+    /// Build the complete report read model for an export. Interactive and
+    /// controller projections deliberately use a recent-run window, but an
+    /// exported manifest must not claim completeness while silently omitting
+    /// historical runs.
+    pub fn complete_project_report_snapshot(
+        &self,
+        project_id: &str,
+    ) -> rusqlite::Result<Option<ProjectReportSnapshot>> {
+        self.project_report_snapshot_with_run_limit(project_id, MAX_REPORT_SNAPSHOT_RUNS)
+    }
+
+    fn project_report_snapshot_with_run_limit(
+        &self,
+        project_id: &str,
+        run_limit: i64,
     ) -> rusqlite::Result<Option<ProjectReportSnapshot>> {
         // Keep every report query on one SQLite read transaction. In WAL mode
         // this pins one consistent database snapshot, so a concurrent
@@ -49,6 +69,22 @@ impl StateStore {
                     std::io::ErrorKind::InvalidData,
                     format!(
                         "project report contains {mailbox_count} mailboxes; report exports are limited to {MAX_REPORT_SNAPSHOT_MAILBOXES}"
+                    ),
+                ),
+            )));
+        }
+
+        let run_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM runs WHERE project_id=?1",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        if run_limit >= MAX_REPORT_SNAPSHOT_RUNS && run_count > run_limit {
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "project report contains {run_count} runs; complete report exports are limited to {MAX_REPORT_SNAPSHOT_RUNS}"
                     ),
                 ),
             )));
@@ -138,9 +174,9 @@ impl StateStore {
 
         let mut runs = Vec::new();
         let mut run_statement = tx.prepare(
-            "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version,(SELECT SUM(CAST(e.detail AS INTEGER)) FROM events e WHERE e.run_id=r.id AND e.kind='diagnostic_lines_dropped'),(SELECT COUNT(*) FROM events e WHERE e.run_id=r.id AND e.kind='transfer_attempt_started'),(SELECT COUNT(*) FROM events s WHERE s.run_id=r.id AND s.kind='transfer_attempt_started' AND NOT EXISTS(SELECT 1 FROM events f WHERE f.run_id=s.run_id AND f.kind='transfer_attempt_finished' AND f.detail LIKE s.detail || ';outcome=%')) FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at DESC,r.rowid DESC LIMIT 20",
+            "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version,(SELECT SUM(CAST(e.detail AS INTEGER)) FROM events e WHERE e.run_id=r.id AND e.kind='diagnostic_lines_dropped'),(SELECT COUNT(*) FROM events e WHERE e.run_id=r.id AND e.kind='transfer_attempt_started'),(SELECT COUNT(*) FROM events s WHERE s.run_id=r.id AND s.kind='transfer_attempt_started' AND NOT EXISTS(SELECT 1 FROM events f WHERE f.run_id=s.run_id AND f.kind='transfer_attempt_finished' AND f.detail LIKE s.detail || ';outcome=%')) FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at DESC,r.rowid DESC LIMIT ?2",
         )?;
-        for row in run_statement.query_map([project_id], |row| {
+        for row in run_statement.query_map(rusqlite::params![project_id, run_limit], |row| {
             Ok(ReportRunSnapshot {
                 run: RunSummary {
                     id: row.get(0)?,

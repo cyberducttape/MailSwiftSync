@@ -367,8 +367,9 @@ pub struct ReportRunSnapshot {
 pub struct ProjectReportSnapshot {
     pub project: Project,
     pub mailboxes: Vec<ReportMailboxSnapshot>,
-    /// The most recent runs, for presentation. Bounded; do not use it to
-    /// decide whether work is still active.
+    /// Recent runs for bounded operational views, or the complete run set for
+    /// an export snapshot (which is subject to the explicit export ceiling).
+    /// Do not use this field to decide whether work is still active.
     pub runs: Vec<ReportRunSnapshot>,
     /// Whether any run of the project, not only a recent one, is queued or
     /// running. A batch parent can be older than its newest children.

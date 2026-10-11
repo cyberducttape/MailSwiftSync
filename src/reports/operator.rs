@@ -15,7 +15,7 @@ pub(crate) fn build_project_report(
     project_id: &str,
 ) -> Result<String, String> {
     let snapshot = store
-        .project_report_snapshot(project_id)
+        .complete_project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
     if snapshot.mailboxes.is_empty() {
@@ -174,7 +174,7 @@ pub(crate) fn export_project_json(
     path: &std::path::Path,
 ) -> Result<(), String> {
     let snapshot = store
-        .project_report_snapshot(project_id)
+        .complete_project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
     if snapshot.mailboxes.is_empty() {
@@ -615,7 +615,7 @@ mod project_json_tests {
             probable_messages: 0,
             flag_verification: None,
         };
-        for index in 0..3 {
+        for index in 0..21 {
             let job = store
                 .add_mailbox(
                     &project.id,
@@ -646,8 +646,8 @@ mod project_json_tests {
         let report: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(report["format"], "mailswiftsync-project-report");
-        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 3);
-        assert_eq!(report["runs"].as_array().unwrap().len(), 3);
+        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 21);
+        assert_eq!(report["runs"].as_array().unwrap().len(), 21);
         assert_eq!(
             report["mailboxes"][0]["evidence"]["verification_outcome"],
             "exact_metadata_match"
