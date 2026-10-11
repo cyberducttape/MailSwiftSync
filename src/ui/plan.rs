@@ -474,8 +474,11 @@ impl App {
                     crate::ui::card(ui, |ui| {
                         ui.heading(self.language.message("ui.reliability-and-metadata"));
                         ui.checkbox(&mut self.form.profile.sync_internaldates, self.language.message("ui.sync-internal-dates-syncinternaldates"));
-                        ui.checkbox(&mut self.form.profile.useuid, self.language.message("ui.use-message-uids-when-available-useuid"));
-                        ui.checkbox(&mut self.form.profile.usecache, self.language.message("ui.use-imapsync-cache-usecache"));
+                        let uid_tradeoff = self.language.message("ui.useuid-interruption-tradeoff");
+                        ui.checkbox(&mut self.form.profile.useuid, self.language.message("ui.use-message-uids-when-available-useuid"))
+                            .on_hover_text(uid_tradeoff);
+                        ui.checkbox(&mut self.form.profile.usecache, self.language.message("ui.use-imapsync-cache-usecache"))
+                            .on_hover_text(uid_tradeoff);
                         ui.checkbox(&mut self.form.profile.allowsizemismatch, self.language.message("ui.allow-message-size-mismatch-allowsizemismatch"));
                         if self.form.engine() == crate::core::Engine::ImapSync {
                             ui.checkbox(
