@@ -83,6 +83,15 @@ it does not measure IMAP fetching, a complete migration, report-commit cost,
 provider behavior, or a 10/50/100 GiB transfer, and does not establish a safe
 aggregate disk ceiling or capacity on other hosts.
 
+The benchmark implementation at that revision called the convenience
+`detect_mismatches_from_stage` API, which materializes mismatch detail in
+memory and has a separate 64 MiB evidence-detail cap. Live durable runs use
+`reconcile_stage` and retain mismatch rows in SQLite. Therefore those recorded
+timings/RSS are valid for the stated typical fixture (2% changed IDs), but are
+not a measurement of the live durable mismatch-heavy path. The benchmark now
+uses `reconcile_stage`; new results from that path must be used for capacity
+claims about high-difference mailboxes.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of

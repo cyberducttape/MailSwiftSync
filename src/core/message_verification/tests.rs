@@ -1937,12 +1937,8 @@ fn durable_stage_reconciliation_benchmark() {
     }
     let reconcile = |stage: &MessageMetadataStage| {
         let started = std::time::Instant::now();
-        let result = MessageVerification::detect_mismatches_from_stage(
-            "job-bench",
-            "run-bench",
-            stage,
-            &HashMap::new(),
-        );
+        let result =
+            MessageVerification::reconcile_stage("job-bench", "run-bench", stage, &HashMap::new());
         (result, started.elapsed().as_millis())
     };
     let (result, reconcile_ms) = reconcile(&stage);
@@ -1962,20 +1958,19 @@ fn durable_stage_reconciliation_benchmark() {
         std::fs::write(path, text).unwrap();
     }
     let final_stage_bytes = files_bytes();
-    let outcome =
-        |result: &Result<(Vec<MessageMismatch>, VerificationSummary), String>| match result {
-            Ok(_) => "ok".to_owned(),
-            Err(error) => match crate::core::VerificationLimit::from_detail(error) {
-                Some(limit) => format!("limit:{}", limit.code()),
-                None => panic!("reconciliation failed: {error}"),
-            },
-        };
+    let outcome = |result: &Result<(u64, VerificationSummary), String>| match result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => match crate::core::VerificationLimit::from_detail(error) {
+            Some(limit) => format!("limit:{}", limit.code()),
+            None => panic!("reconciliation failed: {error}"),
+        },
+    };
     let first_outcome = outcome(&result);
     let (recorded, summary) = match &result {
-        Ok((mismatches, summary)) => {
+        Ok((mismatch_count, summary)) => {
             assert_eq!(summary.total_source, staged[0] as u64);
             assert_eq!(summary.total_destination, staged[1] as u64);
-            (mismatches.len(), Some(summary.clone()))
+            (*mismatch_count, Some(summary.clone()))
         }
         Err(_) => (0, None),
     };

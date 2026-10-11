@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Benchmark durable verification through the same SQLite-staged mismatch path
+  used by live runs; the prior harness materialized mismatch details in memory
+  and could hit its separate 64 MiB ephemeral-report limit on adversarial data.
 - Record a fresh durable verification-scale matrix through 1,000,000 messages
   per endpoint at the synthetic SQLite reconciliation layer, with host profile,
   peak RSS, stage/journal footprint, throughput, and explicit qualification
