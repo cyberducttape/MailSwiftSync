@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import unittest
@@ -43,6 +44,22 @@ class ProviderProofSignatureTests(unittest.TestCase):
     def test_rejects_signature_from_unpinned_key(self):
         with self.assertRaisesRegex(ValueError, "pinned qualification key"):
             verify_proof_signature(self.proof, "00" * 32)
+
+    def test_accepts_prehashed_signature_for_large_payloads(self):
+        proof = json.loads(json.dumps(self.proof))
+        proof["proof_signature"]["algorithm"] = "Ed25519-SHA256"
+        payload_object = json.loads(json.dumps(proof))
+        payload_object["proof_signature"].pop("signature")
+        payload = json.dumps(
+            payload_object, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        proof["proof_signature"]["signature"] = self.private_key.sign(
+            hashlib.sha256(payload).digest()
+        ).hex()
+        verify_proof_signature(proof, self.public_key_hex)
+        proof["format"] = "altered"
+        with self.assertRaisesRegex(ValueError, "signature is invalid"):
+            verify_proof_signature(proof, self.public_key_hex)
 
     def test_rejects_tampered_payload(self):
         tampered = dict(self.proof)

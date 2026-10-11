@@ -78,6 +78,14 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
+        match poll_worker(&mut self.report_export_receiver) {
+            WorkerPoll::Ready((artifact, result)) => self.report_export_result(artifact, result),
+            WorkerPoll::Stopped => self.set_status(
+                format!("Report export {WORKER_STOPPED_UNEXPECTEDLY}."),
+                StatusSeverity::Error,
+            ),
+            WorkerPoll::Pending => {}
+        }
         self.poll_engine_setup();
         match poll_worker(&mut self.keyring_operation_receiver) {
             WorkerPoll::Ready(result) => self.complete_keyring_operation(result),
