@@ -284,6 +284,8 @@ for filename in files:
     proof = None
     if proof_path is None or proof_path.name != proof_file:
         errors.append(f"{filename}: proof_file must be a basename in the evidence directory")
+    elif proof_path.is_symlink():
+        errors.append(f"{filename}: proof_file must not be a symlink")
     elif not proof_path.is_file():
         errors.append(f"{filename}: referenced customer proof is missing: {proof_file}")
     else:

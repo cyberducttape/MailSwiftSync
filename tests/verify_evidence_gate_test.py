@@ -217,6 +217,27 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("dry-pilot.json: large-mailbox-100k", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-20gb", rerun_output)
 
+            # A basename check alone does not keep a qualification bundle
+            # self-contained: a symlink can still resolve outside the bundle.
+            # Release evidence must be reproducible from the submitted files.
+            external_proof = Path(directory) / "external-proof.json"
+            external_proof.write_text(json.dumps(proof), encoding="utf-8")
+            (evidence_dir / "proof.json").unlink()
+            try:
+                (evidence_dir / "proof.json").symlink_to(external_proof)
+            except OSError as error:
+                self.skipTest(f"symlink test unavailable: {error}")
+            symlinked = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            symlinked_output = symlinked.stdout + symlinked.stderr
+            self.assertIn("proof_file must not be a symlink", symlinked_output)
+
 
 if __name__ == "__main__":
     unittest.main()

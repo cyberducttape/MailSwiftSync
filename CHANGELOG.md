@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject symlinked customer-proof files in the provider qualification gate, so
+  accepted evidence bundles remain self-contained and reproducible.
 - Batch transfer-pass, folder, and progress reads during complete report
   exports in bounded run-ID chunks, avoiding a query-per-run history export
   while preserving the complete manifest and report snapshot semantics.
