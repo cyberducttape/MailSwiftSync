@@ -35,6 +35,24 @@ fn oauth_refresh_recovery_path(recovery_directory: &std::path::Path, keyring_id:
     ))
 }
 
+fn oauth_refresh_file_recovery_path(config_path: &std::path::Path) -> Result<PathBuf, String> {
+    let file_name = config_path
+        .file_name()
+        .ok_or_else(|| "OAuth refresh config path has no file name".to_owned())?;
+    let mut recovery_name = file_name.to_os_string();
+    recovery_name.push(".oauth-refresh-recovery");
+    Ok(config_path.with_file_name(recovery_name))
+}
+
+fn oauth_refresh_recovery_directory() -> Result<PathBuf, String> {
+    let data_directory = dirs_next::data_local_dir()
+        .ok_or_else(|| "could not determine a private directory for OAuth recovery".to_owned())?;
+    let recovery_directory = data_directory.join("mailswiftsync/oauth-refresh-recovery");
+    crate::credentials::ensure_private_directory(&recovery_directory)
+        .map_err(|error| format!("could not secure OAuth refresh recovery directory: {error}"))?;
+    Ok(recovery_directory)
+}
+
 fn acquire_oauth_refresh_lock_in(
     lock_directory: &std::path::Path,
     keyring_id: &str,
@@ -511,17 +529,11 @@ pub(super) fn oauth_access_token_command(
             )
         })?;
         let lock_directory = data_directory.join("mailswiftsync/oauth-refresh-locks");
-        let recovery_directory = data_directory.join("mailswiftsync/oauth-refresh-recovery");
+        let recovery_directory = oauth_refresh_recovery_directory().map_err(|error| (1, error))?;
         crate::credentials::ensure_private_directory(&lock_directory).map_err(|error| {
             (
                 1,
                 format!("could not secure OAuth refresh coordination directory: {error}"),
-            )
-        })?;
-        crate::credentials::ensure_private_directory(&recovery_directory).map_err(|error| {
-            (
-                1,
-                format!("could not secure OAuth refresh recovery directory: {error}"),
             )
         })?;
         let lock = acquire_oauth_refresh_lock_in(
@@ -558,7 +570,18 @@ pub(super) fn oauth_access_token_command(
         .unwrap_or(latest_config);
         (Some(entry), Some(recovery_path), Some(lock))
     } else {
-        (None, None, None)
+        let recovery_path =
+            oauth_refresh_file_recovery_path(&config_path).map_err(|error| (1, error))?;
+        config = recover_pending_oauth_refresh(&recovery_path, &config, |recovered| {
+            crate::atomic_artifact::write_private_atomic(
+                &config_path,
+                &crate::oauth_refresh::encode_refresh_config(recovered),
+            )
+            .map_err(|error| format!("could not restore OAuth refresh config file: {error}"))
+        })
+        .map_err(|error| (1, error))?
+        .unwrap_or(config);
+        (None, Some(recovery_path), None)
     };
     let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
         .map_err(|error| (1, format!("OAuth access token refresh failed: {error}")))?;
@@ -583,11 +606,19 @@ pub(super) fn oauth_access_token_command(
                 &rotated_config,
                 |config| persist_and_verify_keyring_refresh_config(entry, config),
             ),
-            (None, None) => crate::atomic_artifact::write_private_atomic(
+            (None, Some(recovery_path)) => persist_rotated_oauth_refresh(
+                recovery_path,
                 &config_path,
-                &crate::oauth_refresh::encode_refresh_config(&rotated_config),
-            )
-            .map_err(|error| format!("could not update OAuth refresh config: {error}")),
+                &previous_config,
+                &rotated_config,
+                |config| {
+                    crate::atomic_artifact::write_private_atomic(
+                        &config_path,
+                        &crate::oauth_refresh::encode_refresh_config(config),
+                    )
+                    .map_err(|error| format!("could not update OAuth refresh config: {error}"))
+                },
+            ),
             _ => Err("OAuth refresh recovery state was not initialized consistently".to_owned()),
         }
         .map_err(|error| (1, error))?;
@@ -876,6 +907,42 @@ mod oauth_refresh_lock_tests {
         assert!(conflict.contains("refusing to overwrite"));
         assert_eq!(writes.load(Ordering::SeqCst), 0);
         assert!(recovery_path.exists());
+
+        let file_config_path = directory.join("file-backed-refresh.json");
+        crate::atomic_artifact::write_private_atomic(
+            &file_config_path,
+            &crate::oauth_refresh::encode_refresh_config(&previous),
+        )
+        .unwrap();
+        let file_recovery_path = oauth_refresh_file_recovery_path(&file_config_path).unwrap();
+        crate::atomic_artifact::write_private_atomic(
+            &file_recovery_path,
+            &encode_oauth_refresh_recovery(&previous, &rotated),
+        )
+        .unwrap();
+        let file_recovered =
+            recover_pending_oauth_refresh(&file_recovery_path, &previous, |config| {
+                crate::atomic_artifact::write_private_atomic(
+                    &file_config_path,
+                    &crate::oauth_refresh::encode_refresh_config(config),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            file_recovered.refresh_token.as_str(),
+            "rotated-refresh-token"
+        );
+        assert!(!file_recovery_path.exists());
+        let stored_file_config = read_secret_file(&file_config_path).unwrap();
+        assert_eq!(
+            crate::oauth_refresh::decode_refresh_config(stored_file_config.as_str())
+                .unwrap()
+                .refresh_token
+                .as_str(),
+            "rotated-refresh-token"
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

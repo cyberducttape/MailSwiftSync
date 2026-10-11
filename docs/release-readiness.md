@@ -325,11 +325,12 @@ reconciliation as successful.
   processes and reload the latest keyring configuration before exchanging.
   If keyring persistence remains unavailable, a reconnect callback fails
   closed after three attempts; the rotated config is retained in a dedicated
-  owner-only recovery file with a hashed keyring ID and reconciled before the
-  next refresh attempt. This fallback file is not encrypted and remains
-  protected by the local OS account boundary. The pre-launch path keeps an
-  unrecoverably rotated config only in protected process memory for keyring
-  persistence recovery, without attempting another provider exchange.
+  owner-only recovery file (hashed keyring ID) or sidecar (file-backed mode)
+  and reconciled before the next refresh attempt. This fallback is not
+  encrypted and remains protected by the local OS account boundary. The
+  pre-launch path keeps an unrecoverably rotated config only in protected
+  process memory for keyring persistence recovery, without attempting another
+  provider exchange.
 
 ## Available in 0.1
 
