@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Apply exact-evidence consistency checks to standalone re-verification
+  history, preventing contradictory message counters from being persisted as
+  an exact audit result.
 - Preserve the verifier's authoritative/non-authoritative evidence flag in
   standalone re-verification history; audit records can no longer upgrade
   metadata observations into authoritative evidence.

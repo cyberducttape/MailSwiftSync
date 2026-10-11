@@ -168,6 +168,23 @@ impl StateStore {
         mismatches: &(impl super::MismatchSource + ?Sized),
         detail: &str,
     ) -> rusqlite::Result<()> {
+        let outcome = value.verification_outcome();
+        if matches!(
+            outcome,
+            VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch
+        ) && (!value.message_result_is_exact()
+            || value
+                .flag_verification
+                .is_some_and(|flags| flags.mismatched_messages > 0)
+            || (value.verification_method == VerificationMethod::AggregateEngine
+                && !value.authoritative)
+            || (value.verification_method == VerificationMethod::BodyHash
+                && outcome != VerificationOutcome::ExactBodyMatch))
+        {
+            return Err(super::ledger_rejection(
+                "an exact verification label contradicts the evidence counters",
+            ));
+        }
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
             "UPDATE runs SET status='completed',finished_at=CURRENT_TIMESTAMP,detail=?1 WHERE id=?2 AND project_id=?3 AND job_id=?4 AND status='running'",

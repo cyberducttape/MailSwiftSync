@@ -2951,6 +2951,53 @@ fn terminal_write_rejects_contradictory_exact_evidence() {
 }
 
 #[test]
+fn verification_only_history_rejects_contradictory_exact_evidence() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("reverify-invariant", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_verification_run(&project.id, &job, "reverify-invalid", "snapshot")
+        .unwrap();
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+        source_messages: 2,
+        destination_messages: 1,
+        source_bytes: 20,
+        destination_bytes: 10,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+        flag_verification: None,
+    };
+    assert!(
+        db.finish_verification_only_run(
+            &project.id,
+            &job,
+            "reverify-invalid",
+            &evidence,
+            &[],
+            "contradictory exact re-verification",
+        )
+        .is_err()
+    );
+    assert_eq!(
+        db.run_status("reverify-invalid").unwrap().as_deref(),
+        Some("running")
+    );
+    assert!(db.latest_evidence_for_run(&job).unwrap().is_none());
+}
+
+#[test]
 fn terminal_write_rejects_non_authoritative_exact_engine_evidence() {
     let db = StateStore::in_memory().unwrap();
     let project = db
