@@ -584,6 +584,111 @@ fn sanitize_private_metadata(line: &str) -> String {
         output.push(']');
         cursor = right;
     }
+    redact_sensitive_fields(&output)
+}
+
+/// Redact secret-shaped key/value fields that may be emitted by an external
+/// engine even when the exact credential is not present in the controller's
+/// known-secret set. This is intentionally line-bounded: it protects support
+/// transcripts without attempting to parse or mutate the semantic engine
+/// stream used by verification.
+fn redact_sensitive_fields(line: &str) -> String {
+    const KEYS: [&str; 10] = [
+        "client_secret",
+        "refresh_token",
+        "access_token",
+        "authorization",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "credential",
+        "bearer",
+    ];
+    let lower = line.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0;
+    let mut search = 0;
+    while search < bytes.len() {
+        let mut candidate = None;
+        for key in KEYS {
+            let Some(relative) = lower[search..].find(key) else {
+                continue;
+            };
+            let start = search + relative;
+            let before_ok =
+                start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+            let after = start + key.len();
+            let after_ok = after == bytes.len()
+                || !bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_';
+            if before_ok && after_ok && candidate.is_none_or(|(current, _)| start < current) {
+                candidate = Some((start, key));
+            }
+        }
+        let Some((key_start, key)) = candidate else {
+            break;
+        };
+        let mut value_start = key_start + key.len();
+        while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
+            value_start += 1;
+        }
+        if value_start >= bytes.len() || !matches!(bytes[value_start], b'=' | b':') {
+            search = key_start + key.len();
+            continue;
+        }
+        value_start += 1;
+        while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
+            value_start += 1;
+        }
+        if value_start >= bytes.len() {
+            break;
+        }
+        let (value_begin, value_end) = if matches!(bytes[value_start], b'"' | b'\'') {
+            let quote = bytes[value_start];
+            let begin = value_start + 1;
+            let end = bytes[begin..]
+                .iter()
+                .position(|byte| *byte == quote)
+                .map(|offset| begin + offset)
+                .unwrap_or(bytes.len());
+            (begin, end)
+        } else if key == "authorization"
+            && (lower[value_start..].starts_with("bearer ")
+                || lower[value_start..].starts_with("basic "))
+        {
+            let token_start = value_start + lower[value_start..].find(' ').unwrap() + 1;
+            let end = bytes[token_start..]
+                .iter()
+                .position(|byte| {
+                    byte.is_ascii_whitespace()
+                        || matches!(*byte, b'&' | b',' | b';' | b']' | b')' | b'}')
+                })
+                .map(|offset| token_start + offset)
+                .unwrap_or(bytes.len());
+            (token_start, end)
+        } else {
+            let begin = value_start;
+            let end = bytes[begin..]
+                .iter()
+                .position(|byte| {
+                    byte.is_ascii_whitespace()
+                        || matches!(*byte, b'&' | b',' | b';' | b']' | b')' | b'}')
+                })
+                .map(|offset| begin + offset)
+                .unwrap_or(bytes.len());
+            (begin, end)
+        };
+        if value_end <= value_begin {
+            search = key_start + key.len();
+            continue;
+        }
+        output.push_str(&line[cursor..value_begin]);
+        output.push_str("[REDACTED]");
+        cursor = value_end;
+        search = value_end;
+    }
+    output.push_str(&line[cursor..]);
     output
 }
 
@@ -869,5 +974,18 @@ mod tests {
         assert!(!sanitized.contains("msg-42@example.test"));
         assert_eq!(sanitized.matches("[mailbox:").count(), 2);
         assert!(sanitized.contains("Login user=<[mailbox:"));
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_unknown_secret_fields_and_preserve_safe_metadata() {
+        let line = "access_token=access-123 refresh_token:'refresh value' Authorization: Bearer bearer-456 folder=Archive";
+        let sanitized = sanitize_private_metadata(line);
+        assert!(!sanitized.contains("access-123"));
+        assert!(!sanitized.contains("refresh value"));
+        assert!(!sanitized.contains("bearer-456"));
+        assert!(sanitized.contains("access_token=[REDACTED]"));
+        assert!(sanitized.contains("refresh_token:'[REDACTED]'"));
+        assert!(sanitized.contains("Authorization: Bearer [REDACTED]"));
+        assert!(sanitized.contains("folder=Archive"));
     }
 }

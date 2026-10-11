@@ -11,6 +11,9 @@
 - Centralize standalone reverify result construction and add a regression for
   partial flag coverage, keeping the machine-readable assurance status aligned
   with the evidence model.
+- Harden opt-in diagnostic transcript redaction for secret-shaped key/value
+  fields and bearer-style authorization values that are not in the controller's
+  known-secret set.
 - Apply exact-evidence consistency checks to standalone re-verification
   history, preventing contradictory message counters from being persisted as
   an exact audit result.
