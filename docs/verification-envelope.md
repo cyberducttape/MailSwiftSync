@@ -108,7 +108,8 @@ post-completion verification run without launching the transfer engine. A
 successful verification commits a new evidence-history row and then removes
 the private stage; an interrupted, failed, or ledger-write-failed verification
 retains it for the next verification attempt. Batch-wide re-verification orchestration, persistent
-customer-facing verification segments, and rolling digests remain future work.
+customer-facing verification segments, and rolling digests remain future work;
+the bounded manifest workflow below does not remove those limits.
 For a bounded batch, `reverify-batch` accepts a CSV manifest with the exact
 header `mailbox_id,source_secret_file,destination_secret_file` and runs the
 same mailbox command serially. Secret files are referenced by path only and
