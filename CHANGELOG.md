@@ -4,6 +4,8 @@
 
 - Pseudonymize customer-controlled project identifiers in opt-in diagnostic
   filenames and headers; raw project names remain out of support transcripts.
+- Resolve the stale Linux packaging roadmap wording so the shipped RPM package
+  is distinguished from still-pending RPM repository metadata.
 - Make imapsync transfer hostname verification explicit for both implicit IMAPS
   and STARTTLS endpoints; the qualified engine's STARTTLS defaults did not set
   `SSL_verifycn_scheme` even though its IMAPS defaults did.

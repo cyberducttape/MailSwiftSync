@@ -1,7 +1,7 @@
 # Linux packaging roadmap
 
-Portable archives and a deterministic signed Debian package are the current
-alpha distribution. A stable Linux release
+Portable archives and deterministic signed Debian and RPM packages are the
+current alpha distribution. A stable Linux release
 should provide deterministic installation and upgrade paths for operators who
 cannot safely assemble a migration control plane from unrelated archives and
 packages.
@@ -11,7 +11,7 @@ The release gate is:
 | Target | Requirement |
 |---|---|
 | Debian/Ubuntu | Signed `.deb` is implemented; signed APT repository metadata remains |
-| RHEL/Alma/Rocky | Signed `.rpm` and signed YUM/DNF repository metadata |
+| RHEL/Alma/Rocky | Signed `.rpm` is implemented; signed YUM/DNF repository metadata remains |
 | Windows | Signed native installer (MSI or MSIX), upgrade/uninstall lifecycle validation |
 | macOS | Signed and notarized `.pkg` or `.dmg`, upgrade/uninstall lifecycle validation |
 | Architectures | x86_64 and ARM64 artifacts, each tested on its target architecture |
@@ -19,7 +19,7 @@ The release gate is:
 | Documentation | Installed man page plus the one-page safe first migration path |
 | Diagnostics | Implemented: `mailswiftsync doctor` reports the transfer engine, state and secret-runtime directory permissions, free space, and engine qualification |
 | Engine contract | Implemented: `doctor --strict` exits 3 unless imapsync is exactly `2.314`; the `.deb` declares `Suggests: imapsync (= 2.314)`, and unqualified versions are already transfer-only at run time |
-| Lifecycle | The `.deb` has no maintainer scripts and owns only its installed files, so upgrade and removal never touch ledgers; RPM parity remains |
+| Lifecycle | The `.deb` and `.rpm` have no maintainer scripts and own only their installed files, so upgrade and removal never touch ledgers |
 
 The package must not silently install an unqualified current imapsync release.
 If the distribution cannot carry the qualified engine under its licensing and
