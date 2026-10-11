@@ -382,8 +382,10 @@ fn run_reverify_one(
         return Err(
             match store.finish_run(&run_id, "verification_failed", &failure_detail) {
                 Ok(()) => format!("Reverification failed to persist evidence: {error}"),
-                Err(finalize_error) => format!(
-                    "Reverification failed to persist evidence and could not finalize run state: {finalize_error}"
+                Err(finalize_error) => reverify_persistence_failure_message(
+                    &run_id,
+                    &error.to_string(),
+                    &finalize_error.to_string(),
                 ),
             },
         );
@@ -411,6 +413,16 @@ fn run_reverify_one(
         folder_count,
         &mismatches,
     ))
+}
+
+fn reverify_persistence_failure_message(
+    run_id: &str,
+    evidence_error: &str,
+    finalization_error: &str,
+) -> String {
+    format!(
+        "Reverification evidence persistence failed for run {run_id}: {evidence_error}; ledger_persistence_failed while recording that failure: {finalization_error}"
+    )
 }
 
 /// A successful dry-run preflight also finishes as `completed`, but it copied
@@ -1221,6 +1233,19 @@ mod tests {
                 .unwrap(),
             std::path::PathBuf::from("results/differences.csv")
         );
+    }
+
+    #[test]
+    fn reverification_reports_both_evidence_and_failure_state_persistence_errors() {
+        let message = super::reverify_persistence_failure_message(
+            "verification-run-123",
+            "injected evidence commit failure",
+            "injected terminal-state write failure",
+        );
+        assert!(message.contains("verification-run-123"));
+        assert!(message.contains("injected evidence commit failure"));
+        assert!(message.contains("ledger_persistence_failed"));
+        assert!(message.contains("injected terminal-state write failure"));
     }
 
     fn exact_metadata_evidence() -> crate::core::MailboxEvidence {
