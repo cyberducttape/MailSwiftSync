@@ -685,11 +685,9 @@ fn redact_sensitive_fields(line: &str) -> String {
                 continue;
             };
             let start = search + relative;
-            let before_ok =
-                start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+            let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
             let after = start + key.len();
-            let after_ok = after == bytes.len()
-                || !bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_';
+            let after_ok = after == bytes.len() || !bytes[after].is_ascii_alphanumeric();
             if before_ok && after_ok && candidate.is_none_or(|(current, _)| start < current) {
                 candidate = Some((start, key));
             }
@@ -1099,20 +1097,22 @@ mod tests {
 
     #[test]
     fn diagnostic_lines_redact_common_hyphenated_and_camel_case_secret_keys() {
-        let line = "access-token=hyphen-access refreshToken=camel-refresh client-secret=client-value api_key=api-value";
+        let line = "access-token=hyphen-access refreshToken=camel-refresh client-secret=client-value api_key=api-value provider_oauth_access_token=prefixed-access provider_oauth_refresh_token=prefixed-refresh";
         let sanitized = sanitize_private_metadata(line);
         for secret in [
             "hyphen-access",
             "camel-refresh",
             "client-value",
             "api-value",
+            "prefixed-access",
+            "prefixed-refresh",
         ] {
             assert!(
                 !sanitized.contains(secret),
                 "credential-like test value remained in diagnostic output"
             );
         }
-        assert_eq!(sanitized.matches("[REDACTED]").count(), 4);
+        assert_eq!(sanitized.matches("[REDACTED]").count(), 6);
     }
 
     #[test]
