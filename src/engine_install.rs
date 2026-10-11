@@ -230,12 +230,27 @@ pub(crate) fn store_verified<R: Read>(
         std::fs::rename(&partial_path, &final_path)
             .map_err(|error| format!("could not store the verified download: {error}"))
     });
-    if result.is_err() {
-        let _ = std::fs::remove_file(&partial_path);
-    }
-    result?;
+    cleanup_partial_download(result, &partial_path, |path| std::fs::remove_file(path))?;
     progress(InstallProgress::Verified);
     Ok(final_path)
+}
+
+fn cleanup_partial_download(
+    result: Result<(), String>,
+    partial_path: &Path,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let Err(primary_error) = result else {
+        return result;
+    };
+    match remove(partial_path) {
+        Ok(()) => Err(primary_error),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(primary_error),
+        Err(cleanup_error) => Err(format!(
+            "{primary_error}; could not remove unverified partial engine artifact {}: {cleanup_error}",
+            partial_path.display()
+        )),
+    }
 }
 
 /// Download `artifact` into `directory` unless a copy with the pinned digest
@@ -441,6 +456,22 @@ mod tests {
         sha256_hex, store_verified, unpack_windows_engine,
     };
     use std::io::Write;
+
+    #[test]
+    fn failed_download_reports_partial_artifact_cleanup_failure() {
+        let partial_path = std::path::Path::new("unverified-engine.partial");
+        let error = super::cleanup_partial_download(
+            Err("download failed digest verification".to_owned()),
+            partial_path,
+            |_| Err(std::io::Error::other("injected cleanup failure")),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("download failed digest verification"));
+        assert!(error.contains("could not remove unverified partial engine artifact"));
+        assert!(error.contains("unverified-engine.partial"));
+        assert!(error.contains("injected cleanup failure"));
+    }
 
     fn private_directory(name: &str) -> std::path::PathBuf {
         let directory = std::env::var_os("XDG_RUNTIME_DIR")
