@@ -20,6 +20,7 @@ fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer, side: Stage
         &budget,
         &state_budget,
         None,
+        false,
         &mut sink,
     )
     .unwrap_or_else(|error| panic!("scan failed: {error:?}"));

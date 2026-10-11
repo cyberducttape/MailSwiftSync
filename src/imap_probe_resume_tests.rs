@@ -27,9 +27,14 @@ pub(super) struct FolderServer {
     uidnext: u64,
     fetched: Vec<u64>,
     fetch_commands: usize,
+    flags_only_fetch_commands: usize,
     uid_enumeration_commands: usize,
     pub(super) flags: std::collections::HashMap<u64, String>,
     change_flags_on_refetch: Option<(u64, String)>,
+    change_flags_after_metadata_fetch: Option<(u64, String)>,
+    pub(super) condstore: bool,
+    modseq_unavailable: bool,
+    modseq: u64,
     pub(super) permanent_flags: Option<String>,
     input: Vec<u8>,
     output: Vec<u8>,
@@ -43,9 +48,14 @@ impl FolderServer {
             uidnext,
             fetched: Vec::new(),
             fetch_commands: 0,
+            flags_only_fetch_commands: 0,
             uid_enumeration_commands: 0,
             flags: std::collections::HashMap::new(),
             change_flags_on_refetch: None,
+            change_flags_after_metadata_fetch: None,
+            condstore: false,
+            modseq_unavailable: false,
+            modseq: 1,
             permanent_flags: None,
             input: Vec::new(),
             output: Vec::new(),
@@ -63,13 +73,22 @@ impl FolderServer {
     fn respond(&mut self, line: &str) {
         let (tag, command) = line.split_once(' ').unwrap();
         let reply = if command.starts_with("SELECT ") {
+            let modseq = if self.condstore && command.ends_with("(CONDSTORE)") {
+                if self.modseq_unavailable {
+                    "* OK [NOMODSEQ] unsupported\r\n".to_owned()
+                } else {
+                    format!("* OK [HIGHESTMODSEQ {}] current\r\n", self.modseq)
+                }
+            } else {
+                String::new()
+            };
             let permanent = self
                 .permanent_flags
                 .as_ref()
                 .map(|flags| format!("* OK [PERMANENTFLAGS ({flags})] ok\r\n"))
                 .unwrap_or_default();
             format!(
-                "* {} EXISTS\r\n{permanent}* OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n{tag} OK SELECT completed\r\n",
+                "* {} EXISTS\r\n{permanent}* OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n{modseq}{tag} OK SELECT completed\r\n",
                 self.uids.len(),
                 self.uidvalidity,
                 self.uidnext
@@ -93,6 +112,9 @@ impl FolderServer {
             let set = rest.split_whitespace().next().unwrap();
             let with_body = rest.contains("BODY.PEEK[]");
             let flags_only = rest.ends_with("(UID FLAGS)");
+            if flags_only {
+                self.flags_only_fetch_commands += 1;
+            }
             if flags_only && let Some((uid, flags)) = self.change_flags_on_refetch.take() {
                 self.flags.insert(uid, flags);
             }
@@ -130,6 +152,11 @@ impl FolderServer {
                     header.len()
                 ));
             }
+            if !flags_only && let Some((uid, flags)) = self.change_flags_after_metadata_fetch.take()
+            {
+                self.flags.insert(uid, flags);
+                self.modseq = self.modseq.saturating_add(1);
+            }
             reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
             reply
         } else {
@@ -163,7 +190,12 @@ impl Read for FolderServer {
     }
 }
 
-fn scan_with(stage: &mut MessageMetadataStage, server: &mut FolderServer, body_hash: bool) -> u64 {
+fn scan_with(
+    stage: &mut MessageMetadataStage,
+    server: &mut FolderServer,
+    body_hash: bool,
+    condstore_enabled: bool,
+) -> u64 {
     let cancelled = AtomicBool::new(false);
     let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
     let state_budget = MessageStateBudget::new();
@@ -185,13 +217,14 @@ fn scan_with(stage: &mut MessageMetadataStage, server: &mut FolderServer, body_h
         &budget,
         &state_budget,
         body_hash.then_some(&body_options),
+        condstore_enabled,
         &mut sink,
     )
     .unwrap_or_else(|error| panic!("scan failed: {error:?}"))
 }
 
 fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer) -> u64 {
-    scan_with(stage, server, false)
+    scan_with(stage, server, false, false)
 }
 
 fn staged_uids(stage: &MessageMetadataStage) -> Vec<u64> {
@@ -413,6 +446,87 @@ fn flags_mutation_during_scan_discards_pass_and_retries_with_fresh_flags() {
 }
 
 #[test]
+fn condstore_modseq_detects_flag_mutation_without_refetching_every_uid() {
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    let mut server = FolderServer::new(&[1], 7, 2);
+    server.condstore = true;
+    server.flags.insert(1, "".into());
+    server.change_flags_after_metadata_fetch = Some((1, "\\Seen $ClientTag".into()));
+
+    scan_with(&mut stage, &mut server, false, true);
+
+    let message = stage
+        .all_messages(SIDE)
+        .unwrap()
+        .into_iter()
+        .find(|(key, _)| key.uid == "1")
+        .map(|(_, message)| message)
+        .unwrap();
+    let flags = message.flags.as_deref().unwrap();
+    assert!(flags.contains("\\Seen"));
+    assert!(flags.contains("$clienttag"));
+    assert_eq!(server.fetch_commands, 2, "modseq change retries the folder");
+    assert_eq!(server.flags_only_fetch_commands, 0);
+}
+
+#[test]
+fn condstore_nomodseq_falls_back_to_flags_refetch() {
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    let mut server = FolderServer::new(&[1], 7, 2);
+    server.condstore = true;
+    server.modseq_unavailable = true;
+    server.flags.insert(1, "".into());
+    server.change_flags_on_refetch = Some((1, "\\Seen $ClientTag".into()));
+
+    scan_with(&mut stage, &mut server, false, true);
+
+    let message = stage
+        .all_messages(SIDE)
+        .unwrap()
+        .into_iter()
+        .find(|(key, _)| key.uid == "1")
+        .map(|(_, message)| message)
+        .unwrap();
+    let flags = message.flags.as_deref().unwrap();
+    assert!(flags.contains("\\Seen"));
+    assert!(flags.contains("$clienttag"));
+    assert!(server.flags_only_fetch_commands > 0);
+}
+
+#[test]
+fn condstore_select_snapshot_requires_one_valid_modseq_code() {
+    assert_eq!(
+        parse_select_modseq(
+            "* OK [HIGHESTMODSEQ 42] current\r\na001 OK selected\r\n",
+            "imap.example.test",
+            "INBOX"
+        )
+        .unwrap(),
+        ModseqSnapshot::Tracked(42)
+    );
+    assert_eq!(
+        parse_select_modseq(
+            "* OK [NOMODSEQ] unavailable\r\na001 OK selected\r\n",
+            "imap.example.test",
+            "INBOX"
+        )
+        .unwrap(),
+        ModseqSnapshot::Unsupported
+    );
+    for response in [
+        "a001 OK selected\r\n",
+        "* OK [HIGHESTMODSEQ 0] invalid\r\na001 OK selected\r\n",
+        "* OK [HIGHESTMODSEQ 42] current\r\n* OK [NOMODSEQ] conflicting\r\n",
+        "* OK [HIGHESTMODSEQ 42] current\r\n* OK [HIGHESTMODSEQ 43] duplicate\r\n",
+    ] {
+        assert!(
+            parse_select_modseq(response, "imap.example.test", "INBOX").is_err(),
+            "accepted invalid response: {response:?}"
+        );
+    }
+}
+
+#[test]
 fn resumed_scan_of_a_completed_folder_fetches_new_arrivals() {
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     assert_eq!(
@@ -454,7 +568,7 @@ fn body_hash_resume_restores_fingerprints_for_partially_staged_pages() {
     let mut stage = interrupted(&before, 1..=PAGE, None);
     assert!(stage.content_fingerprints(SIDE).is_empty());
     let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
-    scan_with(&mut stage, &mut server, true);
+    scan_with(&mut stage, &mut server, true, false);
     assert_eq!(staged_uids(&stage), uids);
     assert_eq!(stage.content_fingerprints(SIDE).len(), uids.len());
 }
@@ -464,11 +578,11 @@ fn body_hash_resume_keeps_fingerprints_of_checkpointed_pages() {
     let uids = folder(PAGE * 2 + 5);
     let mut first = FolderServer::new(&uids, 9, PAGE * 2 + 6);
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
-    scan_with(&mut stage, &mut first, true);
+    scan_with(&mut stage, &mut first, true, false);
     let fingerprints = stage.content_fingerprints(SIDE);
     assert_eq!(fingerprints.len(), uids.len());
     let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
-    scan_with(&mut stage, &mut server, true);
+    scan_with(&mut stage, &mut server, true, false);
     assert_eq!(server.fetched, uids);
     assert_eq!(stage.content_fingerprints(SIDE), fingerprints);
 }

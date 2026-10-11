@@ -131,14 +131,15 @@ because mutable FLAGS can change without changing the snapshot values. This
 means a controller interruption during verification does not require the
 transfer engine to start over and cannot reuse stale flag-only results.
 
-The current implementation deliberately chooses this safe full-folder refetch
-because it does not yet persist or negotiate `CONDSTORE`/`HIGHESTMODSEQ`
-checkpoint state. During each pass it also issues bounded FLAGS-only UID FETCH
-requests for the UIDs already staged in SQLite. This avoids a second sequence
-enumeration, while adding provider round trips proportional to the extant
-message count. A future optimized path may use those IMAP capabilities to
-avoid that extra pass or refetch only changed UIDs, but it must retain the
-conservative fallback for servers that do not advertise them.
+The scanner negotiates `CONDSTORE` when advertised and requests
+`SELECT (CONDSTORE)` for each folder. A tracked `HIGHESTMODSEQ` is compared at
+the end of the scan; a change discards and retries the folder without a
+second per-message FLAGS pass. The mod-sequence is not persisted as a durable
+resume cursor. If CONDSTORE is not advertised, or the selected folder returns
+`NOMODSEQ`, the scanner instead issues bounded FLAGS-only UID FETCH requests
+for the UIDs already staged in SQLite. This avoids a second sequence
+enumeration, while fallback provider round trips scale with the extant message
+count. Missing or malformed CONDSTORE response codes fail closed.
 
 The current product does not retain completed message metadata indefinitely.
 The `reverify` command provides an operator-invokable mailbox-level

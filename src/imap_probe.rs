@@ -775,6 +775,7 @@ fn classify_mailbox_fetch_error(error: String) -> MailboxFetchError {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     stream: &mut S,
     host: &str,
@@ -782,6 +783,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
     body_hash: Option<&BodyHashOptions<'_>>,
+    condstore_enabled: bool,
     sink: &mut C,
 ) -> Result<u64, MailboxFetchError> {
     budget.check()?;
@@ -789,7 +791,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         return Err("message-level verification requires a non-empty mailbox".into());
     }
     let quoted_mailbox = imap_quote(mailbox)?;
-    let select = format!("v001 SELECT {quoted_mailbox}\r\n");
+    let select_parameter = if condstore_enabled {
+        " (CONDSTORE)"
+    } else {
+        ""
+    };
+    let select = format!("v001 SELECT {quoted_mailbox}{select_parameter}\r\n");
     write_imap_command(
         stream,
         select.as_bytes(),
@@ -817,6 +824,11 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     }
     let (start_exists, start_uidvalidity, uidnext) =
         parse_selected_mailbox(&response, host, mailbox)?;
+    let start_modseq = if condstore_enabled {
+        Some(parse_select_modseq(&response, host, mailbox)?)
+    } else {
+        None
+    };
     let start_uidvalidity = start_uidvalidity.ok_or_else(|| {
         format!(
             "{host}: SELECT {mailbox} did not return UIDVALIDITY; mutation detection is unavailable"
@@ -981,12 +993,13 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
 
     // FLAGS can change without changing UIDVALIDITY, UIDNEXT, or EXISTS.
     // Re-read only this bounded page's mutable state and compare it to the
-    // metadata pass before accepting the folder as stable. This is the
-    // portable fallback for servers without CONDSTORE/HIGHESTMODSEQ.
+    // metadata pass when the mailbox has no persistent CONDSTORE mod-sequence.
+    // With CONDSTORE, SELECT (CONDSTORE) enables race-free mod-sequence
+    // reporting and the end snapshot below detects mutations at lower cost.
     let mut flags_changed = false;
     let mut last_flags_uid = 0_u64;
     let mut flags_page_number = 0usize;
-    loop {
+    while start_modseq == Some(ModseqSnapshot::Unsupported) || start_modseq.is_none() {
         budget.check()?;
         let staged_uid_page = sink.uid_page(
             mailbox,
@@ -1045,7 +1058,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     // missing, extra, or modified mail. The account-level caller retries this
     // folder once before marking verification incomplete.
     let end_tag = format!("v{:03}", page_number + 3);
-    let end_select = format!("{end_tag} SELECT {quoted_mailbox}\r\n");
+    let end_select = format!("{end_tag} SELECT {quoted_mailbox}{select_parameter}\r\n");
     write_imap_command(
         stream,
         end_select.as_bytes(),
@@ -1072,12 +1085,18 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     }
     let (end_exists, end_uidvalidity, end_uidnext) =
         parse_selected_mailbox(&response, host, mailbox)?;
+    let end_modseq = if condstore_enabled {
+        Some(parse_select_modseq(&response, host, mailbox)?)
+    } else {
+        None
+    };
     if end_uidvalidity != Some(start_uidvalidity)
         || end_uidnext != Some(uidnext)
         || end_exists != start_exists
+        || (start_modseq.is_some() && end_modseq != start_modseq)
     {
         return Err(MailboxFetchError::Changed(format!(
-            "{host}: mailbox {mailbox} changed during verification (UIDVALIDITY {start_uidvalidity:?}->{end_uidvalidity:?}, UIDNEXT {uidnext}->{end_uidnext:?}, message count {start_exists}->{end_exists}); retry required"
+            "{host}: mailbox {mailbox} changed during verification (UIDVALIDITY {start_uidvalidity:?}->{end_uidvalidity:?}, UIDNEXT {uidnext}->{end_uidnext:?}, message count {start_exists}->{end_exists}, HIGHESTMODSEQ {start_modseq:?}->{end_modseq:?}); retry required"
         )));
     }
     let last_uid = uidnext.saturating_sub(1);
@@ -1088,6 +1107,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     Ok(start_exists)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
     stream: &mut S,
     host: &str,
@@ -1095,6 +1115,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
     body_hash: Option<&BodyHashOptions<'_>>,
+    condstore_enabled: bool,
     sink: &mut C,
 ) -> Result<u64, MailboxFetchError> {
     let mut last_error = None;
@@ -1106,6 +1127,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
             budget,
             state_budget,
             body_hash,
+            condstore_enabled,
             sink,
         ) {
             Ok(result) => return Ok(result),
@@ -1243,6 +1265,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
         greeting,
         Some(budget),
     )?;
+    let mut condstore_enabled = advertises_capability(&post_auth_response, "CONDSTORE");
     write_imap_command(
         &mut stream,
         authenticated_list_command(advertises_capability(&post_auth_response, "SPECIAL-USE")),
@@ -1311,6 +1334,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                 budget,
                 state_budget,
                 body_hash,
+                condstore_enabled,
                 sink,
             ) {
                 Err(MailboxFetchError::SessionFatal(error))
@@ -1326,7 +1350,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                             certificate_pin_sha256,
                             budget,
                         )?;
-                        let (new_stream, _) = authenticate_imap_stream(
+                        let (new_stream, new_post_auth_response) = authenticate_imap_stream(
                             new_stream,
                             host,
                             user,
@@ -1335,11 +1359,15 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                             new_greeting,
                             Some(budget),
                         )?;
-                        Ok(new_stream)
+                        Ok((
+                            new_stream,
+                            advertises_capability(&new_post_auth_response, "CONDSTORE"),
+                        ))
                     })();
                     match reconnected {
-                        Ok(new_stream) => {
+                        Ok((new_stream, new_condstore_enabled)) => {
                             stream = new_stream;
+                            condstore_enabled = new_condstore_enabled;
                             continue;
                         }
                         Err(reconnect_error) => {
@@ -1596,6 +1624,57 @@ fn parse_selected_mailbox(
         format!("{host}: SELECT {mailbox} did not return an untagged EXISTS count")
     })?;
     Ok((exists, uidvalidity, uidnext))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModseqSnapshot {
+    Tracked(u64),
+    Unsupported,
+}
+
+/// CONDSTORE requires one of HIGHESTMODSEQ or NOMODSEQ on every successful
+/// SELECT/EXAMINE after negotiation. Treat malformed or missing state as a
+/// folder failure rather than silently using the weaker snapshot.
+fn parse_select_modseq(
+    response: &str,
+    host: &str,
+    mailbox: &str,
+) -> Result<ModseqSnapshot, String> {
+    let mut highest = None;
+    let mut no_modseq = false;
+    for line in response.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if let Some(index) = fields.iter().position(|field| {
+            field
+                .trim_matches(['[', ']'])
+                .eq_ignore_ascii_case("HIGHESTMODSEQ")
+        }) {
+            let value = fields
+                .get(index + 1)
+                .and_then(|value| value.trim_matches(['[', ']']).parse::<u64>().ok())
+                .filter(|value| *value > 0 && *value <= i64::MAX as u64)
+                .ok_or_else(|| {
+                    format!("{host}: SELECT {mailbox} returned invalid HIGHESTMODSEQ")
+                })?;
+            if highest.replace(value).is_some() {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned duplicate HIGHESTMODSEQ codes"
+                ));
+            }
+        }
+        no_modseq |= fields.iter().any(|field| {
+            field
+                .trim_matches(['[', ']'])
+                .eq_ignore_ascii_case("NOMODSEQ")
+        });
+    }
+    match (highest, no_modseq) {
+        (Some(value), false) => Ok(ModseqSnapshot::Tracked(value)),
+        (None, true) => Ok(ModseqSnapshot::Unsupported),
+        _ => Err(format!(
+            "{host}: SELECT {mailbox} did not return exactly one HIGHESTMODSEQ or NOMODSEQ response code"
+        )),
+    }
 }
 
 /// LIST parsing is shared with preflight discovery, so its inventory bounds
