@@ -63,6 +63,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn('timeout --kill-after=15s "$command_timeout" "$binary" "$@"', SCALE_SCRIPT)
         self.assertIn('private side channel', SCALE_SCRIPT)
         self.assertIn('command_status=$?', SCALE_SCRIPT)
+        self.assertIn('local pipeline_status=125', SCALE_SCRIPT)
         self.assertIn('pipeline_status="$command_status"', SCALE_SCRIPT)
         self.assertNotIn('timeout --foreground', SCALE_SCRIPT)
         self.assertIn('extra_options="--timeout=30"', SCALE_SCRIPT)

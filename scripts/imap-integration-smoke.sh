@@ -721,7 +721,10 @@ run_product() {
     fi
   ) &
   local monitor_pid=$!
-  local pipeline_status=0
+  # Missing or malformed command status is itself a harness failure (for
+  # example, the evidence filesystem may have filled before the side-channel
+  # write). Never fall back to awk's successful drain status.
+  local pipeline_status=125
   wait "$pipeline_pid" || pipeline_status=$?
   if [[ -s "$status_file" ]] && read -r command_status < "$status_file" \
     && [[ "$command_status" =~ ^[0-9]+$ ]]; then

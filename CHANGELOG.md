@@ -27,8 +27,8 @@
   case-variant identities for the same destination mailbox.
 - Fix the packaged IMAP integration harness to preserve the MailSwiftSync
   command's exit status through its background `awk` logging pipeline; a
-  timeout or failed migration can no longer be masked by a successful log
-  drainer.
+  timeout, failed migration, or unavailable status side-channel can no longer
+  be masked by a successful log drainer.
 - Persist the completed transfer run as re-verification provenance and report
   a distinct `ledger_persistence_failed` diagnostic when a failed scan cannot
   be finalized durably.
