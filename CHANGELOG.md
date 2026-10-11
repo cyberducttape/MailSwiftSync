@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve complete restore-rollback diagnostics: failures returning the prior
+  ledger or SQLite sidecars are no longer silently discarded, and all rollback
+  steps are attempted before reporting the restore failure.
 - Surface failures to remove the private unsigned certificate intermediate;
   certificate export no longer reports complete cleanup when that file remains.
 - Reject reverification difference-export flags that omit their required path,
