@@ -1,6 +1,7 @@
 //! Provider runbooks, engine diagnostics and installation, and OAuth authorization commands.
 
 use super::*;
+use ring::rand::SecureRandom;
 use sha2::{Digest, Sha256};
 
 fn oauth_refresh_credential_digest(keyring_id: &str) -> String {
@@ -16,9 +17,93 @@ fn digest_hex(digest: &[u8]) -> String {
     file_name
 }
 
-fn oauth_refresh_config_digest(config: &crate::oauth_refresh::OAuthRefreshConfig) -> String {
-    let encoded = crate::oauth_refresh::encode_refresh_config(config);
+fn oauth_refresh_legacy_sha256(config: &crate::oauth_refresh::OAuthRefreshConfig) -> String {
+    // One-time compatibility for already-persisted v1 recovery records. New
+    // records use keyed fingerprints; removing this would strand a token
+    // rotated immediately before an application upgrade.
+    let encoded = zeroize::Zeroizing::new(crate::oauth_refresh::encode_refresh_config(config));
+    // codeql[rust/weak-sensitive-data-hashing] Legacy compatibility only; new
+    // recovery fingerprints are keyed, and OAuth refresh tokens are opaque
+    // provider-issued values rather than human-memorable passwords.
     digest_hex(&Sha256::digest(encoded.as_bytes()))
+}
+
+fn oauth_refresh_config_digest(
+    config: &crate::oauth_refresh::OAuthRefreshConfig,
+) -> Result<String, String> {
+    let encoded = zeroize::Zeroizing::new(crate::oauth_refresh::encode_refresh_config(config));
+    let key = oauth_refresh_fingerprint_key()?;
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key[..]);
+    Ok(digest_hex(
+        ring::hmac::sign(&key, encoded.as_bytes()).as_ref(),
+    ))
+}
+
+#[cfg(test)]
+fn oauth_refresh_fingerprint_key() -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+    // Unit tests must not create or depend on credentials in the real user's
+    // application-data directory. Production loads the persistent key below.
+    Ok(zeroize::Zeroizing::new([0x5a; 32]))
+}
+
+#[cfg(not(test))]
+fn oauth_refresh_fingerprint_key() -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+    let directory = dirs_next::data_local_dir()
+        .ok_or_else(|| "could not determine private OAuth fingerprint storage".to_owned())?
+        .join("mailswiftsync");
+    crate::credentials::ensure_private_directory(&directory)
+        .map_err(|error| format!("could not secure OAuth fingerprint storage: {error}"))?;
+    oauth_refresh_fingerprint_key_at(&directory.join("oauth-refresh-fingerprint.key"))
+}
+
+fn oauth_refresh_fingerprint_key_at(
+    path: &std::path::Path,
+) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "OAuth fingerprint key has no parent directory".to_owned())?;
+    crate::credentials::ensure_private_directory(parent)
+        .map_err(|error| format!("could not secure OAuth fingerprint directory: {error}"))?;
+    let lock_path = path.with_extension("lock");
+    let _lock = crate::process::acquire_named_lock_with_timeout(
+        &lock_path,
+        "another process is initializing OAuth fingerprint protection",
+        std::time::Duration::from_secs(5),
+    )?;
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => read_oauth_fingerprint_key(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut key = zeroize::Zeroizing::new([0_u8; 32]);
+            ring::rand::SystemRandom::new()
+                .fill(&mut key[..])
+                .map_err(|_| {
+                    "operating-system random source failed for OAuth fingerprint key".to_owned()
+                })?;
+            let encoded = zeroize::Zeroizing::new(digest_hex(&key[..]));
+            crate::atomic_artifact::write_private_atomic(path, &encoded).map_err(|error| {
+                format!("could not persist private OAuth fingerprint key: {error}")
+            })?;
+            Ok(key)
+        }
+        Err(error) => Err(format!("could not inspect OAuth fingerprint key: {error}")),
+    }
+}
+
+fn read_oauth_fingerprint_key(
+    path: &std::path::Path,
+) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+    let encoded = crate::credentials::read_secret_file(path)?;
+    if encoded.as_str().len() != 64 {
+        return Err("OAuth fingerprint key has an invalid length".into());
+    }
+    let mut key = zeroize::Zeroizing::new([0_u8; 32]);
+    for (index, pair) in encoded.as_str().as_bytes().chunks_exact(2).enumerate() {
+        let pair = std::str::from_utf8(pair)
+            .map_err(|_| "OAuth fingerprint key is not valid hexadecimal".to_owned())?;
+        key[index] = u8::from_str_radix(pair, 16)
+            .map_err(|_| "OAuth fingerprint key is not valid hexadecimal".to_owned())?;
+    }
+    Ok(key)
 }
 
 fn oauth_refresh_lock_path(lock_directory: &std::path::Path, keyring_id: &str) -> PathBuf {
@@ -66,29 +151,34 @@ fn acquire_oauth_refresh_lock_in(
 }
 
 struct PendingOAuthRefreshRecovery {
-    previous_config_sha256: String,
+    previous_config_fingerprint: PreviousOAuthConfigFingerprint,
     rotated_config: crate::oauth_refresh::OAuthRefreshConfig,
+}
+
+enum PreviousOAuthConfigFingerprint {
+    LegacySha256(String),
+    HmacSha256(String),
 }
 
 fn encode_oauth_refresh_recovery(
     previous: &crate::oauth_refresh::OAuthRefreshConfig,
     rotated: &crate::oauth_refresh::OAuthRefreshConfig,
-) -> zeroize::Zeroizing<String> {
+) -> Result<zeroize::Zeroizing<String>, String> {
     #[derive(serde::Serialize)]
     struct RecoveryRecord<'a> {
         format_version: u8,
-        previous_config_sha256: String,
+        previous_config_hmac_sha256: String,
         rotated_config: &'a str,
     }
     let rotated = crate::oauth_refresh::encode_refresh_config(rotated);
-    zeroize::Zeroizing::new(
+    Ok(zeroize::Zeroizing::new(
         serde_json::to_string(&RecoveryRecord {
-            format_version: 1,
-            previous_config_sha256: oauth_refresh_config_digest(previous),
+            format_version: 2,
+            previous_config_hmac_sha256: oauth_refresh_config_digest(previous)?,
             rotated_config: rotated.as_str(),
         })
-        .expect("OAuth recovery record is serializable"),
-    )
+        .map_err(|error| format!("could not encode OAuth recovery record: {error}"))?,
+    ))
 }
 
 fn read_pending_oauth_refresh_recovery(
@@ -97,7 +187,10 @@ fn read_pending_oauth_refresh_recovery(
     #[derive(serde::Deserialize)]
     struct RecoveryRecord {
         format_version: u8,
-        previous_config_sha256: String,
+        #[serde(default)]
+        previous_config_sha256: Option<String>,
+        #[serde(default)]
+        previous_config_hmac_sha256: Option<String>,
         rotated_config: String,
     }
     match std::fs::symlink_metadata(path) {
@@ -107,13 +200,25 @@ fn read_pending_oauth_refresh_recovery(
             })?;
             let record: RecoveryRecord = serde_json::from_str(stored.as_str())
                 .map_err(|error| format!("protected OAuth recovery record is invalid: {error}"))?;
-            if record.format_version != 1 {
-                return Err("protected OAuth recovery record has an unsupported version".into());
-            }
+            let previous_config_fingerprint = match record.format_version {
+                1 => PreviousOAuthConfigFingerprint::LegacySha256(
+                    record.previous_config_sha256.ok_or_else(|| {
+                        "legacy OAuth recovery record is missing its config fingerprint".to_owned()
+                    })?,
+                ),
+                2 => PreviousOAuthConfigFingerprint::HmacSha256(
+                    record.previous_config_hmac_sha256.ok_or_else(|| {
+                        "OAuth recovery record is missing its keyed config fingerprint".to_owned()
+                    })?,
+                ),
+                _ => {
+                    return Err("protected OAuth recovery record has an unsupported version".into());
+                }
+            };
             let rotated = zeroize::Zeroizing::new(record.rotated_config);
             let rotated_config = crate::oauth_refresh::decode_refresh_config(&rotated)?;
             Ok(Some(PendingOAuthRefreshRecovery {
-                previous_config_sha256: record.previous_config_sha256,
+                previous_config_fingerprint,
                 rotated_config,
             }))
         }
@@ -137,7 +242,7 @@ fn persist_and_verify_keyring_refresh_config(
         .map_err(|error| format!("could not verify OAuth refresh config in OS keyring: {error}"))?;
     let verified = crate::oauth_refresh::decode_refresh_config(&stored)
         .map_err(|error| format!("OS keyring returned an invalid OAuth refresh config: {error}"))?;
-    if oauth_refresh_config_digest(&verified) != oauth_refresh_config_digest(config) {
+    if oauth_refresh_config_digest(&verified)? != oauth_refresh_config_digest(config)? {
         return Err("OS keyring returned a different OAuth refresh configuration".to_owned());
     }
     Ok(())
@@ -158,9 +263,28 @@ fn recover_pending_oauth_refresh(
     let Some(recovery) = read_pending_oauth_refresh_recovery(path)? else {
         return Ok(None);
     };
-    let current_digest = oauth_refresh_config_digest(current_keyring_config);
-    let rotated_digest = oauth_refresh_config_digest(&recovery.rotated_config);
-    if current_digest == recovery.previous_config_sha256 {
+    let (current_matches_previous, current_matches_rotated) =
+        match &recovery.previous_config_fingerprint {
+            PreviousOAuthConfigFingerprint::HmacSha256(previous_fingerprint) => {
+                let current_fingerprint = oauth_refresh_config_digest(current_keyring_config)?;
+                let rotated_fingerprint = oauth_refresh_config_digest(&recovery.rotated_config)?;
+                (
+                    current_fingerprint == *previous_fingerprint,
+                    current_fingerprint == rotated_fingerprint,
+                )
+            }
+            PreviousOAuthConfigFingerprint::LegacySha256(previous_fingerprint) => {
+                // Backward compatibility for a crash-recovery record written
+                // by version 1. New records always use a keyed fingerprint.
+                let current_fingerprint = oauth_refresh_legacy_sha256(current_keyring_config);
+                let rotated_fingerprint = oauth_refresh_legacy_sha256(&recovery.rotated_config);
+                (
+                    current_fingerprint == *previous_fingerprint,
+                    current_fingerprint == rotated_fingerprint,
+                )
+            }
+        };
+    if current_matches_previous {
         crate::migration_plan::persist_rotated_refresh_config_with_retry(
             &recovery.rotated_config,
             |config| persist(config),
@@ -170,7 +294,7 @@ fn recover_pending_oauth_refresh(
                 "could not restore the pending rotated OAuth credential to the keyring after bounded retries; protected recovery remains for the next attempt: {error}"
             )
         })?;
-    } else if current_digest != rotated_digest {
+    } else if !current_matches_rotated {
         return Err(
             "the OAuth keyring entry changed since a rotation recovery was saved; refusing to overwrite it, and retaining the protected recovery file for operator review".into(),
         );
@@ -187,7 +311,7 @@ fn persist_rotated_oauth_refresh(
     mut persist: impl FnMut(&crate::oauth_refresh::OAuthRefreshConfig) -> Result<(), String>,
 ) -> Result<(), String> {
     let encoded = crate::oauth_refresh::encode_refresh_config(config);
-    let recovery = encode_oauth_refresh_recovery(previous_config, config);
+    let recovery = encode_oauth_refresh_recovery(previous_config, config)?;
     crate::atomic_artifact::write_private_atomic(recovery_path, &recovery).map_err(|error| {
         format!(
             "provider rotated the OAuth refresh token but protected durable recovery could not be written: {error}"
@@ -701,6 +825,40 @@ mod oauth_refresh_lock_tests {
     use super::*;
 
     #[test]
+    fn oauth_fingerprint_key_is_persisted_private_and_stable() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-oauth-key-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = directory.join("fingerprint.key");
+        let first = oauth_refresh_fingerprint_key_at(&path).unwrap();
+        let second = oauth_refresh_fingerprint_key_at(&path).unwrap();
+        assert_eq!(&first[..], &second[..]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let corrupt_path = directory.join("corrupt.key");
+        crate::atomic_artifact::write_private_atomic(&corrupt_path, "not-a-key").unwrap();
+        assert!(oauth_refresh_fingerprint_key_at(&corrupt_path).is_err());
+        assert_eq!(
+            crate::credentials::read_secret_file(&corrupt_path)
+                .unwrap()
+                .as_str(),
+            "not-a-key"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn rotating_credential_lock_is_stable_private_and_exclusive() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let first_path = oauth_refresh_lock_path(&directory, "customer-a-source");
@@ -810,9 +968,15 @@ mod oauth_refresh_lock_tests {
             refresh_token: crate::credentials::SecretString::from("rotated-refresh-token"),
             ..previous.clone()
         };
+        let encoded_previous =
+            zeroize::Zeroizing::new(crate::oauth_refresh::encode_refresh_config(&previous));
         assert_ne!(
-            oauth_refresh_config_digest(&previous),
-            oauth_refresh_config_digest(&rotated)
+            oauth_refresh_config_digest(&previous).unwrap(),
+            digest_hex(&Sha256::digest(encoded_previous.as_bytes()))
+        );
+        assert_ne!(
+            oauth_refresh_config_digest(&previous).unwrap(),
+            oauth_refresh_config_digest(&rotated).unwrap()
         );
         let attempts = AtomicUsize::new(0);
         let error = persist_rotated_oauth_refresh(
@@ -911,7 +1075,7 @@ mod oauth_refresh_lock_tests {
         let file_recovery_path = oauth_refresh_file_recovery_path(&file_config_path).unwrap();
         crate::atomic_artifact::write_private_atomic(
             &file_recovery_path,
-            &encode_oauth_refresh_recovery(&previous, &rotated),
+            &encode_oauth_refresh_recovery(&previous, &rotated).unwrap(),
         )
         .unwrap();
         let file_recovered =
@@ -935,6 +1099,27 @@ mod oauth_refresh_lock_tests {
                 .unwrap()
                 .refresh_token
                 .as_str(),
+            "rotated-refresh-token"
+        );
+
+        let legacy_recovery_path = directory.join("legacy-oauth-recovery.json");
+        let encoded_rotated = crate::oauth_refresh::encode_refresh_config(&rotated);
+        let legacy_record = serde_json::json!({
+            "format_version": 1,
+            "previous_config_sha256": oauth_refresh_legacy_sha256(&previous),
+            "rotated_config": encoded_rotated.as_str(),
+        });
+        crate::atomic_artifact::write_private_atomic(
+            &legacy_recovery_path,
+            &legacy_record.to_string(),
+        )
+        .unwrap();
+        let legacy_recovered =
+            recover_pending_oauth_refresh(&legacy_recovery_path, &previous, |_| Ok(()))
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            legacy_recovered.refresh_token.as_str(),
             "rotated-refresh-token"
         );
         std::fs::remove_dir_all(directory).unwrap();

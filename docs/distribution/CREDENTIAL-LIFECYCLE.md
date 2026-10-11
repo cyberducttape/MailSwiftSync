@@ -59,6 +59,11 @@ persists the rotated configuration to the configured keyring or refresh
 configuration file and uses a private recovery record if persistence fails.
 Resolve and validate that recovery state before manually replacing the same
 credential. Do not restore a stale exported copy over a newer rotated token.
+Recovery comparisons use a random owner-only fingerprint key in the local
+MailSwiftSync application-data directory; do not copy or delete that key while
+OAuth recovery records are pending. The key is not a credential backup and
+does not encrypt refresh configuration or recovery files. Version-1 recovery
+records remain readable during upgrade; new records use keyed fingerprints.
 
 ## Exported refresh configurations
 
