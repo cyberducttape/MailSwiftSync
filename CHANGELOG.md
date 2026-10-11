@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Refresh the README workflow previews with Retro 80s Neon theme screenshots.
 - Apply exact-evidence consistency checks to standalone re-verification
   history, preventing contradictory message counters from being persisted as
   an exact audit result.
@@ -29,6 +30,9 @@
   command's exit status through its background `awk` logging pipeline; a
   timeout, failed migration, or unavailable status side-channel can no longer
   be masked by a successful log drainer.
+- Add a Linux fault-injection regression for a detached descendant that clears
+  parent-death containment and inherits the engine's output pipes; capture now
+  demonstrably returns within the bounded reader-drain deadline.
 - Persist the completed transfer run as re-verification provenance and report
   a distinct `ledger_persistence_failed` diagnostic when a failed scan cannot
   be finalized durably.

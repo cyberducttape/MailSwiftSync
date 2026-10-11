@@ -408,4 +408,62 @@ mod tests {
         assert!(result.is_err());
         assert!(started.elapsed() < Duration::from_millis(80));
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn capture_returns_when_a_detached_descendant_holds_pipes_open() {
+        if crate::plan_identity::resolve_executable("setsid").is_none()
+            || crate::plan_identity::resolve_executable("python3").is_none()
+        {
+            eprintln!(
+                "skipping detached-descendant capture test: setsid or python3 is unavailable"
+            );
+            return;
+        }
+        let pid_file = std::env::temp_dir().join(format!(
+            "mailswiftsync-detached-pipe-{}-{}.pid",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let pid_file_text = pid_file.to_string_lossy().into_owned();
+        let command = "setsid python3 -c 'import ctypes, os, time; ctypes.CDLL(None).prctl(1, 0, 0, 0, 0); open(os.environ[\"MAILSWIFTSYNC_DETACHED_PID_FILE\"], \"w\").write(str(os.getpid())); time.sleep(30)' & exit 0";
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let result = run_capture_lines(
+            "sh",
+            &["-c".into(), command.into()],
+            &[(
+                "MAILSWIFTSYNC_DETACHED_PID_FILE".into(),
+                SecretString::from(pid_file_text),
+            )],
+            &cancel,
+            &[],
+            Duration::from_secs(2),
+            None,
+            None,
+        );
+        let elapsed = started.elapsed();
+        let detached_pid = (0..20).find_map(|_| {
+            std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|value| value.trim().parse::<libc::pid_t>().ok())
+                .or_else(|| {
+                    std::thread::sleep(Duration::from_millis(25));
+                    None
+                })
+        });
+        if let Some(pid) = detached_pid {
+            // SAFETY: the test fixture created this process and the PID was
+            // read from its owner-only temporary file.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+        let _ = std::fs::remove_file(&pid_file);
+        assert!(result.is_err(), "detached pipe holder was reported cleanly");
+        assert!(
+            elapsed < READER_DRAIN_TIMEOUT + Duration::from_secs(2),
+            "capture exceeded its bounded reader deadline: {elapsed:?}"
+        );
+    }
 }
