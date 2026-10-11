@@ -55,6 +55,8 @@
   transfer in another project when both resolve to the same destination.
 - Correct production-status wording for protected mailbox metadata and content
   fingerprints so the privacy boundary is not overstated.
+- Sanitize secret-shaped fields in operator-visible engine events and process
+  failure diagnostics, including values not present in the known credential set.
 - Fix the packaged IMAP integration harness to preserve the MailSwiftSync
   command's exit status through its background `awk` logging pipeline; a
   timeout, failed migration, or unavailable status side-channel can no longer

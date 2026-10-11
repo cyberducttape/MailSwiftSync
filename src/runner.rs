@@ -38,6 +38,14 @@ const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(500);
 const DURABLE_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Apply the privacy boundary used for operator-visible engine diagnostics.
+/// Semantic parsers continue to receive the known-secret-redacted stream, but
+/// presentation and error paths must also protect secret-shaped fields that
+/// are not present in the controller's credential set.
+fn sanitized_engine_line(line: &str) -> String {
+    crate::diagnostic_log::sanitize_private_metadata(line)
+}
+
 /// Reliable lifecycle events must not wait forever behind lossy diagnostic
 /// output. A timeout is deliberately fail-closed: the caller reports the
 /// durability failure and cleanup can proceed instead of retaining secrets or
@@ -302,7 +310,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 .try_send(Event::RunLine {
                     run_id: out_run_id.clone(),
                     job_id: out_job_id.clone(),
-                    text: format!("{out_prefix}{safe}"),
+                    text: format!("{out_prefix}{}", sanitized_engine_line(&safe)),
                 })
                 .is_err()
             {
@@ -344,7 +352,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 .try_send(Event::RunLine {
                     run_id: err_run_id.clone(),
                     job_id: err_job_id.clone(),
-                    text: format!("{err_prefix}[stderr] {safe}"),
+                    text: format!("{err_prefix}[stderr] {}", sanitized_engine_line(&safe)),
                 })
                 .is_err()
             {
@@ -687,7 +695,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("; ");
-            let recent = process_tail_text(&tail);
+            let recent = sanitized_engine_line(&process_tail_text(&tail));
             if recent.is_empty() {
                 Err(error)
             } else {
@@ -830,6 +838,16 @@ mod tests {
         assert!(diagnostic.contains("final Dovecot error"));
         assert!(!diagnostic.contains("early status output"));
         assert!(diagnostic.len() <= MAX_PROCESS_TAIL_BYTES);
+    }
+
+    #[test]
+    fn operator_engine_diagnostics_redact_secret_shaped_fields() {
+        let line = "access_token=unknown-token Authorization: Bearer unknown-bearer";
+        let sanitized = super::sanitized_engine_line(line);
+        assert!(!sanitized.contains("unknown-token"));
+        assert!(!sanitized.contains("unknown-bearer"));
+        assert!(sanitized.contains("access_token=[REDACTED]"));
+        assert!(sanitized.contains("Authorization: Bearer [REDACTED]"));
     }
 
     #[test]

@@ -303,7 +303,11 @@ pub(crate) fn run_dovecot_destination_preflight(
             let _ = tx.send(Event::RunLine {
                 run_id: run_id.to_owned(),
                 job_id: job_id.to_owned(),
-                text: format!("{prefix}[destination preflight/{}] {line}", index + 1),
+                text: format!(
+                    "{prefix}[destination preflight/{}] {}",
+                    index + 1,
+                    super::sanitized_engine_line(&line)
+                ),
             });
         }
         if status.exit_code != Some(0) {
@@ -355,11 +359,18 @@ pub(crate) fn run_dovecot_verification(
             let _ = tx.send(Event::RunLine {
                 run_id: run_id.to_owned(),
                 job_id: job_id.to_owned(),
-                text: format!("{prefix}[verification/{}] {line}", index + 1),
+                text: format!(
+                    "{prefix}[verification/{}] {}",
+                    index + 1,
+                    super::sanitized_engine_line(line)
+                ),
             });
         }
         if status.exit_code != Some(0) {
-            let diagnostic = truncate_utf8(&process_tail_text(&diagnostic_tail), 4096);
+            let diagnostic = truncate_utf8(
+                &super::sanitized_engine_line(&process_tail_text(&diagnostic_tail)),
+                4096,
+            );
             return Err(format!(
                 "Dovecot verification command {} exited with code {:?}{}",
                 index + 1,
