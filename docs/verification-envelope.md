@@ -67,6 +67,22 @@ workload reaches the software's 1M admission ceiling on the recorded host; it
 does not establish capacity on other hosts, include network fetch or
 report-commit costs, or justify relaxing any guard.
 
+A fresh run of `scripts/benchmark-verification-scale.sh` at commit
+`d15754a85b3c9e83dadcd1d165fe1e2b1a1d636e` on 2026-10-11 repeated the full
+1,000 through 1,000,000 message-per-endpoint typical-shape matrix. All cases
+passed the script's 64 MiB peak-RSS and 20,000 messages/s reconciliation
+thresholds. On the 1M case, staging took 20.769 s; reconciliation took
+22.120 s (45,207 messages/s); restart reconciliation took 22.328 s; and flag
+comparison covered 980,000 unambiguous messages. Peak RSS was 35 MiB, peak
+stage-directory size was 1,151,854,544 bytes, peak rollback journal was
+100,894,672 bytes, and reconciliation wrote 157,106,176 bytes. The fixture
+contained 20,000 intentional changed-ID cases. The shared host was an AMD
+Ryzen 7 7735U workstation with Ubuntu 26.04.1 x86_64, Rust 1.92.0, and local
+ext4 on NVMe. This remains synthetic durable SQLite reconciliation evidence:
+it does not measure IMAP fetching, a complete migration, report-commit cost,
+provider behavior, or a 10/50/100 GiB transfer, and does not establish a safe
+aggregate disk ceiling or capacity on other hosts.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of

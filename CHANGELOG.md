@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Record a fresh durable verification-scale matrix through 1,000,000 messages
+  per endpoint at the synthetic SQLite reconciliation layer, with host profile,
+  peak RSS, stage/journal footprint, throughput, and explicit qualification
+  limits.
 - Document service-identity keyring validation and credential rotation,
   revocation, export, crash-residue, and policy-administration procedures;
   clarify that systemd hardening does not isolate the engine from the worker UID.
