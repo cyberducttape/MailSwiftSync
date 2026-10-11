@@ -6,6 +6,8 @@
   that share a rotating keyring credential; each callback reloads the newest
   refresh configuration while holding the per-credential lock, and retries
   transient keyring writes before failing a rotated-token refresh closed.
+  A protected, hashed-ID recovery file preserves a rotated refresh config if
+  all keyring writes fail and is reconciled before the next token exchange.
 - Explicitly close and remove private migration-assurance SQLite staging data
   before publishing a comparison report; setup and cleanup failures are now
   returned with the comparison error instead of being silently left to drop.

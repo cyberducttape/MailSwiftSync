@@ -3,14 +3,36 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
-fn oauth_refresh_lock_path(lock_directory: &std::path::Path, keyring_id: &str) -> PathBuf {
-    let digest = Sha256::digest(keyring_id.as_bytes());
+fn oauth_refresh_credential_digest(keyring_id: &str) -> String {
+    digest_hex(&Sha256::digest(keyring_id.as_bytes()))
+}
+
+fn digest_hex(digest: &[u8]) -> String {
     let mut file_name = String::with_capacity(digest.len() * 2 + 4);
     for byte in digest {
         use std::fmt::Write as _;
         let _ = write!(file_name, "{byte:02x}");
     }
-    lock_directory.join(format!("{file_name}.lock"))
+    file_name
+}
+
+fn oauth_refresh_config_digest(config: &crate::oauth_refresh::OAuthRefreshConfig) -> String {
+    let encoded = crate::oauth_refresh::encode_refresh_config(config);
+    digest_hex(&Sha256::digest(encoded.as_bytes()))
+}
+
+fn oauth_refresh_lock_path(lock_directory: &std::path::Path, keyring_id: &str) -> PathBuf {
+    lock_directory.join(format!(
+        "{}.lock",
+        oauth_refresh_credential_digest(keyring_id)
+    ))
+}
+
+fn oauth_refresh_recovery_path(recovery_directory: &std::path::Path, keyring_id: &str) -> PathBuf {
+    recovery_directory.join(format!(
+        "{}.json",
+        oauth_refresh_credential_digest(keyring_id)
+    ))
 }
 
 fn acquire_oauth_refresh_lock_in(
@@ -23,6 +45,150 @@ fn acquire_oauth_refresh_lock_in(
         "another migration is refreshing this OAuth credential; retry after it finishes",
         timeout,
     )
+}
+
+struct PendingOAuthRefreshRecovery {
+    previous_config_sha256: String,
+    rotated_config: crate::oauth_refresh::OAuthRefreshConfig,
+}
+
+fn encode_oauth_refresh_recovery(
+    previous: &crate::oauth_refresh::OAuthRefreshConfig,
+    rotated: &crate::oauth_refresh::OAuthRefreshConfig,
+) -> zeroize::Zeroizing<String> {
+    #[derive(serde::Serialize)]
+    struct RecoveryRecord<'a> {
+        format_version: u8,
+        previous_config_sha256: String,
+        rotated_config: &'a str,
+    }
+    let rotated = crate::oauth_refresh::encode_refresh_config(rotated);
+    zeroize::Zeroizing::new(
+        serde_json::to_string(&RecoveryRecord {
+            format_version: 1,
+            previous_config_sha256: oauth_refresh_config_digest(previous),
+            rotated_config: rotated.as_str(),
+        })
+        .expect("OAuth recovery record is serializable"),
+    )
+}
+
+fn read_pending_oauth_refresh_recovery(
+    path: &std::path::Path,
+) -> Result<Option<PendingOAuthRefreshRecovery>, String> {
+    #[derive(serde::Deserialize)]
+    struct RecoveryRecord {
+        format_version: u8,
+        previous_config_sha256: String,
+        rotated_config: String,
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            let stored = read_secret_file(path).map_err(|error| {
+                format!("could not read protected OAuth recovery config: {error}")
+            })?;
+            let record: RecoveryRecord = serde_json::from_str(stored.as_str())
+                .map_err(|error| format!("protected OAuth recovery record is invalid: {error}"))?;
+            if record.format_version != 1 {
+                return Err("protected OAuth recovery record has an unsupported version".into());
+            }
+            let rotated = zeroize::Zeroizing::new(record.rotated_config);
+            let rotated_config = crate::oauth_refresh::decode_refresh_config(&rotated)?;
+            Ok(Some(PendingOAuthRefreshRecovery {
+                previous_config_sha256: record.previous_config_sha256,
+                rotated_config,
+            }))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "could not inspect protected OAuth recovery config: {error}"
+        )),
+    }
+}
+
+fn persist_and_verify_keyring_refresh_config(
+    entry: &keyring::Entry,
+    config: &crate::oauth_refresh::OAuthRefreshConfig,
+) -> Result<(), String> {
+    let encoded = crate::oauth_refresh::encode_refresh_config(config);
+    entry.set_password(&encoded).map_err(|error| {
+        format!("OS keyring could not store the rotated OAuth refresh config: {error}")
+    })?;
+    let stored = entry
+        .get_password()
+        .map_err(|error| format!("could not verify OAuth refresh config in OS keyring: {error}"))?;
+    let verified = crate::oauth_refresh::decode_refresh_config(&stored)
+        .map_err(|error| format!("OS keyring returned an invalid OAuth refresh config: {error}"))?;
+    if oauth_refresh_config_digest(&verified) != oauth_refresh_config_digest(config) {
+        return Err("OS keyring returned a different OAuth refresh configuration".to_owned());
+    }
+    Ok(())
+}
+
+fn clear_oauth_refresh_recovery(path: &std::path::Path) -> Result<(), String> {
+    let mut cleanup = crate::credentials::CleanupGuard::new(vec![path.to_owned()]);
+    cleanup
+        .cleanup_now()
+        .map_err(|error| format!("could not remove recovered OAuth configuration: {error}"))
+}
+
+fn recover_pending_oauth_refresh(
+    path: &std::path::Path,
+    current_keyring_config: &crate::oauth_refresh::OAuthRefreshConfig,
+    mut persist: impl FnMut(&crate::oauth_refresh::OAuthRefreshConfig) -> Result<(), String>,
+) -> Result<Option<crate::oauth_refresh::OAuthRefreshConfig>, String> {
+    let Some(recovery) = read_pending_oauth_refresh_recovery(path)? else {
+        return Ok(None);
+    };
+    let current_digest = oauth_refresh_config_digest(current_keyring_config);
+    let rotated_digest = oauth_refresh_config_digest(&recovery.rotated_config);
+    if current_digest == recovery.previous_config_sha256 {
+        crate::migration_plan::persist_rotated_refresh_config_with_retry(
+            &recovery.rotated_config,
+            |config| persist(config),
+        )
+        .map_err(|error| {
+            format!(
+                "could not restore the pending rotated OAuth credential to the keyring after bounded retries; protected recovery remains for the next attempt: {error}"
+            )
+        })?;
+    } else if current_digest != rotated_digest {
+        return Err(
+            "the OAuth keyring entry changed since a rotation recovery was saved; refusing to overwrite it, and retaining the protected recovery file for operator review".into(),
+        );
+    }
+    clear_oauth_refresh_recovery(path)?;
+    Ok(Some(recovery.rotated_config))
+}
+
+fn persist_rotated_oauth_refresh(
+    recovery_path: &std::path::Path,
+    run_config_path: &std::path::Path,
+    previous_config: &crate::oauth_refresh::OAuthRefreshConfig,
+    config: &crate::oauth_refresh::OAuthRefreshConfig,
+    mut persist: impl FnMut(&crate::oauth_refresh::OAuthRefreshConfig) -> Result<(), String>,
+) -> Result<(), String> {
+    let encoded = crate::oauth_refresh::encode_refresh_config(config);
+    let recovery = encode_oauth_refresh_recovery(previous_config, config);
+    crate::atomic_artifact::write_private_atomic(recovery_path, &recovery).map_err(|error| {
+        format!(
+            "provider rotated the OAuth refresh token but protected durable recovery could not be written: {error}"
+        )
+    })?;
+    crate::atomic_artifact::write_private_atomic(run_config_path, &encoded).map_err(|error| {
+        format!(
+            "provider rotated the OAuth refresh token; durable recovery was saved but the per-run config could not be updated: {error}"
+        )
+    })?;
+    crate::migration_plan::persist_rotated_refresh_config_with_retry(config, |config| {
+        persist(config)
+    })
+    .map_err(|error| {
+        format!(
+            "could not persist the rotated OAuth config to the OS keyring after bounded retries; protected recovery remains for the next attempt: {error}"
+        )
+    })?;
+    clear_oauth_refresh_recovery(recovery_path)
 }
 
 /// Run the interactive authorization-code flow and store the refresh
@@ -335,7 +501,9 @@ pub(super) fn oauth_access_token_command(
     // rotating OS-keyring refresh token. Serialize all callbacks for that
     // credential across processes, then read the latest token while holding
     // the shared lock rather than exchanging a stale per-run copy.
-    let _keyring_refresh_lock = if let Some(keyring_id) = persist_keyring_id.as_deref() {
+    let (keyring_entry, recovery_path, _keyring_refresh_lock) = if let Some(keyring_id) =
+        persist_keyring_id.as_deref()
+    {
         let data_directory = dirs_next::data_local_dir().ok_or_else(|| {
             (
                 1,
@@ -343,10 +511,17 @@ pub(super) fn oauth_access_token_command(
             )
         })?;
         let lock_directory = data_directory.join("mailswiftsync/oauth-refresh-locks");
+        let recovery_directory = data_directory.join("mailswiftsync/oauth-refresh-recovery");
         crate::credentials::ensure_private_directory(&lock_directory).map_err(|error| {
             (
                 1,
                 format!("could not secure OAuth refresh coordination directory: {error}"),
+            )
+        })?;
+        crate::credentials::ensure_private_directory(&recovery_directory).map_err(|error| {
+            (
+                1,
+                format!("could not secure OAuth refresh recovery directory: {error}"),
             )
         })?;
         let lock = acquire_oauth_refresh_lock_in(
@@ -362,21 +537,28 @@ pub(super) fn oauth_access_token_command(
                     format!("could not open the OAuth refresh keyring entry: {error}"),
                 )
             })?;
+        let recovery_path = oauth_refresh_recovery_path(&recovery_directory, keyring_id);
         let latest = entry.get_password().map_err(|error| {
             (
                 1,
                 format!("could not read the latest OAuth refresh configuration: {error}"),
             )
         })?;
-        config = crate::oauth_refresh::decode_refresh_config(&latest).map_err(|error| {
-            (
-                1,
-                format!("the latest OS keyring OAuth configuration is invalid: {error}"),
-            )
-        })?;
-        Some(lock)
+        let latest_config =
+            crate::oauth_refresh::decode_refresh_config(&latest).map_err(|error| {
+                (
+                    1,
+                    format!("the latest OS keyring OAuth configuration is invalid: {error}"),
+                )
+            })?;
+        config = recover_pending_oauth_refresh(&recovery_path, &latest_config, |config| {
+            persist_and_verify_keyring_refresh_config(&entry, config)
+        })
+        .map_err(|error| (1, error))?
+        .unwrap_or(latest_config);
+        (Some(entry), Some(recovery_path), Some(lock))
     } else {
-        None
+        (None, None, None)
     };
     let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
         .map_err(|error| (1, format!("OAuth access token refresh failed: {error}")))?;
@@ -388,62 +570,27 @@ pub(super) fn oauth_access_token_command(
             .unwrap_or_default()
     );
     if let Some(rotated) = refreshed.refresh_token {
+        let previous_config = config.clone();
         let rotated_config = crate::oauth_refresh::OAuthRefreshConfig {
             refresh_token: rotated,
             ..config
         };
-        crate::atomic_artifact::write_private_atomic(
-            &config_path,
-            &crate::oauth_refresh::encode_refresh_config(&rotated_config),
-        )
-        .map_err(|error| {
-            (
-                1,
-                format!(
-                    "the provider rotated the refresh token but the configuration file could not be updated: {error}"
-                ),
-            )
-        })?;
-        if let Some(keyring_id) = persist_keyring_id.as_deref() {
-            let entry = keyring::Entry::new(crate::Form::OAUTH_REFRESH_KEYRING_SERVICE, keyring_id)
-                .map_err(|error| {
-                    (
-                        1,
-                        format!(
-                            "the provider rotated the refresh token but the OS keyring entry could not be opened: {error}"
-                        ),
-                    )
-                })?;
-            crate::migration_plan::persist_rotated_refresh_config_with_retry(
+        match (keyring_entry.as_ref(), recovery_path.as_ref()) {
+            (Some(entry), Some(recovery_path)) => persist_rotated_oauth_refresh(
+                recovery_path,
+                &config_path,
+                &previous_config,
                 &rotated_config,
-                |config| {
-                    let encoded = crate::oauth_refresh::encode_refresh_config(config);
-                    entry.set_password(&encoded).map_err(|error| {
-                        format!(
-                            "the provider rotated the refresh token but the OS keyring could not be updated: {error}"
-                        )
-                    })?;
-                    let stored = entry.get_password().map_err(|error| {
-                        format!(
-                            "the provider rotated the refresh token but the OS keyring update could not be verified: {error}"
-                        )
-                    })?;
-                    let verified = crate::oauth_refresh::decode_refresh_config(&stored)
-                        .map_err(|error| {
-                            format!(
-                                "the provider rotated the refresh token but the OS keyring returned invalid configuration: {error}"
-                            )
-                        })?;
-                    if verified.refresh_token.as_str() != config.refresh_token.as_str() {
-                        return Err(
-                            "the provider rotated the refresh token but the OS keyring returned a different token".to_owned(),
-                        );
-                    }
-                    Ok(())
-                },
+                |config| persist_and_verify_keyring_refresh_config(entry, config),
+            ),
+            (None, None) => crate::atomic_artifact::write_private_atomic(
+                &config_path,
+                &crate::oauth_refresh::encode_refresh_config(&rotated_config),
             )
-            .map_err(|error| (1, error))?;
+            .map_err(|error| format!("could not update OAuth refresh config: {error}")),
+            _ => Err("OAuth refresh recovery state was not initialized consistently".to_owned()),
         }
+        .map_err(|error| (1, error))?;
         if persist_keyring_id.is_some() {
             message.push_str(
                 " The provider rotated the refresh token; the per-run configuration and configured OS keyring entry were updated.",
@@ -609,6 +756,126 @@ mod oauth_refresh_lock_tests {
         );
         assert_ne!(observed[0], observed[1]);
         drop(observed);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rotated_refresh_config_survives_keyring_failure_until_recovery_succeeds() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Keep this fixture outside the shared secret-runtime root: other
+        // parallel tests exercise stale-runtime cleanup against that root.
+        let runtime_directory = crate::credentials::create_secret_directory().unwrap();
+        let runtime_base = crate::credentials::secret_runtime_base();
+        std::fs::remove_dir(runtime_directory).unwrap();
+        let directory = runtime_base.join(format!("test-oauth-recovery-{}", uuid::Uuid::new_v4()));
+        crate::credentials::ensure_private_directory(&directory).unwrap();
+        let recovery_directory = directory.join("oauth-refresh-recovery");
+        crate::credentials::ensure_private_directory(&recovery_directory).unwrap();
+        let recovery_path =
+            oauth_refresh_recovery_path(&recovery_directory, "shared-refresh-credential");
+        let run_config_path = directory.join("run-refresh.json");
+        let previous = crate::oauth_refresh::OAuthRefreshConfig {
+            token_endpoint: "https://oauth.example.test/token".into(),
+            client_id: "client".into(),
+            client_secret: crate::credentials::SecretString::from("client-secret"),
+            refresh_token: crate::credentials::SecretString::from("old-refresh-token"),
+        };
+        let rotated = crate::oauth_refresh::OAuthRefreshConfig {
+            refresh_token: crate::credentials::SecretString::from("rotated-refresh-token"),
+            ..previous.clone()
+        };
+        assert_ne!(
+            oauth_refresh_config_digest(&previous),
+            oauth_refresh_config_digest(&rotated)
+        );
+        let attempts = AtomicUsize::new(0);
+        let error = persist_rotated_oauth_refresh(
+            &recovery_path,
+            &run_config_path,
+            &previous,
+            &rotated,
+            |_| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err("injected keyring outage".to_owned())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert!(error.contains("protected recovery remains"));
+        let pending = read_pending_oauth_refresh_recovery(&recovery_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pending.rotated_config.refresh_token.as_str(),
+            "rotated-refresh-token"
+        );
+        assert_eq!(
+            read_secret_file(&run_config_path).unwrap().as_str(),
+            crate::oauth_refresh::encode_refresh_config(&rotated).as_str()
+        );
+
+        let retry_attempts = AtomicUsize::new(0);
+        assert!(
+            recover_pending_oauth_refresh(&recovery_path, &previous, |_| {
+                retry_attempts.fetch_add(1, Ordering::SeqCst);
+                Err("keyring still unavailable".to_owned())
+            })
+            .is_err()
+        );
+        assert_eq!(retry_attempts.load(Ordering::SeqCst), 3);
+        assert!(recovery_path.exists());
+
+        let recovered = recover_pending_oauth_refresh(&recovery_path, &previous, |_| Ok(()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.refresh_token.as_str(), "rotated-refresh-token");
+        assert!(!recovery_path.exists());
+
+        // If the keyring already contains the rotated value, cleanup is safe
+        // without another write; a newer unrelated value must never be clobbered.
+        persist_rotated_oauth_refresh(
+            &recovery_path,
+            &run_config_path,
+            &previous,
+            &rotated,
+            |_| Err("injected keyring outage".to_owned()),
+        )
+        .unwrap_err();
+        let writes = AtomicUsize::new(0);
+        let already_rotated = recover_pending_oauth_refresh(&recovery_path, &rotated, |_| {
+            writes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            already_rotated.refresh_token.as_str(),
+            "rotated-refresh-token"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+
+        persist_rotated_oauth_refresh(
+            &recovery_path,
+            &run_config_path,
+            &previous,
+            &rotated,
+            |_| Err("injected keyring outage".to_owned()),
+        )
+        .unwrap_err();
+        let operator_update = crate::oauth_refresh::OAuthRefreshConfig {
+            refresh_token: crate::credentials::SecretString::from("operator-new-token"),
+            ..previous.clone()
+        };
+        let writes = AtomicUsize::new(0);
+        let conflict = recover_pending_oauth_refresh(&recovery_path, &operator_update, |_| {
+            writes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(conflict.contains("refusing to overwrite"));
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        assert!(recovery_path.exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

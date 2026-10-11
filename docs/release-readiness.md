@@ -324,9 +324,11 @@ reconciliation as successful.
   imapsync reconnect callbacks that share a keyring ID are serialized across
   processes and reload the latest keyring configuration before exchanging.
   If keyring persistence remains unavailable, a reconnect callback fails
-  closed after three attempts; the rotated config remains only in its private
-  per-run secret directory until normal run cleanup. The pre-launch path keeps
-  an unrecoverably rotated config only in protected process memory for keyring
+  closed after three attempts; the rotated config is retained in a dedicated
+  owner-only recovery file with a hashed keyring ID and reconciled before the
+  next refresh attempt. This fallback file is not encrypted and remains
+  protected by the local OS account boundary. The pre-launch path keeps an
+  unrecoverably rotated config only in protected process memory for keyring
   persistence recovery, without attempting another provider exchange.
 
 ## Available in 0.1
