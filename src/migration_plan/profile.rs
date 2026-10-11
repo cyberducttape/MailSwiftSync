@@ -443,10 +443,10 @@ pub(crate) fn effective_batch_concurrency(value: usize) -> usize {
     value.clamp(1, MAX_BATCH_CONCURRENCY)
 }
 
-/// Keep an aggregate imapsync throughput target enforceable by assigning at
-/// most one worker per configured message/byte budget unit. Each engine then
-/// receives the integer-divided per-worker rate; its aggregate cannot exceed
-/// the run target, and division can never produce a disabling zero rate.
+/// Keep the sum of configured per-worker imapsync limits within the run-level
+/// target by assigning at most one worker per message/byte budget unit. Each
+/// engine receives the integer-divided rate, which cannot be zero. This does
+/// not implement a shared token bucket or guarantee instantaneous wire rate.
 pub(crate) fn effective_batch_concurrency_for_limits(
     configured: usize,
     max_messages_per_second: u32,
