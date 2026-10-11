@@ -112,6 +112,7 @@ impl MessageVerification {
                     FROM staged_messages s
                     LEFT JOIN staged_flag_folder_mapping m ON m.source=s.mailbox
                     WHERE s.side=0 AND s.message_id IS NOT NULL
+                      AND s.identity_provenance='rfc_message_id'
                       AND s.date_key IS NOT NULL AND s.size_bytes IS NOT NULL
                     GROUP BY s.message_id,expected_mailbox,s.date_key,s.size_bytes
                     HAVING COUNT(*)=1
@@ -119,6 +120,7 @@ impl MessageVerification {
                     SELECT message_id,mailbox,date_key,size_bytes,MIN(flags) AS flags
                     FROM staged_messages
                     WHERE side=1 AND message_id IS NOT NULL
+                      AND identity_provenance='rfc_message_id'
                       AND date_key IS NOT NULL AND size_bytes IS NOT NULL
                     GROUP BY message_id,mailbox,date_key,size_bytes
                     HAVING COUNT(*)=1
@@ -175,11 +177,13 @@ impl MessageVerification {
                     FROM staged_messages s
                     LEFT JOIN staged_flag_folder_mapping m ON m.source=s.mailbox
                     WHERE s.side=0 AND s.message_id IS NOT NULL
+                      AND s.identity_provenance='rfc_message_id'
                       AND s.date_key IS NOT NULL AND s.size_bytes IS NOT NULL
                  ), destination AS (
                     SELECT message_id,mailbox,date_key,size_bytes,flags
                     FROM staged_messages
                     WHERE side=1 AND message_id IS NOT NULL
+                      AND identity_provenance='rfc_message_id'
                       AND date_key IS NOT NULL AND size_bytes IS NOT NULL
                  ), source_groups AS (
                     SELECT message_id,mailbox,date_key,size_bytes,COUNT(*) AS n
@@ -346,6 +350,35 @@ mod tests {
         let mapped = MessageVerification::verify_staged_flags(&stage, &mapping).unwrap();
         assert_eq!(mapped.compared_messages, 1);
         assert_eq!(mapped.mismatched_messages, 1);
+    }
+
+    #[test]
+    fn synthetic_header_identities_are_not_used_for_flag_comparisons() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage_side(
+            &mut stage,
+            StagedMessageSide::Source,
+            &[
+                ("INBOX", 1, "header-fingerprint:unique", "\\Seen"),
+                ("INBOX", 2, "header-fingerprint:duplicate", "\\Flagged"),
+                ("INBOX", 3, "header-fingerprint:duplicate", "\\Answered"),
+                ("INBOX", 4, "<real-id@x>", "\\Seen"),
+            ],
+        );
+        stage_side(
+            &mut stage,
+            StagedMessageSide::Destination,
+            &[
+                ("INBOX", 11, "header-fingerprint:unique", ""),
+                ("INBOX", 12, "header-fingerprint:duplicate", ""),
+                ("INBOX", 13, "header-fingerprint:duplicate", ""),
+                ("INBOX", 14, "<real-id@x>", ""),
+            ],
+        );
+
+        let result = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
+        assert_eq!(result.compared_messages, 1);
+        assert_eq!(result.mismatched_messages, 1);
     }
 
     #[test]

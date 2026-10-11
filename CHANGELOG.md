@@ -25,6 +25,7 @@
   UIDNEXT, and EXISTS are unchanged. Clarify retry guidance so durable cursors
   are documented as recovery metadata, not reusable verification evidence.
 - Keep synthetic header fingerprints out of exact RFC Message-ID reconciliation. Persist RFC-ID and synthetic-candidate counts separately in evidence history and signed/report exports.
+- Exclude synthetic header identities from FLAGS and keyword fidelity coverage; only real RFC Message-ID groups establish comparable flag pairs.
 - Upgrade ledger schema to v31 with nonnegative identity-provenance counters; prior ledgers migrate with zero-valued legacy counters.
 - Use a private local HMAC key for new OAuth rotation-recovery fingerprints while retaining one-time compatibility with existing version-1 SHA-256 recovery records.
 - Document the non-secret input and filename-only purpose of the stable OAuth keyring-ID digest flagged by password-hashing analysis.
