@@ -92,6 +92,30 @@ not a measurement of the live durable mismatch-heavy path. The benchmark now
 uses `reconcile_stage`; new results from that path must be used for capacity
 claims about high-difference mailboxes.
 
+At commit `bc72c8a93f9e27855b2a1a3d6533a6742023a45f`, the corrected benchmark
+ran on the same shared Ryzen 7 7735U / Ubuntu 26.04.1 / Rust 1.92.0 / ext4-on-
+NVMe workstation. Each case passed the harness's default 64 MiB peak-RSS and
+20,000 messages/s reconciliation thresholds:
+
+| Messages/endpoint | Shape | Reconcile rate | Peak RSS | Peak stage directory | Peak journal | Mismatch rows |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 100,000 | duplicate IDs | 25,667/s | 21 MiB | 111,356,464 B | 9,779,760 B | 2,000 |
+| 100,000 | absent IDs | 53,590/s | 22 MiB | 83,800,896 B | 7,107,392 B | 10,000 |
+| 100,000 | mismatch-heavy | 23,424/s | 21 MiB | 105,626,136 B | 9,722,392 B | 60,000 |
+| 500,000 | mismatch-heavy | 32,566/s | 21 MiB | 545,489,752 B | 50,234,200 B | 300,000 |
+| 1,000,000 | typical | 46,225/s | 21 MiB | 1,151,854,544 B | 100,894,672 B | 20,000 |
+| 1,000,000 | mismatch-heavy | 31,965/s | 21 MiB | 1,094,514,640 B | 100,894,672 B | 600,000 |
+
+The 1M typical fixture compared flags for 980,000 unambiguous messages. The 1M
+mismatch-heavy fixture classified 500,000 messages as matched and recorded
+100,000 missing, 100,000 extra, and 400,000 changed messages. All reported
+`outcome=ok`; mismatch detail remained staged in SQLite rather than being
+materialized in a Rust vector. These results qualify only synthetic durable
+SQLite reconciliation on this host. They do not measure remote IMAP fetching,
+engine transfer, the final ledger evidence commit, real mailbox distributions,
+or provider behavior, and do not establish capacity on other storage or a
+10/50/100 GiB transfer.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of
