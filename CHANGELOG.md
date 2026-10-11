@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Surface failures to remove the private unsigned certificate intermediate;
+  certificate export no longer reports complete cleanup when that file remains.
 - Reject reverification difference-export flags that omit their required path,
   so the command cannot silently skip a requested CSV export.
 - Fail closed during schema migration when the ledger file cannot be inspected

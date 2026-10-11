@@ -24,6 +24,30 @@ fn required_path_option_or_exit(
     })
 }
 
+fn certificate_cleanup_result(
+    result: Result<String, String>,
+    cleanup: std::io::Result<()>,
+    temporary: &std::path::Path,
+    output: &std::path::Path,
+) -> Result<String, String> {
+    let cleanup_error = cleanup
+        .err()
+        .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
+    match (result, cleanup_error) {
+        (Ok(message), None) => Ok(message),
+        (Err(error), None) => Err(error),
+        (Ok(_), Some(error)) => Err(format!(
+            "certificate was created at {} but its private unsigned intermediate {} could not be removed: {error}",
+            output.display(),
+            temporary.display()
+        )),
+        (Err(error), Some(cleanup_error)) => Err(format!(
+            "{error}; private unsigned intermediate {} could not be removed: {cleanup_error}",
+            temporary.display()
+        )),
+    }
+}
+
 pub(super) fn parse_trusted_public_key_argument(
     value: Option<OsString>,
 ) -> Result<Option<String>, &'static str> {
@@ -779,7 +803,12 @@ pub(super) fn certificate_command(mut arguments: std::env::ArgsOs) -> eframe::Re
         reports::customer::export_from_store(&store, &project_id, &temporary, &branding)?;
         reports::signing::sign_file_to(&temporary, &output, &signing_key, &key_id, true)
     })();
-    let _ = std::fs::remove_file(&temporary);
+    let result = certificate_cleanup_result(
+        result,
+        std::fs::remove_file(&temporary),
+        &temporary,
+        &output,
+    );
     match result {
         Ok(message) => {
             drop(store);
@@ -1145,6 +1174,36 @@ fn reverify_stage_path(state: &std::path::Path, job_id: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn certificate_generation_does_not_hide_private_intermediate_cleanup_failure() {
+        let temporary = std::path::Path::new("/private/customer-proof.tmp");
+        let output = std::path::Path::new("/deliverables/certificate.json");
+        let result = super::certificate_cleanup_result(
+            Ok("Signed migration certificate".to_owned()),
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            temporary,
+            output,
+        )
+        .unwrap_err();
+        assert!(result.contains("certificate was created at /deliverables/certificate.json"));
+        assert!(result.contains("/private/customer-proof.tmp"));
+        assert!(result.contains("could not be removed"));
+    }
+
+    #[test]
+    fn missing_certificate_intermediate_is_already_cleaned() {
+        assert_eq!(
+            super::certificate_cleanup_result(
+                Ok("Signed migration certificate".to_owned()),
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+                std::path::Path::new("/private/customer-proof.tmp"),
+                std::path::Path::new("/deliverables/certificate.json")
+            )
+            .unwrap(),
+            "Signed migration certificate"
+        );
+    }
+
     #[test]
     fn reverification_difference_path_options_require_nonempty_values() {
         assert!(
