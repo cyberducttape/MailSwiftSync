@@ -137,6 +137,31 @@ pub(super) fn authenticate_imap_stream<S: Read + Write>(
     Ok((stream, post_auth_response))
 }
 
+/// Refresh the credential immediately before an IMAP reconnect, then run the
+/// normal authentication and post-auth capability exchange on the new stream.
+pub(super) fn reauthenticate_imap_stream<S: Read + Write>(
+    stream: S,
+    host: &str,
+    user: &str,
+    auth_method: &str,
+    greeting: String,
+    budget: Option<&MessageFetchBudget<'_>>,
+    refresh_credential: &mut dyn FnMut() -> Result<SecretString, String>,
+) -> Result<(S, String), String> {
+    let credential = refresh_credential().map_err(|error| {
+        format!("could not refresh the IMAP credential before reconnect: {error}")
+    })?;
+    authenticate_imap_stream(
+        stream,
+        host,
+        user,
+        credential.as_str(),
+        auth_method,
+        greeting,
+        budget,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +271,37 @@ mod tests {
         assert!(stream.sent().contains(&format!("{}\r\n", payload.as_str())));
         assert!(stream.sent().contains("a003 CAPABILITY\r\n"));
         assert!(capabilities.contains("a003 OK"));
+    }
+
+    #[test]
+    fn reconnect_authentication_uses_a_refreshed_oauth_token() {
+        let stream = ScriptedStream::new(&[
+            PRE_AUTH_CAPABILITIES,
+            "+\r\n",
+            "a002 OK authenticated\r\n",
+            POST_AUTH_CAPABILITIES,
+        ]);
+        let mut refresh_calls = 0;
+        let mut refresh = || {
+            refresh_calls += 1;
+            Ok(SecretString::new("fresh-access-token".to_owned()))
+        };
+
+        let (stream, _) = reauthenticate_imap_stream(
+            stream,
+            "imap.example.test",
+            "operator@example.test",
+            "oauth2",
+            "* OK ready\r\n".to_owned(),
+            None,
+            &mut refresh,
+        )
+        .expect("reconnect should authenticate with the refreshed token");
+
+        assert_eq!(refresh_calls, 1);
+        let expected_payload =
+            crate::oauth::xoauth2_payload("operator@example.test", "fresh-access-token");
+        assert!(stream.sent().contains(expected_payload.as_str()));
     }
 
     #[test]

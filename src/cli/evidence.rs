@@ -333,6 +333,11 @@ fn run_reverify_one(
     })?;
     crate::runner::validate_body_hash_limits(&form)
         .map_err(|error| format!("Reverification refused: {error}"))?;
+    form.refresh_oauth_access_token(true)
+        .and_then(|_| form.refresh_oauth_access_token(false))
+        .map_err(|error| {
+            format!("Reverification refused: could not refresh OAuth credentials: {error}")
+        })?;
     let run_id = uuid::Uuid::new_v4().to_string();
     store
         .begin_verification_run_from_transfer(

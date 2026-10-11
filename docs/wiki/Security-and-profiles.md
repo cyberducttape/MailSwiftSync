@@ -15,6 +15,8 @@ MailSwiftSync does not save passwords, sync output, or mailbox contents. Passwor
 
 ## Credential delivery and process visibility
 
+The native verifier refreshes automatic OAuth credentials before the scan and again before any session reconnect. Standalone `reverify` refreshes both sides before its initial connections; without a configured refresh credential, a supplied access token is used as-is and may expire during a long scan.
+
 Here, “owner-only” for an existing directory means owner-owned and not
 writable by group or other users; readable mode bits may remain. Newly created
 private directories use mode 0700, and credential files themselves are always

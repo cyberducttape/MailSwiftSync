@@ -19,7 +19,7 @@ mod namespace_parser;
 mod protocol;
 mod resolver;
 mod tls;
-use auth::authenticate_imap_stream;
+use auth::{authenticate_imap_stream, reauthenticate_imap_stream};
 #[cfg(test)]
 use fetch_pages::parse_uid_search_response;
 use fetch_pages::{
@@ -1229,6 +1229,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     state_budget: &MessageStateBudget,
     body_hash: Option<&BodyHashOptions<'_>>,
     excluded_mailboxes: &HashSet<String>,
+    reconnect_credential: &mut dyn FnMut() -> Result<crate::credentials::SecretString, String>,
     sink: &mut C,
 ) -> Result<FetchedAccountSummary, String> {
     budget.check()?;
@@ -1334,14 +1335,14 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                             certificate_pin_sha256,
                             budget,
                         )?;
-                        let (new_stream, new_post_auth_response) = authenticate_imap_stream(
+                        let (new_stream, new_post_auth_response) = reauthenticate_imap_stream(
                             new_stream,
                             host,
                             user,
-                            credential,
                             auth_method,
                             new_greeting,
                             Some(budget),
+                            reconnect_credential,
                         )?;
                         Ok((
                             new_stream,
@@ -1420,39 +1421,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes(
-    host: &str,
-    user: &str,
-    credential: &str,
-    auth_method: &str,
-    transport: &str,
-    ca_bundle: &str,
-    certificate_pin_sha256: &str,
-    budget: &MessageFetchBudget<'_>,
-    state_budget: &MessageStateBudget,
-    body_hash: Option<&BodyHashOptions<'_>>,
-    stage: &mut crate::core::MessageMetadataStage,
-    side: crate::core::StagedMessageSide,
-) -> Result<FetchedAccountSummary, String> {
-    fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
-        host,
-        user,
-        credential,
-        auth_method,
-        transport,
-        ca_bundle,
-        certificate_pin_sha256,
-        budget,
-        state_budget,
-        body_hash,
-        &HashSet::new(),
-        stage,
-        side,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
+pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding_refresh(
     host: &str,
     user: &str,
     credential: &str,
@@ -1464,6 +1433,7 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
     state_budget: &MessageStateBudget,
     body_hash: Option<&BodyHashOptions<'_>>,
     excluded_mailboxes: &HashSet<String>,
+    reconnect_credential: &mut dyn FnMut() -> Result<crate::credentials::SecretString, String>,
     stage: &mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
 ) -> Result<FetchedAccountSummary, String> {
@@ -1486,6 +1456,7 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
         state_budget,
         body_hash,
         excluded_mailboxes,
+        reconnect_credential,
         &mut sink,
     )
 }

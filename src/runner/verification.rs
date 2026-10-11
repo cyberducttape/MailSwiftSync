@@ -61,35 +61,50 @@ pub(crate) fn run_imap_message_verification(
     } else {
         core::MessageMetadataStage::open_ephemeral()?
     };
-    let source = crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
-        &source_host,
-        &form.profile.source_user,
-        form.source_password.as_str(),
-        &form.profile.source_auth,
-        &form.profile.source_tls,
-        &form.profile.source_ca_bundle,
-        &form.profile.source_certificate_pin_sha256,
-        &budget,
-        &state_budget,
-        body_hash.as_ref(),
-        &excluded_source_folders,
-        &mut stage,
-        core::StagedMessageSide::Source,
-    )?;
-    let destination = crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes(
-        &destination_host,
-        &form.profile.destination_user,
-        form.destination_password.as_str(),
-        &form.profile.destination_auth,
-        crate::effective_destination_tls(&form.profile.destination_tls),
-        &form.profile.destination_ca_bundle,
-        &form.profile.destination_certificate_pin_sha256,
-        &budget,
-        &state_budget,
-        body_hash.as_ref(),
-        &mut stage,
-        core::StagedMessageSide::Destination,
-    )?;
+    let mut source_refresh_form = form.clone();
+    let mut source_reconnect_credential = || {
+        source_refresh_form.refresh_oauth_access_token(true)?;
+        Ok(source_refresh_form.source_password.clone())
+    };
+    let source =
+        crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes_excluding_refresh(
+            &source_host,
+            &form.profile.source_user,
+            form.source_password.as_str(),
+            &form.profile.source_auth,
+            &form.profile.source_tls,
+            &form.profile.source_ca_bundle,
+            &form.profile.source_certificate_pin_sha256,
+            &budget,
+            &state_budget,
+            body_hash.as_ref(),
+            &excluded_source_folders,
+            &mut source_reconnect_credential,
+            &mut stage,
+            core::StagedMessageSide::Source,
+        )?;
+    let mut destination_refresh_form = form.clone();
+    let mut destination_reconnect_credential = || {
+        destination_refresh_form.refresh_oauth_access_token(false)?;
+        Ok(destination_refresh_form.destination_password.clone())
+    };
+    let destination =
+        crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes_excluding_refresh(
+            &destination_host,
+            &form.profile.destination_user,
+            form.destination_password.as_str(),
+            &form.profile.destination_auth,
+            crate::effective_destination_tls(&form.profile.destination_tls),
+            &form.profile.destination_ca_bundle,
+            &form.profile.destination_certificate_pin_sha256,
+            &budget,
+            &state_budget,
+            body_hash.as_ref(),
+            &HashSet::new(),
+            &mut destination_reconnect_credential,
+            &mut stage,
+            core::StagedMessageSide::Destination,
+        )?;
     if (source.total_exists > 0
         && stage
             .count(core::StagedMessageSide::Source)
