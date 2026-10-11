@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Run project report, project JSON, customer-proof, and health exports on a
+  background worker with its own read-only ledger connection; a fleet-scale
+  export no longer freezes the window, and a second export waits for the
+  first.
+
 - Stream complete proof exports from a pinned ledger snapshot instead of
   loading every mailbox and run: the 100,000-run export ceiling is gone, and
   a 100,000-mailbox, 300,000-run customer proof (341 MiB) exports in 36 s

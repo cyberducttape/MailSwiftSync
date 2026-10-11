@@ -39,13 +39,13 @@ impl App {
                         .button(self.language.message("ui.export-project-report"))
                         .clicked()
                     {
-                        self.report_export_result("Project report", self.export_project_report());
+                        self.export_project_report();
                     }
                     if ui
                         .button(self.language.message("ui.export-project-json"))
                         .clicked()
                     {
-                        self.report_export_result("Project JSON", self.export_project_json());
+                        self.export_project_json();
                     }
                     if ui
                         .button(self.language.message("ui.export-post-migration-report"))
@@ -66,7 +66,7 @@ impl App {
                         )
                         .clicked()
                     {
-                        self.report_export_result("Customer proof", self.export_customer_proof());
+                        self.export_customer_proof();
                     }
                     if ui
                         .button(self.language.message("ui.export-support-bundle"))
@@ -81,10 +81,7 @@ impl App {
                         .button(self.language.message("ui.export-project-health"))
                         .clicked()
                     {
-                        self.report_export_result(
-                            "Project health export",
-                            self.export_project_health(),
-                        );
+                        self.export_project_health();
                     }
                 });
                 if let Some(project) = self.ui_snapshot.project.as_ref() {
