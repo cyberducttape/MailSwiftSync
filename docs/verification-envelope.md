@@ -173,10 +173,17 @@ Use `--mode content` for the bounded body-fingerprint path. Secret files must
 be regular, owner-only files; credentials are never accepted in argv. The
 command reuses the immutable plan snapshot, records a separate
 verification-only run and `evidence_history` row, and stores differences under
-that run for CSV export. The original migration evidence and mailbox state are
-not overwritten. A later difference is an audit observation and may represent
-legitimate post-migration delivery, deletion, or flag changes; it must not
-automatically be presented as proof that the original transfer lost mail.
+that run for CSV export. The run is linked to the completed transfer run that
+provided its baseline, and the command holds the same exclusive ledger lock as
+the GUI/recovery controller for the entire provider scan and evidence commit.
+Current organization policy is rechecked against the requested evidence mode;
+a historical plan is not an exemption from a stronger current minimum. The
+original migration evidence and mailbox state are not overwritten. A later
+difference is an audit observation and may represent legitimate post-migration
+delivery, deletion, or flag changes; it must not automatically be presented as
+proof that the original transfer lost mail. SQLite history and finalization
+errors are reported as storage failures rather than being collapsed into
+"no prior run" or a generic scan failure.
 
 ## When verification reaches a limit
 
