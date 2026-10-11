@@ -217,8 +217,16 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
 #[test]
 fn native_runtime_failures_retain_logs_for_every_platform() {
     let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
+    let upload_step = ci
+        .split("- name: Upload native test log")
+        .nth(1)
+        .expect("native-test log upload step should exist")
+        .split("\n      - name:")
+        .next()
+        .expect("native-test log upload step should be delimited");
     assert!(
-        ci.contains("if: failure()\n        uses: actions/upload-artifact@"),
+        upload_step.contains("if: failure()")
+            && upload_step.contains("uses: actions/upload-artifact@"),
         "failed native-test jobs must upload diagnostics on every matrix platform"
     );
     assert!(
