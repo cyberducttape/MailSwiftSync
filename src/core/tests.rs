@@ -5997,6 +5997,34 @@ fn exact_messages_with_partial_flag_coverage_are_stored_for_review_and_acceptabl
 }
 
 #[test]
+fn exact_message_label_without_flag_coverage_is_rejected_from_difference_state() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("missing-flags", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "missing-flags-run", "imapsync")
+        .unwrap();
+    let evidence = flag_evidence(VerificationOutcome::ExactMetadataMatch, None);
+
+    assert!(
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "missing-flags-run",
+            "completed",
+            "verification_difference",
+            "flag coverage unavailable",
+            &evidence,
+        )
+        .is_err()
+    );
+    assert!(db.evidence(&job).unwrap().is_none());
+}
+
+#[test]
 fn fully_exact_evidence_still_refuses_an_exception_acceptance() {
     let db = StateStore::in_memory().unwrap();
     let project = db.create_project("exact", "source", "destination").unwrap();

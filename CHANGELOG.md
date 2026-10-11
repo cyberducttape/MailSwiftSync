@@ -28,6 +28,9 @@
 - Prevent exact metadata/body evidence from being certified without complete
   FLAGS and keyword coverage; missing flag coverage now remains an explicit
   assurance exception instead of being mislabeled as a flag change.
+- Apply the same missing-flag-coverage guard to normal transfer evidence
+  commits, while retaining partial and provider-exception coverage as
+  reviewable `verification_difference` evidence.
 - Harden opt-in diagnostic transcript redaction for secret-shaped key/value
   fields and bearer-style authorization values that are not in the controller's
   known-secret set.

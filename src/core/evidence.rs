@@ -505,6 +505,13 @@ impl VerificationEvidence {
             )
     }
 
+    /// Exact message labels may still be retained for reviewable partial or
+    /// provider-exception flag results. They must not be persisted at all
+    /// when a non-empty metadata/body result has no flag dimension.
+    pub(crate) fn flag_coverage_is_missing(&self) -> bool {
+        self.flag_coverage_is_required() && self.flag_verification.is_none()
+    }
+
     fn flag_difference_is_present(&self, flags: FlagVerification) -> bool {
         flags.mismatched_messages > 0
             || flags.excepted_messages > 0

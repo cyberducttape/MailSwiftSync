@@ -180,7 +180,7 @@ impl StateStore {
                 && !value.authoritative)
             || (value.verification_method == VerificationMethod::BodyHash
                 && outcome != VerificationOutcome::ExactBodyMatch)
-            || !value.is_exact_match())
+            || value.flag_coverage_is_missing())
         {
             return Err(super::ledger_rejection(
                 "an exact verification label contradicts the evidence counters",
