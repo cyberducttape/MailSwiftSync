@@ -95,36 +95,62 @@ fn atomic_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
         .chain(std::iter::once(0))
         .collect();
 
-    match std::fs::metadata(dst) {
+    retry_windows_sharing_violation(|| match std::fs::metadata(dst) {
         Ok(_) => {
             // SAFETY: the UTF-16 vectors are NUL-terminated, remain alive for
             // the call, and the Windows API does not retain either pointer.
-            unsafe {
-                if ReplaceFileW(
+            let replaced = unsafe {
+                ReplaceFileW(
                     dst_wide.as_ptr(),
                     src_wide.as_ptr(),
                     std::ptr::null(),
                     0,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
-                ) == 0
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
+                )
+            };
+            if replaced == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             // SAFETY: both NUL-terminated path buffers remain alive through
             // MoveFileExW, and WRITE_THROUGH requests durable rename handling.
-            unsafe {
-                if MoveFileExW(src_wide.as_ptr(), dst_wide.as_ptr(), MOVEFILE_WRITE_THROUGH) == 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
+            let moved = unsafe {
+                MoveFileExW(src_wide.as_ptr(), dst_wide.as_ptr(), MOVEFILE_WRITE_THROUGH)
+            };
+            if moved == 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
             }
         }
-        Err(error) => return Err(error),
+        Err(error) => Err(error),
+    })
+}
+
+#[cfg(any(windows, test))]
+fn retry_windows_sharing_violation(
+    mut operation: impl FnMut() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    const ATTEMPTS: usize = 5;
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
+    for attempt in 0..ATTEMPTS {
+        match operation() {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if matches!(error.raw_os_error(), Some(32 | 33)) && attempt + 1 < ATTEMPTS =>
+            {
+                std::thread::sleep(RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
     }
-    Ok(())
+
+    unreachable!("the bounded retry loop always returns")
 }
 
 #[cfg(unix)]
@@ -149,6 +175,31 @@ fn sync_directory(_: Option<&Path>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn windows_replace_retries_only_transient_sharing_conflicts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let attempts = AtomicUsize::new(0);
+        retry_windows_sharing_violation(|| {
+            if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err(std::io::Error::from_raw_os_error(32))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+
+        let attempts = AtomicUsize::new(0);
+        let error = retry_windows_sharing_violation(|| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err(std::io::Error::from_raw_os_error(5))
+        })
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(5));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
 
     #[cfg(unix)]
     #[test]

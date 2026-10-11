@@ -236,7 +236,7 @@ pub(crate) fn acquire_named_lock_with_timeout(
     loop {
         match file.try_lock_exclusive() {
             Ok(()) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(error) if is_lock_contention(&error) => {
                 if std::time::Instant::now() >= deadline {
                     // Explicitly close a denied contender before returning.
                     drop(file);
@@ -253,6 +253,24 @@ pub(crate) fn acquire_named_lock_with_timeout(
         }
     }
     Ok(InstanceLock(file))
+}
+
+fn is_lock_contention(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+
+    // LockFileEx reports an already-held byte-range lock as
+    // ERROR_LOCK_VIOLATION. `fs2` exposes that Windows status as an `Other`
+    // error rather than normalizing it to WouldBlock, so treat it as ordinary
+    // contention and honor the same timeout/retry policy used on Unix.
+    #[cfg(windows)]
+    {
+        return matches!(error.raw_os_error(), Some(32 | 33));
+    }
+
+    #[cfg(not(windows))]
+    false
 }
 
 #[cfg(test)]
@@ -370,6 +388,22 @@ fn emit_lossy_line<F: FnMut(String)>(line: &[u8], truncated: bool, callback: &mu
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn lock_contention_errors_are_recognized_across_platforms() {
+        assert!(is_lock_contention(&io::Error::from(
+            io::ErrorKind::WouldBlock
+        )));
+
+        #[cfg(windows)]
+        {
+            // LockFileEx can report ERROR_LOCK_VIOLATION (33); Windows may
+            // also surface ERROR_SHARING_VIOLATION (32) for a competing lock.
+            assert!(is_lock_contention(&io::Error::from_raw_os_error(32)));
+            assert!(is_lock_contention(&io::Error::from_raw_os_error(33)));
+            assert!(!is_lock_contention(&io::Error::from_raw_os_error(5)));
+        }
+    }
 
     // GitHub-hosted Windows runners restrict certain security operations
     // (ACLs, nested jobs). Self-hosted Actions runners must execute these tests.
