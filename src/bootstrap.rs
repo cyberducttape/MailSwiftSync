@@ -599,6 +599,26 @@ mod tests {
     }
 
     #[test]
+    fn startup_warns_when_secret_cleanup_is_skipped_for_unavailable_state() {
+        let blocker = std::env::temp_dir().join(format!(
+            "mailswiftsync-bootstrap-blocker-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let state_path = blocker.join("ledger.db");
+
+        let app = App::try_from_state_path(Some(&state_path)).unwrap();
+
+        assert!(!app.persistence_available);
+        assert!(app.output.iter().any(|line| {
+            line.contains("residual credential cleanup was skipped")
+                && line.contains("private temporary files may remain")
+        }));
+        drop(app);
+        std::fs::remove_file(blocker).unwrap();
+    }
+
+    #[test]
     fn bootstrap_summary_matches_the_localized_english_copy() {
         assert_eq!(
             crate::ui::UiLanguage::English.text("ui.bootstrap-failure-summary"),
