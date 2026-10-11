@@ -78,15 +78,18 @@ state a client cannot store.
 | Compared messages | Only pairs where exactly one source and one destination message share the Message-ID, expected destination folder, INTERNALDATE, and RFC822.SIZE. Duplicates, probable pairings, unmatched messages, and messages whose FETCH carried no FLAGS are not compared. The compared count against all source messages is reported as flag coverage. |
 | Documented exception | The destination lost flags, gained none, and every lost flag is one the destination folder's SELECT `PERMANENTFLAGS` cannot store (a keyword is storable when `\*` is listed; a system flag only when listed by name). This is counted as excepted, not as a failure. Without `PERMANENTFLAGS` every flag is assumed storable, as RFC 9051 requires. |
 | Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
-| Point in time | Each side is read once. A user reading or flagging mail between the source and destination scans, or after cutover, is reported as a difference. Because IMAP flags can change without changing UIDVALIDITY, UIDNEXT, or EXISTS, a resumed durable scan never reuses an earlier folder page: it rescans that folder's flags before producing evidence. |
+| Point in time | Each side is inventoried independently, not as one cross-server instant. Within each folder, a bounded second FLAGS-only pass is compared page-by-page with the initial metadata pass; a mutation causes the folder to be discarded and retried. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. A resumed durable scan never reuses an earlier folder page. |
 
 ## Snapshot and cutover semantics
 
 The source and destination scans are not one atomic cross-server snapshot.
 Each selected folder is checked for internal stability using its
-`UIDVALIDITY`, `UIDNEXT`, and `EXISTS` values, but the two endpoints are
-observed at different times. Delivery, user actions, server-side rules, and
-flag changes between those observations can therefore appear as missing,
+`UIDVALIDITY`, `UIDNEXT`, and `EXISTS` values and a second bounded FLAGS pass.
+The latter catches flag changes between the initial FETCH and the flag check;
+servers without a usable CONDSTORE snapshot are not assumed stable merely
+because the UID snapshot is unchanged. The two endpoints are still observed
+at different times. Delivery, user actions, server-side rules, and flag changes
+between those observations can therefore appear as missing,
 extra, changed, or flag differences even when the transfer itself was correct.
 The evidence records the per-folder UID snapshot and verification run identity;
 it is not a global cross-provider timestamp or a claim that mail flow was
@@ -130,9 +133,11 @@ transfer engine to start over and cannot reuse stale flag-only results.
 
 The current implementation deliberately chooses this safe full-folder refetch
 because it does not yet persist or negotiate `CONDSTORE`/`HIGHESTMODSEQ`
-checkpoint state. A future optimized path may use those IMAP capabilities to
-refetch only changed UIDs, but it must retain the conservative fallback for
-servers that do not advertise them.
+checkpoint state. During each pass it also performs a second bounded sequence
+enumeration and FLAGS-only UID FETCH, adding provider round trips proportional
+to the extant message count. A future optimized path may use those IMAP
+capabilities to avoid that extra pass or refetch only changed UIDs, but it must
+retain the conservative fallback for servers that do not advertise them.
 
 The current product does not retain completed message metadata indefinitely.
 The `reverify` command provides an operator-invokable mailbox-level

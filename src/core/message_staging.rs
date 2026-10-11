@@ -906,6 +906,33 @@ impl MessageMetadataStage {
         )
     }
 
+    /// Check that a bounded refetch of mutable FLAGS still matches the
+    /// metadata page staged earlier in this scan. This is the fallback for
+    /// servers that cannot provide CONDSTORE mod-sequence stability.
+    pub(crate) fn flags_match_page(
+        &self,
+        side: StagedMessageSide,
+        messages: &ExtractedMessages,
+    ) -> rusqlite::Result<bool> {
+        let connection = self.connection_ref()?;
+        let mut statement = connection.prepare_cached(
+            "SELECT flags FROM staged_messages WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uid=?4",
+        )?;
+        for (key, message) in messages {
+            let uidvalidity = key.uidvalidity.map(sqlite_i64).transpose()?.unwrap_or(-1);
+            let staged: Option<Option<String>> = statement
+                .query_row(
+                    params![side.as_i64(), key.mailbox.as_ref(), uidvalidity, key.uid],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if staged != Some(message.flags.clone()) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(crate) fn sum_bytes(&self, side: StagedMessageSide) -> rusqlite::Result<u64> {
         self.connection_ref()?.query_row(
             "SELECT COALESCE(SUM(size_bytes), 0) FROM staged_messages WHERE side=?1",

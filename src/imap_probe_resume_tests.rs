@@ -3,7 +3,7 @@
 //! server between runs, and drives the real fetch path against a scripted
 //! IMAP server. The invariant under test: after a scan the staged folder
 //! equals the server's current folder exactly, whatever happened between
-//! runs, and unchanged pages are not fetched again.
+//! runs. Resumed folders are rescanned because FLAGS can change independently.
 use super::*;
 use crate::core::{
     ExtractedMessage, ExtractedMessages, FolderSnapshot, MailboxMessageKey, MessageMetadataStage,
@@ -29,6 +29,7 @@ pub(super) struct FolderServer {
     fetch_commands: usize,
     uid_enumeration_commands: usize,
     pub(super) flags: std::collections::HashMap<u64, String>,
+    change_flags_on_refetch: Option<(u64, String)>,
     pub(super) permanent_flags: Option<String>,
     input: Vec<u8>,
     output: Vec<u8>,
@@ -44,6 +45,7 @@ impl FolderServer {
             fetch_commands: 0,
             uid_enumeration_commands: 0,
             flags: std::collections::HashMap::new(),
+            change_flags_on_refetch: None,
             permanent_flags: None,
             input: Vec::new(),
             output: Vec::new(),
@@ -90,14 +92,22 @@ impl FolderServer {
         } else if let Some(rest) = command.strip_prefix("UID FETCH ") {
             let set = rest.split_whitespace().next().unwrap();
             let with_body = rest.contains("BODY.PEEK[]");
-            self.fetch_commands += 1;
+            let flags_only = rest.ends_with("(UID FLAGS)");
+            if flags_only && let Some((uid, flags)) = self.change_flags_on_refetch.take() {
+                self.flags.insert(uid, flags);
+            }
+            if !flags_only {
+                self.fetch_commands += 1;
+            }
             let mut reply = String::new();
             let requested = set.split(',').flat_map(|item| {
                 let (low, high) = item.split_once(':').unwrap_or((item, item));
                 low.parse::<u64>().unwrap()..=high.parse::<u64>().unwrap()
             });
             for uid in requested {
-                self.fetched.push(uid);
+                if !flags_only {
+                    self.fetched.push(uid);
+                }
                 let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
                 let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
                 let body = if with_body {
@@ -111,6 +121,10 @@ impl FolderServer {
                     .get(&uid)
                     .map(|flags| format!("FLAGS ({flags}) "))
                     .unwrap_or_default();
+                if flags_only {
+                    reply.push_str(&format!("* {sequence} FETCH (UID {uid} {flags})\r\n"));
+                    continue;
+                }
                 reply.push_str(&format!(
                     "* {sequence} FETCH (UID {uid} {flags}RFC822.SIZE 10 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n{header}{body})\r\n",
                     header.len()
@@ -262,7 +276,7 @@ fn sparse_historical_uid_space_does_not_create_empty_search_windows() {
     let mut server = FolderServer::new(&[4_294_967_295], 9, 4_294_967_296);
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     assert_eq!(scan(&mut stage, &mut server), 1);
-    assert_eq!(server.uid_enumeration_commands, 1);
+    assert_eq!(server.uid_enumeration_commands, 2);
     assert_eq!(staged_uids(&stage), vec![4_294_967_295]);
 }
 
@@ -375,6 +389,27 @@ fn flags_only_change_between_checkpoint_and_resume_is_refetched() {
     let flags = message.flags.as_deref().unwrap();
     assert!(flags.contains("\\Seen"));
     assert!(flags.contains("$clienttag"));
+}
+
+#[test]
+fn flags_mutation_during_scan_discards_pass_and_retries_with_fresh_flags() {
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    let mut server = FolderServer::new(&[1], 7, 2);
+    server.flags.insert(1, "".into());
+    server.change_flags_on_refetch = Some((1, "\\Seen $ClientTag".into()));
+
+    scan(&mut stage, &mut server);
+
+    let messages = stage.all_messages(SIDE).unwrap();
+    let message = messages
+        .iter()
+        .find(|(key, _)| key.uid == "1")
+        .map(|(_, message)| message)
+        .unwrap();
+    let flags = message.flags.as_deref().unwrap();
+    assert!(flags.contains("\\Seen"));
+    assert!(flags.contains("$clienttag"));
+    assert_eq!(server.fetch_commands, 2, "changed pass is retried");
 }
 
 #[test]
