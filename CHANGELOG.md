@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Document service-identity keyring validation and credential rotation,
+  revocation, export, crash-residue, and policy-administration procedures;
+  clarify that systemd hardening does not isolate the engine from the worker UID.
 - Allow `=` in typed folder-mapping destinations; retain the engine-required
   restriction on source names and explain it precisely.
 - Version post-migration report artifacts as v2 and encode an unrecorded

@@ -139,3 +139,8 @@ The `fleet-status` command is a read-only aggregation of separate local
 ledgers; it is not a scheduler, worker registry, heartbeat service, remote
 pause/resume mechanism, or distributed ownership protocol. Do not place the
 SQLite ledgers on shared storage or run multiple controllers against one ledger.
+
+Follow the [credential lifecycle runbook](distribution/CREDENTIAL-LIFECYCLE.md)
+for planned rotation, provider-side revocation, export-file handling, and
+abandoned temporary credentials. Local keyring deletion is not provider grant
+revocation.

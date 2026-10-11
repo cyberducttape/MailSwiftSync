@@ -72,6 +72,12 @@ Before starting the service, confirm the operational hand-off:
   reference. Passwords and OAuth tokens are never restored from the SQLite
   ledger, and a queue containing only transient in-memory credentials will
   remain blocked until an operator provisions credentials again.
+- Verify the keyring backend can retrieve each required credential as
+  `mailswiftsync` under this exact unit sandbox, including after a service
+  restart/reboot. Desktop-session keyring access must not be assumed. Run an
+  authenticated read-only preflight under the service identity before
+  admitting live work. If that backend cannot be made reliably available, do
+  not treat keyring references as provisioned for unattended service use.
 - The service account can access the approved engine executable, runtime
   directory, ledger, and any explicitly configured trust bundle, but not
   unrelated customer files.
@@ -124,3 +130,10 @@ The supervisor treats transient SQLite lock/busy responses during its polling
 read as contention and waits for the next poll interval. It still exits on
 malformed, unavailable, or permission-denied ledgers so a service manager can
 raise a genuine storage incident instead of masking it as a retry.
+
+Credential setup, rotation, revocation, exported refresh-config handling, and
+crash-residue response are specified in
+[CREDENTIAL-LIFECYCLE.md](CREDENTIAL-LIFECYCLE.md). The controller and engine
+share the service UID; systemd restrictions narrow filesystem and kernel
+access but do not isolate a compromised engine from credentials accessible to
+that account.
