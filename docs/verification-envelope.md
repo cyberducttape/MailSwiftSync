@@ -88,13 +88,14 @@ transfer process. While verification is incomplete, its private SQLite stage
 retains one cursor per source and destination folder containing the folder
 snapshot (`UIDVALIDITY`, `UIDNEXT`, and `EXISTS`), the last staged UID, a
 completion flag, and the staged-row count. Each metadata or body-fingerprint
-page is committed before its cursor advances. A restart reuses only a cursor
-whose complete snapshot still matches the server; however, mutable FLAGS are
-never reused as evidence, so a matching cursor causes that folder to be
-rescanned from its first page. If the snapshot differs, the folder is
-discarded and rescanned as well. This means a controller interruption during
-verification does not require the transfer engine to start over while avoiding
-stale flag-only results.
+page is committed before its cursor advances. On restart, a matching cursor
+confirms that the folder generation is still compatible, but its staged rows
+are discarded and the folder is rescanned from its first page. A changed
+snapshot also invalidates the staged rows and triggers the same full rescan.
+The cursor is recovery metadata; it does not authorize skipping saved pages,
+because mutable FLAGS can change without changing the snapshot values. This
+means a controller interruption during verification does not require the
+transfer engine to start over and cannot reuse stale flag-only results.
 
 The current implementation deliberately chooses this safe full-folder refetch
 because it does not yet persist or negotiate `CONDSTORE`/`HIGHESTMODSEQ`

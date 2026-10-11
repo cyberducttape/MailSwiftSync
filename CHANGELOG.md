@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clarify that verification restart cursors record folder context but do not
+  reuse staged message rows; mutable flags require a full folder rescan.
 - Redact embedded URI userinfo in opt-in diagnostic transcripts while
   preserving endpoint hosts and paths for troubleshooting.
 - Size the Mailboxes state column for the widest translated status badge so
