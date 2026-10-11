@@ -3291,6 +3291,46 @@ fn verification_admission_rejects_an_active_conflicting_destination() {
 }
 
 #[test]
+fn verification_admission_rejects_another_active_verification_on_same_destination() {
+    let db = StateStore::in_memory().unwrap();
+    let first_project = db
+        .create_project("verification-lock-first", "source-a", "destination")
+        .unwrap();
+    let first_job = db
+        .add_mailbox(&first_project.id, "source-a", "User@example.test")
+        .unwrap();
+    let second_project = db
+        .create_project("verification-lock-second", "source-b", "destination")
+        .unwrap();
+    let second_job = db
+        .add_mailbox(&second_project.id, "source-b", "user@example.test")
+        .unwrap();
+
+    db.begin_verification_run(
+        &first_project.id,
+        &first_job,
+        "active-verification",
+        "snapshot",
+    )
+    .unwrap();
+
+    assert!(
+        db.begin_verification_run(
+            &second_project.id,
+            &second_job,
+            "blocked-verification-same-destination",
+            "snapshot",
+        )
+        .is_err()
+    );
+    assert_eq!(
+        db.run_status("blocked-verification-same-destination")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
 fn project_report_snapshot_loads_related_rows_as_one_read_model() {
     let db = StateStore::in_memory().unwrap();
     let project = db
