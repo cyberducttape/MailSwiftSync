@@ -107,7 +107,7 @@ evidence = "Plan risk assessment now shows observed source/destination quota fac
 [[production_features]]
 feature = "Independent verification-only workflow"
 status = "partial"
-evidence = "The reverify command runs mailbox-level metadata or bounded content verification without rerunning the transfer engine, preserves the original migration result, records separate evidence history, and exports differences; batch orchestration and persistent verification segments remain open."
+evidence = "The reverify command runs mailbox-level metadata or bounded content verification without rerunning the transfer engine, preserves the original migration result, records separate evidence history, and exports differences; bounded serial reverify-batch orchestration is available with per-mailbox results, while persistent verification segments, cross-mailbox leases/snapshots, and fleet orchestration remain open."
 
 [[production_features]]
 feature = "Migration readiness score"
