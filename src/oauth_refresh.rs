@@ -9,6 +9,8 @@
 //! on an expired token that only the operator could previously replace by
 //! hand. Refresh-token rotation (a provider issuing a new refresh token with
 //! every exchange) is honored and persisted by the caller.
+pub(crate) mod durable;
+
 use crate::credentials::SecretString;
 use serde::{Deserialize, Serialize};
 use std::{

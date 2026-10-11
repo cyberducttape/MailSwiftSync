@@ -43,6 +43,8 @@ mod queue;
 mod recovery;
 pub(crate) mod recovery_dashboard;
 mod recovery_queue;
+mod report_export;
+pub use report_export::ProjectExportReader;
 mod reports;
 mod run_queries;
 mod runs;
@@ -156,6 +158,48 @@ impl StateStore {
             [project_id],
         )?;
         Ok(())
+    }
+    /// Bulk-load a completed, verified project for export benchmarks: each
+    /// mailbox gets `runs_per_mailbox` completed runs carrying a distinct
+    /// plan snapshot of realistic size, and exact metadata evidence on the
+    /// last one. Plain SQL keeps a 100,000-mailbox fixture to seconds.
+    #[cfg(test)]
+    pub(crate) fn insert_export_benchmark_fixture_for_test(
+        &self,
+        project_id: &str,
+        mailboxes: usize,
+        runs_per_mailbox: usize,
+    ) -> rusqlite::Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        {
+            let mut job = tx.prepare(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?4,'verified')",
+            )?;
+            let mut run = tx.prepare(
+                "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at) VALUES(?1,?2,?3,'imapsync','migration',?4,'completed',?5,?5)",
+            )?;
+            let mut evidence = tx.prepare(
+                "INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,run_id) VALUES(?1,'metadata_reconciliation','exact_metadata_match',1000,1000,100000,100000,0,0,5,5,0,?2)",
+            )?;
+            let padding = "x".repeat(1_800);
+            for index in 0..mailboxes {
+                let job_id = format!("job-{index}");
+                let source = format!("user{index}@source.example");
+                let destination = format!("user{index}@destination.example");
+                job.execute(params![job_id, project_id, source, destination])?;
+                let snapshot = format!(
+                    "dry_run = false\n\n[profile]\nname = \"benchmark\"\nsource_user = \"{source}\"\n# {padding}\n"
+                );
+                let mut last_run = String::new();
+                for pass in 0..runs_per_mailbox {
+                    last_run = format!("run-{index}-{pass}");
+                    let started = format!("2026-10-01 00:{:02}:{:02}", pass % 60, index % 60);
+                    run.execute(params![last_run, project_id, job_id, snapshot, started])?;
+                }
+                evidence.execute(params![job_id, last_run])?;
+            }
+        }
+        tx.commit()
     }
     #[cfg(test)]
     pub(crate) fn insert_run_for_test(

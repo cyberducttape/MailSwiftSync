@@ -299,6 +299,11 @@ mailswiftsync sign path/to/mailswiftsync-project-report.json path/to/operator-ke
 mailswiftsync verify path/to/mailswiftsync-project-report.json <public-key-hex>
 ```
 
+Signing and verification stream the file, so fleet-scale proofs (up to 1 GiB)
+do not need to fit in memory. A signed payload up to 32 MiB carries a pure
+`Ed25519` signature over the canonical JSON; a larger one is signed as
+`Ed25519-SHA256`, Ed25519 over the SHA-256 digest of the same canonical bytes.
+
 For a completed project, `mailswiftsync certificate` emits a signed
 Migration Certificate containing the migration ID, customer, engine and plan
 hashes, mailbox totals, aggregate message totals, verification level, and
