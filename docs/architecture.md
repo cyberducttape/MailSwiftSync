@@ -130,14 +130,18 @@ by streaming: each mailbox and run entry is generated and serialized one at a
 time, first into a SHA-256 hasher over the canonical compact, key-sorted JSON
 and then into the private, atomically replaced file, so the digest is
 identical to hashing the whole document in memory while only one entry is
-resident. Generated proof files are bounded to the same 32 MiB envelope used
-by verification and signing; oversized exports fail closed. A customer proof
-entry is about 1.8 KiB per mailbox plus 0.5 KiB per run, so that envelope
-holds roughly 14,000 single-run mailboxes; larger projects cannot export a
-customer proof or project JSON until verification and signing stream the file
-instead of parsing it whole. The ledger
-snapshot the entries are derived from is still loaded in full; verification
-and signing of an existing proof parse the whole file.
+resident. The rows come from `StateStore::project_export_reader`, which pins
+one SQLite read transaction so the aggregate, digest, and file passes all see
+the same commit without loading the project. Verification and signing read a
+proof through `reports::canonical`, which canonicalizes it as it is parsed and
+spills large members (the mailbox and run arrays) to a private file, so they
+do not hold the document in memory either. Proof files are bounded at 1 GiB.
+Signed payloads up to 32 MiB keep a pure Ed25519 signature over the canonical
+bytes; larger ones are signed as `Ed25519-SHA256` (Ed25519 over the SHA-256 of
+the same bytes). A release benchmark of 100,000 mailboxes with 300,000 runs
+produces a 341 MiB customer proof in 36 s with 15 MiB of memory growth and
+verifies it in 64 s with no measurable growth
+(`customer_proof_export_memory_benchmark`).
 
 Each run also stores the project phase observed at admission. This is immutable
 provenance for reports and incident review, not a claim that the current engine

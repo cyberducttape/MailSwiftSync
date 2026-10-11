@@ -2,7 +2,6 @@ use super::*;
 
 const MAX_REPORT_PAGE_ROWS: u32 = 1_000;
 const MAX_REPORT_SNAPSHOT_MAILBOXES: i64 = 100_000;
-const MAX_REPORT_SNAPSHOT_RUNS: i64 = 100_000;
 
 impl StateStore {
     pub fn project_report_snapshot(
@@ -10,17 +9,6 @@ impl StateStore {
         project_id: &str,
     ) -> rusqlite::Result<Option<ProjectReportSnapshot>> {
         self.project_report_snapshot_with_run_limit(project_id, 20)
-    }
-
-    /// Build the complete report read model for an export. Interactive and
-    /// controller projections deliberately use a recent-run window, but an
-    /// exported manifest must not claim completeness while silently omitting
-    /// historical runs.
-    pub fn complete_project_report_snapshot(
-        &self,
-        project_id: &str,
-    ) -> rusqlite::Result<Option<ProjectReportSnapshot>> {
-        self.project_report_snapshot_with_run_limit(project_id, MAX_REPORT_SNAPSHOT_RUNS)
     }
 
     fn project_report_snapshot_with_run_limit(
@@ -69,22 +57,6 @@ impl StateStore {
                     std::io::ErrorKind::InvalidData,
                     format!(
                         "project report contains {mailbox_count} mailboxes; report exports are limited to {MAX_REPORT_SNAPSHOT_MAILBOXES}"
-                    ),
-                ),
-            )));
-        }
-
-        let run_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM runs WHERE project_id=?1",
-            [project_id],
-            |row| row.get(0),
-        )?;
-        if run_limit >= MAX_REPORT_SNAPSHOT_RUNS && run_count > run_limit {
-            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "project report contains {run_count} runs; complete report exports are limited to {MAX_REPORT_SNAPSHOT_RUNS}"
                     ),
                 ),
             )));

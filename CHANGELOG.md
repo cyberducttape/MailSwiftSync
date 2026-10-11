@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Stream complete proof exports from a pinned ledger snapshot instead of
+  loading every mailbox and run: the 100,000-run export ceiling is gone, and
+  a 100,000-mailbox, 300,000-run customer proof (341 MiB) exports in 36 s
+  with 15 MiB of memory growth.
+- Verify and sign proofs by streaming canonicalization with a private spill
+  file; the proof cap rises from 32 MiB (about 14,000 mailboxes) to 1 GiB, and
+  a 341 MiB proof verifies with no measurable memory growth. Signed payloads
+  above 32 MiB use `Ed25519-SHA256`; smaller ones keep pure `Ed25519`, and the
+  qualification verifier script accepts both. Signed output is compact
+  canonical JSON.
+- Fix per-mailbox verification reports for any project with more than 20
+  runs: the evidence run was looked up among only the 20 most recent runs,
+  so older mailboxes reported "The evidence refers to a run that is no
+  longer available". The report now reads just that mailbox and run.
+- Move credential-directory owner locks beside the run directory instead of
+  inside it; Windows treats byte-range locks as mandatory, so a locked file
+  inside blocked listing, renaming, and removing the directory.
+
 - Protect live credential directories across processes: every `run-*`
   secret directory now holds an owner lock for its lifetime, and startup or
   `recover` cleanup skips directories another live MailSwiftSync process

@@ -1,33 +1,89 @@
-use crate::atomic_artifact::write_private_atomic;
-use crate::{
-    plan_identity::snapshot_sha256 as plan_snapshot_sha256,
-    reports::integrity::{
-        MAX_PROOF_BYTES, canonical_signed_proof_payload, hex_decode, hex_encode, with_proof_digest,
-    },
+use crate::atomic_artifact::write_private_atomic_with;
+use crate::reports::{
+    canonical::{HashWriter, ProofDocument, Sink},
+    integrity::{MAX_PROOF_BYTES, hex_decode, hex_encode},
 };
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use std::{io::Read, path::Path};
 
 const MAX_SIGNING_KEY_BYTES: u64 = 64 * 1024;
 
-fn read_proof_file(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_PROOF_BYTES {
-        return Err(format!(
-            "migration proof exceeds the {MAX_PROOF_BYTES}-byte limit"
-        ));
+/// Payloads up to this size keep the original pure-Ed25519 signature over
+/// the canonical bytes, which external verifiers already accept. Larger
+/// payloads are signed as `Ed25519-SHA256`: Ed25519 over the SHA-256 digest
+/// of the same canonical bytes, so neither side needs the payload in memory.
+const MAX_PURE_ED25519_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
+const PURE_ED25519: &str = "Ed25519";
+const PREHASHED_ED25519: &str = "Ed25519-SHA256";
+
+#[cfg(test)]
+thread_local! {
+    static PURE_SIGNATURE_LIMIT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Largest payload signed with pure Ed25519; tests lower it to exercise the
+/// prehashed form without building a 32 MiB proof.
+fn pure_signature_limit() -> u64 {
+    #[cfg(test)]
+    if let Some(limit) = PURE_SIGNATURE_LIMIT.with(std::cell::Cell::get) {
+        return limit;
     }
-    let mut text = String::new();
-    std::io::Read::by_ref(&mut file)
-        .take(MAX_PROOF_BYTES + 1)
-        .read_to_string(&mut text)
-        .map_err(|error| error.to_string())?;
-    if text.len() as u64 > MAX_PROOF_BYTES {
-        return Err(format!(
-            "migration proof exceeds the {MAX_PROOF_BYTES}-byte limit"
-        ));
+    MAX_PURE_ED25519_PAYLOAD_BYTES
+}
+
+fn read_proof(path: &Path) -> Result<ProofDocument, String> {
+    ProofDocument::read(path, MAX_PROOF_BYTES)
+}
+
+fn string_field(document: &ProofDocument, key: &str) -> Result<Option<String>, String> {
+    Ok(document
+        .value(key)?
+        .and_then(|value| value.as_str().map(str::to_owned)))
+}
+
+/// The canonical bytes a signature covers: the document with the signature
+/// object minus its `signature` value.
+fn signed_payload_replacement(signature: &serde_json::Value) -> Result<Vec<u8>, String> {
+    let mut unsigned = signature.clone();
+    unsigned
+        .as_object_mut()
+        .ok_or("Migration proof signature must be an object.")?
+        .remove("signature");
+    serde_json::to_vec(&unsigned).map_err(|error| error.to_string())
+}
+
+/// The message handed to Ed25519 for a signature algorithm.
+fn signature_message(
+    document: &ProofDocument,
+    algorithm: &str,
+    payload_replacement: &[u8],
+) -> Result<Vec<u8>, String> {
+    let replace = Some(("proof_signature", payload_replacement));
+    match algorithm {
+        PURE_ED25519 => {
+            let length = document
+                .write_canonical(&mut Sink, &[], replace)
+                .map_err(|error| error.to_string())?;
+            if length > MAX_PURE_ED25519_PAYLOAD_BYTES {
+                return Err(format!(
+                    "Migration proof payload exceeds the {MAX_PURE_ED25519_PAYLOAD_BYTES}-byte limit for an {PURE_ED25519} signature."
+                ));
+            }
+            let mut payload = Vec::with_capacity(length as usize);
+            document
+                .write_canonical(&mut payload, &[], replace)
+                .map_err(|error| error.to_string())?;
+            Ok(payload)
+        }
+        PREHASHED_ED25519 => {
+            let mut hasher = HashWriter::default();
+            document
+                .write_canonical(&mut hasher, &[], replace)
+                .map_err(|error| error.to_string())?;
+            Ok(sha2::Digest::finalize(hasher.0).to_vec())
+        }
+        _ => Err("Unsupported migration proof signature algorithm.".into()),
     }
-    Ok(text)
 }
 
 #[cfg(unix)]
@@ -280,70 +336,72 @@ pub(crate) fn sign_file_to(
     };
     let key_pair = Ed25519KeyPair::from_pkcs8(&key_bytes)
         .map_err(|_| "signing key is not a supported Ed25519 PKCS#8 key".to_owned())?;
-    let text = read_proof_file(path)?;
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
-    let mut value = with_proof_digest(value)?;
+    let mut document = read_proof(path)?;
+    // Re-digest exactly as `with_proof_digest`: a prior signature is metadata,
+    // not part of the signed report.
+    document.remove("proof_signature");
+    document.set("proof_digest", &document.digest()?.into());
     if certificate {
-        let completion_status = value
-            .get("completion_claim")
-            .and_then(|claim| claim.get("status"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
-        let object = value
-            .as_object_mut()
-            .ok_or("Migration proof must be a JSON object.")?;
-        if object.get("format").and_then(serde_json::Value::as_str)
-            != Some("mailswiftsync-customer-proof")
-        {
+        if string_field(&document, "format")?.as_deref() != Some("mailswiftsync-customer-proof") {
             return Err("Migration certificate requires a customer-proof artifact.".into());
         }
+        let completion_status = document
+            .value("completion_claim")?
+            .and_then(|claim| claim.get("status")?.as_str().map(str::to_owned));
         if completion_status.as_deref() != Some("durably_complete") {
             return Err("Migration certificate requires durable project completion.".into());
         }
-        object.insert(
-            "artifact_role".into(),
-            serde_json::Value::String("signed_migration_certificate".into()),
-        );
-        object.insert(
-            "certificate".into(),
-            serde_json::json!({
+        document.set("artifact_role", &"signed_migration_certificate".into());
+        document.set(
+            "certificate",
+            &serde_json::json!({
                 "type": "authenticated_durable_migration_evidence",
                 "issued_at": chrono::Utc::now().to_rfc3339(),
                 "independent_message_level_attestation": false,
                 "note": "This certificate authenticates the exported durable ledger evidence and signer. It does not replace per-message reconciliation or provider-independent audit review."
             }),
         );
-        value = with_proof_digest(value)?;
+        document.set("proof_digest", &document.digest()?.into());
     }
     let public_key = hex_encode(key_pair.public_key().as_ref());
-    value
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?
-        .insert(
-            "proof_signature".into(),
-            serde_json::json!({
-                "algorithm": "Ed25519",
-                "key_id": key_id,
-                "public_key": public_key,
-                "signature": "",
-            }),
-        );
-    let payload = canonical_signed_proof_payload(&value)?;
-    let signature = key_pair.sign(payload.as_bytes());
-    let object = value
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?;
-    object
-        .get_mut("proof_signature")
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or("Migration proof signature must be an object.")?
-        .insert(
-            "signature".into(),
-            serde_json::Value::String(hex_encode(signature.as_ref())),
-        );
-    let output = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-    write_private_atomic(output_path, &output).map_err(|error| error.to_string())?;
+    let unsigned_signature = |algorithm: &str| {
+        serde_json::json!({
+            "algorithm": algorithm,
+            "key_id": key_id,
+            "public_key": public_key,
+            "signature": "",
+        })
+    };
+    // Keep the widely verifiable pure signature whenever the payload fits.
+    let pure_payload_length = document
+        .write_canonical(
+            &mut Sink,
+            &[],
+            Some((
+                "proof_signature",
+                &signed_payload_replacement(&unsigned_signature(PURE_ED25519))?,
+            )),
+        )
+        .map_err(|error| error.to_string())?;
+    let algorithm = if pure_payload_length <= pure_signature_limit() {
+        PURE_ED25519
+    } else {
+        PREHASHED_ED25519
+    };
+    let mut signature_value = unsigned_signature(algorithm);
+    let message = signature_message(
+        &document,
+        algorithm,
+        &signed_payload_replacement(&signature_value)?,
+    )?;
+    let signature = key_pair.sign(&message);
+    drop(message);
+    signature_value["signature"] = serde_json::Value::String(hex_encode(signature.as_ref()));
+    document.set("proof_signature", &signature_value);
+    write_private_atomic_with(output_path, |file| {
+        document.write_canonical(file, &[], None).map(drop)
+    })
+    .map_err(|error| error.to_string())?;
     if certificate {
         Ok(format!(
             "Created signed migration certificate with key {key_id}"
@@ -354,14 +412,14 @@ pub(crate) fn sign_file_to(
 }
 
 pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Result<String, String> {
-    let text = read_proof_file(path)?;
-    let mut value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
-    let format = value
-        .get("format")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("Migration proof is missing format.")?
-        .to_owned();
+    verify_document(&read_proof(path)?, trusted_public_key)
+}
+
+fn verify_document(
+    document: &ProofDocument,
+    trusted_public_key: Option<&str>,
+) -> Result<String, String> {
+    let format = string_field(document, "format")?.ok_or("Migration proof is missing format.")?;
     if !matches!(
         format.as_str(),
         "mailswiftsync-project-report"
@@ -370,40 +428,23 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
     ) {
         return Err("Unsupported migration proof format.".into());
     }
-    let signature = value.get("proof_signature").cloned();
-    let expected = value
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?
-        .remove("proof_digest")
-        .and_then(|digest| digest.as_str().map(str::to_owned))
+    let expected = string_field(document, "proof_digest")?
         .ok_or("Migration proof is missing proof_digest.")?;
-    let mut digest_value = value.clone();
-    digest_value
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?
-        .remove("proof_signature");
-    let canonical = serde_json::to_string(&digest_value).map_err(|error| error.to_string())?;
-    let actual = plan_snapshot_sha256(&canonical);
+    let actual = document.digest()?;
     if expected != actual {
         return Err(format!(
             "Migration proof digest mismatch: expected {expected}, calculated {actual}."
         ));
     }
-    value
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?
-        .insert("proof_digest".into(), serde_json::Value::String(expected));
-    if let Some(signature_value) = signature {
+    if let Some(signature_value) = document.value("proof_signature")? {
         let signature_object = signature_value
             .as_object()
             .ok_or("Migration proof signature must be an object.")?;
-        if signature_object
+        let algorithm = signature_object
             .get("algorithm")
             .and_then(serde_json::Value::as_str)
-            != Some("Ed25519")
-        {
-            return Err("Unsupported migration proof signature algorithm.".into());
-        }
+            .filter(|algorithm| matches!(*algorithm, PURE_ED25519 | PREHASHED_ED25519))
+            .ok_or("Unsupported migration proof signature algorithm.")?;
         let public_key = hex_decode::<32>(
             signature_object
                 .get("public_key")
@@ -423,9 +464,13 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
                 .and_then(serde_json::Value::as_str)
                 .ok_or("Migration proof signature is missing signature.")?,
         )?;
-        let payload = canonical_signed_proof_payload(&value)?;
+        let message = signature_message(
+            document,
+            algorithm,
+            &signed_payload_replacement(&signature_value)?,
+        )?;
         UnparsedPublicKey::new(&ED25519, public_key)
-            .verify(payload.as_bytes(), &signature)
+            .verify(&message, &signature)
             .map_err(|_| "Migration proof signature verification failed.".to_owned())?;
         let key_id = signature_object
             .get("key_id")
@@ -437,7 +482,7 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
             "signer identity is not trust-pinned"
         };
         return Ok(format!(
-            "Migration proof integrity verified: {actual}; Ed25519 signature valid for key {key_id}; {trust_message}; this validates the {format} artifact and signer, not independent migration completion"
+            "Migration proof integrity verified: {actual}; {algorithm} signature valid for key {key_id}; {trust_message}; this validates the {format} artifact and signer, not independent migration completion"
         ));
     }
     // A pinned signer asks "was this signed by that key?". An unsigned
@@ -460,48 +505,34 @@ pub(crate) fn verify_certificate_file(
     path: &Path,
     trusted_public_key: Option<&str>,
 ) -> Result<String, String> {
-    let text = read_proof_file(path)?;
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| format!("Invalid migration certificate JSON: {error}"))?;
-    if value.get("format").and_then(serde_json::Value::as_str)
-        != Some("mailswiftsync-customer-proof")
-    {
+    let document = read_proof(path)?;
+    if string_field(&document, "format")?.as_deref() != Some("mailswiftsync-customer-proof") {
         return Err("Migration certificate must use the customer-proof format.".into());
     }
-    if value
-        .get("artifact_role")
-        .and_then(serde_json::Value::as_str)
-        != Some("signed_migration_certificate")
+    if string_field(&document, "artifact_role")?.as_deref() != Some("signed_migration_certificate")
     {
         return Err("Artifact is not a signed migration certificate.".into());
     }
-    if value
-        .get("certificate")
-        .and_then(|certificate| certificate.get("type"))
-        .and_then(serde_json::Value::as_str)
+    if document
+        .value("certificate")?
+        .and_then(|certificate| certificate.get("type")?.as_str().map(str::to_owned))
+        .as_deref()
         != Some("authenticated_durable_migration_evidence")
     {
         return Err("Migration certificate metadata is missing or unsupported.".into());
     }
-    if value
-        .get("completion_claim")
-        .and_then(|claim| claim.get("status"))
-        .and_then(serde_json::Value::as_str)
+    if document
+        .value("completion_claim")?
+        .and_then(|claim| claim.get("status")?.as_str().map(str::to_owned))
+        .as_deref()
         != Some("durably_complete")
     {
         return Err("Migration certificate is not marked durably complete.".into());
     }
-    let Some(signature) = value.get("proof_signature") else {
+    if !document.contains("proof_signature") {
         return Err("Migration certificate is unsigned; an Ed25519 signature is required.".into());
-    };
-    if signature
-        .get("algorithm")
-        .and_then(serde_json::Value::as_str)
-        != Some("Ed25519")
-    {
-        return Err("Migration certificate must use an Ed25519 signature.".into());
     }
-    verify_file(path, trusted_public_key)
+    verify_document(&document, trusted_public_key)
 }
 
 #[cfg(all(test, unix))]
@@ -542,5 +573,78 @@ mod tests {
 
         fs::remove_file(link).unwrap();
         fs::remove_file(target).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod prehashed_signature_tests {
+    use super::{PREHASHED_ED25519, PURE_ED25519, PURE_SIGNATURE_LIMIT, sign_file, verify_file};
+    use ring::signature::KeyPair;
+
+    fn signing_fixture() -> (std::path::PathBuf, std::path::PathBuf, String) {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let proof_path = directory.join("proof.json");
+        let proof = crate::reports::integrity::with_proof_digest(serde_json::json!({
+            "format": "mailswiftsync-project-report",
+            "project": {"name": "Large migration"},
+            "mailboxes": (0..50).map(|index| serde_json::json!({"id": index})).collect::<Vec<_>>(),
+        }))
+        .unwrap();
+        std::fs::write(&proof_path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+        let key = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .unwrap();
+        let key_path = directory.join("signing-key.pk8");
+        let mut key_file = crate::credentials::open_secret_file(&key_path).unwrap();
+        std::io::Write::write_all(&mut key_file, key.as_ref()).unwrap();
+        drop(key_file);
+        let public_key = crate::reports::integrity::hex_encode(
+            ring::signature::Ed25519KeyPair::from_pkcs8(key.as_ref())
+                .unwrap()
+                .public_key()
+                .as_ref(),
+        );
+        (proof_path, key_path, public_key)
+    }
+
+    #[test]
+    fn payloads_above_the_pure_limit_are_signed_over_their_digest() {
+        let (proof_path, key_path, public_key) = signing_fixture();
+        let directory = proof_path.parent().unwrap().to_owned();
+        let _cleanup = crate::credentials::CleanupGuard::new(vec![directory]);
+
+        PURE_SIGNATURE_LIMIT.with(|limit| limit.set(Some(0)));
+        let signed = sign_file(&proof_path, &key_path, "large-key");
+        PURE_SIGNATURE_LIMIT.with(|limit| limit.set(None));
+        if let Err(error) = signed {
+            // Hosted Windows runners cannot always satisfy the key ACL check.
+            if cfg!(windows) {
+                return;
+            }
+            panic!("{error}");
+        }
+        let certificate: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&proof_path).unwrap()).unwrap();
+        assert_eq!(
+            certificate["proof_signature"]["algorithm"],
+            PREHASHED_ED25519
+        );
+        let message = verify_file(&proof_path, Some(&public_key)).unwrap();
+        assert!(
+            message.contains("Ed25519-SHA256 signature valid"),
+            "{message}"
+        );
+
+        let mut tampered = certificate.clone();
+        tampered["mailboxes"][7]["id"] = 700.into();
+        std::fs::write(&proof_path, serde_json::to_string(&tampered).unwrap()).unwrap();
+        assert!(verify_file(&proof_path, None).is_err());
+
+        // Re-signing a normal-sized proof returns to the pure algorithm.
+        std::fs::write(&proof_path, serde_json::to_string(&certificate).unwrap()).unwrap();
+        sign_file(&proof_path, &key_path, "small-key").unwrap();
+        let resigned: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&proof_path).unwrap()).unwrap();
+        assert_eq!(resigned["proof_signature"]["algorithm"], PURE_ED25519);
+        verify_file(&proof_path, Some(&public_key)).unwrap();
     }
 }

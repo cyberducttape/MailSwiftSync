@@ -175,11 +175,14 @@ fn create_secret_directory_at(base: &Path) -> Result<PathBuf, String> {
 }
 
 /// Every MailSwiftSync process of this user shares one runtime base, but the
-/// instance lock only covers one ledger. A run directory therefore carries an
+/// instance lock only covers one ledger. A run directory therefore has an
 /// owner lock held for as long as the creating process may use it, so startup
 /// cleanup in another process (another project, `recover`, a supervisor)
 /// never deletes the passfiles or OAuth refresh files of a live migration.
-const SECRET_DIRECTORY_OWNER_LOCK: &str = ".owner.lock";
+/// The lock is a sibling file (`run-<id>.owner`) rather than a file inside
+/// the directory: Windows byte-range locks are mandatory, and a locked file
+/// inside would block listing, renaming, and removing the directory.
+const SECRET_DIRECTORY_OWNER_EXTENSION: &str = "owner";
 
 fn secret_directory_owners()
 -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, fs::File>> {
@@ -187,6 +190,10 @@ fn secret_directory_owners()
         std::sync::Mutex<std::collections::HashMap<PathBuf, fs::File>>,
     > = std::sync::OnceLock::new();
     OWNERS.get_or_init(Default::default)
+}
+
+fn secret_directory_owner_path(directory: &Path) -> PathBuf {
+    directory.with_extension(SECRET_DIRECTORY_OWNER_EXTENSION)
 }
 
 fn open_secret_directory_owner_lock(directory: &Path, create: bool) -> std::io::Result<fs::File> {
@@ -203,7 +210,7 @@ fn open_secret_directory_owner_lock(directory: &Path, create: bool) -> std::io::
             .mode(0o600)
             .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
     }
-    options.open(directory.join(SECRET_DIRECTORY_OWNER_LOCK))
+    options.open(secret_directory_owner_path(directory))
 }
 
 fn claim_secret_directory(directory: &Path) -> std::io::Result<()> {
@@ -217,25 +224,23 @@ fn claim_secret_directory(directory: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Drop this process's owner lock before the directory is removed. Windows
-/// cannot delete a directory that still contains an open file.
+/// Drop this process's claim on a run directory and remove its owner lock.
 fn release_secret_directory(directory: &Path) {
-    secret_directory_owners()
+    let released = secret_directory_owners()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .remove(directory);
+    if released.is_some() {
+        drop(released);
+        let _ = fs::remove_file(secret_directory_owner_path(directory));
+    }
 }
 
-/// Remove a run directory that should otherwise be empty, together with its
+/// Remove a run directory that should otherwise be empty, releasing its
 /// owner lock. Like `fs::remove_dir`, it fails rather than deleting
 /// unexpected contents.
 pub fn remove_empty_secret_directory(directory: &Path) -> std::io::Result<()> {
     release_secret_directory(directory);
-    match fs::remove_file(directory.join(SECRET_DIRECTORY_OWNER_LOCK)) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
     fs::remove_dir(directory)
 }
 
@@ -427,9 +432,23 @@ fn cleanup_secret_directories(
                 continue;
             }
         };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // An owner lock whose run directory is gone is left by an exited
+        // process; remove it once no process holds it.
+        if file_type.is_file()
+            && name.starts_with("run-")
+            && let Some(directory) =
+                name.strip_suffix(&format!(".{SECRET_DIRECTORY_OWNER_EXTENSION}"))
+        {
+            let directory = base.join(directory);
+            if !directory.exists() && !secret_directory_in_use(&directory) {
+                let _ = fs::remove_file(&path);
+            }
+            continue;
+        }
         // Do not follow symlinks while deciding what cleanup routine owns.
         // A link named run-* is not a MailSwiftSync secret directory.
-        if !entry.file_name().to_string_lossy().starts_with("run-") || !file_type.is_dir() {
+        if !name.starts_with("run-") || !file_type.is_dir() {
             continue;
         }
         if secret_directory_in_use(&path) {
@@ -448,11 +467,15 @@ fn cleanup_secret_directories(
                 }
             },
         };
-        if eligible && let Err(error) = fs::remove_dir_all(&path) {
-            errors.push(format!(
-                "could not remove residual secret directory {}: {error}",
-                path.display()
-            ));
+        if eligible {
+            if let Err(error) = fs::remove_dir_all(&path) {
+                errors.push(format!(
+                    "could not remove residual secret directory {}: {error}",
+                    path.display()
+                ));
+            } else {
+                let _ = fs::remove_file(secret_directory_owner_path(&path));
+            }
         }
     }
     if errors.is_empty() {
@@ -1035,7 +1058,7 @@ mod tests {
         // Model another process: forget this process's claim, but keep the
         // owner lock held through an independent open file description.
         super::release_secret_directory(&theirs);
-        let other_process = super::open_secret_directory_owner_lock(&theirs, false).unwrap();
+        let other_process = super::open_secret_directory_owner_lock(&theirs, true).unwrap();
         other_process.try_lock_exclusive().unwrap();
 
         cleanup_reconciled_secret_directories(&base).unwrap();
@@ -1048,11 +1071,13 @@ mod tests {
         drop(other_process);
         cleanup_reconciled_secret_directories(&base).unwrap();
         assert!(!theirs.exists(), "an abandoned run directory is removed");
+        assert!(!super::secret_directory_owner_path(&theirs).exists());
         assert!(ours.exists());
 
         let mut guard = CleanupGuard::new(vec![ours.clone()]);
         guard.cleanup_now().unwrap();
         assert!(!ours.exists());
+        assert!(!super::secret_directory_owner_path(&ours).exists());
         fs::remove_dir(base).unwrap();
     }
 

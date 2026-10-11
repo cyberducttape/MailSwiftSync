@@ -175,14 +175,14 @@ pub(crate) fn export_project_json(
     project_id: &str,
     path: &std::path::Path,
 ) -> Result<(), String> {
-    let snapshot = store
-        .complete_project_report_snapshot(project_id)
+    let reader = store
+        .project_export_reader(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
-    if snapshot.mailboxes.is_empty() {
+    if !reader.has_mailboxes()? {
         return Err("The project has no mailbox jobs to report.".into());
     }
-    let project = &snapshot.project;
+    let project = reader.project();
     let mailbox_entry =
         |mailbox: &core::ReportMailboxSnapshot| -> Result<serde_json::Value, String> {
             let job = &mailbox.job;
@@ -291,16 +291,10 @@ pub(crate) fn export_project_json(
         fields,
         &[
             ("mailboxes", &|emit| {
-                snapshot
-                    .mailboxes
-                    .iter()
-                    .try_for_each(|mailbox| emit(mailbox_entry(mailbox)?))
+                reader.for_each_mailbox(|mailbox| emit(mailbox_entry(&mailbox)?))
             }),
             ("runs", &|emit| {
-                snapshot
-                    .runs
-                    .iter()
-                    .try_for_each(|run| emit(run_entry(run)))
+                reader.for_each_run(|run| emit(run_entry(&run)))
             }),
         ],
     )
@@ -352,31 +346,37 @@ pub(crate) fn build_post_migration_report_json(
     serde_json::to_string_pretty(&with_proof_digest(value)?).map_err(|e| e.to_string())
 }
 
+/// The project fields the single-mailbox verification report prints.
+struct ReportProject {
+    project: core::Project,
+}
+
 pub(crate) fn build_verification_report(
     store: &core::StateStore,
     project_id: &str,
     job_id: &str,
 ) -> Result<String, String> {
-    let snapshot = store
-        .project_report_snapshot(project_id)
+    // Read only this mailbox and its evidence run: the evidence run of an
+    // early mailbox is rarely among a large project's recent runs.
+    let reader = store
+        .project_export_reader(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The mailbox project no longer exists.")?;
-    let mailbox = snapshot
-        .mailboxes
-        .iter()
-        .find(|mailbox| mailbox.job.id == job_id)
+    let mailbox = reader
+        .mailbox(job_id)?
         .ok_or("The mailbox job no longer exists.")?;
     let (evidence_run_id, evidence, plan_snapshot) = mailbox
         .evidence
         .clone()
         .ok_or("No mailbox evidence is available yet.")?;
     let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
-    let run = snapshot
-        .runs
-        .iter()
-        .find(|run| run.run.id == evidence_run_id)
-        .map(|run| run.run.clone())
+    let run = reader
+        .run(&evidence_run_id)?
         .ok_or("The evidence refers to a run that is no longer available.")?;
+    let snapshot = ReportProject {
+        project: reader.project().clone(),
+    };
+    drop(reader);
     let snapshot_profile = decode_report_run_snapshot(&run.plan_snapshot)?.map(|run| run.profile);
     let source_endpoint = snapshot_profile
         .as_ref()
@@ -622,6 +622,12 @@ mod project_json_tests {
                 excepted_messages: 0,
             }),
         };
+        let plan_snapshot = crate::Form {
+            dry_run: false,
+            ..Default::default()
+        }
+        .plan_snapshot();
+        let mut first_job = None;
         for index in 0..21 {
             let job = store
                 .add_mailbox(
@@ -630,9 +636,10 @@ mod project_json_tests {
                     &format!("user{index}"),
                 )
                 .unwrap();
+            first_job.get_or_insert_with(|| job.clone());
             let run = format!("run-{index}");
             store
-                .begin_run_with_snapshot(&project.id, &job, &run, "imapsync", "dry_run = false\n")
+                .begin_run_with_snapshot(&project.id, &job, &run, "imapsync", &plan_snapshot)
                 .unwrap();
             store
                 .finish_run_for_mailbox_with_evidence(
@@ -671,6 +678,10 @@ mod project_json_tests {
             report["mailboxes"][0]["evidence"]["evidence_level"],
             "Aggregate match — not message-body proof"
         );
+        // The first mailbox's evidence run is older than the 20 most recent
+        // runs; its verification report must still find it.
+        let report = build_verification_report(&store, &project.id, &first_job.unwrap()).unwrap();
+        assert!(report.contains("`run-0`"), "{report}");
         let _ = std::fs::remove_dir_all(directory);
     }
 }
