@@ -264,13 +264,7 @@ fn is_lock_contention(error: &std::io::Error) -> bool {
     // ERROR_LOCK_VIOLATION. `fs2` exposes that Windows status as an `Other`
     // error rather than normalizing it to WouldBlock, so treat it as ordinary
     // contention and honor the same timeout/retry policy used on Unix.
-    #[cfg(windows)]
-    {
-        return matches!(error.raw_os_error(), Some(32 | 33));
-    }
-
-    #[cfg(not(windows))]
-    false
+    cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33))
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 |---|---|
 | Status | Technical Preview |
 | Package version | `0.1.0-alpha.1` |
-| SQLite schema version | `30` |
+| SQLite schema version | `31` |
 | Last reviewed | 2026-10-10 |
 | Qualified engine | `imapsync 2.314` |
 <!-- release-metadata:end -->
@@ -66,7 +66,7 @@ The authoritative release feature matrix is generated from `capabilities.toml`.
 | Independent verification-only workflow | partial | The reverify command runs mailbox-level metadata or bounded content verification without rerunning the transfer engine, preserves the original migration result, records separate evidence history, and exports differences; bounded serial reverify-batch orchestration is available with per-mailbox results, while persistent verification segments, cross-mailbox leases/snapshots, and fleet orchestration remain open. |
 | Migration readiness score | partial | The pre-migration risk report provides an advisory scale score from supplied message/folder/size facts and warns when documented metadata/body verification envelopes may be exceeded; live authentication, TLS, capacity, verification, maintenance-window, and provider-qualification checks remain separate hard gates. |
 | Automatic destination capacity checks | partial | Quota parsing, RFC 7889 APPENDLIMIT observation, explicit unknown-capacity warnings, and destination quota blocking exist where IMAP data is exposed; provider-wide capacity discovery is not qualified. |
-| Advanced typed folder mapping | partial | The advanced plan editor supports bounded exact source-to-destination mappings and source-folder exclusions; rules are immutable plan state, emitted as imapsync --f1f2/anchored --exclude arguments, and reused by independent verification. Explicit destination targets that collide after case folding are rejected to prevent unintended folder merges. Destination names may contain `=`; source names containing `=` remain unsupported by imapsync 2.314's `--f1f2` syntax. Provider-specific normalization and arbitrary regex transforms remain unsupported. |
+| Advanced typed folder mapping | partial | The advanced plan editor supports bounded exact source-to-destination mappings and source-folder exclusions; rules are immutable plan state, emitted as imapsync --f1f2/anchored --exclude arguments, and reused by independent verification. Explicit destination targets that collide after case folding are rejected to prevent unintended folder merges. Provider-specific normalization and arbitrary regex transforms remain unsupported. |
 | Executable cutover orchestration | partial | Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI with persisted schedule/window enforcement; external MX/DNS confirmation remains an explicit operator acknowledgement. |
 | Organization policy enforcement | partial | Owner-only organization-policy.toml enforcement covers TLS, destination mutation, minimum verification, global worker concurrency, and provider-endpoint/tenant/credential runtime ceilings at preflight and batch admission; provider quota discovery and role-scoped policy administration remain open. |
 | Durable signed webhook delivery | partial | HTTPS webhook delivery now has deterministic event IDs, idempotency headers, optional HMAC signatures, transaction-bound lifecycle event production, and a SQLite outbox with bounded retry/backoff/dead-letter state; notify-webhook --watch provides continuous operator-managed delivery while fleet-centralized management remains open. |

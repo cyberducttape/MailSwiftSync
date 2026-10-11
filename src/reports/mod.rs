@@ -3,6 +3,7 @@
 //! Reports depend on durable read models, not on egui state. Keeping this
 //! boundary explicit makes the GUI and CLI callers interchangeable.
 
+pub(crate) mod canonical;
 pub(crate) mod customer;
 pub(crate) mod integrity;
 pub(crate) mod operator;

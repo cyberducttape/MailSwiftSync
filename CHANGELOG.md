@@ -18,6 +18,46 @@
   are documented as recovery metadata, not reusable verification evidence.
 - Keep synthetic header fingerprints out of exact RFC Message-ID reconciliation. Persist RFC-ID and synthetic-candidate counts separately in evidence history and signed/report exports.
 - Upgrade ledger schema to v31 with nonnegative identity-provenance counters; prior ledgers migrate with zero-valued legacy counters.
+- Use a private local HMAC key for new OAuth rotation-recovery fingerprints while retaining one-time compatibility with existing version-1 SHA-256 recovery records.
+- Version customer proof exports as v2 to identify the expanded evidence fields, including identity provenance counts.
+
+- Run project report, project JSON, customer-proof, and health exports on a
+  background worker with its own read-only ledger connection; a fleet-scale
+  export no longer freezes the window, and a second export waits for the
+  first.
+
+- Stream complete proof exports from a pinned ledger snapshot instead of
+  loading every mailbox and run: the 100,000-run export ceiling is gone, and
+  a 100,000-mailbox, 300,000-run customer proof (341 MiB) exports in 36 s
+  with 15 MiB of memory growth.
+- Verify and sign proofs by streaming canonicalization with a private spill
+  file; the proof cap rises from 32 MiB (about 14,000 mailboxes) to 1 GiB, and
+  a 341 MiB proof verifies with no measurable memory growth. Signed payloads
+  above 32 MiB use `Ed25519-SHA256`; smaller ones keep pure `Ed25519`, and the
+  qualification verifier script accepts both. Signed output is compact
+  canonical JSON.
+- Fix per-mailbox verification reports for any project with more than 20
+  runs: the evidence run was looked up among only the 20 most recent runs,
+  so older mailboxes reported "The evidence refers to a run that is no
+  longer available". The report now reads just that mailbox and run.
+- Move credential-directory owner locks beside the run directory instead of
+  inside it; Windows treats byte-range locks as mandatory, so a locked file
+  inside blocked listing, renaming, and removing the directory.
+
+- Protect live credential directories across processes: every `run-*`
+  secret directory now holds an owner lock for its lifetime, and startup or
+  `recover` cleanup skips directories another live MailSwiftSync process
+  still owns. Previously a second instance on a different ledger deleted the
+  passfiles and OAuth refresh files of running migrations, breaking their
+  mid-run token refresh.
+- Serialize in-process OAuth launch refreshes with the same per-credential
+  cross-process lock the imapsync reconnect callback uses, and replay a
+  callback's durable rotation recovery before exchanging; concurrent batch
+  workers sharing a rotating refresh credential no longer spend the same
+  token or overwrite each other's rotation.
+- Drop a redundant second URI-userinfo pass from diagnostic line redaction.
+- Fix Windows-only clippy findings in the OAuth refresh guard, lock
+  contention check, and credential tests.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving
@@ -276,7 +316,7 @@
 - Keep 100k-row queues responsive after admission. Presented queue states
   probed `runs` for every row, so with one child run per mailbox each state
   change cost about 290 ms for queue counts and 410 ms for an all-selected
-  summary, freezing the first Mailboxes frame for about 760 ms. Schema v30
+  summary, freezing the first Mailboxes frame for about 760 ms. The queue-facts migration
   adds trigger-maintained run, queued-run, and acceptance counts to the queue
   facts, plus a covering index; counts, filters, selection summaries, and
   visible pages now read that projection (16 ms each, 49 ms first frame).

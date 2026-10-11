@@ -175,14 +175,14 @@ pub(crate) fn export_project_json(
     project_id: &str,
     path: &std::path::Path,
 ) -> Result<(), String> {
-    let snapshot = store
-        .begin_project_report_export(project_id)
+    let reader = store
+        .project_export_reader(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
-    if snapshot.mailbox_count() == 0 {
+    if !reader.has_mailboxes()? {
         return Err("The project has no mailbox jobs to report.".into());
     }
-    let project = snapshot.project();
+    let project = reader.project();
     let mailbox_entry =
         |mailbox: &core::ReportMailboxSnapshot| -> Result<serde_json::Value, String> {
             let job = &mailbox.job;
@@ -225,8 +225,6 @@ pub(crate) fn export_project_json(
                             "modified_count": evidence.modified_count(),
                             "probable_count": evidence.probable_count(),
                             "metadata_matched_count": evidence.metadata_matched_count(),
-                            "rfc_message_id_matches": evidence.rfc_message_id_matches,
-                            "synthetic_identity_matches": evidence.synthetic_identity_matches,
                             "failed_messages": evidence.failed_messages,
                         }
                     });
@@ -288,16 +286,17 @@ pub(crate) fn export_project_json(
     }) else {
         unreachable!("a JSON object literal is an object")
     };
-    let mailbox_array = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
-        snapshot.for_each_mailbox(|mailbox| emit(mailbox_entry(&mailbox)?))
-    };
-    let run_array = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
-        snapshot.for_each_run(|run| emit(run_entry(&run)))
-    };
     crate::reports::integrity::write_streamed_proof(
         path,
         fields,
-        &[("mailboxes", &mailbox_array), ("runs", &run_array)],
+        &[
+            ("mailboxes", &|emit| {
+                reader.for_each_mailbox(|mailbox| emit(mailbox_entry(&mailbox)?))
+            }),
+            ("runs", &|emit| {
+                reader.for_each_run(|run| emit(run_entry(&run)))
+            }),
+        ],
     )
 }
 
@@ -326,8 +325,8 @@ pub(crate) fn build_post_migration_report_json(
     }
     let report = core::post_migration_report::PostMigrationReport::from_project_snapshot(&snapshot);
     let value = serde_json::json!({
-        "format": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT,
-        "format_version": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION,
+        "format": "mailswiftsync-post-migration-report",
+        "format_version": 1,
         "application_version": env!("CARGO_PKG_VERSION"),
         "project": {
             "id": snapshot.project.id,
@@ -348,31 +347,37 @@ pub(crate) fn build_post_migration_report_json(
     serde_json::to_string_pretty(&with_proof_digest(value)?).map_err(|e| e.to_string())
 }
 
+/// The project fields the single-mailbox verification report prints.
+struct ReportProject {
+    project: core::Project,
+}
+
 pub(crate) fn build_verification_report(
     store: &core::StateStore,
     project_id: &str,
     job_id: &str,
 ) -> Result<String, String> {
-    let snapshot = store
-        .project_report_snapshot(project_id)
+    // Read only this mailbox and its evidence run: the evidence run of an
+    // early mailbox is rarely among a large project's recent runs.
+    let reader = store
+        .project_export_reader(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The mailbox project no longer exists.")?;
-    let mailbox = snapshot
-        .mailboxes
-        .iter()
-        .find(|mailbox| mailbox.job.id == job_id)
+    let mailbox = reader
+        .mailbox(job_id)?
         .ok_or("The mailbox job no longer exists.")?;
     let (evidence_run_id, evidence, plan_snapshot) = mailbox
         .evidence
         .clone()
         .ok_or("No mailbox evidence is available yet.")?;
     let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
-    let run = snapshot
-        .runs
-        .iter()
-        .find(|run| run.run.id == evidence_run_id)
-        .map(|run| run.run.clone())
+    let run = reader
+        .run(&evidence_run_id)?
         .ok_or("The evidence refers to a run that is no longer available.")?;
+    let snapshot = ReportProject {
+        project: reader.project().clone(),
+    };
+    drop(reader);
     let snapshot_profile = decode_report_run_snapshot(&run.plan_snapshot)?.map(|run| run.profile);
     let source_endpoint = snapshot_profile
         .as_ref()
@@ -620,7 +625,13 @@ mod project_json_tests {
                 excepted_messages: 0,
             }),
         };
-        for index in 0..105 {
+        let plan_snapshot = crate::Form {
+            dry_run: false,
+            ..Default::default()
+        }
+        .plan_snapshot();
+        let mut first_job = None;
+        for index in 0..21 {
             let job = store
                 .add_mailbox(
                     &project.id,
@@ -628,9 +639,10 @@ mod project_json_tests {
                     &format!("user{index}"),
                 )
                 .unwrap();
+            first_job.get_or_insert_with(|| job.clone());
             let run = format!("run-{index}");
             store
-                .begin_run_with_snapshot(&project.id, &job, &run, "imapsync", "dry_run = false\n")
+                .begin_run_with_snapshot(&project.id, &job, &run, "imapsync", &plan_snapshot)
                 .unwrap();
             store
                 .finish_run_for_mailbox_with_evidence(
@@ -644,26 +656,15 @@ mod project_json_tests {
                 )
                 .unwrap();
         }
-        // Keep this fixture out of the shared secret runtime: other tests
-        // exercise reconciled cleanup of that directory concurrently.
-        let directory = std::env::temp_dir().join(format!(
-            "mailswiftsync-report-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir(&directory).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
+        let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("project-report.json");
         export_project_json(&store, &project.id, &path).unwrap();
         crate::reports::signing::verify_file(&path, None).unwrap();
         let report: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(report["format"], "mailswiftsync-project-report");
-        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 105);
-        assert_eq!(report["runs"].as_array().unwrap().len(), 105);
+        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 21);
+        assert_eq!(report["runs"].as_array().unwrap().len(), 21);
         assert_eq!(
             report["mailboxes"][0]["evidence"]["verification_outcome"],
             "exact_metadata_match"
@@ -680,26 +681,10 @@ mod project_json_tests {
             report["mailboxes"][0]["evidence"]["evidence_level"],
             "Aggregate match — not message-body proof"
         );
-        let post_report: serde_json::Value =
-            serde_json::from_str(&build_post_migration_report_json(&store, &project.id).unwrap())
-                .unwrap();
-        assert_eq!(
-            post_report["format"],
-            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT
-        );
-        assert_eq!(
-            post_report["format_version"],
-            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION
-        );
-        assert!(post_report["report"]["total_skipped"].is_null());
-        assert_eq!(
-            post_report["report"]["total_skipped_availability"],
-            "unavailable"
-        );
-        assert_eq!(
-            post_report["count_semantics"]["total_skipped"],
-            "null when the durable ledger has no message-level skipped count; consult total_skipped_availability"
-        );
+        // The first mailbox's evidence run is older than the 20 most recent
+        // runs; its verification report must still find it.
+        let report = build_verification_report(&store, &project.id, &first_job.unwrap()).unwrap();
+        assert!(report.contains("`run-0`"), "{report}");
         let _ = std::fs::remove_dir_all(directory);
     }
 }

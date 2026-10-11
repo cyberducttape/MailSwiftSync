@@ -17,7 +17,7 @@ Preflight Scheduler Verify
  Durable SQLite state + evidence ledger
 ```
 
-The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, verification evidence, and credential-free webhook delivery state. It intentionally never persists passwords, endpoint URLs, or mailbox content. The current SQLite schema (v30) establishes destination-identity policy v2, binds the one-row-per-mailbox current evidence projection to its run, records per-attempt transfer-pass provenance, stores narrow per-mailbox queue facts with a project-scoped FTS5 trigram search index, stores shared batch policies separately from mailbox identity/credential deltas, groups mailboxes into ordered, approvable migration waves, records per-run IMAP flag-verification results, distinguishes verification that stopped at a safety limit (`verification_limit_exceeded`) from other incomplete verification, stores project-scoped folder digests for mismatch drill-down without retaining folder names in mismatch rows, provides bounded webhook retry/dead-letter state with expiring atomic delivery leases, and transactionally turns selected ledger events into endpoint-unbound lifecycle deliveries with distinct completion, failure, preflight-failure, and proof-ready event types. Queue-fact triggers keep the search index current and upgrades rebuild it transactionally; terms shorter than three characters retain the literal substring fallback. Since v30 each queue fact also carries trigger-maintained counts of its mailbox's runs, queued runs, and verification acceptances, so the presented queue state (imported, queued, verification difference, or the durable state) is derived from one narrow covering index rather than by probing `runs` for every row. Counts, filters, selection summaries, and visible pages read that projection; admission and other execution paths still read `mailbox_jobs` directly. A ledger invariant requires the stored counts to equal the live rows. Project-scoped webhook workers bind and claim only their project's events. Normal opens trust the versioned identity invariant instead of reparsing every mailbox's serialized config; GUI/report reads use the current projection instead of repeatedly finding the latest historical record. Older ledgers rebuild these invariants transactionally during migration. Deep integrity checks remain separate from the ordinary startup path.
+The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, verification evidence, and credential-free webhook delivery state. It intentionally never persists passwords, endpoint URLs, or mailbox content. The current SQLite schema (v31) establishes destination-identity policy v2, binds the one-row-per-mailbox current evidence projection to its run, records per-attempt transfer-pass provenance, stores narrow per-mailbox queue facts with a project-scoped FTS5 trigram search index, stores shared batch policies separately from mailbox identity/credential deltas, groups mailboxes into ordered, approvable migration waves, records per-run IMAP flag-verification results, distinguishes verification that stopped at a safety limit (`verification_limit_exceeded`) from other incomplete verification, stores project-scoped folder digests for mismatch drill-down without retaining folder names in mismatch rows, provides bounded webhook retry/dead-letter state with expiring atomic delivery leases, and transactionally turns selected ledger events into endpoint-unbound lifecycle deliveries with distinct completion, failure, preflight-failure, and proof-ready event types. Queue-fact triggers keep the search index current and upgrades rebuild it transactionally; terms shorter than three characters retain the literal substring fallback. Since v30 each queue fact also carries trigger-maintained counts of its mailbox's runs, queued runs, and verification acceptances, so the presented queue state (imported, queued, verification difference, or the durable state) is derived from one narrow covering index rather than by probing `runs` for every row. Counts, filters, selection summaries, and visible pages read that projection; admission and other execution paths still read `mailbox_jobs` directly. A ledger invariant requires the stored counts to equal the live rows. Project-scoped webhook workers bind and claim only their project's events. Normal opens trust the versioned identity invariant instead of reparsing every mailbox's serialized config; GUI/report reads use the current projection instead of repeatedly finding the latest historical record. Older ledgers rebuild these invariants transactionally during migration. Deep integrity checks remain separate from the ordinary startup path.
 
 The implementation keeps the controller boundary explicit even while the
 desktop shell continues to evolve. `migration_plan` owns profile validation,
@@ -130,14 +130,18 @@ by streaming: each mailbox and run entry is generated and serialized one at a
 time, first into a SHA-256 hasher over the canonical compact, key-sorted JSON
 and then into the private, atomically replaced file, so the digest is
 identical to hashing the whole document in memory while only one entry is
-resident. Generated proof files are bounded to the same 32 MiB envelope used
-by verification and signing; oversized exports fail closed. A customer proof
-entry is about 1.8 KiB per mailbox plus 0.5 KiB per run, so that envelope
-holds roughly 14,000 single-run mailboxes; larger projects cannot export a
-customer proof or project JSON until verification and signing stream the file
-instead of parsing it whole. The ledger
-snapshot the entries are derived from is still loaded in full; verification
-and signing of an existing proof parse the whole file.
+resident. The rows come from `StateStore::project_export_reader`, which pins
+one SQLite read transaction so the aggregate, digest, and file passes all see
+the same commit without loading the project. Verification and signing read a
+proof through `reports::canonical`, which canonicalizes it as it is parsed and
+spills large members (the mailbox and run arrays) to a private file, so they
+do not hold the document in memory either. Proof files are bounded at 1 GiB.
+Signed payloads up to 32 MiB keep a pure Ed25519 signature over the canonical
+bytes; larger ones are signed as `Ed25519-SHA256` (Ed25519 over the SHA-256 of
+the same bytes). A release benchmark of 100,000 mailboxes with 300,000 runs
+produces a 341 MiB customer proof in 36 s with 15 MiB of memory growth and
+verifies it in 64 s with no measurable growth
+(`customer_proof_export_memory_benchmark`).
 
 Each run also stores the project phase observed at admission. This is immutable
 provenance for reports and incident review, not a claim that the current engine
