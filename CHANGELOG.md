@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Check credential-file and directory cleanup before reporting transfer completion;
+  failed removals remain guarded for a best-effort retry and are included in the
+  run failure details.
 - Preserve complete restore-rollback diagnostics: failures returning the prior
   ledger or SQLite sidecars are no longer silently discarded, and all rollback
   steps are attempted before reporting the restore failure.

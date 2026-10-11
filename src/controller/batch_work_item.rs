@@ -489,7 +489,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     checkpoint.as_deref(),
                 )
             });
-            let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
+            let mut cleanup_guard = CleanupGuard::new(command.cleanup.clone());
             let verification = command.verification.clone();
             let prefix = format!("[{}] ", index + 1);
             let secrets = [
@@ -701,8 +701,13 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
             } else {
                 result
             };
-            drop(cleanup_guard);
-            result
+            match cleanup_guard.cleanup_now() {
+                Ok(()) => result,
+                Err(cleanup_error) => Err(match result {
+                    Ok(_) => cleanup_error,
+                    Err(run_error) => format!("{run_error}; {cleanup_error}"),
+                }),
+            }
         }
         Err(error) => Err(error),
     }

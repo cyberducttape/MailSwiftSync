@@ -80,7 +80,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 dovecot_checkpoint.as_deref(),
             )
         });
-        let _cleanup_guard = CleanupGuard::new(cleanup);
+        let mut cleanup_guard = CleanupGuard::new(cleanup);
         // Resolve the executable before launch. Imapsync's result selects the
         // only parser grammar permitted to create verification evidence.
         let (engine_version, mut imapsync_output_profile) = if engine == core::Engine::ImapSync {
@@ -335,6 +335,12 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     "[process-debug] single worker reached terminal handoff (result_ok={})",
                     result.is_ok()
                 );
+            }
+            if let Err(cleanup_error) = cleanup_guard.cleanup_now() {
+                result = Err(match result {
+                    Ok(_) => cleanup_error,
+                    Err(run_error) => format!("{run_error}; {cleanup_error}"),
+                });
             }
             let terminal_send =
                 send_reliable_event(&tx, Event::Finished(result.map(|stream| stream.outcome)));

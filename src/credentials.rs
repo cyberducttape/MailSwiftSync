@@ -116,6 +116,33 @@ impl CleanupGuard {
     pub fn disarm(mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.paths)
     }
+
+    /// Attempt cleanup while the caller can still report failures. Paths that
+    /// could not be removed remain guarded so Drop can make a best-effort
+    /// retry during unwinding or an early return.
+    pub fn cleanup_now(&mut self) -> Result<(), String> {
+        let mut remaining = Vec::new();
+        let mut failures = Vec::new();
+        for path in self.paths.iter().rev() {
+            match remove_cleanup_path(path) {
+                Ok(()) => {}
+                Err(error) => {
+                    failures.push(format!("{}: {error}", path.display()));
+                    remaining.push(path.clone());
+                }
+            }
+        }
+        remaining.reverse();
+        self.paths = remaining;
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "could not remove sensitive temporary files: {}",
+                failures.join("; ")
+            ))
+        }
+    }
 }
 
 impl Drop for CleanupGuard {
@@ -544,11 +571,16 @@ pub fn open_secret_file(path: &Path) -> std::io::Result<fs::File> {
 
 pub fn cleanup_paths(paths: &[PathBuf]) {
     for path in paths.iter().rev() {
-        if path.is_dir() {
-            let _ = fs::remove_dir_all(path);
-        } else {
-            let _ = fs::remove_file(path);
-        }
+        let _ = remove_cleanup_path(path);
+    }
+}
+
+fn remove_cleanup_path(path: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -761,13 +793,13 @@ pub fn verify_directory_writable(dir: &Path) -> std::io::Result<()> {
 mod tests {
     #[cfg(unix)]
     use super::cleanup_stale_secret_directories_at;
-    use super::{SecretString, cleanup_reconciled_secret_directories, read_secret_file};
-    use std::fs;
-    #[cfg(unix)]
-    use std::{
-        path::PathBuf,
-        time::{Duration, SystemTime},
+    use super::{
+        CleanupGuard, SecretString, cleanup_reconciled_secret_directories, read_secret_file,
     };
+    use std::fs;
+    use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn secret_clones_share_one_allocation_and_edits_copy_on_write() {
@@ -786,6 +818,45 @@ mod tests {
         let debug = format!("{secret:?}");
         assert_eq!(debug, "SecretString(REDACTED)");
         assert!(!debug.contains("customer-password"));
+    }
+
+    #[test]
+    fn checked_cleanup_reports_failures_and_attempts_every_path() {
+        let base = std::env::temp_dir().join(format!(
+            "mailswiftsync-checked-cleanup-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&base).unwrap();
+        let blocker = base.join("not-a-directory");
+        fs::write(&blocker, "x").unwrap();
+        let blocked_child = blocker.join("secret");
+        let removable = base.join("removable.secret");
+        fs::write(&removable, "secret").unwrap();
+
+        let mut guard = CleanupGuard::new(vec![blocked_child.clone(), removable.clone()]);
+        let error = guard.cleanup_now().unwrap_err();
+
+        assert!(error.contains(&blocked_child.display().to_string()));
+        assert!(
+            !removable.exists(),
+            "cleanup should continue after an error"
+        );
+        assert_eq!(guard.paths, vec![blocked_child]);
+
+        drop(guard);
+        fs::remove_file(blocker).unwrap();
+        fs::remove_dir(base).unwrap();
+    }
+
+    #[test]
+    fn checked_cleanup_treats_already_missing_paths_as_success() {
+        let missing = std::env::temp_dir().join(format!(
+            "mailswiftsync-already-removed-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut guard = CleanupGuard::new(vec![missing]);
+        assert!(guard.cleanup_now().is_ok());
+        assert!(guard.paths.is_empty());
     }
 
     #[test]
