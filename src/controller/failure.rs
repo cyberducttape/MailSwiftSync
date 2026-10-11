@@ -159,6 +159,15 @@ fn classify_failure_text(provider: &str, error: &str) -> FailureClass {
     if let Some(class) = controller_failure_class(error) {
         return class;
     }
+    // Filesystem permission errors during private temporary-file cleanup are
+    // local operational failures, not provider authentication failures. Keep
+    // them out of endpoint-specific classification and automatic retries.
+    if error
+        .to_ascii_lowercase()
+        .contains("could not remove sensitive temporary files")
+    {
+        return FailureClass::Unknown;
+    }
     // A verifier safety limit is tagged at its source. It is verification
     // incompleteness, never a transport or capacity failure to retry.
     if core::VerificationLimit::from_detail(error).is_some() {
@@ -644,6 +653,18 @@ mod tests {
         assert_eq!(
             super::provider_for_sided_error("gmail", "microsoft365", "Host1 and Host2 refused"),
             crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
+        );
+    }
+
+    #[test]
+    fn credential_cleanup_failure_does_not_retry_a_completed_transfer() {
+        let detail = "could not remove sensitive temporary files: /run/user/1000/mailswiftsync/run-test: permission denied";
+        assert!(!super::should_retry_batch_error_for_provider(
+            "generic", detail, 0, 2
+        ));
+        assert_eq!(
+            super::classify_failure_for_provider("generic", detail),
+            super::FailureClass::Unknown
         );
     }
 
