@@ -52,6 +52,27 @@ workload reaches the software's 1M admission ceiling on the recorded host; it
 does not establish capacity on other hosts, include network fetch or
 report-commit costs, or justify relaxing any guard.
 
+## Report-export memory boundary
+
+Project JSON and customer proof writers serialize large JSON arrays one item
+at a time and enforce a 32 MiB final-artifact limit. This is not yet
+end-to-end streaming: `complete_project_report_snapshot()` first materializes
+mailbox and run records, evidence, transfer-pass commands, and transfer-pass
+folder rows in memory inside one consistent SQLite read transaction. Mailbox
+and run counts are capped at 100,000, but nested transfer-pass folder rows do
+not currently have an independent count or byte budget. Consequently the
+32 MiB output limit does not bound peak memory during snapshot construction,
+and a report can consume substantial memory before the writer rejects its
+serialized size. Do not interpret “streamed report” as a peak-RSS guarantee.
+
+The durable reconciliation measurements above do not exercise report
+snapshot construction, report serialization, or proof signing. End-to-end
+report memory and latency remain unqualified. A future DB-backed export should
+page rows from the same consistent read snapshot and stream canonical digest
+calculation and output without retaining the complete project model; until
+then, report exports should be treated as bounded by their snapshot limits,
+not by the final artifact-size cap alone.
+
 ## Evidence dimensions
 
 Verification results expose independent dimensions rather than treating one
