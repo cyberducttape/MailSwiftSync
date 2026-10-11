@@ -181,6 +181,27 @@ pub(crate) fn attach_child_supervisor(child: &Child) -> std::io::Result<ChildSup
 
 pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, String> {
     let lock_path = state_path.with_extension("lock");
+    acquire_named_lock(
+        &lock_path,
+        "Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.",
+    )
+}
+
+/// Acquire an exclusive owner-only lock at an exact path for a shared
+/// application resource other than a project ledger (for example a rotating
+/// OAuth refresh credential).
+pub(crate) fn acquire_named_lock(
+    lock_path: &Path,
+    busy_message: &str,
+) -> Result<InstanceLock, String> {
+    acquire_named_lock_with_timeout(lock_path, busy_message, Duration::ZERO)
+}
+
+pub(crate) fn acquire_named_lock_with_timeout(
+    lock_path: &Path,
+    busy_message: &str,
+    timeout: Duration,
+) -> Result<InstanceLock, String> {
     #[cfg(unix)]
     let file = {
         use std::os::unix::fs::OpenOptionsExt;
@@ -190,7 +211,7 @@ pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, S
             .read(true)
             .write(true)
             .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-            .open(&lock_path)
+            .open(lock_path)
     };
     #[cfg(not(unix))]
     let file = OpenOptions::new()
@@ -198,7 +219,7 @@ pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, S
         .truncate(false)
         .read(true)
         .write(true)
-        .open(&lock_path);
+        .open(lock_path);
     let file = file.map_err(|error| format!("could not open application lock: {error}"))?;
     if !file
         .metadata()
@@ -211,12 +232,25 @@ pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, S
     crate::credentials::restrict_open_file_permissions(&file).map_err(|error| error.to_string())?;
     #[cfg(all(not(unix), not(windows)))]
     crate::credentials::restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
-    if file.try_lock_exclusive().is_err() {
-        // Explicitly close a denied contender before returning. This keeps a
-        // failed second open from retaining an open descriptor on platforms
-        // whose advisory-lock behavior is sensitive to descriptor lifetime.
-        drop(file);
-        return Err("Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.".to_owned());
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    // Explicitly close a denied contender before returning.
+                    drop(file);
+                    return Err(busy_message.to_owned());
+                }
+                thread::sleep(
+                    Duration::from_millis(25)
+                        .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+            Err(error) => {
+                return Err(format!("could not acquire application lock: {error}"));
+            }
+        }
     }
     Ok(InstanceLock(file))
 }

@@ -1,6 +1,17 @@
 //! Provider runbooks, engine diagnostics and installation, and OAuth authorization commands.
 
 use super::*;
+use sha2::{Digest, Sha256};
+
+fn oauth_refresh_lock_path(lock_directory: &std::path::Path, keyring_id: &str) -> PathBuf {
+    let digest = Sha256::digest(keyring_id.as_bytes());
+    let mut file_name = String::with_capacity(digest.len() * 2 + 4);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(file_name, "{byte:02x}");
+    }
+    lock_directory.join(format!("{file_name}.lock"))
+}
 
 /// Run the interactive authorization-code flow and store the refresh
 /// configuration under `<keyring-id>`. Errors carry the process exit code:
@@ -306,8 +317,56 @@ pub(super) fn oauth_access_token_command(
     })?;
     let stored = read_secret_file(&config_path)
         .map_err(|error| (1, format!("OAuth refresh configuration file: {error}")))?;
-    let config =
+    let mut config =
         crate::oauth_refresh::decode_refresh_config(stored.as_str()).map_err(|error| (1, error))?;
+    // A per-run config lock is not enough when concurrent mailboxes share a
+    // rotating OS-keyring refresh token. Serialize all callbacks for that
+    // credential across processes, then read the latest token while holding
+    // the shared lock rather than exchanging a stale per-run copy.
+    let _keyring_refresh_lock = if let Some(keyring_id) = persist_keyring_id.as_deref() {
+        let data_directory = dirs_next::data_local_dir().ok_or_else(|| {
+            (
+                1,
+                "could not determine a private directory for OAuth refresh coordination".to_owned(),
+            )
+        })?;
+        let lock_directory = data_directory.join("mailswiftsync/oauth-refresh-locks");
+        crate::credentials::ensure_private_directory(&lock_directory).map_err(|error| {
+            (
+                1,
+                format!("could not secure OAuth refresh coordination directory: {error}"),
+            )
+        })?;
+        let lock_path = oauth_refresh_lock_path(&lock_directory, keyring_id);
+        let lock = crate::process::acquire_named_lock_with_timeout(
+            &lock_path,
+            "another migration is refreshing this OAuth credential; retry after it finishes",
+            std::time::Duration::from_secs(35),
+        )
+        .map_err(|error| (1, format!("could not coordinate OAuth refresh: {error}")))?;
+        let entry = keyring::Entry::new(crate::Form::OAUTH_REFRESH_KEYRING_SERVICE, keyring_id)
+            .map_err(|error| {
+                (
+                    1,
+                    format!("could not open the OAuth refresh keyring entry: {error}"),
+                )
+            })?;
+        let latest = entry.get_password().map_err(|error| {
+            (
+                1,
+                format!("could not read the latest OAuth refresh configuration: {error}"),
+            )
+        })?;
+        config = crate::oauth_refresh::decode_refresh_config(&latest).map_err(|error| {
+            (
+                1,
+                format!("the latest OS keyring OAuth configuration is invalid: {error}"),
+            )
+        })?;
+        Some(lock)
+    } else {
+        None
+    };
     let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
         .map_err(|error| (1, format!("OAuth access token refresh failed: {error}")))?;
     let mut message = format!(
@@ -453,5 +512,42 @@ fn report_command(result: Result<String, (i32, String)>) -> eframe::Result<()> {
             eprintln!("{message}");
             std::process::exit(code);
         }
+    }
+}
+
+#[cfg(test)]
+mod oauth_refresh_lock_tests {
+    use super::*;
+
+    #[test]
+    fn rotating_credential_lock_is_stable_private_and_exclusive() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let first_path = oauth_refresh_lock_path(&directory, "customer-a-source");
+        let same_path = oauth_refresh_lock_path(&directory, "customer-a-source");
+        let other_path = oauth_refresh_lock_path(&directory, "customer-b-source");
+        assert_eq!(first_path, same_path);
+        assert_ne!(first_path, other_path);
+        assert!(!first_path.to_string_lossy().contains("customer-a-source"));
+
+        let first =
+            crate::process::acquire_named_lock(&first_path, "another OAuth refresh is active")
+                .unwrap();
+        assert!(
+            crate::process::acquire_named_lock(&same_path, "another OAuth refresh is active")
+                .is_err()
+        );
+        let waiting_path = same_path.clone();
+        let waiting = std::thread::spawn(move || {
+            crate::process::acquire_named_lock_with_timeout(
+                &waiting_path,
+                "another OAuth refresh is active",
+                std::time::Duration::from_secs(2),
+            )
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        drop(first);
+        waiting.join().unwrap().unwrap();
+        crate::process::acquire_named_lock(&same_path, "another OAuth refresh is active").unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
