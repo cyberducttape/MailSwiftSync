@@ -21,6 +21,25 @@ distribution materially affect the numbers; run
 `scripts/benchmark-verification-scale.sh` on the target storage before
 setting a production mailbox envelope.
 
+A second release-mode run on 2026-10-11 at commit
+`061e8db9138edc7eac7957083cc7104f4d27dffd` used that script at 100,000 and
+500,000 synthetic messages per endpoint. The host was Ubuntu 24.04 on an AMD
+Ryzen 7 7735U (8 cores/16 threads), Rust 1.92.0, and a local ext4 filesystem on
+NVMe. It was a shared interactive workstation, not an isolated benchmark
+host, so these timings are illustrative rather than a hardware qualification.
+At 100,000 per endpoint, staging took 1.707 s, reconciliation 1.874 s, peak
+RSS was 22 MiB, and the stage directory peaked at 102,324,688 bytes. At
+500,000 per endpoint, staging took 8.669 s, reconciliation 9.795 s (51,046
+messages/s), peak RSS was 28 MiB, the stage directory peaked at 528,686,824
+bytes, the rollback journal peaked at 50,224,872 bytes, and reconciliation
+wrote 74,530,816 bytes. The 500,000 case compared flags for 490,000 messages
+and recorded the fixture's intentional 10,000 changed-ID cases. This extends
+the synthetic durable-reconciliation measurement to 500,000 records per side;
+it still does not measure IMAP network fetching, a 50/100 GiB transfer,
+provider behavior, or production-host performance. The current benchmark
+does not estimate allocator-level allocation counts or establish a safe
+aggregate stage-disk ceiling.
+
 ## Evidence dimensions
 
 Verification results expose independent dimensions rather than treating one
