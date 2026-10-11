@@ -33,6 +33,8 @@
   reviewable `verification_difference` evidence.
 - Centralize exact-result consistency validation across transfer and standalone
   reverification ledger commits to prevent future assurance-policy drift.
+- Keep the exact-evidence invariant in one shared evidence predicate, reducing
+  duplicated ledger validation while preserving reviewable partial coverage.
 - Harden opt-in diagnostic transcript redaction for secret-shaped key/value
   fields and bearer-style authorization values that are not in the controller's
   known-secret set.
