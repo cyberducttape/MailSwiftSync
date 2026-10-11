@@ -131,7 +131,11 @@ time, first into a SHA-256 hasher over the canonical compact, key-sorted JSON
 and then into the private, atomically replaced file, so the digest is
 identical to hashing the whole document in memory while only one entry is
 resident. Generated proof files are bounded to the same 32 MiB envelope used
-by verification and signing; oversized exports fail closed. The ledger
+by verification and signing; oversized exports fail closed. A customer proof
+entry is about 1.8 KiB per mailbox plus 0.5 KiB per run, so that envelope
+holds roughly 14,000 single-run mailboxes; larger projects cannot export a
+customer proof or project JSON until verification and signing stream the file
+instead of parsing it whole. The ledger
 snapshot the entries are derived from is still loaded in full; verification
 and signing of an existing proof parse the whole file.
 

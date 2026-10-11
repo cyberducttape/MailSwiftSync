@@ -3292,7 +3292,10 @@ fn latest_completed_transfer_run_excludes_reverification_history() {
     db.finish_run("audit", "completed", "audit complete")
         .unwrap();
 
-    let baseline = db.latest_completed_transfer_run(&job).unwrap().unwrap();
+    let baseline = db
+        .latest_completed_transfer_run(&job, |_| true)
+        .unwrap()
+        .unwrap();
     assert_eq!(baseline.id, "transfer");
     assert_eq!(baseline.engine, "imapsync");
 
@@ -5413,6 +5416,29 @@ fn transfer_pass_provenance_records_intent_completion_and_verification() {
         .unwrap();
     assert_eq!(run_1.transfer_passes.len(), 2);
 
+    // Only the newest checkpoint of each attempt is reported; attempt 1
+    // must not pick up attempt 10's checkpoint.
+    for (attempt, copied) in [(1, 5), (1, 7), (2, 3), (10, 99)] {
+        db.connection
+            .execute(
+                "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,'run-1','transfer_progress_checkpoint',?2)",
+                rusqlite::params![
+                    project.id,
+                    format!(
+                        "{{\"attempt\":{attempt},\"progress\":{{\"messages_copied\":{copied},\"bytes_copied\":1}}}}"
+                    )
+                ],
+            )
+            .unwrap();
+    }
+    let run_1_passes = db.transfer_passes("run-1").unwrap();
+    assert_eq!(
+        run_1_passes
+            .iter()
+            .map(|pass| pass.progress.as_ref().map(|progress| progress.copied))
+            .collect::<Vec<_>>(),
+        [Some(7), Some(3)]
+    );
     let batched = db
         .transfer_passes_for_runs(&["run-1".into(), "run-2".into()])
         .unwrap();

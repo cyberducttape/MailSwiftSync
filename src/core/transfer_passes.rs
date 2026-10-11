@@ -384,8 +384,8 @@ impl StateStore {
         )?;
         for record in &mut records {
             let progress_json: Option<String> = self.connection.query_row(
-                "SELECT detail FROM events WHERE run_id=?1 AND kind='transfer_progress_checkpoint' AND detail LIKE ?2 ORDER BY id DESC LIMIT 1",
-                params![run_id, format!("%\"attempt\":{}%", record.attempt)],
+                "SELECT detail FROM events WHERE run_id=?1 AND kind='transfer_progress_checkpoint' AND json_valid(detail) AND json_extract(detail,'$.attempt')=?2 ORDER BY id DESC LIMIT 1",
+                params![run_id, record.attempt],
                 |row| row.get(0),
             ).optional()?;
             record.progress = progress_json.and_then(|detail| {
@@ -525,8 +525,10 @@ impl StateStore {
                 }
             }
 
+            // Checkpoints accumulate every few seconds over a long run; read
+            // only the newest one per attempt instead of parsing them all.
             let event_query = format!(
-                "SELECT run_id,detail FROM events WHERE kind='transfer_progress_checkpoint' AND run_id IN ({placeholders}) ORDER BY id"
+                "SELECT run_id,detail FROM events WHERE id IN (SELECT MAX(id) FROM events WHERE kind='transfer_progress_checkpoint' AND run_id IN ({placeholders}) AND json_valid(detail) GROUP BY run_id,json_extract(detail,'$.attempt'))"
             );
             let mut events = self.connection.prepare(&event_query)?;
             for row in events.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {

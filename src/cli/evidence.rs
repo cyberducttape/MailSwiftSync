@@ -231,11 +231,11 @@ fn run_reverify_one(
         .map_err(|error| format!("Reverification refused: source secret file: {error}"))?;
     let destination_password = read_secret_file(destination_secret)
         .map_err(|error| format!("Reverification refused: destination secret file: {error}"))?;
-    let previous_run = match store.latest_completed_transfer_run(job_id) {
+    let previous_run = match store.latest_completed_transfer_run(job_id, is_reverify_baseline) {
         Ok(Some(run)) => run,
         Ok(None) => {
             return Err(format!(
-                "Reverification refused: no prior run exists for mailbox {job_id}"
+                "Reverification refused: no completed transfer exists for mailbox {job_id}"
             ));
         }
         Err(error) => {
@@ -357,6 +357,17 @@ fn run_reverify_one(
         folder_count,
         &mismatches,
     ))
+}
+
+/// A successful dry-run preflight also finishes as `completed`, but it copied
+/// nothing and cannot be the transfer a reverification certifies. Snapshots
+/// that do not decode are not skipped: the newest such run is returned so the
+/// caller refuses it instead of silently falling back to older history.
+fn is_reverify_baseline(run: &core::RunSummary) -> bool {
+    !matches!(
+        crate::migration_plan::decode_report_run_snapshot(&run.plan_snapshot),
+        Ok(Some(snapshot)) if snapshot.dry_run
+    )
 }
 
 const MAX_REVERIFY_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -1133,6 +1144,67 @@ mod tests {
         assert_eq!(output["message_coverage"]["checked"], 4);
         assert_eq!(output["flag_verification"]["compared"], 2);
         assert_eq!(output["flag_verification"]["total"], 4);
+    }
+
+    #[test]
+    fn reverify_baseline_skips_a_later_dry_run_preflight() {
+        let store = crate::core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("reverify-dry-run", "source", "destination")
+            .unwrap();
+        let job = store
+            .add_mailbox(&project.id, "source@example.com", "destination@example.com")
+            .unwrap();
+        let mut form = crate::Form::default();
+        for (run_id, dry_run) in [("transfer", false), ("preflight", true)] {
+            form.dry_run = dry_run;
+            store
+                .begin_run_with_snapshot(
+                    &project.id,
+                    &job,
+                    run_id,
+                    "imapsync",
+                    &form.plan_snapshot(),
+                )
+                .unwrap();
+            store
+                .finish_run_for_mailbox(&project.id, &job, run_id, "completed", "ready", "")
+                .unwrap();
+        }
+        let baseline = store
+            .latest_completed_transfer_run(&job, super::is_reverify_baseline)
+            .unwrap()
+            .unwrap();
+        assert_eq!(baseline.id, "transfer");
+
+        let only_preflight = store
+            .add_mailbox(&project.id, "other@example.com", "other@example.net")
+            .unwrap();
+        store
+            .begin_run_with_snapshot(
+                &project.id,
+                &only_preflight,
+                "preflight-only",
+                "imapsync",
+                &form.plan_snapshot(),
+            )
+            .unwrap();
+        store
+            .finish_run_for_mailbox(
+                &project.id,
+                &only_preflight,
+                "preflight-only",
+                "completed",
+                "ready",
+                "",
+            )
+            .unwrap();
+        assert!(
+            store
+                .latest_completed_transfer_run(&only_preflight, super::is_reverify_baseline)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

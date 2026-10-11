@@ -32,34 +32,39 @@ impl StateStore {
             .optional()
     }
 
-    /// Return the most recent completed transfer run, excluding audit-only
-    /// verification runs. Reverification evidence must be anchored to a
-    /// transfer baseline rather than whichever history row happens to be
-    /// newest.
+    /// Return the most recent completed transfer run accepted by
+    /// `is_baseline`, excluding audit-only verification runs. Reverification
+    /// evidence must be anchored to a transfer baseline rather than whichever
+    /// history row happens to be newest; the caller rejects baselines it can
+    /// only judge from the plan snapshot, such as dry-run preflights, which
+    /// also finish as `completed`.
     pub fn latest_completed_transfer_run(
         &self,
         job_id: &str,
+        mut is_baseline: impl FnMut(&RunSummary) -> bool,
     ) -> rusqlite::Result<Option<RunSummary>> {
-        self.connection
-            .query_row(
-                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 AND status='completed' AND engine <> 'imap-verification' ORDER BY finished_at DESC, rowid DESC LIMIT 1",
-                [job_id],
-                |row| {
-                    Ok(RunSummary {
-                        id: row.get(0)?,
-                        job_id: row.get(1)?,
-                        parent_run_id: row.get(2)?,
-                        engine: row.get(3)?,
-                        phase_at_start: row.get(4)?,
-                        plan_snapshot: row.get(5)?,
-                        status: row.get(6)?,
-                        started_at: row.get(7)?,
-                        finished_at: row.get(8)?,
-                        detail: row.get(9)?,
-                    })
-                },
-            )
-            .optional()
+        let mut statement = self.connection.prepare(
+            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 AND status='completed' AND engine <> 'imap-verification' ORDER BY finished_at DESC, rowid DESC",
+        )?;
+        let mut rows = statement.query([job_id])?;
+        while let Some(row) = rows.next()? {
+            let run = RunSummary {
+                id: row.get(0)?,
+                job_id: row.get(1)?,
+                parent_run_id: row.get(2)?,
+                engine: row.get(3)?,
+                phase_at_start: row.get(4)?,
+                plan_snapshot: row.get(5)?,
+                status: row.get(6)?,
+                started_at: row.get(7)?,
+                finished_at: row.get(8)?,
+                detail: row.get(9)?,
+            };
+            if is_baseline(&run) {
+                return Ok(Some(run));
+            }
+        }
+        Ok(None)
     }
     #[cfg(test)]
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {

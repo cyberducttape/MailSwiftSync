@@ -197,8 +197,9 @@ Use `--mode content` for the bounded body-fingerprint path. Secret files must
 be regular, owner-only files; credentials are never accepted in argv. The
 command reuses the immutable plan snapshot, records a separate
 verification-only run and `evidence_history` row, and stores differences under
-that run for CSV export. The run is linked to the completed transfer run that
-provided its baseline, and the command holds the same exclusive ledger lock as
+that run for CSV export. The run is linked to the most recent completed
+transfer run that provided its baseline (a dry-run preflight is never a
+baseline), and the command holds the same exclusive ledger lock as
 the GUI/recovery controller for the entire provider scan and evidence commit.
 Current organization policy is rechecked against the requested evidence mode;
 a historical plan is not an exemption from a stronger current minimum. The

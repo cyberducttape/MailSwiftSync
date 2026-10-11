@@ -454,7 +454,7 @@ mod tests {
         });
         if let Some(pid) = detached_pid {
             // SAFETY: the test fixture created this process and the PID was
-            // read from its owner-only temporary file.
+            // read from the PID file the fixture wrote.
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
             }

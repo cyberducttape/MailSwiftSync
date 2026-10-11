@@ -14,8 +14,10 @@ pub(crate) fn build_project_report(
     store: &core::StateStore,
     project_id: &str,
 ) -> Result<String, String> {
+    // The Markdown report lists only recent runs, so it reads the bounded
+    // recent-run window; machine-readable exports carry the full manifest.
     let snapshot = store
-        .complete_project_report_snapshot(project_id)
+        .project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
     if snapshot.mailboxes.is_empty() {

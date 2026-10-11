@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Anchor `reverify` to the latest completed transfer rather than a later
+  dry-run preflight, which also finishes as `completed` but copied nothing; a
+  mailbox with only preflight history is refused.
+- Read only the newest transfer-progress checkpoint per attempt in report
+  exports instead of parsing every checkpoint, and match attempts exactly so
+  attempt 1 never reports attempt 10's progress.
+- Keep the Markdown project report on the bounded recent-run window it
+  displays; only machine-readable exports load the complete run manifest.
+- Document that the 32 MiB proof envelope holds roughly 14,000 single-run
+  mailboxes in a customer proof.
+
 - Document the Windows automatic-OAuth-refresh fail-closed boundary: refresh
   command execution remains Unix-qualified until native imapsync callback
   semantics and command-shell quoting are tested.
