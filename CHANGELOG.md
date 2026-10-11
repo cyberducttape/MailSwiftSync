@@ -6,6 +6,8 @@
   filenames and headers; raw project names remain out of support transcripts.
 - Resolve the stale Linux packaging roadmap wording so the shipped RPM package
   is distinguished from still-pending RPM repository metadata.
+- Harden the documented systemd deployment by explicitly setting owner-only
+  modes for its state and runtime directories.
 - Make imapsync transfer hostname verification explicit for both implicit IMAPS
   and STARTTLS endpoints; the qualified engine's STARTTLS defaults did not set
   `SSL_verifycn_scheme` even though its IMAPS defaults did.

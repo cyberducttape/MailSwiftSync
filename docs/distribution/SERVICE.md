@@ -37,7 +37,9 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/mailswiftsync
 StateDirectory=mailswiftsync
+StateDirectoryMode=0700
 RuntimeDirectory=mailswiftsync
+RuntimeDirectoryMode=0700
 Environment=XDG_RUNTIME_DIR=/run/mailswiftsync
 
 [Install]
