@@ -394,19 +394,38 @@ mod tests {
     #[test]
     fn reader_result_join_is_bounded_when_a_pipe_drainer_does_not_finish() {
         let (sender, receiver) = mpsc::sync_channel::<()>(1);
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
         let handle = thread::spawn(move || {
             let _sender = sender;
-            thread::sleep(Duration::from_millis(100));
+            started_tx.send(()).unwrap();
+            // The timeout makes a regression to an unbounded join fail this
+            // test instead of hanging the complete platform test suite.
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            drop(_sender);
+            finished_tx.send(()).unwrap();
         });
-        let started = std::time::Instant::now();
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reader thread should start before its result is awaited");
         let result = crate::process::receive_reader_result(
             receiver,
             handle,
-            started + Duration::from_millis(10),
+            std::time::Instant::now() + Duration::from_millis(10),
             "stdout",
         );
         assert!(result.is_err());
-        assert!(started.elapsed() < Duration::from_millis(80));
+        assert!(
+            finished_rx.try_recv().is_err(),
+            "a bounded receive must not join the still-blocked reader"
+        );
+        release_tx
+            .send(())
+            .expect("test should release the reader after checking the bound");
+        finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("released reader should finish cleanly");
     }
 
     #[cfg(target_os = "linux")]

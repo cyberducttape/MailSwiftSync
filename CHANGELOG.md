@@ -11,6 +11,8 @@
   keeping an unverified partial artifact from being silently abandoned.
 - Use native path display in cleanup diagnostics and retain failed native-test
   logs from every CI platform, making platform-specific regressions actionable.
+- Make the bounded pipe-reader regression deterministic under loaded macOS
+  runners by synchronizing reader state instead of asserting an 80 ms wall time.
 - Surface failures to remove the private unsigned certificate intermediate;
   certificate export no longer reports complete cleanup when that file remains.
 - Reject reverification difference-export flags that omit their required path,
