@@ -190,23 +190,37 @@ impl MessageVerification {
                     FROM destination GROUP BY message_id,mailbox,date_key,size_bytes
                     HAVING COUNT(*)>1
                  ), groups AS (
-                    SELECT s.message_id,s.mailbox,s.date_key,s.size_bytes
+                    SELECT s.message_id,s.mailbox,s.date_key,s.size_bytes,s.n
                     FROM source_groups s
                     JOIN destination_groups d
                       ON d.message_id=s.message_id AND d.mailbox=s.mailbox
                      AND d.date_key=s.date_key AND d.size_bytes=s.size_bytes
                     WHERE s.n=d.n
+                 ), flag_counts AS (
+                    SELECT g.message_id,g.mailbox,g.date_key,g.size_bytes,g.n,s.flags,
+                           COUNT(*) AS source_count,0 AS destination_count
+                    FROM groups g JOIN source s
+                      ON s.message_id=g.message_id AND s.mailbox=g.mailbox
+                     AND s.date_key=g.date_key AND s.size_bytes=g.size_bytes
+                    GROUP BY g.message_id,g.mailbox,g.date_key,g.size_bytes,g.n,s.flags
+                    UNION ALL
+                    SELECT g.message_id,g.mailbox,g.date_key,g.size_bytes,g.n,d.flags,
+                           0 AS source_count,COUNT(*) AS destination_count
+                    FROM groups g JOIN destination d
+                      ON d.message_id=g.message_id AND d.mailbox=g.mailbox
+                     AND d.date_key=g.date_key AND d.size_bytes=g.size_bytes
+                    GROUP BY g.message_id,g.mailbox,g.date_key,g.size_bytes,g.n,d.flags
+                 ), flag_frequencies AS (
+                    SELECT message_id,mailbox,date_key,size_bytes,n,flags,
+                           SUM(source_count) AS source_count,
+                           SUM(destination_count) AS destination_count
+                    FROM flag_counts
+                    GROUP BY message_id,mailbox,date_key,size_bytes,n,flags
                  )
-                 SELECT g.message_id,g.mailbox,g.date_key,g.size_bytes,0,s.flags
-                 FROM groups g JOIN source s
-                   ON s.message_id=g.message_id AND s.mailbox=g.mailbox
-                  AND s.date_key=g.date_key AND s.size_bytes=g.size_bytes
-                 UNION ALL
-                 SELECT g.message_id,g.mailbox,g.date_key,g.size_bytes,1,d.flags
-                 FROM groups g JOIN destination d
-                   ON d.message_id=g.message_id AND d.mailbox=g.mailbox
-                  AND d.date_key=g.date_key AND d.size_bytes=g.size_bytes
-                 ORDER BY 1,2,3,4,5",
+                 SELECT message_id,mailbox,date_key,size_bytes,n,flags,
+                        source_count,destination_count
+                 FROM flag_frequencies
+                 ORDER BY 1,2,3,4,6",
         )
         .map_err(|error| format!("could not prepare duplicate flag verification: {error}"))?;
         let mut rows = statement
@@ -214,26 +228,25 @@ impl MessageVerification {
             .map_err(|error| format!("could not query duplicate flag groups: {error}"))?;
         let mut result = FlagVerification::default();
         let mut current: Option<(String, String, String, i64)> = None;
-        // Fetch parsing stores FLAGS in canonical sorted/deduplicated form.
-        // Borrow each SQLite value and allocate only when a previously unseen
-        // combination enters a group's frequency map, avoiding one retained
-        // String per duplicate message and a second sort of the group.
-        let mut sides: [HashMap<String, u64>; 2] = [HashMap::new(), HashMap::new()];
-        let mut side_counts = [0_u64; 2];
+        // SQLite groups equal flag sets and streams the two sides' frequency
+        // counts in order. Rust retains only the current group key and its
+        // summary, even when every duplicate has a distinct flag combination.
+        let mut group_size = 0_u64;
+        let mut group_mismatched = false;
         let mut complete = true;
-        let finish = |sides: &mut [HashMap<String, u64>; 2],
-                      side_counts: &mut [u64; 2],
+        let finish = |group_size: &mut u64,
+                      group_mismatched: &mut bool,
                       complete: &mut bool,
                       result: &mut FlagVerification| {
-            if *complete && side_counts[0] == side_counts[1] {
-                let count = side_counts[0];
-                result.compared_messages = result.compared_messages.saturating_add(count);
-                if sides[0] != sides[1] {
-                    result.mismatched_messages = result.mismatched_messages.saturating_add(count);
+            if *complete {
+                result.compared_messages = result.compared_messages.saturating_add(*group_size);
+                if *group_mismatched {
+                    result.mismatched_messages =
+                        result.mismatched_messages.saturating_add(*group_size);
                 }
             }
-            sides.iter_mut().for_each(HashMap::clear);
-            side_counts.fill(0);
+            *group_size = 0;
+            *group_mismatched = false;
             *complete = true;
         };
         while let Some(row) = rows
@@ -248,31 +261,36 @@ impl MessageVerification {
             );
             if current.as_ref() != Some(&key) {
                 if current.is_some() {
-                    finish(&mut sides, &mut side_counts, &mut complete, &mut result);
+                    finish(
+                        &mut group_size,
+                        &mut group_mismatched,
+                        &mut complete,
+                        &mut result,
+                    );
                 }
                 current = Some(key);
+                let count: i64 = row.get(4).map_err(|error| error.to_string())?;
+                group_size =
+                    u64::try_from(count).map_err(|_| "invalid duplicate group size".to_owned())?;
             }
-            let side: i64 = row.get(4).map_err(|error| error.to_string())?;
-            let side = match side {
-                0 => 0,
-                1 => 1,
-                _ => return Err("invalid side in duplicate flag group".to_owned()),
-            };
-            side_counts[side] = side_counts[side].saturating_add(1);
             let flags = row.get_ref(5).map_err(|error| error.to_string())?;
             if flags.data_type() == rusqlite::types::Type::Null {
                 complete = false;
                 continue;
             }
-            let flags = flags.as_str().map_err(|error| error.to_string())?;
-            if let Some(count) = sides[side].get_mut(flags) {
-                *count = count.saturating_add(1);
-            } else {
-                sides[side].insert(flags.to_owned(), 1);
+            let source_count: i64 = row.get(6).map_err(|error| error.to_string())?;
+            let destination_count: i64 = row.get(7).map_err(|error| error.to_string())?;
+            if source_count != destination_count {
+                group_mismatched = true;
             }
         }
         if current.is_some() {
-            finish(&mut sides, &mut side_counts, &mut complete, &mut result);
+            finish(
+                &mut group_size,
+                &mut group_mismatched,
+                &mut complete,
+                &mut result,
+            );
         }
         Ok(result)
     }
@@ -399,6 +417,60 @@ mod tests {
         let result = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
         assert_eq!(result.compared_messages, DUPLICATES);
         assert_eq!(result.mismatched_messages, 0);
+    }
+
+    #[test]
+    fn duplicate_flag_frequencies_stream_when_every_message_has_unique_flags() {
+        const DUPLICATES: usize = 1_024;
+        let flags = (0..DUPLICATES)
+            .map(|index| format!("keyword{index:04}"))
+            .collect::<Vec<_>>();
+        let source = flags
+            .iter()
+            .enumerate()
+            .map(|(index, flags)| {
+                (
+                    "INBOX",
+                    index as u64 + 1,
+                    "<unique-flags@x>",
+                    flags.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let destination = flags
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(index, flags)| {
+                (
+                    "INBOX",
+                    index as u64 + 10_000,
+                    "<unique-flags@x>",
+                    flags.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage_side(&mut stage, StagedMessageSide::Source, &source);
+        stage_side(&mut stage, StagedMessageSide::Destination, &destination);
+
+        let matched = MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap();
+        assert_eq!(matched.compared_messages, DUPLICATES as u64);
+        assert_eq!(matched.mismatched_messages, 0);
+
+        let mut changed_destination = destination;
+        changed_destination[0].3 = r"\Seen";
+        let mut changed_stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage_side(&mut changed_stage, StagedMessageSide::Source, &source);
+        stage_side(
+            &mut changed_stage,
+            StagedMessageSide::Destination,
+            &changed_destination,
+        );
+        let mismatched =
+            MessageVerification::verify_staged_flags(&changed_stage, &HashMap::new()).unwrap();
+        assert_eq!(mismatched.compared_messages, DUPLICATES as u64);
+        assert_eq!(mismatched.mismatched_messages, DUPLICATES as u64);
     }
 
     #[test]
