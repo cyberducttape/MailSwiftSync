@@ -167,20 +167,6 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         eprintln!("Reverification refused: mode must be metadata or content");
         std::process::exit(2);
     }
-    let source_password = match read_secret_file(std::path::Path::new(&source_secret)) {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("Reverification refused: source secret file: {error}");
-            std::process::exit(2);
-        }
-    };
-    let destination_password = match read_secret_file(std::path::Path::new(&destination_secret)) {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("Reverification refused: destination secret file: {error}");
-            std::process::exit(2);
-        }
-    };
     let state = PathBuf::from(state);
     let _instance_lock = match crate::process::acquire_instance_lock(&state) {
         Ok(lock) => lock,
@@ -196,28 +182,78 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
             std::process::exit(1);
         }
     };
-    let previous_run = match store.latest_completed_transfer_run(&job_id) {
+    let result = match run_reverify_one(
+        &store,
+        ReverifyRequest {
+            state: &state,
+            project_id: &project_id,
+            job_id: &job_id,
+            source_secret: std::path::Path::new(&source_secret),
+            destination_secret: std::path::Path::new(&destination_secret),
+            mode: &mode,
+            differences: differences.as_deref(),
+        },
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+    out!("{result}");
+    Ok(())
+}
+
+struct ReverifyRequest<'a> {
+    state: &'a std::path::Path,
+    project_id: &'a str,
+    job_id: &'a str,
+    source_secret: &'a std::path::Path,
+    destination_secret: &'a std::path::Path,
+    mode: &'a str,
+    differences: Option<&'a std::path::Path>,
+}
+
+fn run_reverify_one(
+    store: &core::StateStore,
+    request: ReverifyRequest<'_>,
+) -> Result<serde_json::Value, String> {
+    let ReverifyRequest {
+        state,
+        project_id,
+        job_id,
+        source_secret,
+        destination_secret,
+        mode,
+        differences,
+    } = request;
+    let source_password = read_secret_file(source_secret)
+        .map_err(|error| format!("Reverification refused: source secret file: {error}"))?;
+    let destination_password = read_secret_file(destination_secret)
+        .map_err(|error| format!("Reverification refused: destination secret file: {error}"))?;
+    let previous_run = match store.latest_completed_transfer_run(job_id) {
         Ok(Some(run)) => run,
         Ok(None) => {
-            eprintln!("Reverification refused: no prior run exists for mailbox {job_id}");
-            std::process::exit(2);
+            return Err(format!(
+                "Reverification refused: no prior run exists for mailbox {job_id}"
+            ));
         }
         Err(error) => {
-            eprintln!("Reverification refused: could not read migration history: {error}");
-            std::process::exit(1);
+            return Err(format!(
+                "Reverification refused: could not read migration history: {error}"
+            ));
         }
     };
     let snapshot =
         match crate::migration_plan::decode_report_run_snapshot(&previous_run.plan_snapshot) {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => {
-                eprintln!("Reverification refused: the prior run has no immutable plan snapshot");
-                std::process::exit(2);
+                return Err(
+                    "Reverification refused: the prior run has no immutable plan snapshot"
+                        .to_owned(),
+                );
             }
-            Err(error) => {
-                eprintln!("Reverification refused: {error}");
-                std::process::exit(2);
-            }
+            Err(error) => return Err(format!("Reverification refused: {error}")),
         };
     let mut form = crate::Form {
         profile: snapshot.profile.into_profile(),
@@ -226,48 +262,40 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         dry_run: false,
     };
     if form.engine() != core::Engine::ImapSync {
-        eprintln!(
+        return Err(
             "Reverification refused: independent post-migration verification currently supports imapsync plans only"
+                .to_owned(),
         );
-        std::process::exit(2);
     }
     form.profile.body_hash_verification = mode == "content";
-    let organization_policy = match crate::organization_policy::OrganizationPolicy::load() {
-        Ok(policy) => policy,
-        Err(error) => {
-            eprintln!("Reverification refused: could not load organization policy: {error}");
-            std::process::exit(1);
-        }
-    };
-    if let Err(error) = organization_policy.check_form(&form) {
-        eprintln!(
+    let organization_policy =
+        crate::organization_policy::OrganizationPolicy::load().map_err(|error| {
+            format!("Reverification refused: could not load organization policy: {error}")
+        })?;
+    organization_policy.check_form(&form).map_err(|error| {
+        format!(
             "Reverification refused: current organization policy does not permit this evidence mode: {error}"
-        );
-        std::process::exit(2);
-    }
-    if let Err(error) = crate::runner::validate_body_hash_limits(&form) {
-        eprintln!("Reverification refused: {error}");
-        std::process::exit(2);
-    }
+        )
+    })?;
+    crate::runner::validate_body_hash_limits(&form)
+        .map_err(|error| format!("Reverification refused: {error}"))?;
     let run_id = uuid::Uuid::new_v4().to_string();
-    if let Err(error) = store.begin_verification_run_from_transfer(
-        &project_id,
-        &job_id,
-        &run_id,
-        &previous_run.id,
-        &previous_run.plan_snapshot,
-    ) {
-        eprintln!("Reverification refused: could not begin durable verification run: {error}");
-        std::process::exit(1);
-    }
+    store
+        .begin_verification_run_from_transfer(
+            project_id,
+            job_id,
+            &run_id,
+            &previous_run.id,
+            &previous_run.plan_snapshot,
+        )
+        .map_err(|error| {
+            format!("Reverification refused: could not begin durable verification run: {error}")
+        })?;
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    // A durable stage of its own: fetched metadata and every mismatch stay on
-    // disk (no in-memory mismatch cap), a failed run can resume its fetch, and
-    // a live run's retained stage for the same mailbox is never touched.
-    let stage_path = reverify_stage_path(&state, &job_id);
+    let stage_path = reverify_stage_path(state, job_id);
     let result = crate::runner::run_imap_message_verification(
         &form,
-        &job_id,
+        job_id,
         &run_id,
         &cancel,
         Some(&stage_path),
@@ -279,61 +307,56 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
             folders,
         }) => (evidence, mismatches, folders.len()),
         Err(error) => {
-            if let Err(persistence_error) = store.finish_run(&run_id, "verification_failed", &error)
-            {
-                eprintln!(
+            return match store.finish_run(&run_id, "verification_failed", &error) {
+                Ok(()) => Err(format!("Reverification failed: {error}")),
+                Err(persistence_error) => Err(format!(
                     "Reverification failed: {error}; ledger_persistence_failed for run {run_id}: {persistence_error}"
-                );
-                std::process::exit(1);
-            }
-            eprintln!("Reverification failed: {error}");
-            std::process::exit(1);
+                )),
+            };
         }
     };
     let detail = format!("verification-only mode={mode}; folders={folder_count}");
     if let Err(error) = store.finish_verification_only_run(
-        &project_id,
-        &job_id,
+        project_id,
+        job_id,
         &run_id,
         &evidence,
         &mismatches,
         &detail,
     ) {
-        // The terminal evidence transaction is atomic and rolls back its
-        // initial status update on any persistence failure. Close the run
-        // explicitly so a failed ledger write cannot leave a permanently
-        // active verification run blocking the next retry. Keep the stage:
-        // it may still contain useful page checkpoints for the retry.
         let failure_detail = format!("verification-only evidence persistence failed: {error}");
-        if let Err(finalize_error) =
-            store.finish_run(&run_id, "verification_failed", &failure_detail)
-        {
-            eprintln!(
-                "Reverification failed to persist evidence and could not finalize run state: {finalize_error}"
-            );
-        }
-        eprintln!("Reverification failed to persist evidence: {error}");
-        std::process::exit(1);
+        return Err(
+            match store.finish_run(&run_id, "verification_failed", &failure_detail) {
+                Ok(()) => format!("Reverification failed to persist evidence: {error}"),
+                Err(finalize_error) => format!(
+                    "Reverification failed to persist evidence and could not finalize run state: {finalize_error}"
+                ),
+            },
+        );
     }
-    // The evidence is committed; the stage is no longer needed.
     if let Err(error) = core::MessageMetadataStage::cleanup_durable_stage(&stage_path) {
         eprintln!("Reverification completed; verification stage cleanup deferred: {error}");
     }
-    if let Some(path) = differences
-        && let Err(error) = store.export_message_mismatches_csv_file(
-            &path,
-            &job_id,
-            &run_id,
-            &core::MismatchFilter::default(),
-            &|_| None,
-        )
-    {
-        eprintln!("Reverification completed, but difference export failed: {error}");
-        std::process::exit(1);
+    if let Some(path) = differences {
+        store
+            .export_message_mismatches_csv_file(
+                path,
+                job_id,
+                &run_id,
+                &core::MismatchFilter::default(),
+                &|_| None,
+            )
+            .map_err(|error| {
+                format!("Reverification completed, but difference export failed: {error}")
+            })?;
     }
-    let result = reverify_result_json(&evidence, &run_id, &mode, folder_count, &mismatches);
-    out!("{result}");
-    Ok(())
+    Ok(reverify_result_json(
+        &evidence,
+        &run_id,
+        mode,
+        folder_count,
+        &mismatches,
+    ))
 }
 
 const MAX_REVERIFY_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -427,10 +450,9 @@ fn read_reverify_manifest(path: &std::path::Path) -> Result<Vec<ReverifyManifest
     Ok(rows)
 }
 
-/// Reverify a bounded manifest serially. Each child invocation owns the same
-/// exclusive ledger lock as the single-mailbox command, so batch children do
-/// not scan concurrently and existing policy/provenance/evidence checks are
-/// reused. The lock is intentionally not held across child processes.
+/// Reverify a bounded manifest serially while retaining one exclusive ledger
+/// lock for the whole operation. Each mailbox still gets an independent
+/// durable verification run and result; the batch is not a global snapshot.
 pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let (Some(state), Some(project_id), Some(manifest)) =
         (arguments.next(), arguments.next(), arguments.next())
@@ -480,70 +502,46 @@ pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe:
             std::process::exit(2);
         });
     }
-    let executable = std::env::current_exe().unwrap_or_else(|error| {
-        eprintln!(
-            "Batch reverification refused: could not resolve the application executable: {error}"
-        );
+    let state = PathBuf::from(state);
+    let _instance_lock = crate::process::acquire_instance_lock(&state).unwrap_or_else(|error| {
+        eprintln!("Batch reverification refused: {error}");
+        std::process::exit(1);
+    });
+    let store = core::StateStore::open(&state).unwrap_or_else(|error| {
+        eprintln!("Batch reverification refused: durable SQLite state is unavailable: {error}");
         std::process::exit(1);
     });
     let mut results = Vec::with_capacity(rows.len());
     let mut failed = 0usize;
     for (index, row) in rows.iter().enumerate() {
-        let mut command = std::process::Command::new(&executable);
-        command
-            .arg("reverify")
-            .arg(&state)
-            .arg(&project_id)
-            .arg(&row.mailbox_id)
-            .arg(&row.source_secret)
-            .arg(&row.destination_secret)
-            .arg("--mode")
-            .arg(&mode);
-        if let Some(directory) = &differences_dir {
-            command
-                .arg("--differences")
-                .arg(directory.join(format!("{:04}-differences.csv", index + 1)));
-        }
-        let output = command.output().unwrap_or_else(|error| {
-            eprintln!(
-                "Batch reverification failed to launch mailbox {}: {error}",
-                row.mailbox_id
-            );
-            std::process::exit(1);
-        });
-        if output.status.success() {
-            match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                Ok(result) => results.push(serde_json::json!({
-                    "mailbox_id": row.mailbox_id,
-                    "status": "completed",
-                    "result": result
-                })),
-                Err(error) => {
-                    failed += 1;
-                    results.push(serde_json::json!({
-                        "mailbox_id": row.mailbox_id,
-                        "status": "failed",
-                        "error": format!("reverify returned invalid JSON: {error}")
-                    }));
-                }
-            }
-        } else {
-            failed += 1;
-            let mut error = crate::diagnostic_log::sanitize_private_metadata(
-                String::from_utf8_lossy(&output.stderr).trim(),
-            );
-            if error.len() > 8 * 1024 {
-                error.truncate(8 * 1024);
-                error.push('…');
-            }
-            if error.is_empty() {
-                error = format!("reverify exited with status {}", output.status);
-            }
-            results.push(serde_json::json!({
+        let differences = differences_dir
+            .as_deref()
+            .map(|directory| directory.join(format!("{:04}-differences.csv", index + 1)));
+        match run_reverify_one(
+            &store,
+            ReverifyRequest {
+                state: &state,
+                project_id: &project_id,
+                job_id: &row.mailbox_id,
+                source_secret: &row.source_secret,
+                destination_secret: &row.destination_secret,
+                mode: &mode,
+                differences: differences.as_deref(),
+            },
+        ) {
+            Ok(result) => results.push(serde_json::json!({
                 "mailbox_id": row.mailbox_id,
-                "status": "failed",
-                "error": error
-            }));
+                "status": "completed",
+                "result": result
+            })),
+            Err(error) => {
+                failed += 1;
+                results.push(serde_json::json!({
+                    "mailbox_id": row.mailbox_id,
+                    "status": "failed",
+                    "error": crate::diagnostic_log::sanitize_private_metadata(&error)
+                }));
+            }
         }
     }
     let output = serde_json::json!({

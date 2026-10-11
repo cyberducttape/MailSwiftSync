@@ -5,7 +5,8 @@
 - Refresh the README workflow previews with Retro 80s Neon theme screenshots.
 - Add bounded serial `reverify-batch` orchestration with strict manifest
   validation, per-mailbox evidence results, and a nonzero exit for any failed
-  mailbox.
+  mailbox; the batch now retains the exclusive ledger lock across the entire
+  manifest.
 - Route batch child diagnostics through the existing private-metadata redaction
   boundary before including bounded errors in machine-readable output.
 - Keep `supervise` alive across transient SQLite lock/busy errors during its

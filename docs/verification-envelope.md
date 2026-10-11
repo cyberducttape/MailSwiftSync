@@ -114,15 +114,14 @@ For a bounded batch, `reverify-batch` accepts a CSV manifest with the exact
 header `mailbox_id,source_secret_file,destination_secret_file` and runs the
 same mailbox command serially. Secret files are referenced by path only and
 are still validated by the single-mailbox command; the manifest is limited to
-4 MiB and 1,000 rows. Every child invocation acquires the exclusive ledger
-lock, so batch children never overlap, and the batch emits a versioned
+4 MiB and 1,000 rows. The batch acquires the exclusive ledger lock for the
+whole manifest, so no controller can interleave transfer or verification work
+while it runs, and the batch emits a versioned
 `mailswiftsync.reverify_batch` JSON envelope. A failed row is retained in the
 aggregate output and makes the process exit nonzero. The batch is an
-orchestration convenience; it does not hold a cross-mailbox lease between
-children, and is not a cross-mailbox point-in-time snapshot or a single
-all-or-nothing certification. A separately started controller may run during
-the gaps between child scans, so use a maintenance window when a whole batch
-must be operationally quiescent.
+orchestration convenience, not a cross-mailbox point-in-time snapshot or a
+single all-or-nothing certification. Source and destination state can still
+change between mailbox scans.
 
 Body-byte totals count bytes fetched and hashed from both endpoints together;
 they are not the source mailbox's total stored size. The current implementation
