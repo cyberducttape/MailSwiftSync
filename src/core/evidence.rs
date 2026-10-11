@@ -37,6 +37,11 @@ pub struct VerificationEvidence {
     pub modified_messages: u64,
     /// Metadata pairings that remain candidates rather than exact identities.
     pub probable_messages: u64,
+    /// Exact metadata pairs established with an RFC Message-ID.
+    pub rfc_message_id_matches: u64,
+    /// Pairs whose source identity was a generated header fingerprint. This
+    /// is lower-confidence unless independent body proof also succeeds.
+    pub synthetic_identity_matches: u64,
     /// Independent IMAP FLAGS comparison. `None` means flags and keywords
     /// were not verified (aggregate evidence, or evidence recorded before
     /// flag verification existed); it never means "no differences".
@@ -523,6 +528,8 @@ impl VerificationEvidence {
         self.failed_messages > 0
             || self.unmatched_messages.is_some_and(|count| count > 0)
             || self.probable_messages > 0
+            || (self.verification_method != VerificationMethod::BodyHash
+                && self.synthetic_identity_matches > 0)
             || self.has_message_level_mismatch()
             || self.has_flag_mismatch()
     }
@@ -595,6 +602,11 @@ impl VerificationEvidence {
     /// Canonical classification consumed by all report and UI layers.
     pub fn verification_outcome(&self) -> VerificationOutcome {
         if let Some(outcome) = self.verification_outcome {
+            if outcome == VerificationOutcome::ExactMetadataMatch
+                && self.synthetic_identity_matches > 0
+            {
+                return VerificationOutcome::ProbableMatch;
+            }
             return outcome;
         }
         if self.failed_messages > 0 {
@@ -607,7 +619,10 @@ impl VerificationEvidence {
             VerificationOutcome::Changed
         } else if self.extra_messages > 0 {
             VerificationOutcome::Unexpected
-        } else if self.probable_messages > 0 {
+        } else if self.probable_messages > 0
+            || (self.verification_method != VerificationMethod::BodyHash
+                && self.synthetic_identity_matches > 0)
+        {
             VerificationOutcome::ProbableMatch
         } else if self.unmatched_messages.is_some_and(|count| count > 0) {
             VerificationOutcome::Ambiguous
@@ -657,7 +672,11 @@ impl VerificationEvidence {
         if self.failed_messages > 0 || self.unmatched_messages.is_none_or(|count| count > 0) {
             return "Incomplete evidence";
         }
-        if self.has_message_level_mismatch() || self.probable_messages > 0 {
+        if self.has_message_level_mismatch()
+            || self.probable_messages > 0
+            || (self.verification_method != VerificationMethod::BodyHash
+                && self.synthetic_identity_matches > 0)
+        {
             return "Message-level mismatch";
         }
         if self.has_flag_mismatch() {
@@ -770,6 +789,8 @@ impl VerificationEvidence {
                 || self.authoritative)
             && (self.verification_method != VerificationMethod::BodyHash
                 || outcome == VerificationOutcome::ExactBodyMatch)
+            && (outcome != VerificationOutcome::ExactMetadataMatch
+                || self.synthetic_identity_matches == 0)
             && !self.flag_coverage_is_missing()
     }
 
@@ -934,8 +955,39 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
             flag_verification: None,
         }
+    }
+
+    #[test]
+    fn synthetic_identity_cannot_be_exposed_as_exact_metadata_evidence() {
+        let mut evidence = missing_evidence();
+        evidence.source_messages = 1;
+        evidence.destination_messages = 1;
+        evidence.source_bytes = 8;
+        evidence.destination_bytes = 8;
+        evidence.unmatched_messages = Some(0);
+        evidence.missing_messages = 0;
+        evidence.flag_verification = Some(FlagVerification {
+            compared_messages: 1,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        });
+        evidence.verification_outcome = Some(VerificationOutcome::ExactMetadataMatch);
+        evidence.synthetic_identity_matches = 1;
+
+        assert_eq!(
+            evidence.verification_outcome(),
+            VerificationOutcome::ProbableMatch
+        );
+        assert!(!evidence.is_exact_match());
+        assert!(!evidence.exact_label_is_consistent(VerificationOutcome::ExactMetadataMatch));
+
+        evidence.verification_method = VerificationMethod::BodyHash;
+        evidence.verification_outcome = Some(VerificationOutcome::ExactBodyMatch);
+        assert!(evidence.exact_label_is_consistent(VerificationOutcome::ExactBodyMatch));
     }
 
     #[test]
@@ -1006,6 +1058,8 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
             flag_verification: Some(FlagVerification {
                 compared_messages: 2,
                 mismatched_messages: 0,
@@ -1103,6 +1157,8 @@ mod tests {
                     extra_messages: 0,
                     modified_messages: 0,
                     probable_messages: 0,
+                    rfc_message_id_matches: 0,
+                    synthetic_identity_matches: 0,
                     flag_verification: None,
                 },
                 None,
@@ -1152,6 +1208,8 @@ mod tests {
                     extra_messages: u64::MAX,
                     modified_messages: u64::MAX,
                     probable_messages: 0,
+                    rfc_message_id_matches: 0,
+                    synthetic_identity_matches: 0,
                     flag_verification: None,
                 },
                 None,

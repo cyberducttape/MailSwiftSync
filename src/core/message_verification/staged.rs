@@ -164,6 +164,7 @@ impl MessageVerification {
                            ) AS ordinal
                     FROM staged_messages INDEXED BY staged_messages_exact_source
                     WHERE side=0 AND message_id IS NOT NULL
+                      AND identity_provenance='rfc_message_id'
                       AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
                  CREATE INDEX staged_exact_source_ranked_key
                     ON staged_exact_source_ranked(message_id,match_mailbox,date_key,size_bytes,ordinal);
@@ -175,6 +176,7 @@ impl MessageVerification {
                            ) AS ordinal
                     FROM staged_messages INDEXED BY staged_messages_exact_destination
                     WHERE side=1 AND message_id IS NOT NULL
+                      AND identity_provenance='rfc_message_id'
                       AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
                  CREATE INDEX staged_exact_destination_ranked_key
                     ON staged_exact_destination_ranked(message_id,match_mailbox,date_key,size_bytes,ordinal);
@@ -228,6 +230,7 @@ impl MessageVerification {
                            ) AS ordinal
                     FROM staged_messages s
                     WHERE side=0 AND message_id IS NOT NULL
+                      AND identity_provenance='rfc_message_id'
                       AND NOT EXISTS (
                           SELECT 1 FROM staged_matched m
                           WHERE m.side=s.side AND m.mailbox=s.mailbox
@@ -243,6 +246,7 @@ impl MessageVerification {
                            ) AS ordinal
                     FROM staged_messages d
                     WHERE side=1 AND message_id IS NOT NULL
+                      AND identity_provenance='rfc_message_id'
                       AND NOT EXISTS (
                           SELECT 1 FROM staged_matched m
                           WHERE m.side=d.side AND m.mailbox=d.mailbox
@@ -318,8 +322,13 @@ impl MessageVerification {
             }
             after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
             for source in batch {
+                if source.message.identity_provenance()
+                    != crate::core::MessageIdentityProvenance::RfcMessageId
+                {
+                    continue;
+                }
                 let expected = expected_destination_folder(&source.key, folder_mapping);
-                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d INDEXED BY staged_messages_exact_destination WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox< ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox DESC,d.uidvalidity,d.uid LIMIT 1";
+                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d INDEXED BY staged_messages_exact_destination WHERE d.side=1 AND d.message_id=?1 AND d.identity_provenance='rfc_message_id' AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox< ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox DESC,d.uidvalidity,d.uid LIMIT 1";
                 let lower = stage_candidate(
                     connection,
                     query,
@@ -330,7 +339,7 @@ impl MessageVerification {
                         expected
                     ],
                 )?;
-                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d INDEXED BY staged_messages_exact_destination WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox> ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox,d.uidvalidity,d.uid LIMIT 1";
+                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d INDEXED BY staged_messages_exact_destination WHERE d.side=1 AND d.message_id=?1 AND d.identity_provenance='rfc_message_id' AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox> ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox,d.uidvalidity,d.uid LIMIT 1";
                 let upper = stage_candidate(
                     connection,
                     query,
@@ -431,6 +440,20 @@ impl MessageVerification {
                 u64::try_from(count)
                     .map_err(|_| format!("probable staged match count is invalid: {count}"))
             })?;
+        let synthetic_identity_matches = connection
+            .query_row(
+                "SELECT COUNT(*) FROM staged_probable_pairs p
+                 JOIN staged_messages s ON s.side=0 AND s.mailbox=p.source_mailbox
+                   AND s.uidvalidity=p.source_uidvalidity AND s.uid=p.source_uid
+                WHERE s.identity_provenance='synthetic_header_fingerprint'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| format!("could not count synthetic identity candidates: {error}"))
+            .and_then(|count| {
+                u64::try_from(count)
+                    .map_err(|_| format!("synthetic identity count is invalid: {count}"))
+            })?;
         crate::core::stage_sql::execute_batch(
             connection,
             "DROP TABLE staged_probable_pairs;
@@ -466,7 +489,7 @@ impl MessageVerification {
                 missing_count = missing_count.saturating_add(1);
             }
         }
-        crate::core::stage_sql::execute_batch(connection, "CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0; CREATE INDEX staged_duplicate_ids_message_id ON staged_duplicate_ids(message_id);").map_err(|error| error.to_string())?;
+        crate::core::stage_sql::execute_batch(connection, "CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.identity_provenance='rfc_message_id' GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id AND s.identity_provenance='rfc_message_id') AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id AND s.identity_provenance='rfc_message_id') > 0; CREATE INDEX staged_duplicate_ids_message_id ON staged_duplicate_ids(message_id);").map_err(|error| error.to_string())?;
         after_rowid = 0;
         loop {
             let batch = stage
@@ -548,7 +571,9 @@ impl MessageVerification {
                 total_source,
                 total_destination,
                 metadata_matches,
+                rfc_message_id_matches: metadata_matches,
                 probable_matches,
+                synthetic_identity_matches,
                 missing_count,
                 extra_count,
                 duplicated_count,

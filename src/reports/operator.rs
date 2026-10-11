@@ -225,6 +225,8 @@ pub(crate) fn export_project_json(
                             "modified_count": evidence.modified_count(),
                             "probable_count": evidence.probable_count(),
                             "metadata_matched_count": evidence.metadata_matched_count(),
+                            "rfc_message_id_matches": evidence.rfc_message_id_matches,
+                            "synthetic_identity_matches": evidence.synthetic_identity_matches,
                             "failed_messages": evidence.failed_messages,
                         }
                     });
@@ -616,6 +618,8 @@ mod project_json_tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
             flag_verification: Some(core::FlagVerification {
                 compared_messages: 3,
                 mismatched_messages: 0,

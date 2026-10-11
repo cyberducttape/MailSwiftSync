@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep synthetic header fingerprints out of exact RFC Message-ID reconciliation. Persist RFC-ID and synthetic-candidate counts separately in evidence history and signed/report exports.
+- Upgrade ledger schema to v31 with nonnegative identity-provenance counters; prior ledgers migrate with zero-valued legacy counters.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving

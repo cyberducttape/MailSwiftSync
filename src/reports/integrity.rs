@@ -13,7 +13,7 @@ pub(crate) fn evidence_digest(
     evidence: &core::MailboxEvidence,
 ) -> String {
     let canonical = format!(
-        "run_id={run_id}\nplan_snapshot_sha256={}\nverification_method={}\nverification_outcome={}\nsource_folders={}\ndestination_folders={}\nsource_messages={}\ndestination_messages={}\nsource_bytes={}\ndestination_bytes={}\nunresolved_count={}\nfailed_messages={}\nauthoritative={}\nmissing_count={}\nextra_count={}\nmodified_count={}\nprobable_count={}\nmetadata_matched_count={}\n",
+        "run_id={run_id}\nplan_snapshot_sha256={}\nverification_method={}\nverification_outcome={}\nsource_folders={}\ndestination_folders={}\nsource_messages={}\ndestination_messages={}\nsource_bytes={}\ndestination_bytes={}\nunresolved_count={}\nfailed_messages={}\nauthoritative={}\nmissing_count={}\nextra_count={}\nmodified_count={}\nprobable_count={}\nmetadata_matched_count={}\nrfc_message_id_matches={}\nsynthetic_identity_matches={}\n",
         snapshot_sha256(plan_snapshot),
         evidence.verification_method().as_str(),
         evidence.verification_outcome().as_str(),
@@ -33,6 +33,8 @@ pub(crate) fn evidence_digest(
         evidence.modified_count(),
         evidence.probable_count(),
         evidence.metadata_matched_count(),
+        evidence.rfc_message_id_matches,
+        evidence.synthetic_identity_matches,
     );
     // Appended only when present so digests of evidence recorded before
     // flag verification existed are unchanged.
@@ -70,6 +72,13 @@ pub(crate) fn evidence_coverage_fields(
             "source_messages": total,
             "percent": core::coverage_percent(checked, total),
             "complete": total > 0 && checked == total,
+        }),
+    );
+    fields.insert(
+        "identity_match_counts".into(),
+        serde_json::json!({
+            "rfc_message_id_matches": evidence.rfc_message_id_matches,
+            "synthetic_identity_matches": evidence.synthetic_identity_matches,
         }),
     );
     fields.insert(

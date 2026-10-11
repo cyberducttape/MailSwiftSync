@@ -303,3 +303,12 @@ MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES=100000 \
 
 This isolated synthetic benchmark must not be cited as end-to-end migration or
 provider qualification evidence.
+# Identity evidence qualification
+
+RFC `Message-ID` values and generated `header-fingerprint` values are kept as
+distinct identity provenance. Generated header fingerprints may support a
+unique date/size candidate pairing, but never produce an exact metadata match;
+content proof can strengthen evidence only through its separately bounded
+body-hash path. RFC-ID exact matches and synthetic-identity candidates are
+persisted as separate evidence-history counters and included in signed proof
+digests and report JSON. Synthetic candidates do not imply body integrity.

@@ -262,6 +262,8 @@ pub(crate) fn run_imap_message_verification(
         extra_messages: summary.extra_count.saturating_add(summary.duplicated_count),
         modified_messages: summary.changed_count,
         probable_messages: summary.probable_matches,
+        rfc_message_id_matches: summary.rfc_message_id_matches,
+        synthetic_identity_matches: summary.synthetic_identity_matches,
         flag_verification: Some(flag_verification),
     };
     // Capture each folder's cursor before a durable stage is removed; the

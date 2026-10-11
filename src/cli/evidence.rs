@@ -678,6 +678,8 @@ fn reverify_result_json(
         "extra_messages": evidence.extra_messages,
         "modified_messages": evidence.modified_messages,
         "probable_messages": evidence.probable_messages,
+        "rfc_message_id_matches": evidence.rfc_message_id_matches,
+        "synthetic_identity_matches": evidence.synthetic_identity_matches,
         "mismatch_rows": core::MismatchSource::mismatch_count(mismatches),
         "folders": folder_count,
         "note": "Verification-only observation; the original migration result is unchanged and differences may reflect legitimate post-migration activity."
@@ -1265,6 +1267,8 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
             flag_verification: None,
         }
     }

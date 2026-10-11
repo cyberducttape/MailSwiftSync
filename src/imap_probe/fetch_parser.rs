@@ -51,10 +51,11 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
                             .literal_after(b"BODY[HEADER.FIELDS (MESSAGE-ID)]")
                     });
                 let header_text = header.map(|value| String::from_utf8_lossy(value));
-                let message_id = header_text
+                let parsed_message_id = header_text
                     .as_deref()
                     .and_then(parse_message_id_header)
-                    .filter(|value| !value.is_empty())
+                    .filter(|value| !value.is_empty());
+                let message_id = parsed_message_id
                     .or_else(|| header_text.as_deref().and_then(header_fingerprint));
                 entry.insert(crate::core::ExtractedMessage {
                     message_id,

@@ -90,6 +90,8 @@ impl StateStore {
                     ("extra_messages", "INTEGER", true, 0),
                     ("modified_messages", "INTEGER", true, 0),
                     ("probable_messages", "INTEGER", true, 0),
+                    ("rfc_message_id_matches", "INTEGER", true, 0),
+                    ("synthetic_identity_matches", "INTEGER", true, 0),
                     ("captured_at", "TEXT", true, 0),
                     ("run_id", "TEXT", false, 0),
                 ],
@@ -115,6 +117,8 @@ impl StateStore {
                     ("extra_messages", "INTEGER", true, 0),
                     ("modified_messages", "INTEGER", true, 0),
                     ("probable_messages", "INTEGER", true, 0),
+                    ("rfc_message_id_matches", "INTEGER", true, 0),
+                    ("synthetic_identity_matches", "INTEGER", true, 0),
                     ("captured_at", "TEXT", true, 0),
                 ],
             ),
@@ -967,6 +971,8 @@ impl StateStore {
             ("evidence", "extra_messages"),
             ("evidence", "modified_messages"),
             ("evidence", "probable_messages"),
+            ("evidence", "rfc_message_id_matches"),
+            ("evidence", "synthetic_identity_matches"),
             ("evidence_history", "source_messages"),
             ("evidence_history", "destination_messages"),
             ("evidence_history", "source_bytes"),
@@ -979,6 +985,8 @@ impl StateStore {
             ("evidence_history", "extra_messages"),
             ("evidence_history", "modified_messages"),
             ("evidence_history", "probable_messages"),
+            ("evidence_history", "rfc_message_id_matches"),
+            ("evidence_history", "synthetic_identity_matches"),
             ("evidence_flag_verification", "compared_messages"),
             ("evidence_flag_verification", "mismatched_messages"),
             ("evidence_flag_verification", "excepted_messages"),
@@ -1042,8 +1050,8 @@ impl StateStore {
         const SEMANTIC_CHECKS: &[&str] = &[
             "SELECT EXISTS(SELECT 1 FROM evidence e JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id WHERE e.verification_outcome IN ('exact_body_match','exact_metadata_match') AND f.mismatched_messages<>0)",
             "SELECT EXISTS(SELECT 1 FROM evidence_history h JOIN evidence_flag_verification f ON f.job_id=h.job_id AND f.run_id=h.run_id WHERE h.verification_outcome IN ('exact_body_match','exact_metadata_match') AND f.mismatched_messages<>0)",
-            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
-            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0 OR (verification_outcome='exact_metadata_match' AND synthetic_identity_matches<>0) OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR probable_messages<>0 OR (verification_outcome='exact_metadata_match' AND synthetic_identity_matches<>0) OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
         ];
         for sql in SEMANTIC_CHECKS {
             let contradictory: bool = connection.query_row(sql, [], |row| row.get(0))?;

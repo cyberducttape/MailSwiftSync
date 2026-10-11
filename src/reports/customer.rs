@@ -252,6 +252,8 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "modified_count": value.modified_count(),
                         "probable_count": value.probable_count(),
                         "metadata_matched_count": value.metadata_matched_count(),
+                        "rfc_message_id_matches": value.rfc_message_id_matches,
+                        "synthetic_identity_matches": value.synthetic_identity_matches,
                         "failed_messages": value.failed_messages,
                         "missing_messages": value.missing_messages,
                         "extra_messages": value.extra_messages,
@@ -546,6 +548,8 @@ mod tests {
                     extra_messages: 0,
                     modified_messages: 0,
                     probable_messages: 0,
+                    rfc_message_id_matches: 0,
+                    synthetic_identity_matches: 0,
                     flag_verification: None,
                 },
             )
@@ -666,6 +670,8 @@ mod tests {
                             extra_messages: 0,
                             modified_messages: 0,
                             probable_messages: 0,
+                            rfc_message_id_matches: 0,
+                            synthetic_identity_matches: 0,
                             flag_verification: None,
                         },
                         Some("plan".into()),
@@ -909,6 +915,8 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
             flag_verification: None,
         };
         for index in 0..mailboxes {

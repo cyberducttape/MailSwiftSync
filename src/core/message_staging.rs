@@ -408,6 +408,7 @@ impl MessageMetadataStage {
                  uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= -1),
                  uid TEXT NOT NULL,
                  message_id TEXT,
+                 identity_provenance TEXT NOT NULL DEFAULT 'missing',
                  internal_date TEXT,
                  date_key TEXT,
                  size_bytes INTEGER CHECK(size_bytes IS NULL OR size_bytes >= 0),
@@ -425,6 +426,19 @@ impl MessageMetadataStage {
              CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));
              CREATE TABLE IF NOT EXISTS stage_permanent_flags(side INTEGER NOT NULL, mailbox TEXT NOT NULL, flags TEXT, PRIMARY KEY(side,mailbox));",
         )?;
+        let staged_identity_provenance: bool = self.connection_ref()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('staged_messages') WHERE name='identity_provenance')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !staged_identity_provenance {
+            self.connection_ref()?.execute_batch(
+                "DELETE FROM staged_messages;
+                 DELETE FROM stage_fingerprints;
+                 DELETE FROM stage_cursors;
+                 ALTER TABLE staged_messages ADD COLUMN identity_provenance TEXT NOT NULL DEFAULT 'missing';",
+            )?;
+        }
         // Stages written before flags were staged would leave every resumed
         // row without flags and silently shrink flag-verification coverage.
         // They are a disposable cache, so discard their rows and rescan.
@@ -557,7 +571,7 @@ impl MessageMetadataStage {
         let mut ordered_messages = messages.iter().collect::<Vec<_>>();
         ordered_messages.sort_by(|(left, _), (right, _)| left.cmp(right));
         {
-            let mut insert = tx.prepare_cached("INSERT OR REPLACE INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes,flags) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8,?9)").map_err(|e| e.to_string())?;
+            let mut insert = tx.prepare_cached("INSERT OR REPLACE INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,identity_provenance,internal_date,date_key,size_bytes,flags) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8,?9,?10)").map_err(|e| e.to_string())?;
             for (key, message) in ordered_messages {
                 let uidvalidity = key
                     .uidvalidity
@@ -577,6 +591,7 @@ impl MessageMetadataStage {
                         uidvalidity,
                         key.uid,
                         message.message_id,
+                        message.identity_provenance().as_str(),
                         message.internal_date,
                         metadata_date_key(message.internal_date.as_deref()),
                         size,

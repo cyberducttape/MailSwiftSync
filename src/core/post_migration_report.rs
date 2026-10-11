@@ -351,6 +351,8 @@ mod tests {
                             extra_messages: 2,
                             modified_messages: 3,
                             probable_messages: 0,
+                            rfc_message_id_matches: 0,
+                            synthetic_identity_matches: 0,
                             flag_verification: None,
                         },
                         Some("{}".into()),
