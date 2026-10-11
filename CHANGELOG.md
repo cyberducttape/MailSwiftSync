@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow `=` in typed folder-mapping destinations; retain the engine-required
+  restriction on source names and explain it precisely.
 - Version post-migration report artifacts as v2 and encode an unrecorded
   `total_skipped` count as `null` with explicit `unavailable` status; manually
   supplied counts remain numeric and marked available.

@@ -591,6 +591,25 @@ fn typed_folder_mapping_is_emitted_and_bound_to_plan_arguments() {
 }
 
 #[test]
+fn typed_folder_mapping_allows_equals_in_destination_names() {
+    let mut form = dovecot_form();
+    form.profile.engine = crate::core::Engine::ImapSync;
+    form.profile.folder_mapping_rules = vec![FolderMappingRule {
+        source: "Archive".into(),
+        destination: "Archive=2026".into(),
+        exclude: false,
+    }];
+
+    assert!(form.validate_for_import().is_ok());
+    let args = form.args(true);
+    let mapping = args
+        .windows(2)
+        .find(|window| window[0] == "--f1f2")
+        .expect("typed mapping argument");
+    assert_eq!(mapping[1], "Archive=Archive=2026");
+}
+
+#[test]
 fn typed_folder_mapping_rejects_ambiguous_or_unsafe_names() {
     let mut form = dovecot_form();
     form.profile.folder_mapping_rules = vec![FolderMappingRule {
@@ -611,7 +630,11 @@ fn typed_folder_mapping_rejects_ambiguous_or_unsafe_names() {
         destination: String::new(),
         exclude: true,
     };
-    assert!(form.validate_for_import().is_err());
+    let error = form.validate_for_import().unwrap_err();
+    assert!(
+        error.contains("Source folder names cannot contain '='"),
+        "{error}"
+    );
 
     form.profile.folder_mapping_rules = vec![
         FolderMappingRule {
