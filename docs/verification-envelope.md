@@ -40,6 +40,18 @@ provider behavior, or production-host performance. The current benchmark
 does not estimate allocator-level allocation counts or establish a safe
 aggregate stage-disk ceiling.
 
+A follow-up run on the same host and commit exercised the configured
+1,000,000-message-per-endpoint metadata ceiling. It staged in 20.145 s and
+reconciled in 20.112 s (49,721 messages/s); flag comparison covered 980,000
+unambiguous messages. Peak RSS was 34 MiB, the stage directory peaked at
+1,061,770,424 bytes, the rollback journal peaked at 100,893,880 bytes, and
+reconciliation wrote 157,138,944 bytes. The fixture recorded 20,000
+intentional changed-ID cases. The test passed the script's 64 MiB RSS and
+20,000 messages/s local thresholds. This demonstrates that this synthetic
+workload reaches the software's 1M admission ceiling on the recorded host; it
+does not establish capacity on other hosts, include network fetch or
+report-commit costs, or justify relaxing any guard.
+
 ## Evidence dimensions
 
 Verification results expose independent dimensions rather than treating one
