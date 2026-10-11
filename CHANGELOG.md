@@ -12,6 +12,8 @@
 - Keep `supervise` alive across transient SQLite lock/busy errors during its
   read-only polling phase while continuing to fail fast on corruption and
   permission failures.
+- Add regression coverage proving certificate pins fail closed for both
+  transfer engines until connection-level enforcement is qualified.
 - Include overall assurance status, message coverage, and flag-coverage counters
   in standalone `reverify` JSON so partial fidelity cannot be mistaken for an
   unqualified verification result by automation.

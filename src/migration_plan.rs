@@ -308,6 +308,26 @@ mod tests {
     }
 
     #[test]
+    fn certificate_pins_fail_closed_when_transfer_engine_cannot_enforce_them() {
+        for engine in [crate::core::Engine::ImapSync, crate::core::Engine::Dovecot] {
+            let mut form = Form::default();
+            form.profile.engine = engine;
+            form.profile.source_host = "imap.source.example".into();
+            form.profile.source_user = "user@source.example".into();
+            form.profile.destination_host = "imap.destination.example".into();
+            form.profile.destination_user = "user@destination.example".into();
+            form.profile.source_certificate_pin_sha256 = "ab".repeat(32);
+            let error = form.validate_internal(false).unwrap_err();
+            assert!(error.contains("Certificate pin"), "{error}");
+            assert!(
+                error.contains("cannot currently be enforced")
+                    || error.contains("not currently supported"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn credential_free_form_clone_preserves_plan_defaults() {
         let base = Form {
             source_password: "source-secret".into(),
