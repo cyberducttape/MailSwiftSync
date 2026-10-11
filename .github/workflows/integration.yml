@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mailswiftsync-imap-integration-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   packaged-imapsync-transfer:
     name: Packaged imapsync product integration
