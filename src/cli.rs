@@ -148,6 +148,9 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("reverify") {
         return reverify_command(arguments);
     }
+    if command == std::ffi::OsStr::new("reverify-batch") {
+        return reverify_batch_command(arguments);
+    }
     if command == std::ffi::OsStr::new("verify-certificate") {
         return verify_certificate_command(arguments);
     }
@@ -246,6 +249,9 @@ fn print_cli_help() {
     out!("  verify-certificate <file> [trusted-key]  Verify a signed migration certificate");
     out!(
         "  reverify <state> <project-id> <mailbox-id> <source-secret-file> <destination-secret-file> [--mode metadata|content] [--differences output.csv]  Reconcile a completed mailbox without rerunning the transfer engine"
+    );
+    out!(
+        "  reverify-batch <state> <project-id> <manifest.csv> [--mode metadata|content] [--differences-dir directory]  Reconcile a bounded mailbox manifest serially without rerunning the transfer engine"
     );
     out!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n  --execution-profile <name>    Use hardened (default) or compatibility engine environment\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."

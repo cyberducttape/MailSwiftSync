@@ -336,6 +336,232 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
     Ok(())
 }
 
+const MAX_REVERIFY_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_REVERIFY_MANIFEST_ROWS: usize = 1_000;
+
+#[derive(Debug)]
+struct ReverifyManifestRow {
+    mailbox_id: String,
+    source_secret: PathBuf,
+    destination_secret: PathBuf,
+}
+
+fn read_reverify_manifest(path: &std::path::Path) -> Result<Vec<ReverifyManifestRow>, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("could not inspect reverify manifest: {error}"))?;
+    if !metadata.is_file() {
+        return Err("reverify manifest must be a regular file".to_owned());
+    }
+    if metadata.len() > MAX_REVERIFY_MANIFEST_BYTES {
+        return Err(format!(
+            "reverify manifest exceeds the {} MiB safety limit",
+            MAX_REVERIFY_MANIFEST_BYTES / (1024 * 1024)
+        ));
+    }
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_path(path)
+        .map_err(|error| format!("could not read reverify manifest: {error}"))?;
+    let headers = reader
+        .headers()
+        .map_err(|error| format!("could not read reverify manifest headers: {error}"))?
+        .clone();
+    if headers.len() != 3
+        || headers.get(0) != Some("mailbox_id")
+        || headers.get(1) != Some("source_secret_file")
+        || headers.get(2) != Some("destination_secret_file")
+    {
+        return Err(
+            "reverify manifest headers must be mailbox_id,source_secret_file,destination_secret_file"
+                .to_owned(),
+        );
+    }
+    let mut seen = HashSet::new();
+    let mut rows = Vec::new();
+    for (index, record) in reader.records().enumerate() {
+        if index >= MAX_REVERIFY_MANIFEST_ROWS {
+            return Err(format!(
+                "reverify manifest exceeds the {MAX_REVERIFY_MANIFEST_ROWS}-row safety limit"
+            ));
+        }
+        let record = record
+            .map_err(|error| format!("invalid reverify manifest row {}: {error}", index + 2))?;
+        if record.len() != 3 {
+            return Err(format!(
+                "reverify manifest row {} must contain exactly three fields",
+                index + 2
+            ));
+        }
+        let mailbox_id = record[0].trim().to_owned();
+        let source = record[1].trim();
+        let destination = record[2].trim();
+        if mailbox_id.is_empty() || source.is_empty() || destination.is_empty() {
+            return Err(format!(
+                "reverify manifest row {} contains an empty field",
+                index + 2
+            ));
+        }
+        if !seen.insert(mailbox_id.clone()) {
+            return Err(format!(
+                "reverify manifest contains duplicate mailbox ID {mailbox_id:?}"
+            ));
+        }
+        let resolve = |value: &str| {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                base.join(path)
+            }
+        };
+        rows.push(ReverifyManifestRow {
+            mailbox_id,
+            source_secret: resolve(source),
+            destination_secret: resolve(destination),
+        });
+    }
+    if rows.is_empty() {
+        return Err("reverify manifest contains no mailbox rows".to_owned());
+    }
+    Ok(rows)
+}
+
+/// Reverify a bounded manifest serially. Each child invocation owns the same
+/// exclusive ledger lock as the single-mailbox command, so batch children do
+/// not scan concurrently and existing policy/provenance/evidence checks are
+/// reused. The lock is intentionally not held across child processes.
+pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
+    let (Some(state), Some(project_id), Some(manifest)) =
+        (arguments.next(), arguments.next(), arguments.next())
+    else {
+        eprintln!(
+            "Usage: mailswiftsync reverify-batch <state.db> <project-id> <manifest.csv> [--mode metadata|content] [--differences-dir directory]"
+        );
+        std::process::exit(2);
+    };
+    let project_id = project_id.into_string().unwrap_or_else(|_| {
+        eprintln!("Batch reverification refused: project ID must be valid UTF-8");
+        std::process::exit(2);
+    });
+    let mut mode = "metadata".to_owned();
+    let mut differences_dir = None;
+    while let Some(argument) = arguments.next() {
+        let argument = argument.to_string_lossy().into_owned();
+        if let Some(value) = argument.strip_prefix("--mode=") {
+            mode = value.to_owned();
+        } else if argument == "--mode" {
+            mode = arguments
+                .next()
+                .and_then(|value| value.into_string().ok())
+                .unwrap_or_default();
+        } else if let Some(value) = argument.strip_prefix("--differences-dir=") {
+            differences_dir = Some(PathBuf::from(value));
+        } else if argument == "--differences-dir" {
+            differences_dir = arguments.next().map(PathBuf::from);
+        } else {
+            eprintln!("Batch reverification refused: unknown option {argument}");
+            std::process::exit(2);
+        }
+    }
+    if !matches!(mode.as_str(), "metadata" | "content") {
+        eprintln!("Batch reverification refused: mode must be metadata or content");
+        std::process::exit(2);
+    }
+    let rows = read_reverify_manifest(std::path::Path::new(&manifest)).unwrap_or_else(|error| {
+        eprintln!("Batch reverification refused: {error}");
+        std::process::exit(2);
+    });
+    if let Some(directory) = &differences_dir {
+        std::fs::create_dir_all(directory).unwrap_or_else(|error| {
+            eprintln!(
+                "Batch reverification refused: could not create differences directory: {error}"
+            );
+            std::process::exit(2);
+        });
+    }
+    let executable = std::env::current_exe().unwrap_or_else(|error| {
+        eprintln!(
+            "Batch reverification refused: could not resolve the application executable: {error}"
+        );
+        std::process::exit(1);
+    });
+    let mut results = Vec::with_capacity(rows.len());
+    let mut failed = 0usize;
+    for (index, row) in rows.iter().enumerate() {
+        let mut command = std::process::Command::new(&executable);
+        command
+            .arg("reverify")
+            .arg(&state)
+            .arg(&project_id)
+            .arg(&row.mailbox_id)
+            .arg(&row.source_secret)
+            .arg(&row.destination_secret)
+            .arg("--mode")
+            .arg(&mode);
+        if let Some(directory) = &differences_dir {
+            command
+                .arg("--differences")
+                .arg(directory.join(format!("{:04}-differences.csv", index + 1)));
+        }
+        let output = command.output().unwrap_or_else(|error| {
+            eprintln!(
+                "Batch reverification failed to launch mailbox {}: {error}",
+                row.mailbox_id
+            );
+            std::process::exit(1);
+        });
+        if output.status.success() {
+            match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                Ok(result) => results.push(serde_json::json!({
+                    "mailbox_id": row.mailbox_id,
+                    "status": "completed",
+                    "result": result
+                })),
+                Err(error) => {
+                    failed += 1;
+                    results.push(serde_json::json!({
+                        "mailbox_id": row.mailbox_id,
+                        "status": "failed",
+                        "error": format!("reverify returned invalid JSON: {error}")
+                    }));
+                }
+            }
+        } else {
+            failed += 1;
+            let mut error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            if error.len() > 8 * 1024 {
+                error.truncate(8 * 1024);
+                error.push('…');
+            }
+            if error.is_empty() {
+                error = format!("reverify exited with status {}", output.status);
+            }
+            results.push(serde_json::json!({
+                "mailbox_id": row.mailbox_id,
+                "status": "failed",
+                "error": error
+            }));
+        }
+    }
+    let output = serde_json::json!({
+        "format": "mailswiftsync.reverify_batch",
+        "format_version": 1,
+        "project_id": project_id,
+        "mode": mode,
+        "total": rows.len(),
+        "completed": rows.len() - failed,
+        "failed": failed,
+        "results": results,
+        "note": "Each mailbox is an independent verification observation; a batch with failures is not a complete certification."
+    });
+    out!("{output}");
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn reverify_result_json(
     evidence: &core::MailboxEvidence,
     run_id: &str,
@@ -924,5 +1150,54 @@ mod tests {
                 .to_string_lossy()
                 .ends_with("-reverify.sqlite")
         );
+    }
+
+    #[test]
+    fn reverify_manifest_is_bounded_and_resolves_relative_secret_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "mailswiftsync-reverify-manifest-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("secrets")).unwrap();
+        let manifest = root.join("manifest.csv");
+        std::fs::write(
+            &manifest,
+            "mailbox_id,source_secret_file,destination_secret_file\nmailbox-1,secrets/source,secrets/destination\n",
+        )
+        .unwrap();
+        let rows = super::read_reverify_manifest(&manifest).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].mailbox_id, "mailbox-1");
+        assert_eq!(rows[0].source_secret, root.join("secrets/source"));
+        assert_eq!(rows[0].destination_secret, root.join("secrets/destination"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reverify_manifest_rejects_duplicate_mailboxes_and_wrong_headers() {
+        let root = std::env::temp_dir().join(format!(
+            "mailswiftsync-reverify-manifest-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let duplicate = root.join("duplicate.csv");
+        std::fs::write(
+            &duplicate,
+            "mailbox_id,source_secret_file,destination_secret_file\na,s,d\na,s,d\n",
+        )
+        .unwrap();
+        assert!(
+            super::read_reverify_manifest(&duplicate)
+                .unwrap_err()
+                .contains("duplicate mailbox ID")
+        );
+        let wrong = root.join("wrong.csv");
+        std::fs::write(&wrong, "mailbox,source,destination\na,s,d\n").unwrap();
+        assert!(
+            super::read_reverify_manifest(&wrong)
+                .unwrap_err()
+                .contains("headers must be")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

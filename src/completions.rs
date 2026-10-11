@@ -8,6 +8,7 @@
 pub(crate) const COMMANDS: &[&str] = &[
     "verify",
     "reverify",
+    "reverify-batch",
     "verify-certificate",
     "sign",
     "certificate",

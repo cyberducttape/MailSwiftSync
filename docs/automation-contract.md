@@ -26,6 +26,13 @@ be consumed together; `verification_outcome` alone is not an unqualified
 assurance claim. This result is an evidence artifact rather than a status
 projection and therefore is not included in the status golden-fixture set.
 
+`mailswiftsync reverify-batch` emits `mailswiftsync.reverify_batch`, version
+`1`, with `total`, `completed`, `failed`, and a `results` array. Each result
+contains a mailbox ID, a `completed` or `failed` status, and either the normal
+`reverify` artifact or a bounded error string. Callers must treat any nonzero
+`failed` count as incomplete evidence; the batch envelope is not a global
+point-in-time snapshot.
+
 The JSON contains project identity, durable lifecycle state, mailbox state
 counts, attention reasons, and bounded project summaries. Each fixture lists
 every field path with its allowed JSON types; `[]` marks array elements and

@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Refresh the README workflow previews with Retro 80s Neon theme screenshots.
+- Add bounded serial `reverify-batch` orchestration with strict manifest
+  validation, per-mailbox evidence results, and a nonzero exit for any failed
+  mailbox.
 - Include overall assurance status, message coverage, and flag-coverage counters
   in standalone `reverify` JSON so partial fidelity cannot be mistaken for an
   unqualified verification result by automation.

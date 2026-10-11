@@ -109,6 +109,19 @@ successful verification commits a new evidence-history row and then removes
 the private stage; an interrupted, failed, or ledger-write-failed verification
 retains it for the next verification attempt. Batch-wide re-verification orchestration, persistent
 customer-facing verification segments, and rolling digests remain future work.
+For a bounded batch, `reverify-batch` accepts a CSV manifest with the exact
+header `mailbox_id,source_secret_file,destination_secret_file` and runs the
+same mailbox command serially. Secret files are referenced by path only and
+are still validated by the single-mailbox command; the manifest is limited to
+4 MiB and 1,000 rows. Every child invocation acquires the exclusive ledger
+lock, so batch children never overlap, and the batch emits a versioned
+`mailswiftsync.reverify_batch` JSON envelope. A failed row is retained in the
+aggregate output and makes the process exit nonzero. The batch is an
+orchestration convenience; it does not hold a cross-mailbox lease between
+children, and is not a cross-mailbox point-in-time snapshot or a single
+all-or-nothing certification. A separately started controller may run during
+the gaps between child scans, so use a maintenance window when a whole batch
+must be operationally quiescent.
 
 Body-byte totals count bytes fetched and hashed from both endpoints together;
 they are not the source mailbox's total stored size. The current implementation
@@ -167,6 +180,17 @@ imapsync mailbox can be audited again without launching imapsync:
 ```text
 mailswiftsync reverify STATE PROJECT_ID MAILBOX_ID SOURCE_SECRET_FILE DESTINATION_SECRET_FILE \
   --mode metadata --differences differences.csv
+
+mailswiftsync reverify-batch STATE PROJECT_ID manifest.csv \
+  --mode metadata --differences-dir verification-differences/
+```
+
+The batch manifest is deliberately path-based and contains no passwords:
+
+```text
+mailbox_id,source_secret_file,destination_secret_file
+mailbox-001,secrets/mailbox-001-source,secrets/mailbox-001-destination
+mailbox-002,secrets/mailbox-002-source,secrets/mailbox-002-destination
 ```
 
 Use `--mode content` for the bounded body-fingerprint path. Secret files must
