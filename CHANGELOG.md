@@ -8,6 +8,8 @@
   is distinguished from still-pending RPM repository metadata.
 - Harden the documented systemd deployment by explicitly setting owner-only
   modes for its state and runtime directories.
+- Fix the packaged IMAP lab harness to inspect durable state after documented
+  headless live exit statuses 3, 4, or 5 instead of aborting under `set -e`.
 - Make imapsync transfer hostname verification explicit for both implicit IMAPS
   and STARTTLS endpoints; the qualified engine's STARTTLS defaults did not set
   `SSL_verifycn_scheme` even though its IMAPS defaults did.

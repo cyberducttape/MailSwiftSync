@@ -740,6 +740,27 @@ run_product() {
   return "$pipeline_status"
 }
 
+# A live command can return a documented nonzero terminal status even when the
+# durable mailbox state is the expected reviewable result. Inspect that state
+# below instead of letting `set -e` discard the useful diagnostics before the
+# harness can distinguish verified_with_exceptions from a real failure.
+run_product_live() {
+  local status=0
+  run_product "$@" || status=$?
+  case "$status" in
+    0)
+      return 0
+      ;;
+    3|4|5)
+      echo "INFO: live command returned documented terminal status $status; validating durable state" >&2
+      return 0
+      ;;
+    *)
+      return "$status"
+      ;;
+  esac
+}
+
 assert_mailbox_state() {
   local expected="$1"
   local status_json
@@ -758,7 +779,7 @@ run_product headless "$state" preflight \
 echo "PASS: packaged MailSwiftSync preflight completed against real STARTTLS servers"
 assert_mailbox_state ready
 
-run_product headless "$state" live --acknowledge-destination-loss \
+run_product_live headless "$state" live --acknowledge-destination-loss \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
   --diagnostic-log "$diagnostic_dir"
 echo "PASS: packaged MailSwiftSync live migration completed"
@@ -818,7 +839,7 @@ if [[ "$test_engine" == Dovecot ]]; then
   XDG_CONFIG_HOME="$preservation_config" run_product headless "$preservation_state" preflight \
     --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
     --diagnostic-log "$diagnostic_dir"
-  XDG_CONFIG_HOME="$preservation_config" run_product headless "$preservation_state" live \
+  XDG_CONFIG_HOME="$preservation_config" run_product_live headless "$preservation_state" live \
     --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
     --diagnostic-log "$diagnostic_dir"
   preservation_status="$(XDG_CONFIG_HOME="$preservation_config" run_product status "$preservation_state")"
@@ -894,7 +915,7 @@ Content-Type: text/plain; charset=utf-8
 This message proves that a subsequent incremental pass is exercised.
 EOF
 
-run_product headless "$state" live --acknowledge-destination-loss \
+run_product_live headless "$state" live --acknowledge-destination-loss \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
   --reopen-reason "integration fixture incremental synchronization" \
   --diagnostic-log "$diagnostic_dir"
