@@ -335,7 +335,18 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         "run_id": run_id,
         "mode": mode,
         "verification_outcome": evidence.verification_outcome().as_str(),
+        "verification_status": evidence.verification_status(),
         "verification_level": evidence.verification_level(),
+        "message_coverage": {
+            "checked": evidence.message_coverage().0,
+            "total": evidence.message_coverage().1,
+        },
+        "flag_verification": evidence.flag_verification.map(|flags| serde_json::json!({
+            "compared": flags.compared_messages,
+            "mismatched": flags.mismatched_messages,
+            "excepted": flags.excepted_messages,
+            "total": evidence.source_messages,
+        })),
         "source_messages": evidence.source_messages,
         "destination_messages": evidence.destination_messages,
         "missing_messages": evidence.missing_messages,

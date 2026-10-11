@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Refresh the README workflow previews with Retro 80s Neon theme screenshots.
+- Include overall assurance status, message coverage, and flag-coverage counters
+  in standalone `reverify` JSON so partial fidelity cannot be mistaken for an
+  unqualified verification result by automation.
 - Apply exact-evidence consistency checks to standalone re-verification
   history, preventing contradictory message counters from being persisted as
   an exact audit result.
