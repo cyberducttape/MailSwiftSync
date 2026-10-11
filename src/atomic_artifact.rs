@@ -70,8 +70,8 @@ fn cleanup_temporary_after_failure(
         Err(cleanup_error) => Err(std::io::Error::new(
             primary_error.kind(),
             format!(
-                "{primary_error}; could not remove temporary artifact {:?}: {cleanup_error}",
-                temporary
+                "{primary_error}; could not remove temporary artifact {}: {cleanup_error}",
+                temporary.display()
             ),
         )),
     }

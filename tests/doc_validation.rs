@@ -215,6 +215,23 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
 }
 
 #[test]
+fn native_runtime_failures_retain_logs_for_every_platform() {
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
+    assert!(
+        ci.contains("if: failure()\n        uses: actions/upload-artifact@"),
+        "failed native-test jobs must upload diagnostics on every matrix platform"
+    );
+    assert!(
+        ci.contains("name: native-test-log-${{ matrix.os }}"),
+        "native-test artifact names must identify their runner platform"
+    );
+    assert!(
+        ci.contains("tail -n 160 native-test.log"),
+        "failed native-test jobs must summarize the retained log"
+    );
+}
+
+#[test]
 fn stable_release_requires_privileged_self_hosted_windows_qualification() {
     let release = fs::read_to_string(".github/workflows/release.yml")
         .expect("release workflow should be readable");

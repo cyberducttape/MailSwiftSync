@@ -282,24 +282,24 @@ jobs:
           set +e
           cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture 2>&1 | tee native-test.log
           status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ "$status" -ne 0 ]; then
             # Keep workflow-command data fixed; test output is untrusted.
-            echo "::error title=Windows native test failure::Cargo test failed; inspect the uploaded native-test.log artifact"
+            echo "::error title=Native runtime test failure::Cargo test failed; inspect the uploaded native-test-log-${{ matrix.os }} artifact"
           fi
           exit "$status"
-      - name: Upload Windows native test log
-        if: failure() && matrix.os == 'windows-latest'
+      - name: Upload native test log
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-native-test-log
+          name: native-test-log-${{ matrix.os }}
           path: native-test.log
           if-no-files-found: error
-      - name: Summarize Windows native test failure
-        if: failure() && matrix.os == 'windows-latest'
+      - name: Summarize native test failure
+        if: failure()
         shell: bash
         run: |
           {
-            echo '### Windows native test failure details'
+            echo '### Native runtime test failure details (${{ matrix.os }})'
             echo '```text'
             tail -n 160 native-test.log
             echo '```'

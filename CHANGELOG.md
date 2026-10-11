@@ -9,6 +9,8 @@
   write error, so retained private artifacts are visible for operator cleanup.
 - Report cleanup failures for rejected or interrupted pinned-engine downloads,
   keeping an unverified partial artifact from being silently abandoned.
+- Use native path display in cleanup diagnostics and retain failed native-test
+  logs from every CI platform, making platform-specific regressions actionable.
 - Surface failures to remove the private unsigned certificate intermediate;
   certificate export no longer reports complete cleanup when that file remains.
 - Reject reverification difference-export flags that omit their required path,
