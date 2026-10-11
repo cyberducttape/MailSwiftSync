@@ -20,7 +20,7 @@ pub(super) const OAUTH_REFRESH_PERSIST_RETRY_DELAY: Duration = Duration::from_mi
 /// Keyring writes are outside the provider transaction. Retry short-lived
 /// backend/IPC failures before declaring that a provider-side rotation has
 /// entered the catastrophic recovery state.
-pub(super) fn persist_rotated_refresh_config_with_retry<F>(
+pub(crate) fn persist_rotated_refresh_config_with_retry<F>(
     config: &crate::oauth_refresh::OAuthRefreshConfig,
     mut persist: F,
 ) -> Result<(), String>

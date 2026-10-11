@@ -320,11 +320,14 @@ reconciliation as successful.
   readiness probe. The initial refresh token comes from
   `mailswiftsync oauth-authorize` (authorization-code flow with PKCE, loopback
   redirect, state check, refresh-token required) or from the provider's own
-  tooling. A
-  rotated refresh token is persisted with bounded retries; if the keyring
-  remains unavailable, live execution fails closed and retains the rotated
-  configuration only in protected process memory for persistence recovery,
-  without attempting another provider exchange.
+  tooling. Rotated refresh tokens are persisted with bounded retries. Concurrent
+  imapsync reconnect callbacks that share a keyring ID are serialized across
+  processes and reload the latest keyring configuration before exchanging.
+  If keyring persistence remains unavailable, a reconnect callback fails
+  closed after three attempts; the rotated config remains only in its private
+  per-run secret directory until normal run cleanup. The pre-launch path keeps
+  an unrecoverably rotated config only in protected process memory for keyring
+  persistence recovery, without attempting another provider exchange.
 
 ## Available in 0.1
 

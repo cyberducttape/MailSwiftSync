@@ -414,37 +414,35 @@ pub(super) fn oauth_access_token_command(
                         ),
                     )
                 })?;
-            let encoded = crate::oauth_refresh::encode_refresh_config(&rotated_config);
-            entry.set_password(&encoded).map_err(|error| {
-                (
-                    1,
-                    format!(
-                        "the provider rotated the refresh token but the OS keyring could not be updated: {error}"
-                    ),
-                )
-            })?;
-            let stored = entry.get_password().map_err(|error| {
-                (
-                    1,
-                    format!(
-                        "the provider rotated the refresh token but the OS keyring update could not be verified: {error}"
-                    ),
-                )
-            })?;
-            let verified = crate::oauth_refresh::decode_refresh_config(&stored).map_err(|error| {
-                (
-                    1,
-                    format!(
-                        "the provider rotated the refresh token but the OS keyring returned invalid configuration: {error}"
-                    ),
-                )
-            })?;
-            if verified.refresh_token.as_str() != rotated_config.refresh_token.as_str() {
-                return Err((
-                    1,
-                    "the provider rotated the refresh token but the OS keyring returned a different token".to_owned(),
-                ));
-            }
+            crate::migration_plan::persist_rotated_refresh_config_with_retry(
+                &rotated_config,
+                |config| {
+                    let encoded = crate::oauth_refresh::encode_refresh_config(config);
+                    entry.set_password(&encoded).map_err(|error| {
+                        format!(
+                            "the provider rotated the refresh token but the OS keyring could not be updated: {error}"
+                        )
+                    })?;
+                    let stored = entry.get_password().map_err(|error| {
+                        format!(
+                            "the provider rotated the refresh token but the OS keyring update could not be verified: {error}"
+                        )
+                    })?;
+                    let verified = crate::oauth_refresh::decode_refresh_config(&stored)
+                        .map_err(|error| {
+                            format!(
+                                "the provider rotated the refresh token but the OS keyring returned invalid configuration: {error}"
+                            )
+                        })?;
+                    if verified.refresh_token.as_str() != config.refresh_token.as_str() {
+                        return Err(
+                            "the provider rotated the refresh token but the OS keyring returned a different token".to_owned(),
+                        );
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|error| (1, error))?;
         }
         if persist_keyring_id.is_some() {
             message.push_str(

@@ -495,4 +495,22 @@ mod tests {
         .expect("a transient keyring failure should be retried");
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
+
+    #[test]
+    fn rotated_refresh_persistence_stops_after_bounded_keyring_failures() {
+        let config = OAuthRefreshConfig {
+            token_endpoint: "https://oauth.example.test/token".into(),
+            client_id: "client".into(),
+            client_secret: SecretString::default(),
+            refresh_token: SecretString::from("rotated-refresh-token"),
+        };
+        let attempts = AtomicUsize::new(0);
+        let error = persist_rotated_refresh_config_with_retry(&config, |_config| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err("persistent keyring write failure".into())
+        })
+        .unwrap_err();
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert!(error.contains("persistent keyring write failure"));
+    }
 }

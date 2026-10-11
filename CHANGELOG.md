@@ -4,7 +4,8 @@
 
 - Serialize live OAuth refresh callbacks across concurrent mailbox processes
   that share a rotating keyring credential; each callback reloads the newest
-  refresh configuration while holding the per-credential lock.
+  refresh configuration while holding the per-credential lock, and retries
+  transient keyring writes before failing a rotated-token refresh closed.
 - Explicitly close and remove private migration-assurance SQLite staging data
   before publishing a comparison report; setup and cleanup failures are now
   returned with the comparison error instead of being silently left to drop.
