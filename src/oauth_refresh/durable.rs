@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 pub(crate) fn oauth_refresh_credential_digest(keyring_id: &str) -> String {
+    // codeql[rust/weak-sensitive-data-hashing] keyring_id is a non-secret OS-keyring label, not a password or token; this digest is only a stable local lock/recovery filename and is not used for authentication.
     digest_hex(&Sha256::digest(keyring_id.as_bytes()))
 }
 
