@@ -35,6 +35,9 @@
   reverification ledger commits to prevent future assurance-policy drift.
 - Keep the exact-evidence invariant in one shared evidence predicate, reducing
   duplicated ledger validation while preserving reviewable partial coverage.
+- Fix verification-scale benchmark result matching so keyed output fields are
+  parsed independently of benchmark dimension order; successful scoped runs
+  no longer fail as missing results.
 - Harden opt-in diagnostic transcript redaction for secret-shaped key/value
   fields and bearer-style authorization values that are not in the controller's
   known-secret set.

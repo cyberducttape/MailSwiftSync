@@ -34,7 +34,10 @@ for size in $sizes; do
   output=$(MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES="$size" \
     cargo test --locked --release --bin mailswiftsync \
       durable_stage_reconciliation_benchmark -- --ignored --nocapture --test-threads=1 2>&1)
-  line=$(printf '%s\n' "$output" | awk "/verification-scale messages_per_side=$size / { print; exit }")
+  # The benchmark emits the shape before messages_per_side. Match the keyed
+  # field rather than assuming a positional field order so future benchmark
+  # dimensions cannot make a successful run look missing.
+  line=$(printf '%s\n' "$output" | awk -v size="$size" '$0 ~ /verification-scale/ && index($0, "messages_per_side=" size " ") { print; exit }')
   if [[ -z "$line" ]]; then
     printf '%s\n' "$output" >&2
     printf 'ERROR: missing %s-message verification benchmark result\n' "$size" >&2
