@@ -2388,11 +2388,19 @@ fn imapsync_destination_transport_and_port_are_typed() {
         args.windows(2)
             .any(|pair| pair == ["--sslargs1", "SSL_verify_mode=1"])
     );
+    assert!(
+        args.windows(2)
+            .any(|pair| { pair == ["--sslargs1", "SSL_verifycn_scheme=imap"] })
+    );
     assert!(args.windows(2).any(|pair| pair == ["--port2", "143"]));
     assert!(args.contains(&"--tls2".into()));
     assert!(
         args.windows(2)
             .any(|pair| pair == ["--sslargs2", "SSL_verify_mode=1"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| { pair == ["--sslargs2", "SSL_verifycn_scheme=imap"] })
     );
     assert!(!args.iter().any(|arg| arg.starts_with("--tlsargs")));
     assert!(!args.iter().any(|arg| arg == "--ssl2"));
@@ -2587,6 +2595,10 @@ fn imapsync_trust_bundle_is_explicit_and_verification_stays_enabled() {
     );
     assert!(
         args.windows(2)
+            .any(|pair| { pair == ["--sslargs1", "SSL_verifycn_scheme=imap"] })
+    );
+    assert!(
+        args.windows(2)
             .any(|pair| pair == ["--sslargs1", "SSL_ca_file=/etc/company ca.pem"])
     );
     assert!(
@@ -2597,6 +2609,10 @@ fn imapsync_trust_bundle_is_explicit_and_verification_stays_enabled() {
     assert!(
         args.windows(2)
             .any(|pair| pair == ["--sslargs2", "SSL_verify_mode=1"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| { pair == ["--sslargs2", "SSL_verifycn_scheme=imap"] })
     );
     assert!(
         args.windows(2)

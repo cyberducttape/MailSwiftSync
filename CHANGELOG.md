@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make imapsync transfer hostname verification explicit for both implicit IMAPS
+  and STARTTLS endpoints; the qualified engine's STARTTLS defaults did not set
+  `SSL_verifycn_scheme` even though its IMAPS defaults did.
 - Refresh the README workflow previews with Retro 80s Neon theme screenshots.
 - Add bounded serial `reverify-batch` orchestration with strict manifest
   validation, per-mailbox evidence results, and a nonzero exit for any failed
