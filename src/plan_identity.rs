@@ -195,7 +195,12 @@ pub(crate) fn executable_content_identity(executable: &str) -> String {
         .map(cached_executable_content_identity)
         .or_else(|| {
             let path = Path::new(executable.trim());
-            path.is_file().then(|| file_content_identity_uncached(path))
+            // Keep the fallback consistent with resolve_executable: a regular
+            // file is not an executable identity unless the platform would
+            // actually permit it to be launched. Otherwise admission can
+            // fingerprint a non-executable path and defer the real failure to
+            // process creation.
+            is_executable_file(path).map(|()| file_content_identity_uncached(path))
         })
         .unwrap_or_else(|| "unresolved".into())
 }
@@ -271,6 +276,27 @@ mod tests {
         file.set_modified(modified).unwrap();
         let second = executable_content_identity(&path.to_string_lossy());
         assert_ne!(first, second);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_executable_configured_path_has_no_executable_identity() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-non-executable-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"not an executable").unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(&path, permissions).unwrap();
+
+        assert_eq!(
+            executable_content_identity(&path.to_string_lossy()),
+            "unresolved"
+        );
         let _ = std::fs::remove_file(path);
     }
 }

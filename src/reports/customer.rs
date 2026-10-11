@@ -440,12 +440,33 @@ mod tests {
     use super::*;
     use ring::signature::KeyPair;
 
+    fn test_directory(prefix: &str) -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-{prefix}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&directory, permissions).unwrap();
+        }
+        directory
+    }
+
     #[test]
     fn execution_binary_hash_is_extracted_only_from_a_valid_run_snapshot() {
-        let directory = crate::credentials::create_secret_directory().unwrap();
+        let directory = test_directory("customer-proof-hash");
         let cleanup = crate::credentials::CleanupGuard::new(vec![directory.clone()]);
         let executable = directory.join("mock-engine");
         std::fs::write(&executable, b"mock engine binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&executable, permissions).unwrap();
+        }
         let mut form = crate::Form::default();
         form.profile.imapsync_path = executable.to_string_lossy().into_owned();
         let snapshot = form.plan_snapshot();
@@ -473,10 +494,17 @@ mod tests {
 
     #[test]
     fn customer_proof_exposes_plan_and_engine_hashes_without_exporting_plan() {
-        let directory = crate::credentials::create_secret_directory().unwrap();
+        let directory = test_directory("customer-proof");
         let cleanup = crate::credentials::CleanupGuard::new(vec![directory.clone()]);
         let executable = directory.join("mock-engine");
         std::fs::write(&executable, b"mock engine binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(&executable, permissions).unwrap();
+        }
         let mut form = crate::Form::default();
         form.profile.imapsync_path = executable.to_string_lossy().into_owned();
         let plan_snapshot = form.plan_snapshot();
@@ -907,7 +935,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let directory = crate::credentials::create_secret_directory().unwrap();
+        let directory = test_directory("customer-proof-scale");
         let path = directory.join("customer-proof.json");
         let _ = std::fs::write("/proc/self/clear_refs", "5");
         let before = rss_kib("VmRSS:");

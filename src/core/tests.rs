@@ -6195,7 +6195,11 @@ fn difference_file_export_streams_every_row_across_pages_into_a_private_file() {
         )
         .unwrap();
     assert_eq!((rows, truncated), (2_500, false));
-    let directory = crate::credentials::create_secret_directory().unwrap();
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-differences-{}",
+        uuid::Uuid::new_v4()
+    ));
+    create_private_test_directory(&directory);
     let path = directory.join("differences.csv");
     let written = db
         .export_message_mismatches_csv_file(

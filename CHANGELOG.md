@@ -41,6 +41,8 @@
 - Reset IMAP verifier reconnect budgets after a folder completes, so isolated
   session drops across a large folder inventory do not exhaust recovery for
   later folders while repeated failures on one path still fail closed.
+- Require configured engine identity fingerprints to refer to executable files,
+  keeping preflight identity and process-launch qualification consistent.
 - Harden opt-in diagnostic transcript redaction for secret-shaped key/value
   fields and bearer-style authorization values that are not in the controller's
   known-secret set.

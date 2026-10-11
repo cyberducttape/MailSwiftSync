@@ -2650,6 +2650,13 @@ fn plan_identity_binds_executable_and_trust_bundle_contents() {
         std::env::temp_dir().join(format!("mailswiftsync-plan-executable-{}", Uuid::new_v4()));
     let ca_bundle = std::env::temp_dir().join(format!("mailswiftsync-plan-ca-{}", Uuid::new_v4()));
     std::fs::write(&executable, b"engine version one").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+    }
     std::fs::write(&ca_bundle, b"-----BEGIN CERTIFICATE-----\none").unwrap();
 
     let mut form = Form::default();
@@ -2680,6 +2687,13 @@ fn durable_preflight_rejects_same_path_runtime_replacements() {
     let ca_bundle =
         std::env::temp_dir().join(format!("mailswiftsync-durable-plan-ca-{}", Uuid::new_v4()));
     std::fs::write(&executable, b"engine version one").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+    }
     std::fs::write(&ca_bundle, b"trust bundle one").unwrap();
 
     let mut form = Form::default();
