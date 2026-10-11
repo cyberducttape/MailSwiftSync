@@ -343,10 +343,9 @@ impl App {
         (!self.bulk_all_selected && self.bulk_selected_ids == *members).then_some(wave)
     }
 
-    /// The plan a batch runs with: the operator's plan, with a selected
-    /// wave's concurrency applied as a ceiling (never raised). Used for the
-    /// confirmed action plan, admission, the job loader, the worker count,
-    /// and the recorded run snapshot, so they all agree.
+    /// The plan a batch runs with: selected-wave concurrency and aggregate
+    /// throughput limits both cap the configured worker count. Used for the
+    /// confirmed action plan, admission, the job loader, and worker count.
     pub(crate) fn effective_batch_profile(&self) -> crate::Profile {
         let mut profile = self.form.profile.clone();
         if let Some(limit) = self
@@ -356,6 +355,14 @@ impl App {
             let current =
                 crate::migration_plan::effective_batch_concurrency(profile.batch_concurrency);
             profile.batch_concurrency = current.min(limit as usize);
+        }
+        if profile.effective_engine() == crate::core::Engine::ImapSync {
+            profile.batch_concurrency =
+                crate::migration_plan::effective_batch_concurrency_for_limits(
+                    profile.batch_concurrency,
+                    profile.max_messages_per_second,
+                    profile.max_bytes_per_second,
+                );
         }
         profile
     }

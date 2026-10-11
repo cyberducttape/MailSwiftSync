@@ -432,9 +432,8 @@ crate::ui::name_modal(ui, &modal_heading);
                         )
                         .clicked()
                     {
-                        let current_concurrency = crate::migration_plan::effective_batch_concurrency(
-                            self.form.profile.batch_concurrency,
-                        );
+                        let current_concurrency =
+                            self.effective_batch_profile().batch_concurrency;
                         let identity_matches = stored_identity.as_ref().is_some_and(|stored| {
                             stored.concurrency == current_concurrency
                                 && stored.launch_starts_per_second

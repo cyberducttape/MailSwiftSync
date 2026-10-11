@@ -442,6 +442,25 @@ pub(crate) fn default_batch_process_starts_per_second() -> usize {
 pub(crate) fn effective_batch_concurrency(value: usize) -> usize {
     value.clamp(1, MAX_BATCH_CONCURRENCY)
 }
+
+/// Keep an aggregate imapsync throughput target enforceable by assigning at
+/// most one worker per configured message/byte budget unit. Each engine then
+/// receives the integer-divided per-worker rate; its aggregate cannot exceed
+/// the run target, and division can never produce a disabling zero rate.
+pub(crate) fn effective_batch_concurrency_for_limits(
+    configured: usize,
+    max_messages_per_second: u32,
+    max_bytes_per_second: u64,
+) -> usize {
+    let mut workers = effective_batch_concurrency(configured);
+    if max_messages_per_second > 0 {
+        workers = workers.min(max_messages_per_second as usize);
+    }
+    if max_bytes_per_second > 0 {
+        workers = workers.min(usize::try_from(max_bytes_per_second).unwrap_or(usize::MAX));
+    }
+    workers.max(1)
+}
 pub(crate) fn effective_batch_process_starts_per_second(value: usize) -> usize {
     value.clamp(1, MAX_BATCH_PROCESS_STARTS_PER_SECOND)
 }
@@ -488,6 +507,7 @@ pub(crate) fn completeness(profile: &Profile) -> (usize, usize) {
 mod destination_mutation_policy_tests {
     use super::{
         DestinationMutationPolicy as Policy, DovecotMigrationStrategy as Strategy, Profile,
+        effective_batch_concurrency_for_limits,
     };
     use crate::core::Engine;
 
@@ -549,5 +569,31 @@ mod destination_mutation_policy_tests {
             assert_eq!(Policy::parse(policy.as_str()), Some(policy));
         }
         assert_eq!(Policy::parse(""), None);
+    }
+
+    #[test]
+    fn batch_throughput_limits_cap_workers_without_zeroing_engine_rates() {
+        assert_eq!(effective_batch_concurrency_for_limits(16, 1, 0), 1);
+        assert_eq!(effective_batch_concurrency_for_limits(16, 0, 10), 10);
+        assert_eq!(effective_batch_concurrency_for_limits(16, 5, 2), 2);
+        assert_eq!(effective_batch_concurrency_for_limits(4, 25, 1_000), 4);
+        assert_eq!(effective_batch_concurrency_for_limits(16, 0, 0), 16);
+
+        for target in [1_u32, 2, 5, 25, 100] {
+            for configured in [1, 2, 16, 32] {
+                let workers = effective_batch_concurrency_for_limits(configured, target, 0) as u32;
+                let per_worker = target / workers;
+                assert!(per_worker > 0);
+                assert!(per_worker * workers <= target);
+            }
+        }
+        for target in [1_u64, 2, 5, 25, 100] {
+            for configured in [1, 2, 16, 32] {
+                let workers = effective_batch_concurrency_for_limits(configured, 0, target) as u64;
+                let per_worker = target / workers;
+                assert!(per_worker > 0);
+                assert!(per_worker * workers <= target);
+            }
+        }
     }
 }
