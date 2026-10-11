@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exercise cross-process ledger-lock recovery by forcibly terminating the
+  lock-owning subprocess and verifying another process can acquire ownership.
 - Make single-mailbox completion banners state the recorded verification tier:
   metadata-only runs explicitly say message bodies were not compared, bounded
   body-fingerprint runs disclaim full byte-for-byte proof, and aggregate/engine
