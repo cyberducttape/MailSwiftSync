@@ -15,6 +15,30 @@ mod credentials {
         pub(crate) fn new(paths: Vec<PathBuf>) -> Self {
             Self(paths)
         }
+
+        pub(crate) fn cleanup_now(&mut self) -> Result<(), String> {
+            let mut remaining = Vec::new();
+            let mut failures = Vec::new();
+            for path in self.0.iter().rev() {
+                match fs::remove_dir_all(path) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        failures.push(format!("{}: {error}", path.display()));
+                        remaining.push(path.clone());
+                    }
+                }
+            }
+            remaining.reverse();
+            self.0 = remaining;
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "could not remove sensitive temporary files: {}",
+                    failures.join("; ")
+                ))
+            }
+        }
     }
 
     impl Drop for CleanupGuard {
