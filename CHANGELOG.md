@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a real-engine interruption drill to the IMAP lab: the controller is
+  SIGKILLed mid-transfer, the engine must stop with it, and `recover` plus a
+  fresh live pass must end with exactly the source messages verified. With
+  expert `--useuid --usecache`, the drill shows the in-flight message is
+  appended twice and verification flags it; the plan options now explain
+  this trade-off.
+
 - Run project report, project JSON, customer-proof, and health exports on a
   background worker with its own read-only ledger connection; a fleet-scale
   export no longer freezes the window, and a second export waits for the
