@@ -595,6 +595,7 @@ mod tests {
         let certificate: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
+        assert_eq!(certificate["format_version"], 2);
         assert_eq!(certificate["proof_signature"]["algorithm"], "Ed25519");
         let evidence = &certificate["mailboxes"][0]["evidence"];
         assert_eq!(
@@ -627,6 +628,14 @@ mod tests {
         );
         assert_eq!(evidence["message_coverage"]["checked_messages"], 0);
         assert_eq!(evidence["message_coverage"]["complete"], false);
+        assert_eq!(
+            evidence["identity_match_counts"]["rfc_message_id_matches"],
+            0
+        );
+        assert_eq!(
+            evidence["identity_match_counts"]["synthetic_identity_matches"],
+            0
+        );
         assert!(evidence["flag_verification"].is_null());
         assert!(!certificate.to_string().contains(&plan_snapshot));
         assert!(

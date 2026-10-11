@@ -617,7 +617,7 @@ mod project_json_tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
-            rfc_message_id_matches: 0,
+            rfc_message_id_matches: 3,
             synthetic_identity_matches: 0,
             flag_verification: Some(core::FlagVerification {
                 compared_messages: 3,
@@ -680,6 +680,14 @@ mod project_json_tests {
         assert_eq!(
             report["mailboxes"][0]["evidence"]["evidence_level"],
             "Aggregate match — not message-body proof"
+        );
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["identity_match_counts"]["rfc_message_id_matches"],
+            3
+        );
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["identity_match_counts"]["synthetic_identity_matches"],
+            0
         );
         // The first mailbox's evidence run is older than the 20 most recent
         // runs; its verification report must still find it.
