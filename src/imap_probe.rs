@@ -276,8 +276,8 @@ trait MessageSink {
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
     /// Rows currently staged for one folder generation. Compared against the
-    /// server's EXISTS after a scan so rows kept from an interrupted run can
-    /// never stand in for messages that were expunged in the meantime.
+    /// server's EXISTS after a scan to require complete coverage of the
+    /// current SELECT snapshot.
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String>;
     fn uid_page(
         &self,
@@ -291,12 +291,12 @@ trait MessageSink {
     fn flags_match_page(&self, _messages: &crate::core::ExtractedMessages) -> Result<bool, String> {
         Ok(true)
     }
-    fn resume_after_uid(
+    fn begin_mailbox_scan(
         &mut self,
         _mailbox: &str,
         _snapshot: crate::core::FolderSnapshot,
-    ) -> Result<Option<u64>, String> {
-        Ok(None)
+    ) -> Result<(), String> {
+        Ok(())
     }
     fn checkpoint_page(
         &mut self,
@@ -396,30 +396,18 @@ impl MessageSink for StageMessageSink<'_> {
             .record_permanent_flags(self.side, mailbox, permanent_flags)
     }
 
-    fn resume_after_uid(
+    fn begin_mailbox_scan(
         &mut self,
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
-    ) -> Result<Option<u64>, String> {
-        let cursor = self.stage.resume_mailbox(self.side, mailbox, snapshot)?;
-        if cursor.is_some() {
-            // FLAGS are mutable without changing UIDVALIDITY, UIDNEXT, or
-            // EXISTS. The stage snapshot therefore cannot prove that the
-            // flags stored before an interruption are still current. Keep the
-            // durable cursor for recovery metadata, but rescan this folder
-            // from the beginning so a flag-only change is never reused as
-            // verified evidence.
-            self.stage.delete_mailbox(self.side, mailbox)?;
-            // Recreate the cursor for the fresh scan after removing the stale
-            // rows. `checkpoint_page` requires a cursor bound to this SELECT
-            // snapshot.
-            self.stage.resume_mailbox(self.side, mailbox, snapshot)?;
-        }
+    ) -> Result<(), String> {
+        self.stage
+            .begin_mailbox_scan(self.side, mailbox, snapshot)?;
         self.count = self
             .stage
             .count(self.side)
             .map_err(|error| error.to_string())? as usize;
-        Ok(None)
+        Ok(())
     }
 
     fn checkpoint_page(
@@ -846,7 +834,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         exists: start_exists,
     };
     sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
-    let resume_after_uid = sink.resume_after_uid(mailbox, snapshot)?;
+    sink.begin_mailbox_scan(mailbox, snapshot)?;
     let enumerated_uid_count = enumerate_uid_pages(
         stream,
         host,
@@ -855,7 +843,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         &mut response,
         &mut buffer,
         budget,
-        resume_after_uid,
         if body_hash.is_some() {
             FetchPagePlanner::body()
         } else {
@@ -980,10 +967,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         )
         .into());
     }
-    // Pages staged before an interruption are not refetched on resume. Any
-    // message expunged since then leaves a stale row behind, so the staged
-    // folder must hold exactly the server's current message count. A
-    // mismatch discards the folder's stage and rescans it from the start.
+    // The stage was invalidated when this scan began. Require complete
+    // coverage of the current SELECT snapshot; no rows from an interrupted
+    // scan can stand in for newly fetched messages.
     let staged = sink.mailbox_len(mailbox, start_uidvalidity)?;
     if staged != start_exists {
         return Err(MailboxFetchError::Changed(format!(
@@ -1169,7 +1155,6 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     response: &mut String,
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
-    resume_after_uid: Option<u64>,
     mut planner: FetchPagePlanner,
     mut consume_page: F,
 ) -> Result<u64, String>
@@ -1209,11 +1194,10 @@ where
         }
         let uids = parse_uid_fetch_response(response, host, mailbox, sequence_start, sequence_end)?;
         enumerated_uid_count = enumerated_uid_count.saturating_add(uids.len() as u64);
-        // Skip exactly the UIDs already staged before an interruption. Page
-        // sizes adapt, so page boundaries are not stable across runs and
-        // cannot be used to decide what was already fetched.
-        let mut offset =
-            resume_after_uid.map_or(0, |resume| uids.partition_point(|uid| *uid <= resume));
+        // Every scan starts from the first extant UID. Durable staged pages
+        // are invalidated before enumeration because their FLAGS and body
+        // evidence cannot be proven current after an interruption.
+        let mut offset = 0;
         while offset < uids.len() {
             let (count, uid_set) = encode_uid_page(&uids[offset..], planner.size());
             let uid_page = &uids[offset..offset + count];

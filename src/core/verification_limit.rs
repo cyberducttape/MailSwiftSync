@@ -82,10 +82,10 @@ impl VerificationLimit {
         Self::parse(code)
     }
 
-    /// Whether rerunning the same plan can make progress: staged pages are
-    /// reused, so a run that ran out of time or hit a transient bound picks
-    /// up where it stopped. The other limits recur until the plan or scope
-    /// changes.
+    /// Whether retrying the same plan can make progress after a transient
+    /// resource/deadline failure. A retry always rescans each folder from its
+    /// first page; durable staged pages are never reused as verification proof.
+    /// Other limits recur until the plan or scope changes.
     pub fn resumable(self) -> bool {
         matches!(self, Self::Deadline | Self::FetchedState)
     }
@@ -101,7 +101,7 @@ impl VerificationLimit {
                 "A server response exceeded the verifier's 64 MiB bound, usually a very large message during body-hash verification. Lower the body-hash per-message bound or use metadata verification, then rerun."
             }
             Self::FetchedState => {
-                "Verification exceeded its transient memory budget. Rerun to resume from the staged pages; if it recurs, use metadata verification."
+                "Verification exceeded its transient memory budget. Rerun to perform a fresh folder scan; if it recurs, use metadata verification."
             }
             Self::MessageCount => {
                 "An endpoint holds more than the 1,000,000 messages metadata verification admits. Split the account into smaller folder scopes, or obtain evidence another way and accept the difference explicitly."
@@ -119,7 +119,7 @@ impl VerificationLimit {
                 "Reconciliation found more differences than it can record, which usually means the destination differs substantially. Inspect the transfer, run another delta pass, then rerun."
             }
             Self::Deadline => {
-                "Verification ran past the migration timeout. Rerun to resume from the staged pages, or raise the migration timeout."
+                "Verification ran past the migration timeout. Rerun for a fresh folder scan, or raise the migration timeout."
             }
         }
     }

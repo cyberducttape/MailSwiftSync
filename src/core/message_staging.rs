@@ -245,10 +245,11 @@ impl MessageMetadataStage {
         Ok(stage)
     }
 
-    /// Open the private, restartable staging database for one verification.
+    /// Open the private staging database for one verification attempt.
     /// The caller removes it after verification has produced durable evidence;
     /// retaining it on an interrupted run is what makes page-level recovery
-    /// possible after the controller process is restarted.
+    /// possible after the controller process is restarted. Persisted scan
+    /// pages are recovery context and are invalidated before any retry scan.
     pub(crate) fn open_durable(path: PathBuf, identity: &str) -> Result<Self, String> {
         let parent = path
             .parent()
@@ -363,7 +364,7 @@ impl MessageMetadataStage {
 
     /// Remove a completed durable stage only after its evidence has been
     /// committed to the project ledger. Failed or interrupted verification
-    /// must leave the stage available for resume.
+    /// must leave the stage available for a retry; a retry rescans folders.
     pub(crate) fn cleanup_durable_stage(path: &Path) -> Result<(), String> {
         let errors = cleanup_stage_files(path, false);
         if errors.is_empty() {
@@ -439,7 +440,7 @@ impl MessageMetadataStage {
                  ALTER TABLE staged_messages ADD COLUMN identity_provenance TEXT NOT NULL DEFAULT 'missing';",
             )?;
         }
-        // Stages written before flags were staged would leave every resumed
+        // Stages written before flags were staged would leave every retried
         // row without flags and silently shrink flag-verification coverage.
         // They are a disposable cache, so discard their rows and rescan.
         let staged_flags: bool = self.connection_ref()?.query_row(
@@ -678,60 +679,21 @@ impl MessageMetadataStage {
         Ok(())
     }
 
-    /// Prepare one folder for a (possibly resumed) scan and return the UID
-    /// after which staged pages may be reused.
+    /// Start a new folder scan, invalidating every row and fingerprint staged
+    /// by an earlier scan even when the SELECT snapshot is unchanged.
     ///
-    /// Staged rows are reusable only while the server still reports the exact
-    /// SELECT snapshot (UIDVALIDITY, UIDNEXT, EXISTS) that produced them. An
-    /// interrupted run cannot observe expunges or deliveries that happen
-    /// before the restart, so any difference discards the folder's rows,
-    /// fingerprints, and cursor and the scan restarts from zero. The new
-    /// snapshot is recorded in the same transaction, before any page is
-    /// accepted.
-    pub(crate) fn resume_mailbox(
+    /// UIDVALIDITY, UIDNEXT, and EXISTS cannot prove that mutable FLAGS or
+    /// previously captured body fingerprints are still valid after a process
+    /// interruption. Cursors are recovery/progress metadata only; they never
+    /// authorize reuse of fetched evidence. Clearing old state and recording
+    /// the new snapshot happen atomically before any new page is accepted.
+    pub(crate) fn begin_mailbox_scan(
         &mut self,
         side: StagedMessageSide,
         mailbox: &str,
         snapshot: FolderSnapshot,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<(), String> {
         let (uidvalidity, uidnext, exists) = snapshot.to_sql().map_err(|e| e.to_string())?;
-        let cursor: Option<(i64, i64, i64, i64)> = self
-            .connection()?
-            .query_row(
-                "SELECT uidvalidity,uidnext,exists_count,last_uid FROM stage_cursors WHERE side=?1 AND mailbox=?2",
-                params![side.as_i64(), mailbox],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if let Some((stored_validity, stored_next, stored_exists, last_uid)) = cursor
-            && (stored_validity, stored_next, stored_exists) == (uidvalidity, uidnext, exists)
-        {
-            let last_uid = u64::try_from(last_uid)
-                .map_err(|_| "verification stage cursor is corrupt".to_owned())?;
-            // A crash may occur after inserting a page but before committing
-            // its cursor. Discard that uncheckpointed tail so it is fetched
-            // exactly once after restart (including its body fingerprints).
-            let tx = self
-                .connection()?
-                .unchecked_transaction()
-                .map_err(|e| e.to_string())?;
-            for table in ["staged_messages", "stage_fingerprints"] {
-                tx.execute(
-                    &format!("DELETE FROM {table} WHERE side=?1 AND mailbox=?2 AND CAST(uid AS INTEGER)>?3"),
-                    params![side.as_i64(), mailbox, last_uid as i64],
-                )
-                .map_err(|e| e.to_string())?;
-            }
-            tx.commit().map_err(|e| e.to_string())?;
-            self.content_fingerprints
-                .retain(|(fingerprint_side, key), _| {
-                    *fingerprint_side != side
-                        || key.mailbox.as_ref() != mailbox
-                        || key.uid.parse::<u64>().is_ok_and(|uid| uid <= last_uid)
-                });
-            return Ok(Some(last_uid));
-        }
         let tx = self
             .connection()?
             .unchecked_transaction()
@@ -753,7 +715,7 @@ impl MessageMetadataStage {
             .retain(|(fingerprint_side, key), _| {
                 *fingerprint_side != side || key.mailbox.as_ref() != mailbox
             });
-        Ok(None)
+        Ok(())
     }
 
     pub(crate) fn checkpoint_page(
@@ -768,7 +730,7 @@ impl MessageMetadataStage {
 
     /// Mark a folder fully staged. The staged population must equal the
     /// snapshot's EXISTS; anything else means rows from another snapshot
-    /// survived and the folder cannot be trusted on a later resume.
+    /// survived and this scan cannot be trusted.
     /// Every folder's verification cursor with its staged row count. Folder
     /// names stay in process; callers persist only digests of them.
     pub(crate) fn folder_cursors(&self) -> rusqlite::Result<Vec<FolderCursor>> {
@@ -1325,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn durable_stage_reopens_with_cursor_and_identity_binding() {
+    fn durable_stage_reopen_invalidates_rows_and_content_fingerprints() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("verification.sqlite");
         let folder = snapshot(42, 8, 1);
@@ -1333,7 +1295,7 @@ mod tests {
         let key = messages.keys().next().unwrap().clone();
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
         let side = StagedMessageSide::Source;
-        assert_eq!(stage.resume_mailbox(side, "INBOX", folder).unwrap(), None);
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
         stage
             .insert_messages_with_fingerprints(
                 side,
@@ -1347,16 +1309,17 @@ mod tests {
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
         assert_eq!(stage.count(side).unwrap(), 1);
         assert_eq!(stage.content_fingerprints(side).len(), 1);
-        assert_eq!(
-            stage.resume_mailbox(side, "INBOX", folder).unwrap(),
-            Some(7)
-        );
+        // Even an identical snapshot cannot validate saved FLAGS or body
+        // fingerprints across a process restart.
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
+        assert_eq!(stage.count(side).unwrap(), 0);
+        assert!(stage.content_fingerprints(side).is_empty());
         stage.finish().unwrap();
         assert!(!path.exists());
 
         let mut stage = MessageMetadataStage::open_durable(path, "plan-b").unwrap();
         assert_eq!(stage.count(side).unwrap(), 0);
-        assert_eq!(stage.resume_mailbox(side, "INBOX", folder).unwrap(), None);
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
         drop(stage);
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -1367,12 +1330,12 @@ mod tests {
         let source = StagedMessageSide::Source;
         let destination = StagedMessageSide::Destination;
         let inbox = snapshot(42, 9, 2);
-        stage.resume_mailbox(source, "INBOX", inbox).unwrap();
+        stage.begin_mailbox_scan(source, "INBOX", inbox).unwrap();
         stage.insert_messages(source, &page(42, [7, 8])).unwrap();
         stage.complete_mailbox(source, "INBOX", inbox, 8).unwrap();
         let archive = snapshot(5, 30, 3);
         stage
-            .resume_mailbox(destination, "Archive", archive)
+            .begin_mailbox_scan(destination, "Archive", archive)
             .unwrap();
         let archive_page = page(5, [10])
             .into_values()
@@ -1462,13 +1425,13 @@ mod tests {
     }
 
     #[test]
-    fn resume_rebuilds_a_folder_whose_snapshot_changed_between_runs() {
+    fn new_scan_rebuilds_a_folder_whose_snapshot_changed_between_runs() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("verification.sqlite");
         let side = StagedMessageSide::Destination;
         let original = snapshot(42, 33, 32);
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
-        assert_eq!(stage.resume_mailbox(side, "INBOX", original).unwrap(), None);
+        stage.begin_mailbox_scan(side, "INBOX", original).unwrap();
         let messages = page(42, 1..=32);
         let fingerprints = messages
             .keys()
@@ -1484,7 +1447,7 @@ mod tests {
         // and UIDVALIDITY are unchanged, only UIDNEXT reveals the change.
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
         let current = snapshot(42, 34, 32);
-        assert_eq!(stage.resume_mailbox(side, "INBOX", current).unwrap(), None);
+        stage.begin_mailbox_scan(side, "INBOX", current).unwrap();
         assert_eq!(stage.count(side).unwrap(), 0);
         assert!(stage.content_fingerprints(side).is_empty());
         // The stale cursor cannot be advanced under the old snapshot.
@@ -1499,13 +1462,13 @@ mod tests {
     }
 
     #[test]
-    fn resume_discards_rows_and_fingerprints_after_last_checkpoint() {
+    fn restart_discards_checkpointed_and_uncheckpointed_rows_and_fingerprints() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("verification.sqlite");
         let side = StagedMessageSide::Source;
         let folder = snapshot(42, 33, 32);
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
-        stage.resume_mailbox(side, "INBOX", folder).unwrap();
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
         let checkpointed = page(42, 1..=16);
         let checkpointed_fingerprints = checkpointed
             .keys()
@@ -1531,17 +1494,19 @@ mod tests {
         drop(stage);
 
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
-        assert_eq!(
-            stage.resume_mailbox(side, "INBOX", folder).unwrap(),
-            Some(16)
-        );
-        assert_eq!(stage.count(side).unwrap(), 16);
-        assert_eq!(stage.content_fingerprints(side).len(), 16);
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
+        assert_eq!(stage.count(side).unwrap(), 0);
+        assert!(stage.content_fingerprints(side).is_empty());
+        let refreshed = page(42, 1..=32);
+        let refreshed_fingerprints = refreshed
+            .keys()
+            .map(|key| (key.clone(), format!("refreshed-{}", key.uid)))
+            .collect::<HashMap<_, _>>();
         stage
-            .insert_messages_with_fingerprints(side, &uncheckpointed, &uncheckpointed_fingerprints)
+            .insert_messages_with_fingerprints(side, &refreshed, &refreshed_fingerprints)
             .unwrap();
         assert_eq!(stage.count(side).unwrap(), 32);
-        assert_eq!(stage.content_fingerprints(side).len(), 32);
+        assert_eq!(stage.content_fingerprints(side), refreshed_fingerprints);
         stage.finish().unwrap();
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -1551,19 +1516,16 @@ mod tests {
         let mut stage = MessageMetadataStage::open_in_memory().unwrap();
         let side = StagedMessageSide::Source;
         let folder = snapshot(42, 4, 2);
-        stage.resume_mailbox(side, "INBOX", folder).unwrap();
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
         stage.insert_messages(side, &page(42, [1, 2, 3])).unwrap();
         assert!(stage.complete_mailbox(side, "INBOX", folder, 3).is_err());
         stage.delete_mailbox(side, "INBOX").unwrap();
-        stage.resume_mailbox(side, "INBOX", folder).unwrap();
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
         stage.insert_messages(side, &page(42, [1, 3])).unwrap();
         stage.complete_mailbox(side, "INBOX", folder, 3).unwrap();
-        // An unchanged completed folder resumes past every staged UID.
-        assert_eq!(
-            stage.resume_mailbox(side, "INBOX", folder).unwrap(),
-            Some(3)
-        );
-        assert_eq!(stage.count(side).unwrap(), 2);
+        // A repeated scan invalidates even a complete unchanged folder.
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
+        assert_eq!(stage.count(side).unwrap(), 0);
     }
 
     #[cfg(unix)]
@@ -1613,12 +1575,9 @@ mod tests {
         let side = StagedMessageSide::Source;
         assert_eq!(stage.count(side).unwrap(), 0);
         assert!(stage.content_fingerprints(side).is_empty());
-        assert_eq!(
-            stage
-                .resume_mailbox(side, "INBOX", snapshot(42, 8, 1))
-                .unwrap(),
-            None
-        );
+        stage
+            .begin_mailbox_scan(side, "INBOX", snapshot(42, 8, 1))
+            .unwrap();
         drop(stage);
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -1642,15 +1601,12 @@ mod tests {
         }
         let mut stage = MessageMetadataStage::open_durable(path, "plan").unwrap();
         let side = StagedMessageSide::Source;
-        // Resuming would leave the staged row without flags and silently
-        // shrink flag-verification coverage, so the folder is rescanned.
+        // A legacy staged row without flags is invalidated before scanning,
+        // so it cannot silently shrink flag-verification coverage.
         assert_eq!(stage.count(side).unwrap(), 0);
-        assert_eq!(
-            stage
-                .resume_mailbox(side, "INBOX", snapshot(42, 8, 1))
-                .unwrap(),
-            None
-        );
+        stage
+            .begin_mailbox_scan(side, "INBOX", snapshot(42, 8, 1))
+            .unwrap();
         let mut page = page(42, [7]);
         page.values_mut()
             .for_each(|message| message.flags = Some("\\Seen".into()));

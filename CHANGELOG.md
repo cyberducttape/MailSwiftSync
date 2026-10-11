@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Enforce full folder rescans after verification restarts: staged message rows
+  and body fingerprints are atomically discarded even when UIDVALIDITY,
+  UIDNEXT, and EXISTS are unchanged. Clarify retry guidance so durable cursors
+  are documented as recovery metadata, not reusable verification evidence.
 - Keep synthetic header fingerprints out of exact RFC Message-ID reconciliation. Persist RFC-ID and synthetic-candidate counts separately in evidence history and signed/report exports.
 - Upgrade ledger schema to v31 with nonnegative identity-provenance counters; prior ledgers migrate with zero-valued legacy counters.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential

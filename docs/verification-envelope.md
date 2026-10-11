@@ -122,14 +122,14 @@ transfer process. While verification is incomplete, its private SQLite stage
 retains one cursor per source and destination folder containing the folder
 snapshot (`UIDVALIDITY`, `UIDNEXT`, and `EXISTS`), the last staged UID, a
 completion flag, and the staged-row count. Each metadata or body-fingerprint
-page is committed before its cursor advances. On restart, a matching cursor
-confirms that the folder generation is still compatible, but its staged rows
-are discarded and the folder is rescanned from its first page. A changed
-snapshot also invalidates the staged rows and triggers the same full rescan.
-The cursor is recovery metadata; it does not authorize skipping saved pages,
-because mutable FLAGS can change without changing the snapshot values. This
-means a controller interruption during verification does not require the
-transfer engine to start over and cannot reuse stale flag-only results.
+page is committed before its cursor advances. On a new attempt, the staging
+layer atomically clears a folder's prior rows and body fingerprints and writes
+a fresh cursor, regardless of whether the snapshot matches. The cursor is
+recovery metadata only; it never authorizes skipping saved pages, because
+mutable FLAGS can change without changing the snapshot values, and the snapshot
+cannot validate previously fetched body fingerprints. This means a controller
+interruption during verification does not require the transfer engine to start
+over, but the verifier refetches the folder from its first page.
 
 The scanner negotiates `CONDSTORE` when advertised and requests
 `SELECT (CONDSTORE)` for each folder. A tracked `HIGHESTMODSEQ` is compared at
@@ -267,21 +267,24 @@ recorded in the run detail together with operator guidance. The operator
 project report exposes it per run as `verification_limit` (`code`,
 `resumable`, `guidance`). The codes are stable for automation:
 
-| Code | Bound | Rerun resumes? | Guidance |
+| Code | Bound | Retry behavior | Guidance |
 | --- | --- | --- | --- |
 | `folder_inventory` | LIST inventory 32 MiB or 100,000 folders | No | Exclude folders or split the account |
 | `response_size` | One IMAP response 64 MiB | No | Lower the body-hash per-message bound or use metadata verification |
-| `fetched_state` | Transient fetched state 256 MiB | Yes | Rerun; use metadata verification if it recurs |
+| `fetched_state` | Transient fetched state 256 MiB | Retryable; full folder rescan | Rerun; use metadata verification if it recurs |
 | `message_count` | 1,000,000 messages per endpoint | No | Split into smaller folder scopes or accept the difference explicitly |
 | `body_hash_message_count` | 100,000 messages per endpoint in body-hash mode | No | Disable body-hash verification to obtain metadata evidence |
 | `body_hash_message_size` | Per-message body-hash bound | No | Raise the bound (up to 64 MiB) or disable body hashing |
 | `body_hash_total_size` | Total body-hash bound | No | Raise the bound (up to 8 GiB) or disable body hashing |
 | `reconciliation_state` | Reconciliation state, or 64 MiB in-memory mismatch detail (ephemeral or body-hash runs) | No | Inspect the transfer and run another delta pass |
-| `deadline` | Verification exceeded the migration timeout | Yes | Rerun to resume from staged pages, or raise the timeout |
+| `deadline` | Verification exceeded the migration timeout | Retryable; full folder rescan | Rerun for a fresh scan, or raise the migration timeout |
 
-"Rerun resumes" means the retained verification stage lets the next run pick
-up where this one stopped; the other limits recur until the plan or scope
-changes. A folder that stops at a limit tags the whole account result, even
+"Retryable" means the same plan may make progress on another attempt; it does
+not mean staged message pages are reused. Every new verification attempt
+atomically clears prior message rows and body fingerprints for a folder before
+fetching it again, even when UIDVALIDITY, UIDNEXT, and EXISTS are unchanged.
+The stored cursor is diagnostic recovery/progress metadata only. A folder that
+stops at a limit tags the whole account result, even
 when its own detail is truncated from the folder-failure summary. A single
 IMAP command that stalls for 15 seconds is treated as a provider or transport
 failure, not a limit, because retrying can succeed.

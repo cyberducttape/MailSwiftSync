@@ -271,9 +271,10 @@ pub(crate) fn run_imap_message_verification(
     let folders = stage
         .folder_cursors()
         .map_err(|error| format!("could not read verification folder cursors: {error}"))?;
-    // Keep a durable stage on disk until the caller has committed this result
-    // to the project ledger. A crash or ledger failure after this function
-    // returns must still be resumable rather than forcing a full rescan.
+    // Keep the durable stage on disk until the caller commits this result to
+    // the project ledger. If the process fails before that commit, a later
+    // verification attempt will rescan every folder; staged rows and body
+    // fingerprints are not reusable proof across attempts.
     Ok(MessageVerificationResult {
         evidence,
         mismatches,
