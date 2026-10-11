@@ -1064,19 +1064,37 @@ pub(crate) fn headless_supervise(
             thread::sleep(poll_interval);
             continue;
         }
-        let store =
-            core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
-        let actionable = store
-            .latest_project()
-            .map_err(|error| error.to_string())?
+        let store = match core::StateStore::open_readonly(state_path) {
+            Ok(store) => store,
+            Err(error) if supervisor_should_retry_storage_error(&error.to_string()) => {
+                eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
+                thread::sleep(poll_interval);
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let latest_project = match store.latest_project() {
+            Ok(project) => project,
+            Err(error) if supervisor_should_retry_storage_error(&error.to_string()) => {
+                eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
+                thread::sleep(poll_interval);
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let actionable = match latest_project
             .filter(|project| !project.name.trim().is_empty())
-            .map(|project| {
-                store
-                    .project_has_automation_safe_batch_work(&project.id)
-                    .map_err(|error| error.to_string())
-            })
-            .transpose()?
-            .unwrap_or(false);
+            .map(|project| store.project_has_automation_safe_batch_work(&project.id))
+            .transpose()
+        {
+            Ok(actionable) => actionable.unwrap_or(false),
+            Err(error) if supervisor_should_retry_storage_error(&error.to_string()) => {
+                eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
+                thread::sleep(poll_interval);
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         if !actionable {
             idle_polls = idle_polls.saturating_add(1);
             if max_idle_polls != 0 && idle_polls >= max_idle_polls {
@@ -1103,6 +1121,14 @@ pub(crate) fn headless_supervise(
             Err(error) => return Err(error),
         }
     }
+}
+
+fn supervisor_should_retry_storage_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("database is locked")
+        || error.contains("database is busy")
+        || error.contains("sqlite_busy")
+        || error.contains("temporarily unavailable")
 }
 
 pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {
@@ -1237,5 +1263,21 @@ mod tests {
         output.push_bounded("[durability] latest issue".into(), 10, 1024);
 
         assert_eq!(last_durability_detail(&output), Some("latest issue"));
+    }
+
+    #[test]
+    fn supervisor_retries_transient_storage_contention_but_not_corruption() {
+        assert!(super::supervisor_should_retry_storage_error(
+            "database is locked (SQLITE_BUSY)"
+        ));
+        assert!(super::supervisor_should_retry_storage_error(
+            "temporarily unavailable: database is busy"
+        ));
+        assert!(!super::supervisor_should_retry_storage_error(
+            "database disk image is malformed"
+        ));
+        assert!(!super::supervisor_should_retry_storage_error(
+            "permission denied"
+        ));
     }
 }

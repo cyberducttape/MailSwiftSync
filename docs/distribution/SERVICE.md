@@ -109,3 +109,8 @@ does not replace provider OAuth consent or initial refresh-token provisioning
 **Connect … account** flow),
 and it does not make remote Dovecot execution available. Independent approval
 of Attention rows remains an operator responsibility.
+
+The supervisor treats transient SQLite lock/busy responses during its polling
+read as contention and waits for the next poll interval. It still exits on
+malformed, unavailable, or permission-denied ledgers so a service manager can
+raise a genuine storage incident instead of masking it as a retry.
