@@ -203,8 +203,15 @@ impl StateStore {
             runs.push(row?);
         }
         runs.reverse();
+        let run_ids = runs
+            .iter()
+            .map(|report_run| report_run.run.id.clone())
+            .collect::<Vec<_>>();
+        let mut transfer_passes = self.transfer_passes_for_runs(&run_ids)?;
         for report_run in &mut runs {
-            report_run.transfer_passes = self.transfer_passes(&report_run.run.id)?;
+            report_run.transfer_passes = transfer_passes
+                .remove(&report_run.run.id)
+                .unwrap_or_default();
         }
 
         let mailboxes = jobs

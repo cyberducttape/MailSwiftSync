@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Batch transfer-pass, folder, and progress reads during complete report
+  exports in bounded run-ID chunks, avoiding a query-per-run history export
+  while preserving the complete manifest and report snapshot semantics.
 - Make standalone re-verification hold the exclusive ledger lock, enforce the
   current organization policy, and anchor new evidence to a completed
   imapsync/Dovecot transfer baseline. Re-verification now reports SQLite

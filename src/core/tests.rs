@@ -5269,6 +5269,18 @@ fn transfer_pass_provenance_records_intent_completion_and_verification() {
         .find(|run| run.run.id == "run-1")
         .unwrap();
     assert_eq!(run_1.transfer_passes.len(), 2);
+
+    let batched = db
+        .transfer_passes_for_runs(&["run-1".into(), "run-2".into()])
+        .unwrap();
+    assert_eq!(
+        batched.get("run-1").unwrap(),
+        &db.transfer_passes("run-1").unwrap()
+    );
+    assert_eq!(
+        batched.get("run-2").unwrap(),
+        &db.transfer_passes("run-2").unwrap()
+    );
 }
 
 #[test]

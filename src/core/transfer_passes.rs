@@ -432,6 +432,163 @@ impl StateStore {
         }
         Ok(records)
     }
+
+    /// Load transfer provenance for many runs with bounded `IN` batches.
+    /// Complete report exports may contain a long run history; keeping the
+    /// folder and progress reads batched avoids a query-per-run export path.
+    pub fn transfer_passes_for_runs(
+        &self,
+        run_ids: &[String],
+    ) -> rusqlite::Result<std::collections::HashMap<String, Vec<TransferPassRecord>>> {
+        const RUN_ID_BATCH: usize = 400;
+        let mut result = std::collections::HashMap::new();
+        for chunk in run_ids.chunks(RUN_ID_BATCH) {
+            let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+            let query = format!(
+                "SELECT run_id,attempt,pass_sequence,pass_kind,engine,executable_identity,command_sha256,command,folder_scope,source_range,started_at,finished_at,outcome,delta_required,completion_evidence,emitted_state_sha256,verification_method,verification_outcome,verified_at FROM transfer_passes WHERE run_id IN ({placeholders}) ORDER BY run_id,attempt"
+            );
+            let mut statement = self.connection.prepare(&query)?;
+            let mut records = statement
+                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    let command: String = row.get(7)?;
+                    let counters: Option<String> = row.get(14)?;
+                    Ok(TransferPassRecord {
+                        run_id: row.get(0)?,
+                        attempt: row.get(1)?,
+                        pass_sequence: row.get(2)?,
+                        pass_kind: row.get(3)?,
+                        engine: row.get(4)?,
+                        executable_identity: row.get(5)?,
+                        command_sha256: row.get(6)?,
+                        command: serde_json::from_str(&command).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                7,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?,
+                        folder_scope: row.get(8)?,
+                        source_range: row.get(9)?,
+                        started_at: row.get(10)?,
+                        finished_at: row.get(11)?,
+                        outcome: row.get(12)?,
+                        delta_required: row.get(13)?,
+                        engine_counters: counters
+                            .map(|value| serde_json::from_str(&value))
+                            .transpose()
+                            .map_err(|error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    14,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(error),
+                                )
+                            })?,
+                        emitted_state_sha256: row.get(15)?,
+                        verification_method: row.get(16)?,
+                        verification_outcome: row.get(17)?,
+                        verified_at: row.get(18)?,
+                        folders: Vec::new(),
+                        progress: None,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(statement);
+
+            let mut indexes = std::collections::HashMap::new();
+            for (index, record) in records.iter().enumerate() {
+                indexes.insert((record.run_id.clone(), record.attempt), index);
+            }
+
+            let folder_query = format!(
+                "SELECT run_id,attempt,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete FROM transfer_pass_folders WHERE run_id IN ({placeholders}) ORDER BY run_id,attempt,side,folder_digest"
+            );
+            let mut folders = self.connection.prepare(&folder_query)?;
+            for row in folders.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    TransferPassFolder {
+                        side: PassSide::from_i64(row.get(2)?)?,
+                        folder_digest: row.get(3)?,
+                        uidvalidity: row.get::<_, i64>(4)? as u64,
+                        uidnext: row.get::<_, i64>(5)? as u64,
+                        exists: row.get::<_, i64>(6)? as u64,
+                        verified_through_uid: row.get::<_, i64>(7)? as u64,
+                        staged_messages: row.get::<_, i64>(8)? as u64,
+                        complete: row.get(9)?,
+                    },
+                ))
+            })? {
+                let (run_id, attempt, folder) = row?;
+                if let Some(index) = indexes.get(&(run_id, attempt)).copied() {
+                    records[index].folders.push(folder);
+                }
+            }
+
+            let event_query = format!(
+                "SELECT run_id,detail FROM events WHERE kind='transfer_progress_checkpoint' AND run_id IN ({placeholders}) ORDER BY id"
+            );
+            let mut events = self.connection.prepare(&event_query)?;
+            for row in events.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })? {
+                let (run_id, detail) = row?;
+                let value: serde_json::Value = match serde_json::from_str(&detail) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let Some(attempt) = value.get("attempt").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let Ok(attempt) = u32::try_from(attempt) else {
+                    continue;
+                };
+                let Some(progress) = value.get("progress") else {
+                    continue;
+                };
+                let Some(copied) = progress
+                    .get("messages_copied")
+                    .and_then(serde_json::Value::as_u64)
+                else {
+                    continue;
+                };
+                let Some(bytes_copied) = progress
+                    .get("bytes_copied")
+                    .and_then(serde_json::Value::as_u64)
+                else {
+                    continue;
+                };
+                if let Some(index) = indexes.get(&(run_id, attempt)).copied() {
+                    records[index].progress = Some(TransferProgressSnapshot {
+                        copied,
+                        bytes_copied,
+                        skipped: progress
+                            .get("source_messages")
+                            .and_then(serde_json::Value::as_u64)
+                            .zip(
+                                progress
+                                    .get("messages_left")
+                                    .and_then(serde_json::Value::as_u64),
+                            )
+                            .map(|(source, left)| {
+                                source.saturating_sub(left).saturating_sub(copied)
+                            }),
+                        unresolved: progress
+                            .get("messages_left")
+                            .and_then(serde_json::Value::as_u64),
+                    });
+                }
+            }
+
+            for record in records {
+                result
+                    .entry(record.run_id.clone())
+                    .or_insert_with(Vec::new)
+                    .push(record);
+            }
+        }
+        Ok(result)
+    }
 }
 
 fn sql_u64(value: u64) -> rusqlite::Result<i64> {
