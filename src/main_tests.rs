@@ -2448,6 +2448,82 @@ fn state_lock_prevents_two_instances_and_releases_on_drop() {
     let _ = std::fs::remove_file(state_path.with_extension("lock"));
 }
 
+#[test]
+fn state_lock_child_process_holds_ledger_lock() {
+    let Some(state_path) = std::env::var_os("MAILSWIFTSYNC_LOCK_CHILD_STATE") else {
+        // This test is a subprocess helper invoked by the parent regression
+        // below. It remains harmless when the test harness runs it normally.
+        return;
+    };
+    let marker_path = PathBuf::from(
+        std::env::var_os("MAILSWIFTSYNC_LOCK_CHILD_READY")
+            .expect("parent supplies child readiness path"),
+    );
+    let release_path = PathBuf::from(
+        std::env::var_os("MAILSWIFTSYNC_LOCK_CHILD_RELEASE")
+            .expect("parent supplies child release path"),
+    );
+    let _lock = acquire_instance_lock(&PathBuf::from(state_path)).unwrap();
+    std::fs::write(marker_path, b"ready").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !release_path.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "parent did not release the subprocess ledger lock"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn ledger_instance_lock_excludes_a_second_process() {
+    let directory =
+        std::env::temp_dir().join(format!("mailswiftsync-lock-process-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let state_path = directory.join("state.db");
+    let ready_path = directory.join("ready");
+    let release_path = directory.join("release");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::state_lock_child_process_holds_ledger_lock",
+            "--nocapture",
+        ])
+        .env("MAILSWIFTSYNC_LOCK_CHILD_STATE", &state_path)
+        .env("MAILSWIFTSYNC_LOCK_CHILD_READY", &ready_path)
+        .env("MAILSWIFTSYNC_LOCK_CHILD_RELEASE", &release_path)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ready_path.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("lock-holder test subprocess exited before acquiring lock: {status}");
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("lock-holder test subprocess did not acquire the lock in time");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let second_lock = acquire_instance_lock(&state_path);
+    let rejected_second_process = second_lock
+        .as_ref()
+        .is_err_and(|error| error.contains("project database"));
+    drop(second_lock);
+    std::fs::write(&release_path, b"release").unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success(), "lock-holder subprocess failed: {status}");
+    assert!(
+        rejected_second_process,
+        "a second process acquired a ledger lock already held by verification"
+    );
+    let lock_after_child_exit = acquire_instance_lock(&state_path).unwrap();
+    drop(lock_after_child_exit);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn recorded_process_group_termination_stops_orphaned_child() {
