@@ -6,11 +6,24 @@ use super::{ProjectReportSnapshot, VerificationOutcome};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostMigrationReport {
     pub total_processed: u64,
-    pub total_skipped: u64,
+    pub total_skipped: Option<u64>,
+    pub total_skipped_availability: CountAvailability,
     pub total_failed: u64,
     pub exceptions: Vec<MigrationException>,
     pub remediation_steps: Vec<String>,
 }
+
+/// Whether a report counter is backed by persisted or explicitly supplied
+/// evidence. `Unavailable` is paired with a JSON `null`, never a fabricated 0.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CountAvailability {
+    Available,
+    Unavailable,
+}
+
+pub(crate) const POST_MIGRATION_REPORT_FORMAT: &str = "mailswiftsync-post-migration-report";
+pub(crate) const POST_MIGRATION_REPORT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationException {
@@ -43,7 +56,8 @@ impl PostMigrationReport {
         let mut changed_count: u64 = 0;
         let mut report = Self {
             total_processed: 0,
-            total_skipped: 0,
+            total_skipped: None,
+            total_skipped_availability: CountAvailability::Unavailable,
             total_failed: 0,
             exceptions: Vec::new(),
             remediation_steps: Vec::new(),
@@ -146,14 +160,13 @@ impl PostMigrationReport {
             }));
         report.remediation_steps.extend(generated.remediation_steps);
 
-        // The ledger does not persist a message-level skipped count. Keep the
-        // exported zero explicitly qualified instead of presenting it as an
-        // observed fact.
+        // The ledger does not persist a message-level skipped count. Keep it
+        // null and explicitly mark it unavailable instead of fabricating 0.
         report.exceptions.push(MigrationException {
             id: "skipped-count-unavailable".to_string(),
             severity: ExceptionSeverity::Warning,
             category: "skipped_count_unavailable".to_string(),
-            message: "The durable ledger does not record a message-level skipped count".to_string(),
+            message: "The durable ledger does not record a message-level skipped count; the value is unavailable".to_string(),
             affected_folder: None,
             affected_message_id: None,
         });
@@ -256,7 +269,7 @@ impl PostMigrationReport {
         // Skipped count
         if total_skipped > 0 {
             exceptions.push(MigrationException {
-                id: format!("skipped-{}", uuid::Uuid::new_v4()),
+                id: "skipped-count-reported".to_string(),
                 severity: ExceptionSeverity::Info,
                 category: "skipped".to_string(),
                 message: format!(
@@ -285,7 +298,8 @@ impl PostMigrationReport {
 
         PostMigrationReport {
             total_processed,
-            total_skipped,
+            total_skipped: Some(total_skipped),
+            total_skipped_availability: CountAvailability::Available,
             total_failed,
             exceptions,
             remediation_steps,
@@ -381,6 +395,11 @@ mod tests {
         let report = PostMigrationReport::generate(1000, 0, 0, 0, 0, 0);
         assert!(report.is_successful());
         assert_eq!(report.exceptions.len(), 0);
+        assert_eq!(report.total_skipped, Some(0));
+        assert_eq!(
+            report.total_skipped_availability,
+            CountAvailability::Available
+        );
     }
 
     #[test]
@@ -411,6 +430,11 @@ mod tests {
     fn durable_snapshot_aggregation_remains_fail_closed() {
         let report = PostMigrationReport::from_project_snapshot(&snapshot_with_evidence());
         assert_eq!(report.total_processed, 10);
+        assert_eq!(report.total_skipped, None);
+        assert_eq!(
+            report.total_skipped_availability,
+            CountAvailability::Unavailable
+        );
         assert_eq!(report.total_failed, 2);
         assert!(report.exceptions.iter().any(|exception| {
             exception.category == "incomplete_evidence"
@@ -429,6 +453,14 @@ mod tests {
                 .any(|exception| exception.category == "skipped_count_unavailable")
         );
         assert!(!report.is_successful());
+    }
+
+    #[test]
+    fn unavailable_skipped_count_serializes_as_null_with_status() {
+        let report = PostMigrationReport::from_project_snapshot(&snapshot_with_evidence());
+        let value = serde_json::to_value(report).unwrap();
+        assert!(value["total_skipped"].is_null());
+        assert_eq!(value["total_skipped_availability"], "unavailable");
     }
 
     #[test]

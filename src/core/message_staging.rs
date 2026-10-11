@@ -247,9 +247,8 @@ impl MessageMetadataStage {
 
     /// Open the private staging database for one verification attempt.
     /// The caller removes it after verification has produced durable evidence;
-    /// retaining it on an interrupted run is what makes page-level recovery
-    /// possible after the controller process is restarted. Persisted scan
-    /// pages are recovery context and are invalidated before any retry scan.
+    /// an interrupted attempt retains diagnostic/progress context, but every
+    /// retry invalidates its persisted scan pages before fetching again.
     pub(crate) fn open_durable(path: PathBuf, identity: &str) -> Result<Self, String> {
         let parent = path
             .parent()

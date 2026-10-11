@@ -333,8 +333,8 @@ pub(crate) fn build_post_migration_report_json(
     }
     let report = core::post_migration_report::PostMigrationReport::from_project_snapshot(&snapshot);
     let value = serde_json::json!({
-        "format": "mailswiftsync-post-migration-report",
-        "format_version": 1,
+        "format": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT,
+        "format_version": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION,
         "application_version": env!("CARGO_PKG_VERSION"),
         "project": {
             "id": snapshot.project.id,
@@ -345,7 +345,8 @@ pub(crate) fn build_post_migration_report_json(
         "report": report,
         "count_semantics": {
             "total_processed": "sum of source messages in durable mailbox evidence",
-            "total_skipped": "not recorded at message level by the durable ledger; remains zero and is surfaced as an exception",
+            "total_skipped": "null when the durable ledger has no message-level skipped count; consult total_skipped_availability",
+            "total_skipped_availability": "available only when the count is backed by durable or explicitly supplied evidence",
             "total_failed": "sum of failed messages in durable mailbox evidence",
             "missing_extra_changed": "sum of durable verification differences",
         },
@@ -674,6 +675,26 @@ mod project_json_tests {
         assert_eq!(
             report["mailboxes"][0]["evidence"]["evidence_level"],
             "Aggregate match — not message-body proof"
+        );
+        let post_report: serde_json::Value =
+            serde_json::from_str(&build_post_migration_report_json(&store, &project.id).unwrap())
+                .unwrap();
+        assert_eq!(
+            post_report["format"],
+            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT
+        );
+        assert_eq!(
+            post_report["format_version"],
+            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION
+        );
+        assert!(post_report["report"]["total_skipped"].is_null());
+        assert_eq!(
+            post_report["report"]["total_skipped_availability"],
+            "unavailable"
+        );
+        assert_eq!(
+            post_report["count_semantics"]["total_skipped"],
+            "null when the durable ledger has no message-level skipped count; consult total_skipped_availability"
         );
         let _ = std::fs::remove_dir_all(directory);
     }

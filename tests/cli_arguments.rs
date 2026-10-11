@@ -97,6 +97,17 @@ fn post_report_state_requires_state_and_output_paths() {
 }
 
 #[test]
+fn post_report_command_emits_versioned_nullable_count_semantics() {
+    let output = run(&["post-report", "10", "0", "0", "0", "0", "0"]);
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["format"], "mailswiftsync-post-migration-report");
+    assert_eq!(report["format_version"], 2);
+    assert_eq!(report["report"]["total_skipped"], 0);
+    assert_eq!(report["report"]["total_skipped_availability"], "available");
+}
+
+#[test]
 fn batch_headless_accepts_opt_in_diagnostic_directory() {
     let root = std::env::temp_dir().join(format!(
         "mailswiftsync-cli-batch-diagnostic-{}",

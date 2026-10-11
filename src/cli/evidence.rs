@@ -949,7 +949,19 @@ pub(super) fn post_report_command(arguments: std::env::ArgsOs) -> eframe::Result
     let report = crate::core::post_migration_report::PostMigrationReport::generate(
         values[0], values[1], values[2], values[3], values[4], values[5],
     );
-    match serde_json::to_string_pretty(&report) {
+    let value = serde_json::json!({
+        "format": crate::core::post_migration_report::POST_MIGRATION_REPORT_FORMAT,
+        "format_version": crate::core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION,
+        "report": report,
+        "count_semantics": {
+            "total_processed": "explicitly supplied by the command caller",
+            "total_skipped": "explicitly supplied by the command caller",
+            "total_skipped_availability": "available because the command caller supplied a count",
+            "total_failed": "explicitly supplied by the command caller",
+            "missing_extra_changed": "explicitly supplied by the command caller",
+        }
+    });
+    match serde_json::to_string_pretty(&value) {
         Ok(report) => {
             out!("{report}");
             Ok(())

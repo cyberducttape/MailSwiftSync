@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Version post-migration report artifacts as v2 and encode an unrecorded
+  `total_skipped` count as `null` with explicit `unavailable` status; manually
+  supplied counts remain numeric and marked available.
 - Compare duplicate-message FLAGS with streaming frequency maps, retaining one
   key per distinct canonical flag set instead of one entry per message.
 - Enforce full folder rescans after verification restarts: staged message rows
