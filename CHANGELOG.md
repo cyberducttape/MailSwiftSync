@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Make standalone re-verification hold the exclusive ledger lock, enforce the
+  current organization policy, and anchor new evidence to a completed
+  imapsync/Dovecot transfer baseline. Re-verification now reports SQLite
+  history failures instead of treating them as missing history.
+- Prevent verification-only runs from starting against an actively migrating
+  job's destination, and make cutover lookup failures fail closed rather than
+  being interpreted as an absent cutover workflow.
+- Bound streamed proof generation to the same 32 MiB envelope enforced by
+  proof verification and signing. Oversized customer/operator artifacts now
+  fail closed instead of being emitted in a form the product cannot verify.
 - Make machine-readable customer and operator exports use a complete durable
   run manifest instead of the bounded recent-run view. Export snapshots now
   load every run up to a 100,000-run safety ceiling and fail closed above it;

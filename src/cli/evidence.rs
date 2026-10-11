@@ -182,6 +182,13 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         }
     };
     let state = PathBuf::from(state);
+    let _instance_lock = match crate::process::acquire_instance_lock(&state) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("Reverification refused: {error}");
+            std::process::exit(1);
+        }
+    };
     let store = match core::StateStore::open(&state) {
         Ok(store) => store,
         Err(error) => {
@@ -189,9 +196,16 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
             std::process::exit(1);
         }
     };
-    let Some(previous_run) = store.latest_run(&job_id).ok().flatten() else {
-        eprintln!("Reverification refused: no prior run exists for mailbox {job_id}");
-        std::process::exit(2);
+    let previous_run = match store.latest_completed_transfer_run(&job_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => {
+            eprintln!("Reverification refused: no prior run exists for mailbox {job_id}");
+            std::process::exit(2);
+        }
+        Err(error) => {
+            eprintln!("Reverification refused: could not read migration history: {error}");
+            std::process::exit(1);
+        }
     };
     let snapshot =
         match crate::migration_plan::decode_report_run_snapshot(&previous_run.plan_snapshot) {
@@ -218,6 +232,19 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         std::process::exit(2);
     }
     form.profile.body_hash_verification = mode == "content";
+    let organization_policy = match crate::organization_policy::OrganizationPolicy::load() {
+        Ok(policy) => policy,
+        Err(error) => {
+            eprintln!("Reverification refused: could not load organization policy: {error}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = organization_policy.check_form(&form) {
+        eprintln!(
+            "Reverification refused: current organization policy does not permit this evidence mode: {error}"
+        );
+        std::process::exit(2);
+    }
     if let Err(error) = crate::runner::validate_body_hash_limits(&form) {
         eprintln!("Reverification refused: {error}");
         std::process::exit(2);

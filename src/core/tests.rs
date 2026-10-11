@@ -3172,6 +3172,59 @@ fn latest_run_summary_is_queryable_for_audit_reports() {
 }
 
 #[test]
+fn latest_completed_transfer_run_excludes_reverification_history() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("reverify-baseline", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.insert_run_for_test(&project.id, Some(&job), "transfer", "imapsync")
+        .unwrap();
+    db.finish_run("transfer", "completed", "transfer complete")
+        .unwrap();
+    db.insert_run_for_test(&project.id, Some(&job), "audit", "imap-verification")
+        .unwrap();
+    db.finish_run("audit", "completed", "audit complete")
+        .unwrap();
+
+    let baseline = db.latest_completed_transfer_run(&job).unwrap().unwrap();
+    assert_eq!(baseline.id, "transfer");
+    assert_eq!(baseline.engine, "imapsync");
+}
+
+#[test]
+fn verification_admission_rejects_an_active_conflicting_destination() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("verification-lock", "source", "destination")
+        .unwrap();
+    let active_job = db
+        .add_mailbox(&project.id, "source-a", "Destination@example.test")
+        .unwrap();
+    let other_project = db
+        .create_project("verification-lock-other", "source", "destination")
+        .unwrap();
+    let verification_job = db
+        .add_mailbox(&other_project.id, "source-b", " destination@example.test ")
+        .unwrap();
+    db.begin_run(&project.id, &active_job, "active-transfer", "imapsync")
+        .unwrap();
+
+    assert!(
+        db.begin_verification_run(
+            &other_project.id,
+            &verification_job,
+            "blocked-verification",
+            "snapshot",
+        )
+        .is_err()
+    );
+    assert_eq!(db.run_status("blocked-verification").unwrap(), None);
+}
+
+#[test]
 fn project_report_snapshot_loads_related_rows_as_one_read_model() {
     let db = StateStore::in_memory().unwrap();
     let project = db

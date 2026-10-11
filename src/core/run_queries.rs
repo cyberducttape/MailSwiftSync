@@ -31,6 +31,36 @@ impl StateStore {
             )
             .optional()
     }
+
+    /// Return the most recent completed transfer run, excluding audit-only
+    /// verification runs. Reverification evidence must be anchored to a
+    /// transfer baseline rather than whichever history row happens to be
+    /// newest.
+    pub fn latest_completed_transfer_run(
+        &self,
+        job_id: &str,
+    ) -> rusqlite::Result<Option<RunSummary>> {
+        self.connection
+            .query_row(
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 AND status='completed' AND engine IN ('imapsync','dovecot') ORDER BY finished_at DESC, rowid DESC LIMIT 1",
+                [job_id],
+                |row| {
+                    Ok(RunSummary {
+                        id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        parent_run_id: row.get(2)?,
+                        engine: row.get(3)?,
+                        phase_at_start: row.get(4)?,
+                        plan_snapshot: row.get(5)?,
+                        status: row.get(6)?,
+                        started_at: row.get(7)?,
+                        finished_at: row.get(8)?,
+                        detail: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+    }
     #[cfg(test)]
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection

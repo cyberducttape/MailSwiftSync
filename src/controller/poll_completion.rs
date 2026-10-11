@@ -284,46 +284,55 @@ impl App {
                     // generic Verification/Complete path; the operator (or
                     // an audited cutover command) advances it after reviewing
                     // the durable evidence and maintenance window.
-                    let staged_cutover = self.store.cutover_stage(project).ok().flatten().is_some();
-                    if staged_cutover {
-                        self.set_status(
-                            self.language.text(
-                                "Cutover pass completed; review durable evidence before advancing the workflow",
-                            ),
-                            StatusSeverity::Info,
-                        );
-                    } else if run_context.dry_run {
-                        let result = self.store.transition(project, core::Phase::Preflight);
-                        self.report_store_error("advance project phase", result);
-                    } else {
-                        let fully_verified = self.store.all_mailboxes_verified(project);
-                        match fully_verified {
-                            Ok(true) => {
-                                let verification =
-                                    self.store.transition(project, core::Phase::Verification);
-                                if let Err(error) = verification {
-                                    self.report_store_error(
-                                        "advance project to Verification",
-                                        Err(error),
-                                    );
-                                } else {
-                                    let complete =
-                                        self.store.transition(project, core::Phase::Complete);
-                                    self.report_store_error(
-                                        "complete fully verified project",
-                                        complete,
-                                    );
+                    match self.store.cutover_stage(project) {
+                        Ok(Some(_)) => {
+                            self.set_status(
+                                self.language.text(
+                                    "Cutover pass completed; review durable evidence before advancing the workflow",
+                                ),
+                                StatusSeverity::Info,
+                            );
+                        }
+                        Ok(None) if run_context.dry_run => {
+                            let result = self.store.transition(project, core::Phase::Preflight);
+                            self.report_store_error("advance project phase", result);
+                        }
+                        Ok(None) => {
+                            let fully_verified = self.store.all_mailboxes_verified(project);
+                            match fully_verified {
+                                Ok(true) => {
+                                    let verification =
+                                        self.store.transition(project, core::Phase::Verification);
+                                    if let Err(error) = verification {
+                                        self.report_store_error(
+                                            "advance project to Verification",
+                                            Err(error),
+                                        );
+                                    } else {
+                                        let complete =
+                                            self.store.transition(project, core::Phase::Complete);
+                                        self.report_store_error(
+                                            "complete fully verified project",
+                                            complete,
+                                        );
+                                    }
                                 }
+                                Ok(false) => {
+                                    let result =
+                                        self.store.transition(project, core::Phase::Verification);
+                                    self.report_store_error("advance project phase", result);
+                                }
+                                Err(error) => self.report_store_error(
+                                    "check project verification before completion",
+                                    Err(error),
+                                ),
                             }
-                            Ok(false) => {
-                                let result =
-                                    self.store.transition(project, core::Phase::Verification);
-                                self.report_store_error("advance project phase", result);
-                            }
-                            Err(error) => self.report_store_error(
-                                "check project verification before completion",
+                        }
+                        Err(error) => {
+                            self.report_store_error(
+                                "read cutover workflow before phase advancement",
                                 Err(error),
-                            ),
+                            );
                         }
                     }
                 } else if terminal_write_ok && !succeeded && !self.durability_error {

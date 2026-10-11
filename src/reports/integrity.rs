@@ -2,6 +2,11 @@
 
 use crate::{core, plan_identity::snapshot_sha256};
 
+/// Keep generated proof artifacts within the bounded input envelope used by
+/// the verifier and signer. A streamed writer must never successfully produce
+/// a file that the corresponding commands refuse to read.
+pub(crate) const MAX_PROOF_BYTES: u64 = 32 * 1024 * 1024;
+
 pub(crate) fn evidence_digest(
     run_id: &str,
     plan_snapshot: &str,
@@ -128,8 +133,9 @@ pub(crate) fn write_streamed_proof(
         return Err("A streamed proof has a duplicated or reserved field.".into());
     }
     let mut hasher = HashingWriter(sha2::Sha256::default());
+    let mut limited_hasher = SizeLimitedWriter::new(&mut hasher);
     serde_json::to_writer(
-        &mut hasher,
+        &mut limited_hasher,
         &StreamedProof {
             fields: &fields,
             arrays,
@@ -140,8 +146,9 @@ pub(crate) fn write_streamed_proof(
     let digest = crate::reports::integrity::hex_encode(&sha2::Digest::finalize(hasher.0));
     let mut failure = None;
     crate::atomic_artifact::write_private_atomic_with(path, |file| {
+        let mut limited_file = SizeLimitedWriter::new(file);
         serde_json::to_writer_pretty(
-            file,
+            &mut limited_file,
             &StreamedProof {
                 fields: &fields,
                 arrays,
@@ -166,6 +173,38 @@ impl std::io::Write for HashingWriter {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+struct SizeLimitedWriter<'a> {
+    inner: &'a mut dyn std::io::Write,
+    written: u64,
+}
+
+impl<'a> SizeLimitedWriter<'a> {
+    fn new(inner: &'a mut dyn std::io::Write) -> Self {
+        Self { inner, written: 0 }
+    }
+}
+
+impl std::io::Write for SizeLimitedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let length = u64::try_from(bytes.len()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::FileTooLarge, "proof chunk is too large")
+        })?;
+        if length > MAX_PROOF_BYTES.saturating_sub(self.written) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                format!("proof exceeds the {MAX_PROOF_BYTES}-byte limit"),
+            ));
+        }
+        let written = self.inner.write(bytes)?;
+        self.written = self.written.saturating_add(written as u64);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }
 
@@ -261,7 +300,17 @@ mod streamed_proof_tests {
 
     #[test]
     fn streamed_proofs_carry_exactly_the_in_memory_digest_and_verify() {
-        let directory = crate::credentials::create_secret_directory().unwrap();
+        // Use an isolated test directory rather than the shared credential
+        // runtime: parallel headless tests are allowed to reconcile that
+        // runtime after their subprocesses finish.
+        let run_directory = crate::credentials::create_secret_directory().unwrap();
+        let directory = run_directory
+            .parent()
+            .unwrap()
+            .join(format!("proof-test-{}", uuid::Uuid::new_v4()));
+        // Keep the private permissions inherited from the runtime directory,
+        // but move out of the `run-*` namespace that recovery cleanup scans.
+        std::fs::rename(run_directory, &directory).unwrap();
         let path = directory.join("proof.json");
         let serde_json::Value::Object(fields) = serde_json::json!({
             "format": "mailswiftsync-customer-proof",
@@ -303,6 +352,22 @@ mod streamed_proof_tests {
         let error = write_streamed_proof(&path, serde_json::Map::new(), &[("mailboxes", &failing)])
             .unwrap_err();
         assert!(error.contains("missing evidence run"), "{error}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&path).unwrap())
+                .unwrap(),
+            expected
+        );
+
+        let oversized = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
+            emit(serde_json::json!("x".repeat(MAX_PROOF_BYTES as usize)))
+        };
+        let error =
+            write_streamed_proof(&path, serde_json::Map::new(), &[("mailboxes", &oversized)])
+                .unwrap_err();
+        assert!(
+            error.contains("32 MiB") || error.contains("33554432"),
+            "{error}"
+        );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&path).unwrap())
                 .unwrap(),

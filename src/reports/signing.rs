@@ -2,14 +2,13 @@ use crate::atomic_artifact::write_private_atomic;
 use crate::{
     plan_identity::snapshot_sha256 as plan_snapshot_sha256,
     reports::integrity::{
-        canonical_signed_proof_payload, hex_decode, hex_encode, with_proof_digest,
+        MAX_PROOF_BYTES, canonical_signed_proof_payload, hex_decode, hex_encode, with_proof_digest,
     },
 };
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use std::{io::Read, path::Path};
 
 const MAX_SIGNING_KEY_BYTES: u64 = 64 * 1024;
-const MAX_PROOF_BYTES: u64 = 32 * 1024 * 1024;
 
 fn read_proof_file(path: &Path) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;

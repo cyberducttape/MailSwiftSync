@@ -46,10 +46,10 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let tx = self.connection.unchecked_transaction()?;
-        let phase: String = tx.query_row(
-            "SELECT p.phase FROM projects p JOIN mailbox_jobs j ON j.project_id=p.id WHERE p.id=?1 AND j.id=?2",
+        let (phase, destination, config): (String, String, Option<String>) = tx.query_row(
+            "SELECT p.phase,j.destination_mailbox,j.config FROM projects p JOIN mailbox_jobs j ON j.project_id=p.id WHERE p.id=?1 AND j.id=?2",
             params![project_id, job_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
@@ -59,6 +59,14 @@ impl StateStore {
         if active {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        ensure_no_active_destination_lock_conflict(
+            &tx,
+            &[normalized_destination_lock_identity(
+                &destination,
+                config.as_deref(),
+            )],
+            &BTreeSet::from([job_id.to_owned()]),
+        )?;
         tx.execute(
             "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,'imap-verification',?4,?5,'running')",
             params![run_id, project_id, job_id, phase, plan_snapshot],
