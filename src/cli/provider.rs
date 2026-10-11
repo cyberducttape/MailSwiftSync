@@ -611,13 +611,7 @@ pub(super) fn oauth_access_token_command(
                 &config_path,
                 &previous_config,
                 &rotated_config,
-                |config| {
-                    crate::atomic_artifact::write_private_atomic(
-                        &config_path,
-                        &crate::oauth_refresh::encode_refresh_config(config),
-                    )
-                    .map_err(|error| format!("could not update OAuth refresh config: {error}"))
-                },
+                |_| Ok(()),
             ),
             _ => Err("OAuth refresh recovery state was not initialized consistently".to_owned()),
         }
