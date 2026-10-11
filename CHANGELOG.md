@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exercise ledger ownership across processes, including forced termination of
+  the lock holder and recovery by a fresh process.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving

@@ -2459,17 +2459,13 @@ fn state_lock_child_process_holds_ledger_lock() {
         std::env::var_os("MAILSWIFTSYNC_LOCK_CHILD_READY")
             .expect("parent supplies child readiness path"),
     );
-    let release_path = PathBuf::from(
-        std::env::var_os("MAILSWIFTSYNC_LOCK_CHILD_RELEASE")
-            .expect("parent supplies child release path"),
-    );
     let _lock = acquire_instance_lock(&PathBuf::from(state_path)).unwrap();
     std::fs::write(marker_path, b"ready").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !release_path.exists() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
         assert!(
             std::time::Instant::now() < deadline,
-            "parent did not release the subprocess ledger lock"
+            "parent did not terminate the lock-holder subprocess"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -2482,7 +2478,6 @@ fn ledger_instance_lock_excludes_a_second_process() {
     create_private_test_directory(&directory);
     let state_path = directory.join("state.db");
     let ready_path = directory.join("ready");
-    let release_path = directory.join("release");
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -2491,7 +2486,6 @@ fn ledger_instance_lock_excludes_a_second_process() {
         ])
         .env("MAILSWIFTSYNC_LOCK_CHILD_STATE", &state_path)
         .env("MAILSWIFTSYNC_LOCK_CHILD_READY", &ready_path)
-        .env("MAILSWIFTSYNC_LOCK_CHILD_RELEASE", &release_path)
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -2512,9 +2506,12 @@ fn ledger_instance_lock_excludes_a_second_process() {
         .as_ref()
         .is_err_and(|error| error.contains("project database"));
     drop(second_lock);
-    std::fs::write(&release_path, b"release").unwrap();
+    child.kill().unwrap();
     let status = child.wait().unwrap();
-    assert!(status.success(), "lock-holder subprocess failed: {status}");
+    assert!(
+        !status.success(),
+        "lock-holder subprocess unexpectedly exited cleanly before forced termination"
+    );
     assert!(
         rejected_second_process,
         "a second process acquired a ledger lock already held by verification"
