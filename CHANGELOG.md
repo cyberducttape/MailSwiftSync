@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Finalize a verification-only run as `verification_failed` when its terminal
+  evidence transaction cannot be committed, while retaining the durable stage
+  for retry; failed reverify persistence can no longer leave a permanently
+  running run that blocks the next attempt.
 - Professional typography and visual polish for the desktop interface: IBM
   Plex Sans and Plex Mono are bundled (unmodified, SIL OFL; license shipped as
   `OFL-IBM-Plex.txt` in archives and packages) with real medium and semibold
