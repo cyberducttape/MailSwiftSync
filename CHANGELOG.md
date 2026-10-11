@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fail closed when cutover-stage lookup fails after transfer completion; a
+  transient ledger read error can no longer bypass the approved cutover flow.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving
