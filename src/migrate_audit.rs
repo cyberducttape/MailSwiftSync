@@ -52,7 +52,7 @@ impl<R: Read> Read for LimitedReader<R> {
 struct StagingDatabase {
     connection: Connection,
     _path: PathBuf,
-    _cleanup: crate::credentials::CleanupGuard,
+    cleanup: crate::credentials::CleanupGuard,
 }
 
 /// Stage snapshots in an owner-only on-disk SQLite database rather than an
@@ -60,47 +60,98 @@ struct StagingDatabase {
 /// SQLite may spill indexed payloads to the private runtime directory.
 fn create_staging_database() -> Result<StagingDatabase, String> {
     let directory = crate::credentials::create_secret_directory()?;
-    let cleanup = crate::credentials::CleanupGuard::new(vec![directory.clone()]);
-    // SQLite's NOFOLLOW flag rejects a filename if any component is a symlink.
-    // macOS temp paths commonly begin with /var, which aliases /private/var;
-    // resolve the already-private run directory before creating/opening the DB
-    // so NOFOLLOW can remain enabled without weakening the filesystem check.
-    #[cfg(unix)]
-    let database_directory = fs::canonicalize(&directory)
-        .map_err(|error| format!("could not resolve private migration-audit directory: {error}"))?;
-    #[cfg(not(unix))]
-    let database_directory = directory.clone();
-    crate::credentials::verify_private_directory(&database_directory)
-        .map_err(|error| format!("could not verify private migration-audit directory: {error}"))?;
-    let path = database_directory.join("migration-audit.sqlite3");
-    crate::credentials::open_secret_file(&path)
-        .map(drop)
-        .map_err(|error| {
-            format!("could not create private migration-audit staging database: {error}")
+    let mut cleanup = crate::credentials::CleanupGuard::new(vec![directory.clone()]);
+    let preparation = (|| {
+        // SQLite's NOFOLLOW flag rejects a filename if any component is a symlink.
+        // macOS temp paths commonly begin with /var, which aliases /private/var;
+        // resolve the already-private run directory before creating/opening the DB
+        // so NOFOLLOW can remain enabled without weakening the filesystem check.
+        #[cfg(unix)]
+        let database_directory = fs::canonicalize(&directory).map_err(|error| {
+            format!("could not resolve private migration-audit directory: {error}")
         })?;
-    let connection = Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )
-    .map_err(|error| format!("could not open migration-audit staging database: {error}"))?;
-    connection
-        .execute_batch(
-            "PRAGMA temp_store=FILE;
-             PRAGMA journal_mode=DELETE;
-             CREATE TABLE records(
-                 side INTEGER NOT NULL,
-                 category TEXT NOT NULL,
-                 identity TEXT NOT NULL,
-                 payload TEXT NOT NULL
-             );
-             CREATE INDEX records_lookup ON records(side, category, identity, payload);",
+        #[cfg(not(unix))]
+        let database_directory = directory.clone();
+        crate::credentials::verify_private_directory(&database_directory).map_err(|error| {
+            format!("could not verify private migration-audit directory: {error}")
+        })?;
+        let path = database_directory.join("migration-audit.sqlite3");
+        crate::credentials::open_secret_file(&path)
+            .map(drop)
+            .map_err(|error| {
+                format!("could not create private migration-audit staging database: {error}")
+            })?;
+        let connection = Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
-        .map_err(|error| error.to_string())?;
-    Ok(StagingDatabase {
-        connection,
-        _path: path,
-        _cleanup: cleanup,
-    })
+        .map_err(|error| format!("could not open migration-audit staging database: {error}"))?;
+        connection
+            .execute_batch(
+                "PRAGMA temp_store=FILE;
+                 PRAGMA journal_mode=DELETE;
+                 CREATE TABLE records(
+                     side INTEGER NOT NULL,
+                     category TEXT NOT NULL,
+                     identity TEXT NOT NULL,
+                     payload TEXT NOT NULL
+                 );
+                 CREATE INDEX records_lookup ON records(side, category, identity, payload);",
+            )
+            .map_err(|error| error.to_string())?;
+        Ok((connection, path))
+    })();
+    match preparation {
+        Ok((connection, path)) => Ok(StagingDatabase {
+            connection,
+            _path: path,
+            cleanup,
+        }),
+        Err(preparation_error) => match cleanup.cleanup_now() {
+            Ok(()) => Err(preparation_error),
+            Err(cleanup_error) => Err(format!("{preparation_error}; {cleanup_error}")),
+        },
+    }
+}
+
+impl StagingDatabase {
+    fn finish(self) -> Result<(), String> {
+        let Self {
+            connection,
+            cleanup,
+            ..
+        } = self;
+        let close_result = connection.close().map_err(|(connection, error)| {
+            drop(connection);
+            format!("could not close migration-assurance staging database: {error}")
+        });
+        let cleanup_result = {
+            let mut cleanup = cleanup;
+            cleanup.cleanup_now()
+        };
+        match (close_result, cleanup_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(close_error), Ok(())) => Err(close_error),
+            (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(close_error), Err(cleanup_error)) => {
+                Err(format!("{close_error}; {cleanup_error}"))
+            }
+        }
+    }
+}
+
+fn finish_staging_operation<T>(
+    result: Result<T, String>,
+    cleanup: Result<(), String>,
+) -> Result<T, String> {
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(cleanup_error)) => Err(format!(
+            "migration assurance completed, but private staging cleanup failed: {cleanup_error}"
+        )),
+        (Err(error), Err(cleanup_error)) => Err(format!("{error}; {cleanup_error}")),
+    }
 }
 
 struct SnapshotVisitor<'a> {
@@ -803,26 +854,29 @@ pub(crate) fn compare_files(
     destination: &Path,
     output: &Path,
 ) -> Result<AuditResult, String> {
-    let mut connection = create_staging_database()?;
-    let mut categories = std::collections::BTreeSet::new();
-    stage_snapshot(
-        source,
-        "source",
-        SOURCE_SIDE,
-        &mut connection.connection,
-        &mut categories,
-    )?;
-    stage_snapshot(
-        destination,
-        "destination",
-        DESTINATION_SIDE,
-        &mut connection.connection,
-        &mut categories,
-    )?;
-    let result = compare_staged(&connection.connection, &categories)?;
-    let text = serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?;
-    write_private_atomic(output, &text).map_err(|e| e.to_string())?;
-    Ok(result)
+    let mut staging = create_staging_database()?;
+    let result = (|| {
+        let mut categories = std::collections::BTreeSet::new();
+        stage_snapshot(
+            source,
+            "source",
+            SOURCE_SIDE,
+            &mut staging.connection,
+            &mut categories,
+        )?;
+        stage_snapshot(
+            destination,
+            "destination",
+            DESTINATION_SIDE,
+            &mut staging.connection,
+            &mut categories,
+        )?;
+        let result = compare_staged(&staging.connection, &categories)?;
+        let text = serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?;
+        write_private_atomic(output, &text).map_err(|e| e.to_string())?;
+        Ok(result)
+    })();
+    finish_staging_operation(result, staging.finish())
 }
 
 #[cfg(test)]
@@ -1003,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn staging_database_is_private_on_disk_and_removed_on_drop() {
+    fn staging_database_is_private_on_disk_and_removed_on_finish() {
         let staging = create_staging_database().unwrap();
         let path = staging._path.clone();
         let directory = path.parent().unwrap().to_owned();
@@ -1047,7 +1101,23 @@ mod tests {
                 0o700
             );
         }
-        drop(staging);
+        staging.finish().unwrap();
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn staging_cleanup_failure_is_reported_with_operation_context() {
+        let error =
+            finish_staging_operation::<()>(Ok(()), Err("stage remained".into())).unwrap_err();
+        assert!(error.contains("migration assurance completed"));
+        assert!(error.contains("stage remained"));
+
+        let error = finish_staging_operation::<()>(
+            Err("comparison failed".into()),
+            Err("stage remained".into()),
+        )
+        .unwrap_err();
+        assert!(error.contains("comparison failed"));
+        assert!(error.contains("stage remained"));
     }
 }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Explicitly close and remove private migration-assurance SQLite staging data
+  before reporting a comparison complete; setup and cleanup failures are now
+  returned with the comparison error instead of being silently left to drop.
 - Check credential-file and directory cleanup before reporting transfer completion;
   failed removals remain guarded for a best-effort retry and are included in run
   failure details without misclassifying local permission errors as provider
