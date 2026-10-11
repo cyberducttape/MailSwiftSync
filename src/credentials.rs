@@ -266,54 +266,93 @@ fn fallback_secret_runtime_base() -> PathBuf {
     std::env::temp_dir().join("mailswiftsync-runtime")
 }
 
-pub fn cleanup_stale_secret_directories(base: &Path) {
+pub fn cleanup_stale_secret_directories(base: &Path) -> Result<(), String> {
     const MAX_SECRET_DIRECTORY_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-    cleanup_stale_secret_directories_at(base, SystemTime::now(), MAX_SECRET_DIRECTORY_AGE);
+    cleanup_stale_secret_directories_at(base, SystemTime::now(), MAX_SECRET_DIRECTORY_AGE)
 }
 
 /// Remove every residual run directory after durable process recovery has
 /// established that no recorded engine can still be consuming its passfiles.
 /// Callers must hold the application instance lock and must not use this when
 /// process ownership is unverified.
-pub fn cleanup_reconciled_secret_directories(base: &Path) {
-    cleanup_secret_directories(base, None, SystemTime::now());
+pub fn cleanup_reconciled_secret_directories(base: &Path) -> Result<(), String> {
+    cleanup_secret_directories(base, None, SystemTime::now())
 }
 
-fn cleanup_stale_secret_directories_at(base: &Path, now: SystemTime, max_age: Duration) {
-    cleanup_secret_directories(base, Some(max_age), now);
+fn cleanup_stale_secret_directories_at(
+    base: &Path,
+    now: SystemTime,
+    max_age: Duration,
+) -> Result<(), String> {
+    cleanup_secret_directories(base, Some(max_age), now)
 }
 
-fn cleanup_secret_directories(base: &Path, max_age: Option<Duration>, now: SystemTime) {
+fn cleanup_secret_directories(
+    base: &Path,
+    max_age: Option<Duration>,
+    now: SystemTime,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
     // Cleanup must never inspect or remove children through an attacker-owned
     // base path. The Unix helper opens with O_NOFOLLOW and verifies ownership
     // and private permissions before read_dir is allowed to proceed.
-    let Ok(_base_guard) = secure_runtime_directory(base) else {
-        return;
-    };
-    let Ok(entries) = fs::read_dir(base) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
+    let _base_guard = secure_runtime_directory(base).map_err(|error| {
+        format!(
+            "could not securely open secret runtime directory {}: {error}",
+            base.display()
+        )
+    })?;
+    let entries = fs::read_dir(base).map_err(|error| {
+        format!(
+            "could not inspect secret runtime directory {}: {error}",
+            base.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors.push(format!("could not inspect a secret runtime entry: {error}"));
+                continue;
+            }
         };
-        // Do not follow symlinks while deciding what the cleanup routine owns.
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                errors.push(format!("could not inspect {}: {error}", path.display()));
+                continue;
+            }
+        };
+        // Do not follow symlinks while deciding what cleanup routine owns.
         // A link named run-* is not a MailSwiftSync secret directory.
         if !entry.file_name().to_string_lossy().starts_with("run-") || !file_type.is_dir() {
             continue;
         }
-        let eligible = max_age.is_none_or(|max_age| {
-            entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .ok()
-                .and_then(|modified| now.duration_since(modified).ok())
-                .is_some_and(|age| age > max_age)
-        });
-        if eligible {
-            let _ = fs::remove_dir_all(path);
+        let eligible = match max_age {
+            None => true,
+            Some(max_age) => match entry.metadata().and_then(|metadata| metadata.modified()) {
+                Ok(modified) => now.duration_since(modified).is_ok_and(|age| age > max_age),
+                Err(error) => {
+                    errors.push(format!(
+                        "could not determine age of secret directory {}: {error}",
+                        path.display()
+                    ));
+                    false
+                }
+            },
+        };
+        if eligible && let Err(error) = fs::remove_dir_all(&path) {
+            errors.push(format!(
+                "could not remove residual secret directory {}: {error}",
+                path.display()
+            ));
         }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
 }
 
@@ -870,7 +909,7 @@ mod tests {
         fs::create_dir(&unrelated).unwrap();
         super::write_secret_file(&run_dir.join("source.secret"), "test-credential").unwrap();
 
-        cleanup_reconciled_secret_directories(&base);
+        cleanup_reconciled_secret_directories(&base).unwrap();
 
         assert!(
             !run_dir.exists(),
@@ -882,6 +921,19 @@ mod tests {
         );
         fs::remove_dir(unrelated).unwrap();
         fs::remove_dir(base).unwrap();
+    }
+
+    #[test]
+    fn residual_cleanup_reports_an_unavailable_runtime_path() {
+        let base = std::env::temp_dir().join(format!(
+            "mailswiftsync-cleanup-blocker-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(&base, "not a directory").unwrap();
+        let error = super::cleanup_reconciled_secret_directories(&base).unwrap_err();
+        assert!(error.contains("could not securely open secret runtime directory"));
+        assert!(base.is_file());
+        fs::remove_file(base).unwrap();
     }
 
     #[test]
@@ -990,7 +1042,7 @@ mod tests {
         let suffix = uuid::Uuid::new_v4();
         let base = std::env::temp_dir().join(format!("mailswiftsync-cleanup-{suffix}"));
         let target = std::env::temp_dir().join(format!("mailswiftsync-target-{suffix}"));
-        fs::create_dir_all(&base).unwrap();
+        drop(super::secure_runtime_directory(&base).unwrap());
         fs::create_dir_all(&target).unwrap();
         let link: PathBuf = base.join("run-linked");
         symlink(&target, &link).unwrap();
@@ -999,7 +1051,8 @@ mod tests {
             &base,
             SystemTime::now() + Duration::from_secs(8 * 24 * 60 * 60),
             Duration::from_secs(7 * 24 * 60 * 60),
-        );
+        )
+        .unwrap();
 
         assert!(link.exists());
         assert!(target.exists());
@@ -1018,7 +1071,7 @@ mod tests {
         let run_dir = super::create_secret_directory_at(&base).unwrap();
         let max_age = Duration::from_secs(7 * 24 * 60 * 60);
 
-        cleanup_stale_secret_directories_at(&base, SystemTime::now(), max_age);
+        cleanup_stale_secret_directories_at(&base, SystemTime::now(), max_age).unwrap();
         assert!(
             run_dir.exists(),
             "recent credentials must survive ambiguous ownership"
@@ -1028,7 +1081,8 @@ mod tests {
             &base,
             SystemTime::now() + Duration::from_secs(8 * 24 * 60 * 60),
             max_age,
-        );
+        )
+        .unwrap();
         assert!(
             !run_dir.exists(),
             "the existing age fail-safe remains in force"

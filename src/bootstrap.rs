@@ -166,17 +166,25 @@ impl App {
         // immediate cleanup safe when there are no unverified owners. If an
         // owner remains ambiguous, retain young directories and apply only
         // the seven-day fallback age policy.
-        if persistence_warning.is_none() {
+        let cleanup_warning = if persistence_warning.is_none() {
             if unverified_processes.is_empty() {
-                cleanup_reconciled_secret_directories(&secret_runtime_base());
+                cleanup_reconciled_secret_directories(&secret_runtime_base())
             } else {
-                cleanup_stale_secret_directories(&secret_runtime_base());
+                cleanup_stale_secret_directories(&secret_runtime_base())
             }
-        }
+            .err()
+        } else {
+            None
+        };
         let mut initial_output_lines = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with Preflight against a test destination mailbox.".into()],
             |warning| vec![warning, "WARNING: this session is not durable.".into()],
         );
+        if let Some(error) = cleanup_warning {
+            initial_output_lines.push(format!(
+                "WARNING: residual credential cleanup was incomplete; sensitive temporary files may remain: {error}"
+            ));
+        }
         if orphaned > 0 {
             initial_output_lines.push(format!(
                 "Startup found {orphaned} recorded migration process(es); verified identities were terminated before recovery."

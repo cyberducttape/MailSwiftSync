@@ -560,9 +560,17 @@ pub(crate) fn headless_recover(
         .recover_abandoned_jobs_preserving(&unverified)
         .map_err(|error| error.to_string())?;
     if unverified.is_empty() {
-        crate::cleanup_reconciled_secret_directories(&secret_runtime_base());
+        crate::cleanup_reconciled_secret_directories(&secret_runtime_base()).map_err(|error| {
+            format!(
+                "jobs were recovered, but residual credential cleanup failed; sensitive temporary files may remain: {error}"
+            )
+        })?;
     } else {
-        cleanup_stale_secret_directories(&secret_runtime_base());
+        cleanup_stale_secret_directories(&secret_runtime_base()).map_err(|error| {
+            format!(
+                "jobs were recovered, but stale credential cleanup failed; sensitive temporary files may remain: {error}"
+            )
+        })?;
     }
     Ok(HeadlessRecoveryResult {
         recovered_jobs,
