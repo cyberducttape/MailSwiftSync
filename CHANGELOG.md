@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Harden opt-in diagnostic redaction for hyphenated and camel-case credential
+  field names and quoted JSON-style keys; quoted values with escaped quotes
+  are now redacted as a whole rather than leaving a suffix in the transcript.
 - Handle Windows byte-range lock contention as normal lock contention, retry
   transient sharing violations during atomic replacement, and close staged
   artifact handles before replacement. This restores exclusive-ledger and

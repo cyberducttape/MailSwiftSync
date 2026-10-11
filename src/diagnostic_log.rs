@@ -649,13 +649,25 @@ fn is_uri_authority_at(line: &str, at: usize) -> bool {
 /// transcripts without attempting to parse or mutate the semantic engine
 /// stream used by verification.
 fn redact_sensitive_fields(line: &str) -> String {
-    const KEYS: [&str; 10] = [
+    const KEYS: [&str; 22] = [
         "client_secret",
+        "client-secret",
+        "clientsecret",
         "refresh_token",
+        "refresh-token",
+        "refreshtoken",
         "access_token",
+        "access-token",
+        "accesstoken",
         "authorization",
         "password",
         "passwd",
+        "api_key",
+        "api-key",
+        "apikey",
+        "oauth_token",
+        "oauth-token",
+        "oauthtoken",
         "secret",
         "token",
         "credential",
@@ -686,6 +698,14 @@ fn redact_sensitive_fields(line: &str) -> String {
             break;
         };
         let mut value_start = key_start + key.len();
+        if key_start > 0
+            && matches!(bytes[key_start - 1], b'"' | b'\'')
+            && bytes.get(value_start) == Some(&bytes[key_start - 1])
+        {
+            // Also recognize JSON/YAML-style quoted keys such as
+            // `"access_token":"..."`.
+            value_start += 1;
+        }
         while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
             value_start += 1;
         }
@@ -703,11 +723,18 @@ fn redact_sensitive_fields(line: &str) -> String {
         let (value_begin, value_end) = if matches!(bytes[value_start], b'"' | b'\'') {
             let quote = bytes[value_start];
             let begin = value_start + 1;
-            let end = bytes[begin..]
-                .iter()
-                .position(|byte| *byte == quote)
-                .map(|offset| begin + offset)
-                .unwrap_or(bytes.len());
+            let mut end = begin;
+            let mut escaped = false;
+            while end < bytes.len() {
+                if escaped {
+                    escaped = false;
+                } else if bytes[end] == b'\\' {
+                    escaped = true;
+                } else if bytes[end] == quote {
+                    break;
+                }
+                end += 1;
+            }
             (begin, end)
         } else if key == "authorization"
             && (lower[value_start..].starts_with("bearer ")
@@ -1068,6 +1095,31 @@ mod tests {
         assert!(sanitized.contains("refresh_token:'[REDACTED]'"));
         assert!(sanitized.contains("Authorization: Bearer [REDACTED]"));
         assert!(sanitized.contains("folder=Archive"));
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_common_hyphenated_and_camel_case_secret_keys() {
+        let line = "access-token=hyphen-access refreshToken=camel-refresh client-secret=client-value api_key=api-value";
+        let sanitized = sanitize_private_metadata(line);
+        for secret in [
+            "hyphen-access",
+            "camel-refresh",
+            "client-value",
+            "api-value",
+        ] {
+            assert!(!sanitized.contains(secret), "leaked {secret}: {sanitized}");
+        }
+        assert_eq!(sanitized.matches("[REDACTED]").count(), 4);
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_quoted_secrets_with_escaped_quotes() {
+        let line = r#"{"password":"prefix\"suffix","folder":"Archive"}"#;
+        let sanitized = sanitize_private_metadata(line);
+        assert!(!sanitized.contains("prefix"), "{sanitized}");
+        assert!(!sanitized.contains("suffix"), "{sanitized}");
+        assert!(sanitized.contains(r#""password":"[REDACTED]""#));
+        assert!(sanitized.contains(r#""folder":"Archive""#));
     }
 
     #[test]
