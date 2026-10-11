@@ -138,7 +138,8 @@ reconciliation as successful.
   `--diagnostic-log <directory>` transcripts. Each batch child has a separate
   file; project and mailbox job IDs are hashed in filenames and project IDs are
   pseudonymized in transcript headers. Engine output is redacted for known
-  secrets and bounded to 8 MiB per file / 128 MiB per directory, with
+  secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB per
+  file / 128 MiB per directory, with
   retention capped at 20 completed files. These plaintext logs can still
   contain provider, mailbox, folder, and message metadata; transcript contents
   are not account-pseudonymized, encrypted, or compressed, and support bundles

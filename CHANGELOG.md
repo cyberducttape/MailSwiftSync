@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Redact embedded URI userinfo in opt-in diagnostic transcripts while
+  preserving endpoint hosts and paths for troubleshooting.
 - Size the Mailboxes state column for the widest translated status badge so
   long states no longer push the column past the panel edge at 1280 px.
 - Refresh the README and wiki screenshots in the Retro 80s Neon theme with

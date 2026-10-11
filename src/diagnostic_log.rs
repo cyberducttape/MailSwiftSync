@@ -589,7 +589,57 @@ pub(crate) fn sanitize_private_metadata(line: &str) -> String {
         output.push(']');
         cursor = right;
     }
-    redact_sensitive_fields(&output)
+    redact_sensitive_fields(&redact_url_userinfo(&output))
+}
+
+/// Remove userinfo from URI authorities before persisting an opt-in
+/// diagnostic transcript. The mailbox pseudonymizer intentionally leaves
+/// URI-like values intact so endpoint context remains useful, but credentials
+/// embedded in `scheme://user:password@host` must not pass through verbatim.
+fn redact_url_userinfo(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while cursor < line.len() {
+        let Some(relative_scheme_end) = line[cursor..].find("://") else {
+            output.push_str(&line[cursor..]);
+            break;
+        };
+        let scheme_end = cursor + relative_scheme_end;
+        let authority_start = scheme_end + 3;
+        let authority_end = line[authority_start..]
+            .find(|character: char| {
+                character.is_ascii_whitespace()
+                    || matches!(
+                        character,
+                        '/' | '?'
+                            | '#'
+                            | '<'
+                            | '>'
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | ','
+                            | ';'
+                            | '"'
+                            | '\''
+                    )
+            })
+            .map(|offset| authority_start + offset)
+            .unwrap_or(line.len());
+        let authority = &line[authority_start..authority_end];
+        if let Some(userinfo_end) = authority.rfind('@') {
+            output.push_str(&line[cursor..authority_start]);
+            output.push_str("[REDACTED]@");
+            output.push_str(&authority[userinfo_end + 1..]);
+        } else {
+            output.push_str(&line[cursor..authority_end]);
+        }
+        cursor = authority_end;
+    }
+    output
 }
 
 /// Redact secret-shaped key/value fields that may be emitted by an external
@@ -1017,5 +1067,18 @@ mod tests {
         assert!(sanitized.contains("refresh_token:'[REDACTED]'"));
         assert!(sanitized.contains("Authorization: Bearer [REDACTED]"));
         assert!(sanitized.contains("folder=Archive"));
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_uri_userinfo_and_preserve_endpoint_context() {
+        let line = "source=imap://alice:source-pass@mail.example.test:993/INBOX destination=https://svc:destination-pass@mx.example.test/path imaps://mail.example.test";
+        let sanitized = sanitize_private_metadata(line);
+        assert!(!sanitized.contains("alice"));
+        assert!(!sanitized.contains("source-pass"));
+        assert!(!sanitized.contains("svc:"));
+        assert!(!sanitized.contains("destination-pass"));
+        assert!(sanitized.contains("imap://[REDACTED]@mail.example.test:993/INBOX"));
+        assert!(sanitized.contains("https://[REDACTED]@mx.example.test/path"));
+        assert!(sanitized.contains("imaps://mail.example.test"));
     }
 }
