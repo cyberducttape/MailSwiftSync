@@ -43,6 +43,9 @@
   later folders while repeated failures on one path still fail closed.
 - Require configured engine identity fingerprints to refer to executable files,
   keeping preflight identity and process-launch qualification consistent.
+- Surface documented metadata and bounded body-proof envelope warnings in the
+  pre-migration risk report, before a transfer can consume its maintenance
+  window without eligible independent evidence.
 - Harden opt-in diagnostic transcript redaction for secret-shaped key/value
   fields and bearer-style authorization values that are not in the controller's
   known-secret set.

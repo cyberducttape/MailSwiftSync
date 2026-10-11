@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
+const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 100_000;
+const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
+
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreMigrationRisk {
@@ -42,8 +46,10 @@ impl PreMigrationRisk {
     /// This API currently receives no message-size distribution, folder map,
     /// quota, provider, or destination-capability facts. It therefore must
     /// not claim to detect oversized messages, ambiguous mappings, quota
-    /// headroom, Unicode issues, or provider-specific behavior. Those checks
-    /// require a future fact-bearing input type and live preflight integration.
+    /// headroom, Unicode issues, or provider-specific behavior. It can still
+    /// surface the documented aggregate verification envelopes from the
+    /// supplied message and byte totals; exact body-proof admission requires a
+    /// future fact-bearing input type and live preflight integration.
     pub fn assess(
         total_messages: u64,
         total_folders: u64,
@@ -91,6 +97,43 @@ impl PreMigrationRisk {
             });
         }
 
+        // These are advisory planning warnings, not transfer admission gates.
+        // A transfer can complete beyond an evidence envelope, but the report
+        // must tell the operator before launch that independent proof may be
+        // incomplete rather than discovering that only after the transfer.
+        if total_messages > METADATA_VERIFICATION_MESSAGE_LIMIT {
+            warnings.push(RiskWarning {
+                severity: WarningSeverity::Warning,
+                category: "verification".to_string(),
+                message: format!(
+                    "Independent metadata verification exceeds the documented {}-message envelope; transfer may complete without complete message-level evidence",
+                    METADATA_VERIFICATION_MESSAGE_LIMIT
+                ),
+            });
+        }
+
+        if total_messages > BODY_VERIFICATION_MESSAGE_LIMIT {
+            warnings.push(RiskWarning {
+                severity: WarningSeverity::Warning,
+                category: "verification".to_string(),
+                message: format!(
+                    "Bounded body proof exceeds the documented {}-message-per-endpoint envelope",
+                    BODY_VERIFICATION_MESSAGE_LIMIT
+                ),
+            });
+        }
+
+        if total_size_bytes > DEFAULT_BODY_HASH_BYTE_BUDGET {
+            warnings.push(RiskWarning {
+                severity: WarningSeverity::Info,
+                category: "verification".to_string(),
+                message: format!(
+                    "Body proof may exceed the default {}-byte combined hash budget; message-size distribution and configured proof budget require review",
+                    DEFAULT_BODY_HASH_BYTE_BUDGET
+                ),
+            });
+        }
+
         // Determine readiness
         let error_count = warnings
             .iter()
@@ -131,7 +174,7 @@ mod tests {
 
     #[test]
     fn small_migration_requires_review() {
-        let risk = PreMigrationRisk::assess(1000, 5, 1_000_000_000, "");
+        let risk = PreMigrationRisk::assess(1000, 5, 100_000_000, "");
         assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
         assert!(risk.warnings.is_empty());
         assert_eq!(risk.readiness_score, 100);
@@ -147,8 +190,38 @@ mod tests {
 
     #[test]
     fn provider_text_does_not_trigger_unsubstantiated_provider_warning() {
-        let risk = PreMigrationRisk::assess(1000, 5, 1_000_000_000, "provider=gmail");
+        let risk = PreMigrationRisk::assess(1000, 5, 100_000_000, "provider=gmail");
         assert!(risk.warnings.is_empty());
         assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
+    }
+
+    #[test]
+    fn verification_envelopes_are_visible_before_transfer() {
+        let risk = PreMigrationRisk::assess(
+            METADATA_VERIFICATION_MESSAGE_LIMIT + 1,
+            5,
+            DEFAULT_BODY_HASH_BYTE_BUDGET + 1,
+            "",
+        );
+        let messages = risk
+            .warnings
+            .iter()
+            .filter(|warning| warning.category == "verification")
+            .map(|warning| warning.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 3);
+        assert!(messages.iter().any(|message| message.contains("metadata")));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("body proof"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("combined hash budget"))
+        );
+        assert_eq!(risk.readiness_score, 85);
+        assert_eq!(risk.estimated_readiness, MigrationReadiness::ReviewRequired);
     }
 }
