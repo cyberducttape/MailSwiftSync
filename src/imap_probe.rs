@@ -1182,6 +1182,58 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn fetch_mailbox_with_session_reconnect<S, C, R>(
+    stream: &mut S,
+    host: &str,
+    mailbox: &str,
+    budget: &MessageFetchBudget<'_>,
+    state_budget: &MessageStateBudget,
+    body_hash: Option<&BodyHashOptions<'_>>,
+    condstore_enabled: &mut bool,
+    consecutive_reconnects: &mut usize,
+    reconnect: &mut R,
+    sink: &mut C,
+) -> Result<u64, MailboxFetchError>
+where
+    S: Read + Write,
+    C: MessageSink,
+    R: FnMut() -> Result<(S, bool), String>,
+{
+    const MAX_CONSECUTIVE_SESSION_RECONNECTS: usize = 3;
+
+    loop {
+        match fetch_mailbox_with_stability_retry(
+            stream,
+            host,
+            mailbox,
+            budget,
+            state_budget,
+            body_hash,
+            *condstore_enabled,
+            sink,
+        ) {
+            Err(MailboxFetchError::SessionFatal(error))
+                if *consecutive_reconnects < MAX_CONSECUTIVE_SESSION_RECONNECTS =>
+            {
+                *consecutive_reconnects = consecutive_reconnects.saturating_add(1);
+                match reconnect() {
+                    Ok((new_stream, new_condstore_enabled)) => {
+                        *stream = new_stream;
+                        *condstore_enabled = new_condstore_enabled;
+                    }
+                    Err(reconnect_error) => {
+                        return Err(MailboxFetchError::SessionFatal(format!(
+                            "{error}; reconnect attempt {consecutive_reconnects} failed: {reconnect_error}"
+                        )));
+                    }
+                }
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Enumerate bounded sequence-number pages and hand each fetch-sized UID page
 /// to the caller. Sequence numbers are dense over the current SELECT snapshot,
 /// so command count scales with EXISTS rather than historical UIDNEXT. No
@@ -1341,7 +1393,6 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     let mut incomplete_folders = HashMap::new();
     let mut incomplete_folder_count = 0_usize;
     let mut consecutive_session_reconnects = 0_usize;
-    const MAX_CONSECUTIVE_SESSION_RECONNECTS: usize = 3;
 
     // Process folders on one authenticated connection when possible. A
     // session-fatal transport error gets a bounded reconnect/re-authentication
@@ -1353,61 +1404,40 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     // the total bound on all reconnect work.
     for mailbox in mailboxes {
         budget.check()?;
-        let result = loop {
-            match fetch_mailbox_with_stability_retry(
-                &mut stream,
+        let mut reconnect = || {
+            let (new_stream, new_post_auth_response) = reconnect_and_authenticate_imap_stream(
                 host,
-                &mailbox,
-                budget,
-                state_budget,
-                body_hash,
-                condstore_enabled,
-                sink,
-            ) {
-                Err(MailboxFetchError::SessionFatal(error))
-                    if consecutive_session_reconnects < MAX_CONSECUTIVE_SESSION_RECONNECTS =>
-                {
-                    consecutive_session_reconnects =
-                        consecutive_session_reconnects.saturating_add(1);
-                    let reconnected: Result<_, String> = (|| {
-                        let (new_stream, new_post_auth_response) =
-                            reconnect_and_authenticate_imap_stream(
-                                host,
-                                user,
-                                auth_method,
-                                Some(budget),
-                                reconnect_credential,
-                                || {
-                                    connect_tls_stream_with_budget(
-                                        host,
-                                        transport,
-                                        ca_bundle,
-                                        certificate_pin_sha256,
-                                        budget,
-                                    )
-                                },
-                            )?;
-                        Ok((
-                            new_stream,
-                            advertises_capability(&new_post_auth_response, "CONDSTORE"),
-                        ))
-                    })();
-                    match reconnected {
-                        Ok((new_stream, new_condstore_enabled)) => {
-                            stream = new_stream;
-                            condstore_enabled = new_condstore_enabled;
-                            continue;
-                        }
-                        Err(reconnect_error) => {
-                            break Err(MailboxFetchError::SessionFatal(format!(
-                                "{error}; reconnect attempt {consecutive_session_reconnects} failed: {reconnect_error}"
-                            )));
-                        }
-                    }
-                }
-                result => break result,
-            }
+                user,
+                auth_method,
+                Some(budget),
+                reconnect_credential,
+                || {
+                    connect_tls_stream_with_budget(
+                        host,
+                        transport,
+                        ca_bundle,
+                        certificate_pin_sha256,
+                        budget,
+                    )
+                },
+            )?;
+            Ok((
+                new_stream,
+                advertises_capability(&new_post_auth_response, "CONDSTORE"),
+            ))
         };
+        let result = fetch_mailbox_with_session_reconnect(
+            &mut stream,
+            host,
+            &mailbox,
+            budget,
+            state_budget,
+            body_hash,
+            &mut condstore_enabled,
+            &mut consecutive_session_reconnects,
+            &mut reconnect,
+            sink,
+        );
         match result {
             Ok(folder_exists) => {
                 consecutive_session_reconnects = 0;

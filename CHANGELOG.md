@@ -96,6 +96,10 @@
 - Drop a redundant second URI-userinfo pass from diagnostic line redaction.
 - Fix Windows-only clippy findings in the OAuth refresh guard, lock
   contention check, and credential tests.
+- Add deterministic IMAP session-recovery fault tests proving a fatal connection
+  error reconnects and reauthenticates before retrying the failed folder,
+  refreshes server capabilities, fails closed on reconnect authentication errors,
+  and stops after three consecutive reconnect attempts.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving
