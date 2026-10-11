@@ -94,7 +94,7 @@ impl StateStore {
         }
         if let Some(transfer_run_id) = transfer_run_id {
             let valid_baseline: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND engine IN ('imapsync','dovecot') AND status='completed')",
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND engine <> 'imap-verification' AND status='completed')",
                 params![transfer_run_id, project_id, job_id],
                 |row| row.get(0),
             )?;

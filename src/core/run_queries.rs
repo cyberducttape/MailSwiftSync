@@ -42,7 +42,7 @@ impl StateStore {
     ) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 AND status='completed' AND engine IN ('imapsync','dovecot') ORDER BY finished_at DESC, rowid DESC LIMIT 1",
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 AND status='completed' AND engine <> 'imap-verification' ORDER BY finished_at DESC, rowid DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok(RunSummary {
