@@ -6,7 +6,8 @@
   failed removals remain guarded for a best-effort retry and are included in run
   failure details without misclassifying local permission errors as provider
   authentication failures. Crash-recovery cleanup now reports inaccessible or
-  retained secret directories instead of silently ignoring them.
+  retained secret directories instead of silently ignoring them; cleanup fault
+  injection is deterministic across Windows and Unix test runners.
 - Preserve complete restore-rollback diagnostics: failures returning the prior
   ledger or SQLite sidecars are no longer silently discarded, and all rollback
   steps are attempted before reporting the restore failure.

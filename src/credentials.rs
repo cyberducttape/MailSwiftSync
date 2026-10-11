@@ -121,10 +121,17 @@ impl CleanupGuard {
     /// could not be removed remain guarded so Drop can make a best-effort
     /// retry during unwinding or an early return.
     pub fn cleanup_now(&mut self) -> Result<(), String> {
+        self.cleanup_now_with(remove_cleanup_path)
+    }
+
+    fn cleanup_now_with<F>(&mut self, mut remove: F) -> Result<(), String>
+    where
+        F: FnMut(&Path) -> std::io::Result<()>,
+    {
         let mut remaining = Vec::new();
         let mut failures = Vec::new();
         for path in self.paths.iter().rev() {
-            match remove_cleanup_path(path) {
+            match remove(path) {
                 Ok(()) => {}
                 Err(error) => {
                     failures.push(format!("{}: {error}", path.display()));
@@ -866,24 +873,38 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         fs::create_dir(&base).unwrap();
-        let blocker = base.join("not-a-directory");
-        fs::write(&blocker, "x").unwrap();
-        let blocked_child = blocker.join("secret");
+        let blocked = base.join("secret-that-first-removal-fails");
         let removable = base.join("removable.secret");
+        fs::write(&blocked, "secret").unwrap();
         fs::write(&removable, "secret").unwrap();
 
-        let mut guard = CleanupGuard::new(vec![blocked_child.clone(), removable.clone()]);
-        let error = guard.cleanup_now().unwrap_err();
+        let mut guard = CleanupGuard::new(vec![blocked.clone(), removable.clone()]);
+        let error = guard
+            .cleanup_now_with(|path| {
+                if path == blocked {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected cleanup failure",
+                    ))
+                } else {
+                    super::remove_cleanup_path(path)
+                }
+            })
+            .unwrap_err();
 
-        assert!(error.contains(&blocked_child.display().to_string()));
+        assert!(error.contains(&blocked.display().to_string()));
         assert!(
             !removable.exists(),
             "cleanup should continue after an error"
         );
-        assert_eq!(guard.paths, vec![blocked_child]);
+        assert!(blocked.exists(), "failed path remains for a retry");
+        assert_eq!(guard.paths, vec![blocked.clone()]);
 
-        drop(guard);
-        fs::remove_file(blocker).unwrap();
+        guard.cleanup_now().unwrap();
+        assert!(
+            !blocked.exists(),
+            "a later cleanup removes the retained path"
+        );
         fs::remove_dir(base).unwrap();
     }
 
