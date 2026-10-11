@@ -595,7 +595,9 @@ pub(crate) fn sanitize_private_metadata(line: &str) -> String {
         output.push(']');
         cursor = right;
     }
-    redact_sensitive_fields(&redact_url_userinfo(&output))
+    // URI userinfo was already removed above, and pseudonymization never
+    // introduces it, so the field pass runs once on the final text.
+    redact_sensitive_fields(&output)
 }
 
 /// Remove userinfo from URI authorities before persisting an opt-in

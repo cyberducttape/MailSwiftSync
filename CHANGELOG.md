@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Protect live credential directories across processes: every `run-*`
+  secret directory now holds an owner lock for its lifetime, and startup or
+  `recover` cleanup skips directories another live MailSwiftSync process
+  still owns. Previously a second instance on a different ledger deleted the
+  passfiles and OAuth refresh files of running migrations, breaking their
+  mid-run token refresh.
+- Serialize in-process OAuth launch refreshes with the same per-credential
+  cross-process lock the imapsync reconnect callback uses, and replay a
+  callback's durable rotation recovery before exchanging; concurrent batch
+  workers sharing a rotating refresh credential no longer spend the same
+  token or overwrite each other's rotation.
+- Drop a redundant second URI-userinfo pass from diagnostic line redaction.
+- Fix Windows-only clippy findings in the OAuth refresh guard, lock
+  contention check, and credential tests.
+
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving

@@ -205,7 +205,7 @@ impl MessageMetadataStage {
             Ok(connection) => connection,
             Err(error) => {
                 let _ = fs::remove_file(&path);
-                let _ = fs::remove_dir(&directory);
+                let _ = crate::credentials::remove_empty_secret_directory(&directory);
                 return Err(format!("could not open verification stage: {error}"));
             }
         };
@@ -224,7 +224,7 @@ impl MessageMetadataStage {
             if let Some(path) = path {
                 let _ = fs::remove_file(&path);
                 if let Some(directory) = path.parent() {
-                    let _ = fs::remove_dir(directory);
+                    let _ = crate::credentials::remove_empty_secret_directory(directory);
                 }
             }
             return Err(format!("could not initialize verification stage: {error}"));
@@ -1163,7 +1163,7 @@ fn cleanup_stage_files(path: &Path, remove_parent: bool) -> Vec<String> {
     }
     if remove_parent
         && let Some(directory) = path.parent()
-        && let Err(error) = fs::remove_dir(directory)
+        && let Err(error) = crate::credentials::remove_empty_secret_directory(directory)
         && error.kind() != std::io::ErrorKind::NotFound
     {
         errors.push(format!(
