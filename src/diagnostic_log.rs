@@ -1119,8 +1119,8 @@ mod tests {
     fn diagnostic_lines_redact_quoted_secrets_with_escaped_quotes() {
         let line = r#"{"password":"prefix\"suffix","folder":"Archive"}"#;
         let sanitized = sanitize_private_metadata(line);
-        assert!(!sanitized.contains("prefix"), "{sanitized}");
-        assert!(!sanitized.contains("suffix"), "{sanitized}");
+        assert!(!sanitized.contains("prefix"));
+        assert!(!sanitized.contains("suffix"));
         assert!(sanitized.contains(r#""password":"[REDACTED]""#));
         assert!(sanitized.contains(r#""folder":"Archive""#));
     }
