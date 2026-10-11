@@ -325,8 +325,8 @@ pub(crate) fn build_post_migration_report_json(
     }
     let report = core::post_migration_report::PostMigrationReport::from_project_snapshot(&snapshot);
     let value = serde_json::json!({
-        "format": "mailswiftsync-post-migration-report",
-        "format_version": 1,
+        "format": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT,
+        "format_version": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION,
         "application_version": env!("CARGO_PKG_VERSION"),
         "project": {
             "id": snapshot.project.id,
@@ -594,6 +594,33 @@ fn run_execution_profile(plan_snapshot: &str) -> &'static str {
 #[cfg(test)]
 mod project_json_tests {
     use super::*;
+
+    #[test]
+    fn durable_post_migration_export_uses_v2_nullable_count_contract() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("report", "source.example", "destination.example")
+            .unwrap();
+        store.add_mailbox(&project.id, "user", "user").unwrap();
+
+        let report: serde_json::Value =
+            serde_json::from_str(&build_post_migration_report_json(&store, &project.id).unwrap())
+                .unwrap();
+
+        assert_eq!(
+            report["format"],
+            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT
+        );
+        assert_eq!(
+            report["format_version"],
+            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION
+        );
+        assert!(report["report"]["total_skipped"].is_null());
+        assert_eq!(
+            report["report"]["total_skipped_availability"],
+            "unavailable"
+        );
+    }
 
     #[test]
     fn project_json_streams_a_verifiable_report_with_every_mailbox_and_run() {

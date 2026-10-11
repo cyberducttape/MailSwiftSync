@@ -16,7 +16,8 @@
   restriction on source names and explain it precisely.
 - Version post-migration report artifacts as v2 and encode an unrecorded
   `total_skipped` count as `null` with explicit `unavailable` status; manually
-  supplied counts remain numeric and marked available.
+  supplied counts remain numeric and marked available. Use the same v2
+  format marker on both durable and explicitly supplied report exports.
 - Compare duplicate-message FLAGS with streaming frequency maps, retaining one
   key per distinct canonical flag set instead of one entry per message.
 - Enforce full folder rescans after verification restarts: staged message rows
