@@ -11,13 +11,20 @@ Use:
 mailswiftsync status /path/to/state.db project-123 --summary
 ```
 
-Three commands emit the versioned automation contract:
+The three status commands emit the versioned status automation contract:
 
 | Command | `format` | `format_version` | Golden fixture |
 |---|---|---|---|
 | `mailswiftsync status <state.db> [project]` | `mailswiftsync-status` | `1` | [`status.v1.json`](../tests/fixtures/automation/status.v1.json) |
 | `mailswiftsync status <state.db> [project] --summary` | `mailswiftsync-status-summary` | `1` | [`status-summary.v1.json`](../tests/fixtures/automation/status-summary.v1.json) |
 | `mailswiftsync fleet-status <directory>` | `mailswiftsync-fleet-status` | `1` | [`fleet-status.v1.json`](../tests/fixtures/automation/fleet-status.v1.json) |
+
+The standalone `mailswiftsync reverify` command also emits a versioned JSON
+result (`mailswiftsync.reverify`, version `1`). Its `verification_status`,
+`verification_level`, `message_coverage`, and `flag_verification` fields must
+be consumed together; `verification_outcome` alone is not an unqualified
+assurance claim. This result is an evidence artifact rather than a status
+projection and therefore is not included in the status golden-fixture set.
 
 The JSON contains project identity, durable lifecycle state, mailbox state
 counts, attention reasons, and bounded project summaries. Each fixture lists

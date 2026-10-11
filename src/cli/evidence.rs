@@ -332,6 +332,8 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
         std::process::exit(1);
     }
     let result = serde_json::json!({
+        "format": "mailswiftsync.reverify",
+        "format_version": 1,
         "run_id": run_id,
         "mode": mode,
         "verification_outcome": evidence.verification_outcome().as_str(),
