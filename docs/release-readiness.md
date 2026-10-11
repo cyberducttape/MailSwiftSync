@@ -635,6 +635,8 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 Pull-request CI, release verification, and the scheduled dependency workflow run
 both `cargo audit` and `cargo deny check advisories bans licenses sources`.
 The current dependency graph has no reported vulnerabilities; RustSec reports
-only the unmaintained transitive crate `ttf-parser`, which comes from the
-desktop GUI stack and remains tracked for upstream replacement. This
-maintenance finding is not suppressed by the policy.
+only unmaintained `ttf-parser 0.25.1` (`RUSTSEC-2026-0192`), reached through
+`owned_ttf_parser` → `ab_glyph` → `sctk-adwaita` → the desktop `eframe`
+stack. It remains tracked for an upstream replacement or GUI-stack upgrade;
+the advisory is not suppressed by the policy. Release qualification must
+recheck this path and record any version change before publishing artifacts.

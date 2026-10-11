@@ -14,6 +14,9 @@
   permission failures.
 - Add regression coverage proving certificate pins fail closed for both
   transfer engines until connection-level enforcement is qualified.
+- Record the exact RustSec maintenance warning (`ttf-parser 0.25.1`,
+  `RUSTSEC-2026-0192`) and transitive desktop dependency path in release
+  readiness documentation.
 - Include overall assurance status, message coverage, and flag-coverage counters
   in standalone `reverify` JSON so partial fidelity cannot be mistaken for an
   unqualified verification result by automation.
