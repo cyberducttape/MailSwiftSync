@@ -3,8 +3,17 @@ use crate::{
     core,
     reports::integrity::{evidence_coverage_fields, evidence_digest, write_streamed_proof},
 };
-use std::collections::BTreeSet;
 use std::path::Path;
+
+fn record_single_value(slot: &mut Option<String>, mixed: &mut bool, value: String) {
+    if let Some(existing) = slot {
+        if existing != &value {
+            *mixed = true;
+        }
+    } else {
+        *slot = Some(value);
+    }
+}
 
 fn execution_executable_sha256(plan_snapshot: &str) -> Option<String> {
     let snapshot: toml::Value = toml::from_str(plan_snapshot).ok()?;
@@ -83,138 +92,155 @@ pub(crate) fn export_from_store_with_options_and_identity(
     provider_identity: Option<&ProviderIdentity>,
 ) -> Result<(), String> {
     let snapshot = store
-        .complete_project_report_snapshot(project_id)
+        .begin_project_report_export(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
+    let project = snapshot.project().clone();
     if !allow_incomplete {
-        ensure_exportable(&snapshot)?;
-    } else if snapshot.mailboxes.is_empty() {
+        if project.phase != core::Phase::Complete {
+            return Err(
+                "Customer proof is available only after the project reaches durable Complete state; use the CLI --allow-incomplete flag only for an explicitly labeled progress artifact."
+                    .into(),
+            );
+        }
+        if snapshot.mailbox_count() == 0 {
+            return Err("Customer proof is blocked: the project has no mailbox results.".into());
+        }
+        snapshot.for_each_mailbox(|mailbox| {
+            if !matches!(
+                mailbox.job.state.as_str(),
+                "verified" | "verified_with_exceptions"
+            ) || mailbox.evidence.is_none()
+                || (mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_none())
+            {
+                let reason = if mailbox.job.state == "verified_with_exceptions"
+                    && mailbox.acceptance.is_none()
+                {
+                    "does not have a durable operator acceptance for its verification exceptions"
+                } else {
+                    "does not have a verified durable result"
+                };
+                return Err(format!(
+                    "Customer proof is blocked: mailbox {} {reason}.",
+                    mailbox.job.id
+                ));
+            }
+            Ok(())
+        })?;
+        if snapshot.has_active_runs() {
+            return Err("Customer proof is blocked while migration work is still running.".into());
+        }
+    } else if snapshot.mailbox_count() == 0 {
         return Err("The project has no mailbox jobs to report.".into());
     }
-    let durably_complete = is_durably_complete(&snapshot);
-    let total_mailboxes = snapshot.mailboxes.len();
-    let exact_mailboxes = snapshot
-        .mailboxes
-        .iter()
-        .filter(|mailbox| {
-            mailbox
-                .evidence
-                .as_ref()
-                .is_some_and(|(_, value, _)| value.is_exact_match())
-        })
-        .count();
-    let mailbox_exceptions = total_mailboxes.saturating_sub(exact_mailboxes);
-    let unmatched_count_unknown = snapshot.mailboxes.iter().any(|mailbox| {
-        mailbox
-            .evidence
-            .as_ref()
-            .is_some_and(|(_, value, _)| value.unresolved_count().is_none())
-    });
-    let mut message_counts = snapshot.mailboxes.iter().filter_map(|mailbox| {
-        mailbox.evidence.as_ref().map(|(_, value, _)| {
-            serde_json::json!({
-                "source": value.source_messages,
-                "destination": value.destination_messages,
-                "missing": value.missing_messages,
-                "extra": value.extra_messages,
-                "modified": value.modified_messages,
-                "unmatched": value.unresolved_count(),
-                "failed": value.failed_messages,
-            })
-        })
-    }).fold(
-        serde_json::json!({"source": 0_u64, "destination": 0_u64, "missing": 0_u64, "extra": 0_u64, "modified": 0_u64, "unmatched": 0_u64, "failed": 0_u64}),
-        |mut total, value| {
-            for field in ["source", "destination", "missing", "extra", "modified", "unmatched", "failed"] {
-                let current = total[field].as_u64().unwrap_or(0);
-                total[field] = serde_json::json!(
-                    current.saturating_add(value[field].as_u64().unwrap_or(0))
-                );
+    let total_mailboxes = snapshot.mailbox_count();
+    let mut exact_mailboxes = 0_u64;
+    let mut mailboxes_transferred = 0_u64;
+    let mut mailboxes_verified = 0_u64;
+    let mut message_totals = [0_u64; 7];
+    let mut unmatched_count_unknown = false;
+    let mut plan_sha256_value = None;
+    let mut plan_sha256_mixed = false;
+    let mut engine_sha256_value = None;
+    let mut engine_sha256_mixed = false;
+    let mut verification_level_value = None;
+    let mut verification_level_mixed = false;
+    snapshot.for_each_mailbox(|mailbox| {
+        if let Some((_, value, plan_snapshot)) = &mailbox.evidence {
+            if value.is_exact_match() {
+                exact_mailboxes += 1;
             }
-            total
-        },
-    );
+            let values = [
+                value.source_messages,
+                value.destination_messages,
+                value.missing_messages,
+                value.extra_messages,
+                value.modified_messages,
+                value.unresolved_count().unwrap_or(0),
+                value.failed_messages,
+            ];
+            for (total, value) in message_totals.iter_mut().zip(values) {
+                *total = total.saturating_add(value);
+            }
+            unmatched_count_unknown |= value.unresolved_count().is_none();
+            if let Some(plan) = plan_snapshot.as_deref() {
+                record_single_value(
+                    &mut plan_sha256_value,
+                    &mut plan_sha256_mixed,
+                    crate::plan_identity::snapshot_sha256(plan),
+                );
+                if let Some(hash) = execution_executable_sha256(plan) {
+                    record_single_value(&mut engine_sha256_value, &mut engine_sha256_mixed, hash);
+                }
+            }
+            let level = match value.verification_method {
+                core::VerificationMethod::MetadataReconciliation => {
+                    "Level 2 — Per-message metadata reconciliation"
+                }
+                core::VerificationMethod::BodyHash => "Level 3 — Bounded content fingerprints",
+                core::VerificationMethod::AggregateEngine
+                | core::VerificationMethod::NativeDovecot => "Level 1 — Aggregate evidence",
+            };
+            record_single_value(
+                &mut verification_level_value,
+                &mut verification_level_mixed,
+                level.to_owned(),
+            );
+        }
+        if matches!(
+            mailbox.job.state.as_str(),
+            "completed"
+                | "verified"
+                | "verified_with_exceptions"
+                | "delta_required"
+                | "verification_difference"
+        ) {
+            mailboxes_transferred += 1;
+        }
+        if mailbox.evidence.is_some()
+            && (mailbox.job.state == "verified"
+                || (mailbox.job.state == "verified_with_exceptions"
+                    && mailbox.acceptance.is_some()))
+        {
+            mailboxes_verified += 1;
+        }
+        Ok(())
+    })?;
+    let mailbox_exceptions = total_mailboxes.saturating_sub(exact_mailboxes);
+    let mut engine_value = None;
+    let mut engine_mixed = false;
+    snapshot.for_each_run(|run| {
+        record_single_value(
+            &mut engine_value,
+            &mut engine_mixed,
+            run.engine_version.unwrap_or(run.run.engine),
+        );
+        Ok(())
+    })?;
+    let plan_sha256 = (!plan_sha256_mixed).then_some(plan_sha256_value).flatten();
+    let engine_sha256 = (!engine_sha256_mixed)
+        .then_some(engine_sha256_value)
+        .flatten();
+    let verification_level = (!verification_level_mixed)
+        .then_some(verification_level_value)
+        .flatten();
+    let engine = (!engine_mixed).then_some(engine_value).flatten();
+    let mut message_counts = serde_json::json!({
+        "source": message_totals[0],
+        "destination": message_totals[1],
+        "missing": message_totals[2],
+        "extra": message_totals[3],
+        "modified": message_totals[4],
+        "unmatched": message_totals[5],
+        "failed": message_totals[6],
+    });
     if unmatched_count_unknown {
         message_counts["unmatched"] = serde_json::Value::Null;
     }
-    let plan_hashes = snapshot
-        .mailboxes
-        .iter()
-        .filter_map(|mailbox| {
-            mailbox
-                .evidence
-                .as_ref()
-                .and_then(|(_, _, plan)| plan.as_deref())
-                .map(crate::plan_identity::snapshot_sha256)
-        })
-        .collect::<BTreeSet<_>>();
-    let plan_sha256 = (plan_hashes.len() == 1).then(|| plan_hashes.into_iter().next().unwrap());
-    let engine_identities = snapshot
-        .runs
-        .iter()
-        .map(|run| {
-            run.engine_version
-                .clone()
-                .unwrap_or_else(|| run.run.engine.clone())
-        })
-        .collect::<BTreeSet<_>>();
-    let engine =
-        (engine_identities.len() == 1).then(|| engine_identities.into_iter().next().unwrap());
-    let engine_hashes = snapshot
-        .mailboxes
-        .iter()
-        .filter_map(|mailbox| {
-            mailbox
-                .evidence
-                .as_ref()
-                .and_then(|(_, _, plan)| plan.as_deref())
-                .and_then(execution_executable_sha256)
-        })
-        .collect::<BTreeSet<_>>();
-    let engine_sha256 =
-        (engine_hashes.len() == 1).then(|| engine_hashes.into_iter().next().unwrap());
-    let verification_levels = snapshot
-        .mailboxes
-        .iter()
-        .filter_map(|mailbox| {
-            mailbox
-                .evidence
-                .as_ref()
-                .map(|(_, value, _)| match value.verification_method {
-                    core::VerificationMethod::MetadataReconciliation => {
-                        "Level 2 — Per-message metadata reconciliation"
-                    }
-                    core::VerificationMethod::BodyHash => "Level 3 — Bounded content fingerprints",
-                    core::VerificationMethod::AggregateEngine
-                    | core::VerificationMethod::NativeDovecot => "Level 1 — Aggregate evidence",
-                })
-        })
-        .collect::<BTreeSet<_>>();
-    let verification_level =
-        (verification_levels.len() == 1).then(|| verification_levels.into_iter().next().unwrap());
-    let mailboxes_transferred = snapshot
-        .mailboxes
-        .iter()
-        .filter(|mailbox| {
-            matches!(
-                mailbox.job.state.as_str(),
-                "completed"
-                    | "verified"
-                    | "verified_with_exceptions"
-                    | "delta_required"
-                    | "verification_difference"
-            )
-        })
-        .count();
-    let mailboxes_verified = snapshot
-        .mailboxes
-        .iter()
-        .filter(|mailbox| {
-            mailbox.job.state == "verified"
-                || (mailbox.job.state == "verified_with_exceptions" && mailbox.acceptance.is_some())
-        })
-        .count();
-    let project = snapshot.project;
+    let durably_complete = project.phase == core::Phase::Complete
+        && total_mailboxes > 0
+        && !snapshot.has_active_runs()
+        && mailboxes_verified == total_mailboxes;
     // Each mailbox and run entry is generated on demand and serialized
     // immediately; the proof is never materialized as one JSON tree.
     let mailbox_entry =
@@ -372,16 +398,10 @@ pub(crate) fn export_from_store_with_options_and_identity(
         fields,
         &[
             ("mailboxes", &|emit| {
-                snapshot
-                    .mailboxes
-                    .iter()
-                    .try_for_each(|mailbox| emit(mailbox_entry(mailbox)?))
+                snapshot.for_each_mailbox(|mailbox| emit(mailbox_entry(&mailbox)?))
             }),
             ("runs", &|emit| {
-                snapshot
-                    .runs
-                    .iter()
-                    .try_for_each(|run| emit(run_entry(run)))
+                snapshot.for_each_run(|run| emit(run_entry(&run)))
             }),
         ],
     )
@@ -390,6 +410,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
 /// Customer proof is a deliverable for a durably completed migration, not a
 /// progress snapshot. Keep this gate next to the report builder so both the
 /// GUI and the read-only CLI enforce the same completion contract.
+#[cfg(test)]
 fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), String> {
     if snapshot.project.phase != core::Phase::Complete {
         return Err(
@@ -422,19 +443,6 @@ fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), Strin
         return Err("Customer proof is blocked while migration work is still running.".into());
     }
     Ok(())
-}
-
-fn is_durably_complete(snapshot: &core::ProjectReportSnapshot) -> bool {
-    snapshot.project.phase == core::Phase::Complete
-        && !snapshot.mailboxes.is_empty()
-        && snapshot.mailboxes.iter().all(|mailbox| {
-            matches!(
-                mailbox.job.state.as_str(),
-                "verified" | "verified_with_exceptions"
-            ) && mailbox.evidence.is_some()
-                && (mailbox.job.state != "verified_with_exceptions" || mailbox.acceptance.is_some())
-        })
-        && !snapshot.has_active_runs
 }
 
 #[cfg(test)]
@@ -917,7 +925,11 @@ mod tests {
             probable_messages: 0,
             rfc_message_id_matches: 0,
             synthetic_identity_matches: 0,
-            flag_verification: None,
+            flag_verification: Some(core::FlagVerification {
+                compared_messages: 1_000,
+                mismatched_messages: 0,
+                excepted_messages: 0,
+            }),
         };
         for index in 0..mailboxes {
             let job = store

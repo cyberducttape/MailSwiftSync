@@ -176,13 +176,13 @@ pub(crate) fn export_project_json(
     path: &std::path::Path,
 ) -> Result<(), String> {
     let snapshot = store
-        .complete_project_report_snapshot(project_id)
+        .begin_project_report_export(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
-    if snapshot.mailboxes.is_empty() {
+    if snapshot.mailbox_count() == 0 {
         return Err("The project has no mailbox jobs to report.".into());
     }
-    let project = &snapshot.project;
+    let project = snapshot.project();
     let mailbox_entry =
         |mailbox: &core::ReportMailboxSnapshot| -> Result<serde_json::Value, String> {
             let job = &mailbox.job;
@@ -288,23 +288,16 @@ pub(crate) fn export_project_json(
     }) else {
         unreachable!("a JSON object literal is an object")
     };
+    let mailbox_array = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
+        snapshot.for_each_mailbox(|mailbox| emit(mailbox_entry(&mailbox)?))
+    };
+    let run_array = |emit: &mut dyn FnMut(serde_json::Value) -> Result<(), String>| {
+        snapshot.for_each_run(|run| emit(run_entry(&run)))
+    };
     crate::reports::integrity::write_streamed_proof(
         path,
         fields,
-        &[
-            ("mailboxes", &|emit| {
-                snapshot
-                    .mailboxes
-                    .iter()
-                    .try_for_each(|mailbox| emit(mailbox_entry(mailbox)?))
-            }),
-            ("runs", &|emit| {
-                snapshot
-                    .runs
-                    .iter()
-                    .try_for_each(|run| emit(run_entry(run)))
-            }),
-        ],
+        &[("mailboxes", &mailbox_array), ("runs", &run_array)],
     )
 }
 
@@ -627,7 +620,7 @@ mod project_json_tests {
                 excepted_messages: 0,
             }),
         };
-        for index in 0..21 {
+        for index in 0..105 {
             let job = store
                 .add_mailbox(
                     &project.id,
@@ -651,15 +644,26 @@ mod project_json_tests {
                 )
                 .unwrap();
         }
-        let directory = crate::credentials::create_secret_directory().unwrap();
+        // Keep this fixture out of the shared secret runtime: other tests
+        // exercise reconciled cleanup of that directory concurrently.
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-report-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let path = directory.join("project-report.json");
         export_project_json(&store, &project.id, &path).unwrap();
         crate::reports::signing::verify_file(&path, None).unwrap();
         let report: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(report["format"], "mailswiftsync-project-report");
-        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 21);
-        assert_eq!(report["runs"].as_array().unwrap().len(), 21);
+        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 105);
+        assert_eq!(report["runs"].as_array().unwrap().len(), 105);
         assert_eq!(
             report["mailboxes"][0]["evidence"]["verification_outcome"],
             "exact_metadata_match"

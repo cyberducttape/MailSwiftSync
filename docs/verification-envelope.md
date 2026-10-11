@@ -69,24 +69,24 @@ report-commit costs, or justify relaxing any guard.
 
 ## Report-export memory boundary
 
-Project JSON and customer proof writers serialize large JSON arrays one item
-at a time and enforce a 32 MiB final-artifact limit. This is not yet
-end-to-end streaming: `complete_project_report_snapshot()` first materializes
-mailbox and run records, evidence, transfer-pass commands, and transfer-pass
-folder rows in memory inside one consistent SQLite read transaction. Mailbox
-and run counts are capped at 100,000, but nested transfer-pass folder rows do
-not currently have an independent count or byte budget. Consequently the
-32 MiB output limit does not bound peak memory during snapshot construction,
-and a report can consume substantial memory before the writer rejects its
-serialized size. Do not interpret “streamed report” as a peak-RSS guarantee.
+Project JSON and customer proof exports now traverse mailbox rows in pages of
+up to 100 rows, adaptively reduced to keep staged plan snapshots at or below
+4 MiB per page (one row is the minimum), and run/pass records in four-run
+pages. Both passes used to calculate the canonical digest and write the
+artifact share one consistent SQLite read snapshot, so a concurrent ledger
+update cannot make the digest describe different rows from the file. The
+complete project model is no longer retained in memory. Exports fail closed
+above 100,000 mailboxes, runs,
+transfer attempts, or pass-folder records, or above 16 MiB of recorded
+transfer-command JSON; the final artifact remains capped at 32 MiB.
 
-The durable reconciliation measurements above do not exercise report
-snapshot construction, report serialization, or proof signing. End-to-end
-report memory and latency remain unqualified. A future DB-backed export should
-page rows from the same consistent read snapshot and stream canonical digest
-calculation and output without retaining the complete project model; until
-then, report exports should be treated as bounded by their snapshot limits,
-not by the final artifact-size cap alone.
+This bounds application-level report data to page-sized models subject to
+those admission limits, but is not yet a measured peak-RSS guarantee. A
+single run can have many associated folder rows up to the project-wide cap,
+and a long read snapshot can delay WAL checkpointing while hashing and writing
+the output. The synthetic reconciliation measurements above do not exercise
+report export memory, WAL growth under concurrent writes, or report latency;
+those still need dedicated scale and fault-injection measurements.
 
 ## Evidence dimensions
 
