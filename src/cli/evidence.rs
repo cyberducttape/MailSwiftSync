@@ -529,7 +529,9 @@ pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe:
             }
         } else {
             failed += 1;
-            let mut error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let mut error = crate::diagnostic_log::sanitize_private_metadata(
+                String::from_utf8_lossy(&output.stderr).trim(),
+            );
             if error.len() > 8 * 1024 {
                 error.truncate(8 * 1024);
                 error.push('…');

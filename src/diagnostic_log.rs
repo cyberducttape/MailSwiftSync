@@ -530,7 +530,7 @@ fn pseudonym_hash(value: &str) -> String {
 /// The live engine parser receives the original redacted line; this additional
 /// pass is deliberately limited to diagnostic persistence so evidence remains
 /// semantically complete while support logs avoid retaining identifiers.
-fn sanitize_private_metadata(line: &str) -> String {
+pub(crate) fn sanitize_private_metadata(line: &str) -> String {
     let bytes = line.as_bytes();
     let mut output = String::with_capacity(line.len());
     let mut cursor = 0;
