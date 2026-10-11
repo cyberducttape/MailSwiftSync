@@ -1244,6 +1244,52 @@ fn active_destination_lock_blocks_case_variant_account_in_another_project() {
 }
 
 #[test]
+fn verification_admission_blocks_an_active_conflicting_destination_in_another_project() {
+    let db = StateStore::in_memory().unwrap();
+    let first = db
+        .create_project("verification-owner", "source-a", "destination")
+        .unwrap();
+    let first_job = db
+        .add_mailbox(&first.id, "source-a", "User@example.test")
+        .unwrap();
+    let second = db
+        .create_project("verification-audit", "source-b", "destination")
+        .unwrap();
+    let second_job = db
+        .add_mailbox(&second.id, "source-b", "user@example.test")
+        .unwrap();
+    for (job_id, mailbox) in [
+        (&first_job, "User@example.test"),
+        (&second_job, "user@example.test"),
+    ] {
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET config=?1 WHERE id=?2",
+                params![
+                    format!(
+                        "destination_host = \"mail.customer.example\"\ndestination_user = \"{mailbox}\"\ndestination_tls = \"imaps\"\ndestination_port = \"993\""
+                    ),
+                    job_id
+                ],
+            )
+            .unwrap();
+    }
+    db.begin_run(&first.id, &first_job, "run-verification-owner", "test")
+        .unwrap();
+
+    assert!(
+        db.begin_verification_run(
+            &second.id,
+            &second_job,
+            "run-conflicting-verification",
+            "snapshot"
+        )
+        .is_err()
+    );
+    assert!(db.run("run-conflicting-verification").unwrap().is_none());
+}
+
+#[test]
 fn active_process_rejects_wrong_mailbox_for_single_mailbox_run() {
     let db = StateStore::in_memory().unwrap();
     let project = db

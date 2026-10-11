@@ -51,6 +51,8 @@
   being interpreted as an absent cutover workflow.
 - Add a regression proving that two verification-only runs cannot overlap on
   case-variant identities for the same destination mailbox.
+- Add coverage proving a verification-only run also cannot overlap an active
+  transfer in another project when both resolve to the same destination.
 - Fix the packaged IMAP integration harness to preserve the MailSwiftSync
   command's exit status through its background `awk` logging pipeline; a
   timeout, failed migration, or unavailable status side-channel can no longer
