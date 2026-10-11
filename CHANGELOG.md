@@ -58,6 +58,12 @@
 - Use a private local HMAC key for new OAuth rotation-recovery fingerprints while retaining one-time compatibility with existing version-1 SHA-256 recovery records.
 - Document the non-secret input and filename-only purpose of the stable OAuth keyring-ID digest flagged by password-hashing analysis.
 - Version customer proof exports as v2 to identify the expanded evidence fields, including identity provenance counts.
+- Add a real-engine interruption drill to the IMAP lab: the controller is
+  SIGKILLed mid-transfer, the engine must stop with it, and `recover` plus a
+  fresh live pass must end with exactly the source messages verified. With
+  expert `--useuid --usecache`, the drill shows the in-flight message is
+  appended twice and verification flags it; the plan options now explain
+  this trade-off. The default-plan recovery is repeated from a restored ledger.
 
 - Run project report, project JSON, customer-proof, and health exports on a
   background worker with its own read-only ledger connection; a fleet-scale

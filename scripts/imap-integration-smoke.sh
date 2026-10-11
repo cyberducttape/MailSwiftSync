@@ -1065,7 +1065,7 @@ echo "PASS: MailSwiftSync product integration verified $destination_messages mes
 # the controller died can be appended twice; that run must surface the
 # difference rather than report a silently verified result.
 run_interruption_drill() {
-  local label="$1" useuid="$2" strict="$3"
+  local label="$1" useuid="$2" strict="$3" restore="${4:-}"
   local drill_user="drill-$label@example.test"
   local drill_messages=60
   local name index drill_filename
@@ -1145,6 +1145,15 @@ run_interruption_drill() {
   echo "PASS: the engine stopped with its killed controller ($label)"
 
   XDG_CONFIG_HOME="$drill_config" run_product recover "$drill_state"
+  if [[ "$restore" == restore ]]; then
+    # Resume from a ledger restored out of a post-crash backup rather than
+    # the original file, as after losing the host's state volume.
+    local drill_backup="$app_runtime/drill-$label-backup.db"
+    XDG_CONFIG_HOME="$drill_config" run_product backup "$drill_state" "$drill_backup"
+    drill_state="$app_runtime/drill-$label-restored.db"
+    XDG_CONFIG_HOME="$drill_config" run_product restore "$drill_backup" "$drill_state"
+    echo "PASS: interrupted drill ledger ($label) backed up and restored for resume"
+  fi
   XDG_CONFIG_HOME="$drill_config" run_product_live headless "$drill_state" live \
     --acknowledge-destination-loss \
     --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
@@ -1171,6 +1180,6 @@ run_interruption_drill() {
 }
 
 if [[ "$test_engine" != Dovecot ]] && (( scale_messages == 0 )); then
-  run_interruption_drill defaults false strict
+  run_interruption_drill defaults false strict restore
   run_interruption_drill uid-cache true flagged
 fi
