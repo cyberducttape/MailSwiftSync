@@ -3,7 +3,7 @@
 **Status source:** [`capabilities.toml`](capabilities.toml)
 **Last reviewed:**
 <!-- capability-review-date:begin -->
-2026-10-03
+2026-10-10
 <!-- capability-review-date:end -->
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
