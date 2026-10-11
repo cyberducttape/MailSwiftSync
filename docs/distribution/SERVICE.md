@@ -9,6 +9,14 @@ been imported, reviewed, and provisioned with the approved credential
 references. Keep Attention and verification-difference rows for operator
 review.
 
+Automatic OAuth refresh is currently qualified only on the Unix shell path.
+Windows refuses to launch a plan that requests `--oauthrefreshcmd1/2` until
+the packaged imapsync callback contract and native command-shell quoting have
+been qualified. On Windows, use a manually refreshed access token or run the
+automated migration under a qualified Unix service host; do not treat a saved
+refresh-credential reference as proof that a Windows unattended run can
+refresh tokens.
+
 ## Linux systemd
 
 Create a dedicated service account and ledger directory, install the verified

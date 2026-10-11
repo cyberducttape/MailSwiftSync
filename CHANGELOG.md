@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Document the Windows automatic-OAuth-refresh fail-closed boundary: refresh
+  command execution remains Unix-qualified until native imapsync callback
+  semantics and command-shell quoting are tested.
 - Fix the headless Docker build by copying the tracked bundled font assets
   required by the shared UI code at compile time; the packaged IMAP
   qualification image now contains the same build inputs as local releases.
