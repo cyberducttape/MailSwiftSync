@@ -5,6 +5,8 @@
 - Preserve complete restore-rollback diagnostics: failures returning the prior
   ledger or SQLite sidecars are no longer silently discarded, and all rollback
   steps are attempted before reporting the restore failure.
+- Surface atomic-export temporary-file cleanup failures alongside the original
+  write error, so retained private artifacts are visible for operator cleanup.
 - Surface failures to remove the private unsigned certificate intermediate;
   certificate export no longer reports complete cleanup when that file remains.
 - Reject reverification difference-export flags that omit their required path,

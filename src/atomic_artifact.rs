@@ -53,10 +53,28 @@ pub(crate) fn write_private_atomic_with(
         restrict_file_permissions(path)?;
         sync_directory(path.parent())
     })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+    cleanup_temporary_after_failure(result, &temporary, |path| std::fs::remove_file(path))
+}
+
+fn cleanup_temporary_after_failure(
+    result: std::io::Result<()>,
+    temporary: &Path,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let Err(primary_error) = result else {
+        return result;
+    };
+    match remove(temporary) {
+        Ok(()) => Err(primary_error),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(primary_error),
+        Err(cleanup_error) => Err(std::io::Error::new(
+            primary_error.kind(),
+            format!(
+                "{primary_error}; could not remove temporary artifact {:?}: {cleanup_error}",
+                temporary
+            ),
+        )),
     }
-    result
 }
 
 /// Atomically install the source file at the destination.
@@ -217,6 +235,35 @@ mod tests {
         assert!(result.is_err());
         assert!(path.is_dir());
         assert_eq!(fs::read_dir(&temp_dir)?.count(), 1);
+        fs::remove_dir_all(temp_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_write_reports_temporary_cleanup_failure() -> std::io::Result<()> {
+        let temp_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-artifact-cleanup-{}",
+                uuid::Uuid::new_v4()
+            ));
+        crate::credentials::ensure_private_directory(&temp_dir)?;
+        let temporary = temp_dir.join("stuck-temporary");
+        fs::create_dir(&temporary)?;
+
+        let error = cleanup_temporary_after_failure(
+            Err(std::io::Error::other("injected write failure")),
+            &temporary,
+            |path| fs::remove_file(path),
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("injected write failure"));
+        assert!(message.contains("could not remove temporary artifact"));
+        assert!(message.contains(&temporary.display().to_string()));
+        assert!(temporary.is_dir());
         fs::remove_dir_all(temp_dir)?;
         Ok(())
     }
