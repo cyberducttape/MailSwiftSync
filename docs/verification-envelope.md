@@ -21,6 +21,21 @@ distribution materially affect the numbers; run
 `scripts/benchmark-verification-scale.sh` on the target storage before
 setting a production mailbox envelope.
 
+The scale script defaults to the typical distribution. To exercise adversarial
+reconciliation shapes at a bounded size, set `MAILSWIFTSYNC_VERIFY_SIZES` and
+`MAILSWIFTSYNC_VERIFY_SHAPES`, for example:
+
+```sh
+MAILSWIFTSYNC_VERIFY_SIZES="10000 100000" \
+MAILSWIFTSYNC_VERIFY_SHAPES="duplicate_ids absent_ids mismatch_heavy" \
+scripts/benchmark-verification-scale.sh
+```
+
+Each shape/size pair runs in a separate process and is reported and gated
+independently. Available shapes are `typical`, `duplicate_ids`, `absent_ids`,
+and `mismatch_heavy`. This broadens synthetic workload coverage; it does not
+replace network/provider qualification or realistic end-to-end mailbox tests.
+
 A second release-mode run on 2026-10-11 at commit
 `061e8db9138edc7eac7957083cc7104f4d27dffd` used that script at 100,000 and
 500,000 synthetic messages per endpoint. The host was Ubuntu 24.04 on an AMD
