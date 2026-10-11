@@ -52,6 +52,31 @@ workload reaches the software's 1M admission ceiling on the recorded host; it
 does not establish capacity on other hosts, include network fetch or
 report-commit costs, or justify relaxing any guard.
 
+A repeat of the full script matrix on 2026-10-11 at commit
+`26979b6ee5faf176382066d0355f184d58e3c143` used the same Ryzen 7 7735U
+workstation, Ubuntu 26.04.1 LTS x86_64 (Linux 7.0.0-38-generic), Rust 1.92.0,
+and local ext4 on NVMe. The host was shared, not an isolated benchmark
+machine. Results by synthetic messages per endpoint were:
+
+| Messages/endpoint | Staging | Reconciliation | Reconcile rate | Peak RSS | Peak stage directory | Peak journal | Reconciliation writes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 17 ms | 17 ms | 58,823/s | 13 MiB | 1,032,192 B | 4,616 B | 0 B reported |
+| 10,000 | 170 ms | 166 ms | 60,240/s | 17 MiB | 9,591,808 B | 949,248 B | 495,616 B |
+| 100,000 | 1.904 s | 1.867 s | 53,561/s | 22 MiB | 108,005,848 B | 9,722,328 B | 14,417,920 B |
+| 500,000 | 10.027 s | 9.911 s | 50,448/s | 28 MiB | 558,137,856 B | 50,225,664 B | 74,563,584 B |
+| 1,000,000 | 20.309 s | 20.126 s | 49,686/s | 35 MiB | 1,120,937,168 B | 100,893,904 B | 157,138,944 B |
+
+Each case used the benchmark's typical distribution with intentional 2% changed
+identifiers; the 1M case compared flags for 980,000 unambiguous messages and
+recorded 20,000 changed-ID cases. All sizes passed the script's local 64 MiB
+peak-RSS and 20,000 messages/s reconciliation thresholds. Zero reported block
+I/O bytes at smaller sizes can result from cache-backed I/O; syscall counters
+and SQLite file/journal sizes are reported separately. This repeat confirms
+the prior synthetic measurements at the current source revision. It still
+does not cover allocator counts, remote IMAP fetching, full migration/report
+commit, provider behavior, a 10/50/100 GiB transfer, or production-host
+capacity, and it establishes no safe aggregate stage-disk ceiling.
+
 ## Evidence dimensions
 
 Verification results expose independent dimensions rather than treating one

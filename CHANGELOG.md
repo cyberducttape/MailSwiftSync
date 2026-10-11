@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Record a fresh durable SQLite verification-scale matrix through the 1M
+  messages-per-endpoint admission limit, tied to the exact source revision and
+  host profile; explicitly keep synthetic reconciliation separate from IMAP or
+  large-mailbox qualification claims.
 - Fail closed when cutover-stage lookup fails after transfer completion; a
   transient ledger read error can no longer bypass the approved cutover flow.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
