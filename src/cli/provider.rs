@@ -13,6 +13,18 @@ fn oauth_refresh_lock_path(lock_directory: &std::path::Path, keyring_id: &str) -
     lock_directory.join(format!("{file_name}.lock"))
 }
 
+fn acquire_oauth_refresh_lock_in(
+    lock_directory: &std::path::Path,
+    keyring_id: &str,
+    timeout: std::time::Duration,
+) -> Result<crate::process::InstanceLock, String> {
+    crate::process::acquire_named_lock_with_timeout(
+        &oauth_refresh_lock_path(lock_directory, keyring_id),
+        "another migration is refreshing this OAuth credential; retry after it finishes",
+        timeout,
+    )
+}
+
 /// Run the interactive authorization-code flow and store the refresh
 /// configuration under `<keyring-id>`. Errors carry the process exit code:
 /// 2 for usage errors, 1 for authorization or storage failures.
@@ -337,10 +349,9 @@ pub(super) fn oauth_access_token_command(
                 format!("could not secure OAuth refresh coordination directory: {error}"),
             )
         })?;
-        let lock_path = oauth_refresh_lock_path(&lock_directory, keyring_id);
-        let lock = crate::process::acquire_named_lock_with_timeout(
-            &lock_path,
-            "another migration is refreshing this OAuth credential; retry after it finishes",
+        let lock = acquire_oauth_refresh_lock_in(
+            &lock_directory,
+            keyring_id,
             std::time::Duration::from_secs(35),
         )
         .map_err(|error| (1, format!("could not coordinate OAuth refresh: {error}")))?;
@@ -529,25 +540,77 @@ mod oauth_refresh_lock_tests {
         assert_ne!(first_path, other_path);
         assert!(!first_path.to_string_lossy().contains("customer-a-source"));
 
-        let first =
-            crate::process::acquire_named_lock(&first_path, "another OAuth refresh is active")
-                .unwrap();
+        let first = acquire_oauth_refresh_lock_in(
+            &directory,
+            "customer-a-source",
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
         assert!(
-            crate::process::acquire_named_lock(&same_path, "another OAuth refresh is active")
-                .is_err()
+            acquire_oauth_refresh_lock_in(
+                &directory,
+                "customer-a-source",
+                std::time::Duration::ZERO,
+            )
+            .is_err()
         );
-        let waiting_path = same_path.clone();
+        let waiting_directory = directory.clone();
         let waiting = std::thread::spawn(move || {
-            crate::process::acquire_named_lock_with_timeout(
-                &waiting_path,
-                "another OAuth refresh is active",
+            acquire_oauth_refresh_lock_in(
+                &waiting_directory,
+                "customer-a-source",
                 std::time::Duration::from_secs(2),
             )
         });
         std::thread::sleep(std::time::Duration::from_millis(50));
         drop(first);
         waiting.join().unwrap().unwrap();
-        crate::process::acquire_named_lock(&same_path, "another OAuth refresh is active").unwrap();
+        acquire_oauth_refresh_lock_in(&directory, "customer-a-source", std::time::Duration::ZERO)
+            .unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn concurrent_rotation_callbacks_observe_each_others_latest_token() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let token = std::sync::Arc::new(std::sync::Mutex::new("initial".to_owned()));
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let start = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut workers = Vec::new();
+        for worker in 0..2 {
+            let directory = directory.clone();
+            let token = token.clone();
+            let observed = observed.clone();
+            let start = start.clone();
+            workers.push(std::thread::spawn(move || {
+                start.wait();
+                let _lock = acquire_oauth_refresh_lock_in(
+                    &directory,
+                    "shared-refresh-credential",
+                    std::time::Duration::from_secs(2),
+                )
+                .unwrap();
+                let current = token.lock().unwrap().clone();
+                observed.lock().unwrap().push(current);
+                // Model network latency between reading a rotating token and
+                // persisting its replacement. Without the file lock, both
+                // callbacks can observe and exchange the same old token.
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                *token.lock().unwrap() = format!("rotated-by-{worker}");
+            }));
+        }
+        start.wait();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(
+            observed.iter().filter(|value| *value == "initial").count(),
+            1
+        );
+        assert_ne!(observed[0], observed[1]);
+        drop(observed);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
