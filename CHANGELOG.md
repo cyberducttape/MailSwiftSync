@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Handle Windows byte-range lock contention as normal lock contention, retry
+  transient sharing violations during atomic replacement, and close staged
+  artifact handles before replacement. This restores exclusive-ledger and
+  rotating OAuth refresh behavior on Windows.
+- Make the cross-platform native-test log assertion match the actual workflow
+  step structure, so Windows runs validate diagnostics instead of failing on
+  an unrelated YAML line-order assumption.
 - Serialize live OAuth refresh callbacks across concurrent mailbox processes
   that share a rotating keyring credential; each callback reloads the newest
   refresh configuration while holding the per-credential lock, and retries
