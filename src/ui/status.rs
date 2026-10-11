@@ -232,6 +232,26 @@ pub(crate) fn display_state_key(state: &str) -> String {
     core::MailboxState::parse(&normalized).map_or(normalized, |state| state.as_str().to_owned())
 }
 
+/// Every state `job_state_badge` distinguishes, so a table can size its state
+/// column for the widest badge before any row is laid out.
+pub(crate) const JOB_BADGE_STATES: [&str; 15] = [
+    "imported",
+    "verified_with_exceptions",
+    "verified",
+    "completed",
+    "running",
+    "queued",
+    "preflight",
+    "retrying",
+    "ready",
+    "delta_required",
+    "verification_difference",
+    "attention",
+    "failed",
+    "cancelled",
+    "unknown",
+];
+
 pub(crate) fn job_state_badge(state: &str, colors: ThemeColors) -> (&'static str, Color32) {
     match state {
         "imported" => ("○ Imported", colors.text_secondary),

@@ -2,7 +2,7 @@
 
 MailSwiftSync is a local mailbox migration control plane. It uses Dovecot's native `doveadm`/dsync workflow when the destination is Dovecot, and `imapsync` for arbitrary IMAP-to-IMAP work. It helps you plan a migration, test it safely, keep a durable project record, and verify the result.
 
-![MailSwiftSync Overview with a loaded batch queue](assets/overview.png)
+![MailSwiftSync Overview with a loaded batch queue — Retro 80s Neon theme](assets/overview.png)
 
 *Overview page of the current release with placeholder `.example` data: queue status, the recommended next step, and progress through the migration workflow and project lifecycle.*
 
@@ -16,7 +16,7 @@ MailSwiftSync is a local mailbox migration control plane. It uses Dovecot's nati
 6. Click **Run preflight** against a test destination mailbox. The engine runs without changing the destination.
 7. Confirm the mailbox is **Ready** and the preflight plan still matches the current fields. Only then clear **Dry run / preflight** and click **Start live migration**, which asks for confirmation. Changing endpoints, users, engine, TLS, ports, or controlled options requires another preflight.
 
-![Migration plan page](assets/migration-plan.png)
+![Migration plan page — Retro 80s Neon theme](assets/migration-plan.png)
 
 ## Choose the right engine
 

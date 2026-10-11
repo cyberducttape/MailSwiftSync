@@ -6,7 +6,7 @@ MailSwiftSync can import a migration list from CSV or XLSX and process rows with
 
 XLSX files are limited to 100,000 data rows, 64 columns, and 1,000,000 occupied or expanded cells per selected worksheet. Sheets whose declared or actual cell range exceeds those limits are rejected before Calamine creates its dense worksheet matrix.
 
-![Mailboxes page with a loaded batch queue](assets/batch-queue.png)
+![Mailboxes page with a loaded batch queue — Retro 80s Neon theme](assets/batch-queue.png)
 
 *Mailboxes page of the current release with placeholder `.example` data: queue health, collapsed queue settings, selection controls, and the review drawer for two selected rows. Passwords are never shown in the queue.*
 

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 
-![Migration plan — Retro 80s Neon theme](docs/wiki/assets/migration-plan-retro-80s.png)
+![Migration plan — Retro 80s Neon theme](docs/wiki/assets/migration-plan.png)
 
 > Documentation images are current workflow previews, not pixel-accurate screenshots of the egui interface. They illustrate the intended operator flow and emphasize explicit safety state, lifecycle visibility, redacted command review, and diagnostics.
 
@@ -517,7 +517,7 @@ restoring an earlier verified backup returns the ledger to normal operation.
 It does not cover the transfer engine itself running out of destination
 storage.
 
-![Mailboxes workspace — Retro 80s Neon theme](docs/wiki/assets/batch-queue-retro-80s.png)
+![Mailboxes workspace — Retro 80s Neon theme](docs/wiki/assets/batch-queue.png)
 
 The on-screen **Activity** log is intentionally capped at 10,000 lines for desktop stability; the structured durable event ledger remains the longer-lived audit record. Raw engine transcripts stay process-local and are not written to SQLite.
 

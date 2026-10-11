@@ -722,6 +722,19 @@ impl App {
             let table_width = ui.available_width();
             let show_endpoints = table_width >= 760.0;
             let show_operator_action = table_width >= 1100.0;
+            // An auto column only grows to its content after the remainder
+            // columns have claimed the width, which pushed long badges past
+            // the panel edge. Reserve the widest badge in this language.
+            let badge_size = egui::TextStyle::Body.resolve(ui.style()).size;
+            let state_width = crate::ui::status::JOB_BADGE_STATES
+                .iter()
+                .map(|state| {
+                    let (badge, color) = job_state_badge(state, colors);
+                    let text = crate::ui::status_text(self.language.text(badge), color, badge_size);
+                    ui.fonts_mut(|fonts| fonts.layout_job(text).size().x)
+                })
+                .fold(96.0_f32, f32::max)
+                + 4.0;
             // Resizable columns draw permanent dividers in the border colour;
             // soften them so rows read as rows, not a spreadsheet grid.
             let divider = ui.visuals().widgets.noninteractive.bg_stroke;
@@ -738,7 +751,7 @@ impl App {
                     .column(Column::remainder().at_least(110.0).clip(true))
                     .column(Column::remainder().at_least(110.0).clip(true));
             }
-            table = table.column(Column::auto().at_least(96.0).clip(true));
+            table = table.column(Column::initial(state_width).at_least(96.0).clip(true));
             if show_operator_action {
                 table = table.column(Column::remainder().at_least(90.0).clip(true));
             }

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Size the Mailboxes state column for the widest translated status badge so
+  long states no longer push the column past the panel edge at 1280 px.
+- Refresh the README and wiki screenshots in the Retro 80s Neon theme with
+  the current typography, and drop the duplicate README-only image copies.
+
 - Anchor `reverify` to the latest completed transfer rather than a later
   dry-run preflight, which also finishes as `completed` but copied nothing; a
   mailbox with only preflight history is refused.
