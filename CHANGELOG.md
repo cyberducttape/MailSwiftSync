@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pseudonymize customer-controlled project identifiers in opt-in diagnostic
+  filenames and headers; raw project names remain out of support transcripts.
 - Make imapsync transfer hostname verification explicit for both implicit IMAPS
   and STARTTLS endpoints; the qualified engine's STARTTLS defaults did not set
   `SSL_verifycn_scheme` even though its IMAPS defaults did.

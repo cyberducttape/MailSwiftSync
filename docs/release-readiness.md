@@ -136,8 +136,9 @@ reconciliation as successful.
   limiting detailed mailbox statuses to an explicitly marked 1,000-row sample.
 - Headless preflight/live and batch commands support opt-in
   `--diagnostic-log <directory>` transcripts. Each batch child has a separate
-  file; mailbox job IDs are hashed in filenames. Engine output is redacted for
-  known secrets and bounded to 8 MiB per file / 128 MiB per directory, with
+  file; project and mailbox job IDs are hashed in filenames and project IDs are
+  pseudonymized in transcript headers. Engine output is redacted for known
+  secrets and bounded to 8 MiB per file / 128 MiB per directory, with
   retention capped at 20 completed files. These plaintext logs can still
   contain provider, mailbox, folder, and message metadata; transcript contents
   are not account-pseudonymized, encrypted, or compressed, and support bundles

@@ -367,17 +367,22 @@ impl LogWriter {
         job_id: &str,
         part: u32,
     ) -> Result<FileState, String> {
+        // Project names are operator-controlled and may contain customer
+        // names or domains. Keep the raw value only in the writer's
+        // in-memory identity check; diagnostic filenames and headers must
+        // remain safe to copy into an incident bundle.
+        let project_hash = pseudonym_hash(project_id);
         let mailbox_hash = pseudonym_hash(job_id);
         let filename = if part == 0 {
             format!(
                 "mailswiftsync-{project_id}-{run_id}-mailbox-{mailbox_hash}.log",
-                project_id = safe_component(project_id),
+                project_id = project_hash,
                 run_id = safe_component(run_id),
             )
         } else {
             format!(
                 "mailswiftsync-{project_id}-{run_id}-mailbox-{mailbox_hash}-part-{part:04}.log",
-                project_id = safe_component(project_id),
+                project_id = project_hash,
                 run_id = safe_component(run_id),
             )
         };
@@ -393,7 +398,7 @@ impl LogWriter {
             .map_err(|error| format!("could not restrict diagnostic log permissions: {error}"))?;
         let mut file = BufWriter::with_capacity(WRITER_CAPACITY, file);
         let header = format!(
-            "# MailSwiftSync diagnostic log; project_id={project_id} run_id={run_id} mailbox_hash={mailbox_hash}\n"
+            "# MailSwiftSync diagnostic log; project_hash={project_hash} run_id={run_id} mailbox_hash={mailbox_hash}\n"
         );
         file.write_all(header.as_bytes())
             .map_err(|error| format!("could not initialize diagnostic log: {error}"))?;
@@ -964,6 +969,31 @@ mod tests {
         assert_eq!(hash, pseudonym_hash(identifier));
         assert_eq!(hash.len(), 24);
         assert!(!hash.contains(identifier));
+    }
+
+    #[test]
+    fn diagnostic_filename_and_header_pseudonymize_project_identifiers() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        logger
+            .write_line(
+                "Acme Hosting / customer@example.test",
+                "run-1",
+                "mailbox-1",
+                "stdout",
+                "safe diagnostic line",
+            )
+            .unwrap();
+        drop(logger);
+        let entry = fs::read_dir(&directory).unwrap().next().unwrap().unwrap();
+        let filename = entry.file_name().to_string_lossy().into_owned();
+        let content = fs::read_to_string(entry.path()).unwrap();
+        assert!(!filename.contains("Acme"));
+        assert!(!filename.contains("customer@example.test"));
+        assert!(!content.contains("Acme Hosting"));
+        assert!(!content.contains("customer@example.test"));
+        assert!(content.contains("project_hash="));
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -356,7 +356,8 @@ mailswiftsync oauth-authorize google|microsoft|custom <keyring-id> --client-id <
 For opt-in headless incident troubleshooting, preflight/live and batch
 commands may receive `--diagnostic-log /secure/directory`. Batch execution
 writes each child mailbox run to its own owner-only transcript; filenames use
-a stable hash of the mailbox job ID rather than the ID itself. Transcripts are
+stable hashes of the project and mailbox job IDs rather than those identifiers
+themselves. Transcript headers use the same project pseudonym. Transcripts are
 secret-redacted, capped at 8 MiB per file and 128 MiB per directory, and
 retention is limited to the newest 20 files when runs finish. Email and
 Message-ID-like values in persisted transcript lines are replaced with stable
