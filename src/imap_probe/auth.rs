@@ -137,20 +137,24 @@ pub(super) fn authenticate_imap_stream<S: Read + Write>(
     Ok((stream, post_auth_response))
 }
 
-/// Refresh the credential immediately before an IMAP reconnect, then run the
-/// normal authentication and post-auth capability exchange on the new stream.
-pub(super) fn reauthenticate_imap_stream<S: Read + Write>(
-    stream: S,
+/// Refresh the credential before opening a reconnect socket, then run the
+/// normal authentication and post-auth capability exchange on that stream.
+pub(super) fn reconnect_and_authenticate_imap_stream<S, C>(
     host: &str,
     user: &str,
     auth_method: &str,
-    greeting: String,
     budget: Option<&MessageFetchBudget<'_>>,
     refresh_credential: &mut dyn FnMut() -> Result<SecretString, String>,
-) -> Result<(S, String), String> {
+    connect: C,
+) -> Result<(S, String), String>
+where
+    S: Read + Write,
+    C: FnOnce() -> Result<(S, String), String>,
+{
     let credential = refresh_credential().map_err(|error| {
         format!("could not refresh the IMAP credential before reconnect: {error}")
     })?;
+    let (stream, greeting) = connect()?;
     authenticate_imap_stream(
         stream,
         host,
@@ -275,30 +279,36 @@ mod tests {
 
     #[test]
     fn reconnect_authentication_uses_a_refreshed_oauth_token() {
+        use std::{cell::RefCell, rc::Rc};
+
         let stream = ScriptedStream::new(&[
             PRE_AUTH_CAPABILITIES,
             "+\r\n",
             "a002 OK authenticated\r\n",
             POST_AUTH_CAPABILITIES,
         ]);
-        let mut refresh_calls = 0;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let refresh_events = Rc::clone(&events);
         let mut refresh = || {
-            refresh_calls += 1;
+            refresh_events.borrow_mut().push("refresh");
             Ok(SecretString::new("fresh-access-token".to_owned()))
         };
+        let connect_events = Rc::clone(&events);
 
-        let (stream, _) = reauthenticate_imap_stream(
-            stream,
+        let (stream, _) = reconnect_and_authenticate_imap_stream(
             "imap.example.test",
             "operator@example.test",
             "oauth2",
-            "* OK ready\r\n".to_owned(),
             None,
             &mut refresh,
+            || {
+                connect_events.borrow_mut().push("connect");
+                Ok((stream, "* OK ready\r\n".to_owned()))
+            },
         )
         .expect("reconnect should authenticate with the refreshed token");
 
-        assert_eq!(refresh_calls, 1);
+        assert_eq!(*events.borrow(), ["refresh", "connect"]);
         let expected_payload =
             crate::oauth::xoauth2_payload("operator@example.test", "fresh-access-token");
         assert!(stream.sent().contains(expected_payload.as_str()));

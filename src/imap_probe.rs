@@ -19,7 +19,7 @@ mod namespace_parser;
 mod protocol;
 mod resolver;
 mod tls;
-use auth::{authenticate_imap_stream, reauthenticate_imap_stream};
+use auth::{authenticate_imap_stream, reconnect_and_authenticate_imap_stream};
 #[cfg(test)]
 use fetch_pages::parse_uid_search_response;
 use fetch_pages::{
@@ -1328,22 +1328,23 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                     consecutive_session_reconnects =
                         consecutive_session_reconnects.saturating_add(1);
                     let reconnected: Result<_, String> = (|| {
-                        let (new_stream, new_greeting) = connect_tls_stream_with_budget(
-                            host,
-                            transport,
-                            ca_bundle,
-                            certificate_pin_sha256,
-                            budget,
-                        )?;
-                        let (new_stream, new_post_auth_response) = reauthenticate_imap_stream(
-                            new_stream,
-                            host,
-                            user,
-                            auth_method,
-                            new_greeting,
-                            Some(budget),
-                            reconnect_credential,
-                        )?;
+                        let (new_stream, new_post_auth_response) =
+                            reconnect_and_authenticate_imap_stream(
+                                host,
+                                user,
+                                auth_method,
+                                Some(budget),
+                                reconnect_credential,
+                                || {
+                                    connect_tls_stream_with_budget(
+                                        host,
+                                        transport,
+                                        ca_bundle,
+                                        certificate_pin_sha256,
+                                        budget,
+                                    )
+                                },
+                            )?;
                         Ok((
                             new_stream,
                             advertises_capability(&new_post_auth_response, "CONDSTORE"),
