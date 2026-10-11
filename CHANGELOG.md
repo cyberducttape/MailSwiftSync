@@ -54,6 +54,8 @@
 - Re-fetch bounded FLAGS pages before accepting a mailbox scan and retry the
   folder if system flags or custom keywords changed during the scan; document
   the extra IMAP work and the remaining non-atomic cross-server snapshot limit.
+  The refetch pages use staged UIDs directly with an indexed numeric-order scan,
+  avoiding a second sequence-number enumeration.
 - Redact embedded URI userinfo in opt-in diagnostic transcripts while
   preserving endpoint hosts and paths for troubleshooting.
 - Size the Mailboxes state column for the widest translated status badge so

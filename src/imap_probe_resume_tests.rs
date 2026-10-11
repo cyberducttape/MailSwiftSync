@@ -276,7 +276,7 @@ fn sparse_historical_uid_space_does_not_create_empty_search_windows() {
     let mut server = FolderServer::new(&[4_294_967_295], 9, 4_294_967_296);
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     assert_eq!(scan(&mut stage, &mut server), 1);
-    assert_eq!(server.uid_enumeration_commands, 2);
+    assert_eq!(server.uid_enumeration_commands, 1);
     assert_eq!(staged_uids(&stage), vec![4_294_967_295]);
 }
 

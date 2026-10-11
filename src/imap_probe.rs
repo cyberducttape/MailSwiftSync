@@ -279,6 +279,15 @@ trait MessageSink {
     /// server's EXISTS after a scan so rows kept from an interrupted run can
     /// never stand in for messages that were expunged in the meantime.
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String>;
+    fn uid_page(
+        &self,
+        _mailbox: &str,
+        _uidvalidity: u64,
+        _after_uid: u64,
+        _limit: usize,
+    ) -> Result<Vec<u64>, String> {
+        Err("message sink does not support bounded UID paging".to_owned())
+    }
     fn flags_match_page(&self, _messages: &crate::core::ExtractedMessages) -> Result<bool, String> {
         Ok(true)
     }
@@ -357,6 +366,18 @@ impl MessageSink for StageMessageSink<'_> {
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String> {
         self.stage
             .count_mailbox(self.side, mailbox, uidvalidity)
+            .map_err(|error| error.to_string())
+    }
+
+    fn uid_page(
+        &self,
+        mailbox: &str,
+        uidvalidity: u64,
+        after_uid: u64,
+        limit: usize,
+    ) -> Result<Vec<u64>, String> {
+        self.stage
+            .uid_page(self.side, mailbox, uidvalidity, after_uid, limit)
             .map_err(|error| error.to_string())
     }
 
@@ -962,56 +983,57 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     // Re-read only this bounded page's mutable state and compare it to the
     // metadata pass before accepting the folder as stable. This is the
     // portable fallback for servers without CONDSTORE/HIGHESTMODSEQ.
-    let mut flags_page_number = 0usize;
     let mut flags_changed = false;
-    enumerate_uid_pages(
-        stream,
-        host,
-        mailbox,
-        start_exists,
-        &mut response,
-        &mut buffer,
-        budget,
-        None,
-        FetchPagePlanner::metadata(),
-        |stream, buffer, uid_page, uid_set| {
-            budget.check()?;
-            let tag = format!("f{:03}", flags_page_number + 1);
-            flags_page_number = flags_page_number.saturating_add(1);
-            let command = format!("{tag} UID FETCH {uid_set} (UID FLAGS)\r\n");
-            write_imap_command(
-                stream,
-                command.as_bytes(),
-                Some(budget),
-                &format!("{host}: could not refetch mailbox flags"),
-            )?;
-            let raw = read_imap_tagged_bytes_with_budget(
-                stream,
-                &tag,
-                buffer,
-                MAX_MESSAGE_FETCH_RESPONSE_BYTES,
-                budget,
-            )?;
-            if !imap_command_succeeded(&raw, &tag) {
-                return Err(imap_command_failure(
-                    &raw,
-                    &tag,
-                    "FETCH mailbox flags",
-                    host,
-                ));
-            }
-            let flags = parse_message_fetch_flags_response_bytes(
-                &raw,
-                std::sync::Arc::clone(&mailbox_context),
-                Some(start_uidvalidity),
-            )?;
-            validate_fetch_page_coverage(&flags, uid_page, host, mailbox)?;
-            if !sink.flags_match_page(&flags)? {
-                flags_changed = true;
-            }
-            Ok(raw.len())
-        },
-    )?;
+    let mut last_flags_uid = 0_u64;
+    let mut flags_page_number = 0usize;
+    loop {
+        budget.check()?;
+        let staged_uid_page = sink.uid_page(
+            mailbox,
+            start_uidvalidity,
+            last_flags_uid,
+            MESSAGE_FETCH_PAGE_SIZE as usize,
+        )?;
+        if staged_uid_page.is_empty() {
+            break;
+        }
+        let (count, uid_set) = encode_uid_page(&staged_uid_page, staged_uid_page.len());
+        if count == 0 {
+            return Err(MailboxFetchError::Folder(format!(
+                "{host}: folder {mailbox}: could not encode staged UID page for FLAGS refetch"
+            )));
+        }
+        let uid_page = &staged_uid_page[..count];
+        let tag = format!("f{:03}", page_number + flags_page_number + 3);
+        flags_page_number = flags_page_number.saturating_add(1);
+        let command = format!("{tag} UID FETCH {uid_set} (UID FLAGS)\r\n");
+        write_imap_command(
+            stream,
+            command.as_bytes(),
+            Some(budget),
+            &format!("{host}: could not refetch mailbox flags"),
+        )?;
+        let raw = read_imap_tagged_bytes_with_budget(
+            stream,
+            &tag,
+            &mut buffer,
+            MAX_MESSAGE_FETCH_RESPONSE_BYTES,
+            budget,
+        )?;
+        if !imap_command_succeeded(&raw, &tag) {
+            return Err(imap_command_failure(&raw, &tag, "FETCH mailbox flags", host).into());
+        }
+        let flags = parse_message_fetch_flags_response_bytes(
+            &raw,
+            std::sync::Arc::clone(&mailbox_context),
+            Some(start_uidvalidity),
+        )?;
+        validate_fetch_page_coverage(&flags, uid_page, host, mailbox)?;
+        if !sink.flags_match_page(&flags)? {
+            flags_changed = true;
+        }
+        last_flags_uid = uid_page.last().copied().unwrap_or(last_flags_uid);
+    }
     if flags_changed {
         return Err(MailboxFetchError::Changed(format!(
             "{host}: folder {mailbox} FLAGS changed during verification; retry required"

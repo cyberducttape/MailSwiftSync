@@ -133,11 +133,12 @@ transfer engine to start over and cannot reuse stale flag-only results.
 
 The current implementation deliberately chooses this safe full-folder refetch
 because it does not yet persist or negotiate `CONDSTORE`/`HIGHESTMODSEQ`
-checkpoint state. During each pass it also performs a second bounded sequence
-enumeration and FLAGS-only UID FETCH, adding provider round trips proportional
-to the extant message count. A future optimized path may use those IMAP
-capabilities to avoid that extra pass or refetch only changed UIDs, but it must
-retain the conservative fallback for servers that do not advertise them.
+checkpoint state. During each pass it also issues bounded FLAGS-only UID FETCH
+requests for the UIDs already staged in SQLite. This avoids a second sequence
+enumeration, while adding provider round trips proportional to the extant
+message count. A future optimized path may use those IMAP capabilities to
+avoid that extra pass or refetch only changed UIDs, but it must retain the
+conservative fallback for servers that do not advertise them.
 
 The current product does not retain completed message metadata indefinitely.
 The `reverify` command provides an operator-invokable mailbox-level
