@@ -536,6 +536,8 @@ fn pseudonym_hash(value: &str) -> String {
 /// pass is deliberately limited to diagnostic persistence so evidence remains
 /// semantically complete while support logs avoid retaining identifiers.
 pub(crate) fn sanitize_private_metadata(line: &str) -> String {
+    let url_redacted = redact_url_userinfo(line);
+    let line = url_redacted.as_str();
     let bytes = line.as_bytes();
     let mut output = String::with_capacity(line.len());
     let mut cursor = 0;
@@ -578,7 +580,11 @@ pub(crate) fn sanitize_private_metadata(line: &str) -> String {
             })
             .map(|(index, _)| at + index)
             .unwrap_or(line.len());
-        if left >= at || right <= at || line[left..right].contains("://") {
+        if left >= at
+            || right <= at
+            || line[left..right].contains("://")
+            || is_uri_authority_at(line, at)
+        {
             output.push_str(&line[cursor..=at]);
             cursor = at + 1;
             continue;
@@ -609,23 +615,7 @@ fn redact_url_userinfo(line: &str) -> String {
         let authority_end = line[authority_start..]
             .find(|character: char| {
                 character.is_ascii_whitespace()
-                    || matches!(
-                        character,
-                        '/' | '?'
-                            | '#'
-                            | '<'
-                            | '>'
-                            | '('
-                            | ')'
-                            | '['
-                            | ']'
-                            | '{'
-                            | '}'
-                            | ','
-                            | ';'
-                            | '"'
-                            | '\''
-                    )
+                    || matches!(character, '/' | '?' | '#' | '<' | '>' | '{' | '}')
             })
             .map(|offset| authority_start + offset)
             .unwrap_or(line.len());
@@ -640,6 +630,17 @@ fn redact_url_userinfo(line: &str) -> String {
         cursor = authority_end;
     }
     output
+}
+
+fn is_uri_authority_at(line: &str, at: usize) -> bool {
+    line[..at].rfind("://").is_some_and(|scheme_end| {
+        let authority_start = scheme_end + 3;
+        authority_start <= at
+            && !line[authority_start..at].chars().any(|character| {
+                character.is_ascii_whitespace()
+                    || matches!(character, '/' | '?' | '#' | '<' | '>' | '{' | '}')
+            })
+    })
 }
 
 /// Redact secret-shaped key/value fields that may be emitted by an external
@@ -1071,14 +1072,16 @@ mod tests {
 
     #[test]
     fn diagnostic_lines_redact_uri_userinfo_and_preserve_endpoint_context() {
-        let line = "source=imap://alice:source-pass@mail.example.test:993/INBOX destination=https://svc:destination-pass@mx.example.test/path imaps://mail.example.test";
+        let line = "source=imap://alice:source-pass@mail.example.test:993/INBOX destination=https://svc:destination-pass@mx.example.test/path opaque=imap://semi;comma,user'pass@mail2.example.test/path imaps://mail.example.test";
         let sanitized = sanitize_private_metadata(line);
         assert!(!sanitized.contains("alice"));
         assert!(!sanitized.contains("source-pass"));
         assert!(!sanitized.contains("svc:"));
         assert!(!sanitized.contains("destination-pass"));
+        assert!(!sanitized.contains("semi;comma,user'pass"));
         assert!(sanitized.contains("imap://[REDACTED]@mail.example.test:993/INBOX"));
         assert!(sanitized.contains("https://[REDACTED]@mx.example.test/path"));
+        assert!(sanitized.contains("imap://[REDACTED]@mail2.example.test/path"));
         assert!(sanitized.contains("imaps://mail.example.test"));
     }
 }
