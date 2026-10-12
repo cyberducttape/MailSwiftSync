@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Further restrict the Linux supervisor service from changing system clock,
+  kernel logs, hostname, or namespaces, and limit it to the native syscall ABI.
+  Keep these restrictions covered by the service-unit contract test and
+  systemd's offline security analysis.
 - Raise the bounded cross-platform release-build job timeout from 20 to 30
   minutes after the clean x86_64 Linux target compile exceeded the prior CI
   limit; keep the existing per-job timeout rather than disabling the guard.
