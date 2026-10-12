@@ -505,9 +505,11 @@ mod tests {
         let executable = directory.join("fake-imapsync");
         let pid_file = directory.join("detached.pid");
         let script = format!(
-            "#!/bin/sh\n{} /bin/sh -c 'echo $$ > {}; exec /bin/sleep 2' &\nprintf 'imapsync 2.314\\n'\n",
+            "#!/bin/sh\n{} /bin/sh -c 'echo $$ > {}; exec /bin/sleep 2' &\ni=0\nwhile [ ! -s '{}' ] && [ \"$i\" -lt 100 ]; do sleep 0.01; i=$((i + 1)); done\n[ -s '{}' ] || exit 9\nprintf 'imapsync 2.314\\n'\n",
             setsid.display(),
-            pid_file.display()
+            pid_file.display(),
+            pid_file.display(),
+            pid_file.display(),
         );
         std::fs::write(&executable, script).unwrap();
         #[cfg(unix)]
