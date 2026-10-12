@@ -34,6 +34,14 @@ fn execution_profile(plan_snapshot: &str) -> &'static str {
     }
 }
 
+fn engine_identity(engine: &str, version: Option<&str>) -> String {
+    version
+        .map(str::trim)
+        .filter(|version| !version.is_empty() && !version.eq_ignore_ascii_case("unknown"))
+        .map(str::to_owned)
+        .unwrap_or_else(|| engine.to_owned())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProviderIdentity {
     pub(crate) source_provider: String,
@@ -319,11 +327,10 @@ impl ExportSummary {
             Ok(())
         })?;
         reader.for_each_run(|run| {
-            summary.engine_identities.insert(
-                run.engine_version
-                    .clone()
-                    .unwrap_or_else(|| run.run.engine.clone()),
-            );
+            summary.engine_identities.insert(engine_identity(
+                &run.run.engine,
+                run.engine_version.as_deref(),
+            ));
             Ok(())
         })?;
         Ok(summary)
@@ -594,6 +601,7 @@ mod tests {
         crate::reports::signing::verify_file(&signed_output, Some(&trusted_public_key)).unwrap();
         let certificate: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
+        assert_eq!(certificate["engine"], "imapsync 2.314");
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
         assert_eq!(certificate["format_version"], 2);
         assert_eq!(certificate["proof_signature"]["algorithm"], "Ed25519");
@@ -644,6 +652,20 @@ mod tests {
                 .contains(&executable.to_string_lossy().to_string())
         );
         drop(cleanup);
+    }
+
+    #[test]
+    fn engine_identity_falls_back_when_version_is_unknown_or_blank() {
+        assert_eq!(
+            engine_identity("Dovecot native", Some("unknown")),
+            "Dovecot native"
+        );
+        assert_eq!(engine_identity("imapsync", None), "imapsync");
+        assert_eq!(engine_identity("imapsync", Some("  ")), "imapsync");
+        assert_eq!(
+            engine_identity("imapsync", Some("imapsync 2.314")),
+            "imapsync 2.314"
+        );
     }
 
     fn snapshot(phase: core::Phase, state: &str, evidence: bool) -> core::ProjectReportSnapshot {

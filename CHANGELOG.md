@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fall back to the engine name in customer-proof summaries when the recorded
+  engine version is missing or reported as `unknown`, preventing native-engine
+  certificates from exporting an ambiguous top-level engine identity.
 - Keep provider-pair evidence packs explicitly marked as qualification
   candidates until the signed release gate passes. Require consistent fixture,
   dataset, provider, and binary identities across phases; reject exceptions,
