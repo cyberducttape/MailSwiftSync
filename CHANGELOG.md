@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Exercise cross-process ledger-lock recovery by forcibly terminating the
+  lock-owning subprocess and verifying another process can acquire ownership.
+- Make single-mailbox completion banners state the recorded verification tier:
+  metadata-only runs explicitly say message bodies were not compared, bounded
+  body-fingerprint runs disclaim full byte-for-byte proof, and aggregate/engine
+  evidence disclaims independent per-message verification. A missing method on
+  a `verified` result now produces a warning instead of an unqualified success.
 - Version pre-migration risk JSON and mark its score as scale-only/advisory;
   enumerate authentication, TLS, provider, capacity, verification, disk,
   maintenance-window, and policy gates that this score does not evaluate.
@@ -51,6 +58,12 @@
 - Use a private local HMAC key for new OAuth rotation-recovery fingerprints while retaining one-time compatibility with existing version-1 SHA-256 recovery records.
 - Document the non-secret input and filename-only purpose of the stable OAuth keyring-ID digest flagged by password-hashing analysis.
 - Version customer proof exports as v2 to identify the expanded evidence fields, including identity provenance counts.
+- Add a real-engine interruption drill to the IMAP lab: the controller is
+  SIGKILLed mid-transfer, the engine must stop with it, and `recover` plus a
+  fresh live pass must end with exactly the source messages verified. With
+  expert `--useuid --usecache`, the drill shows the in-flight message is
+  appended twice and verification flags it; the plan options now explain
+  this trade-off. The default-plan recovery is repeated from a restored ledger.
 
 - Run project report, project JSON, customer-proof, and health exports on a
   background worker with its own read-only ledger connection; a fleet-scale
@@ -89,6 +102,10 @@
 - Drop a redundant second URI-userinfo pass from diagnostic line redaction.
 - Fix Windows-only clippy findings in the OAuth refresh guard, lock
   contention check, and credential tests.
+- Add deterministic IMAP session-recovery fault tests proving a fatal connection
+  error reconnects and reauthenticates before retrying the failed folder,
+  refreshes server capabilities, fails closed on reconnect authentication errors,
+  and stops after three consecutive reconnect attempts.
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving

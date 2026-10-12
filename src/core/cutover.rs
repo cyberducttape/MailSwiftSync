@@ -109,6 +109,12 @@ impl StateStore {
             .map(|workflow| workflow.map(|w| w.stage))
     }
 
+    #[cfg(test)]
+    pub(crate) fn drop_cutover_table_for_test(&self) -> rusqlite::Result<()> {
+        self.connection
+            .execute_batch("DROP TABLE cutover_workflows")
+    }
+
     pub fn approve_cutover(&self, project_id: &str, operator: &str) -> rusqlite::Result<()> {
         if operator.trim().is_empty() || operator.len() > 256 {
             return Err(rusqlite::Error::InvalidQuery);

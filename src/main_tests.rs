@@ -131,7 +131,7 @@ fn default_live_imapsync_plan_preserves_metadata_for_verification() {
     // If evidence is unavailable after a successful transfer, the
     // controller's terminal policy is review-required, not failed.
     assert_eq!(
-        successful_run_status(false, false, None),
+        successful_run_status(false, false, None, None),
         "Migration completed; verification requires operator review"
     );
 }
@@ -1742,19 +1742,46 @@ fn failure_taxonomy_keeps_operator_actions_distinct() {
 #[test]
 fn successful_live_status_never_overclaims_missing_evidence() {
     assert_eq!(
-        successful_run_status(false, false, Some("verified")),
-        "Migration completed and verified"
+        successful_run_status(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::MetadataReconciliation),
+        ),
+        "Migration completed; message metadata and supported flags verified. Message bodies were not compared."
     );
     assert_eq!(
-        successful_run_status(false, false, Some("delta_required")),
+        successful_run_status(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::BodyHash),
+        ),
+        "Migration completed; bounded message-content fingerprints and supported flags verified. This is not full byte-for-byte proof."
+    );
+    assert_eq!(
+        successful_run_status(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::NativeDovecot),
+        ),
+        "Migration completed; Dovecot aggregate evidence recorded. Individual messages and bodies were not independently verified."
+    );
+    assert_eq!(
+        successful_run_status(false, false, Some("verified"), None),
+        "Migration completed, but evidence details are unavailable. Review the ledger before sign-off."
+    );
+    assert_eq!(
+        successful_run_status(false, false, Some("delta_required"), None),
         "Dovecot synchronization completed with changes pending; repeat the final pass until exit code 0"
     );
     assert_eq!(
-        successful_run_status(false, false, None),
+        successful_run_status(false, false, None, None),
         "Migration completed; verification requires operator review"
     );
     assert_eq!(
-        successful_run_status(false, true, None),
+        successful_run_status(false, true, None, None),
         "Batch transfer completed; review per-mailbox verification results"
     );
 }
@@ -2484,17 +2511,13 @@ fn state_lock_child_process_holds_ledger_lock() {
         std::env::var_os("MAILSWIFTSYNC_LOCK_CHILD_READY")
             .expect("parent supplies child readiness path"),
     );
-    let release_path = PathBuf::from(
-        std::env::var_os("MAILSWIFTSYNC_LOCK_CHILD_RELEASE")
-            .expect("parent supplies child release path"),
-    );
     let _lock = acquire_instance_lock(&PathBuf::from(state_path)).unwrap();
     std::fs::write(marker_path, b"ready").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !release_path.exists() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
         assert!(
             std::time::Instant::now() < deadline,
-            "parent did not release the subprocess ledger lock"
+            "parent did not terminate the lock-holder subprocess"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -2507,7 +2530,6 @@ fn ledger_instance_lock_excludes_a_second_process() {
     create_private_test_directory(&directory);
     let state_path = directory.join("state.db");
     let ready_path = directory.join("ready");
-    let release_path = directory.join("release");
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -2516,7 +2538,6 @@ fn ledger_instance_lock_excludes_a_second_process() {
         ])
         .env("MAILSWIFTSYNC_LOCK_CHILD_STATE", &state_path)
         .env("MAILSWIFTSYNC_LOCK_CHILD_READY", &ready_path)
-        .env("MAILSWIFTSYNC_LOCK_CHILD_RELEASE", &release_path)
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -2537,9 +2558,12 @@ fn ledger_instance_lock_excludes_a_second_process() {
         .as_ref()
         .is_err_and(|error| error.contains("project database"));
     drop(second_lock);
-    std::fs::write(&release_path, b"release").unwrap();
+    child.kill().unwrap();
     let status = child.wait().unwrap();
-    assert!(status.success(), "lock-holder subprocess failed: {status}");
+    assert!(
+        !status.success(),
+        "lock-holder subprocess unexpectedly exited cleanly before forced termination"
+    );
     assert!(
         rejected_second_process,
         "a second process acquired a ledger lock already held by verification"
@@ -3161,20 +3185,29 @@ fn headless_batch_success_requires_verified_terminal_states() {
 #[test]
 fn run_status_severity_is_typed_and_independent_of_display_text() {
     assert_eq!(
-        successful_run_severity(false, false, Some("verified")),
+        successful_run_severity(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::MetadataReconciliation),
+        ),
         StatusSeverity::Success
     );
     assert_eq!(
-        successful_run_severity(false, false, Some("delta_required")),
+        successful_run_severity(false, false, Some("delta_required"), None),
         StatusSeverity::Warning
     );
     assert_eq!(
-        successful_run_severity(false, true, None),
+        successful_run_severity(false, true, None, None),
         StatusSeverity::Warning
     );
     assert_eq!(
-        successful_run_severity(true, false, None),
+        successful_run_severity(true, false, None, None),
         StatusSeverity::Success
+    );
+    assert_eq!(
+        successful_run_severity(false, false, Some("verified"), None),
+        StatusSeverity::Warning
     );
 }
 

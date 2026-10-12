@@ -1057,3 +1057,129 @@ if [[ "$duplicate_count" -ne 2 ]]; then
 fi
 echo "PASS: destination retained literal, non-UTF-8, renamed special-use, and duplicate-ID fixtures"
 echo "PASS: MailSwiftSync product integration verified $destination_messages message(s) through ${test_engine}"
+
+# Real-engine interruption drill: kill the controller mid-transfer, recover the
+# ledger, and resume. With the default header-matching plan the resumed run
+# must hold exactly the source messages, verified. With expert --useuid
+# --usecache, imapsync trusts only its UID cache, so the message in flight when
+# the controller died can be appended twice; that run must surface the
+# difference rather than report a silently verified result.
+run_interruption_drill() {
+  local label="$1" useuid="$2" strict="$3" restore="${4:-}"
+  local drill_user="drill-$label@example.test"
+  local drill_messages=60
+  local name index drill_filename
+  for name in source destination; do
+    mkdir -p "$workspace/$name/mail/$drill_user/Maildir"/{cur,new,tmp}
+    printf '%s:{PLAIN}%s:%s:%s::%s::\n' "$drill_user" "$password" "$mail_uid" "$mail_gid" \
+      "$workspace/$name/mail/$drill_user" >> "$workspace/$name/passwd"
+  done
+  for ((index = 1; index <= drill_messages; index++)); do
+    printf -v drill_filename 'drill-%03d.eml' "$index"
+    printf 'From: drill-lab@example.test\nTo: %s\nSubject: Interruption drill %d\nMessage-ID: <mailswiftsync-drill-%s-%03d@example.test>\nDate: Tue, 01 Jan 2030 03:00:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nInterruption drill message %d.\n' \
+      "$drill_user" "$index" "$label" "$index" "$index" \
+      > "$workspace/source/mail/$drill_user/Maildir/new/$drill_filename"
+  done
+  for name in source destination; do
+    chown -R "$mail_uid:$mail_gid" "$workspace/$name/mail/$drill_user"
+    if id dovecot >/dev/null 2>&1; then
+      chmod 0750 "$workspace/$name/mail/$drill_user"
+    else
+      chmod 0755 "$workspace/$name/mail/$drill_user"
+    fi
+  done
+
+  local drill_config="$app_runtime/drill-$label-config"
+  local drill_state="$app_runtime/drill-$label-state.db"
+  mkdir -p "$drill_config/mailswiftsync"
+  chmod 0700 "$drill_config" "$drill_config/mailswiftsync"
+  # Throttle the engine so the transfer is still in flight when it is killed.
+  sed -e "s/^name = .*/name = \"Interruption drill $label\"/" \
+    -e "s/^source_user = .*/source_user = \"$drill_user\"/" \
+    -e "s/^destination_user = .*/destination_user = \"$drill_user\"/" \
+    -e "s/^max_messages_per_second = .*/max_messages_per_second = 2/" \
+    -e "s/^useuid = .*/useuid = $useuid/" \
+    -e "s/^usecache = .*/usecache = $useuid/" \
+    "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" > "$drill_config/mailswiftsync/profile.toml"
+  chmod 0600 "$drill_config/mailswiftsync/profile.toml"
+
+  local drill_destination="$workspace/destination/mail/$drill_user/Maildir"
+  drill_count() {
+    find "$drill_destination" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l | tr -d '[:space:]'
+  }
+  local drill_log="$app_runtime/drill-$label-live.log"
+  XDG_CONFIG_HOME="$drill_config" "$binary" headless "$drill_state" live \
+    --acknowledge-destination-loss \
+    --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+    > "$drill_log" 2>&1 &
+  local drill_pid=$!
+  local drill_deadline=$((SECONDS + 120))
+  while (( $(drill_count) < 5 )); do
+    if ! kill -0 "$drill_pid" 2>/dev/null; then
+      echo "FAIL: interruption drill ($label) finished before it could be interrupted" >&2
+      tail -n 40 "$drill_log" >&2
+      exit 1
+    fi
+    if (( SECONDS > drill_deadline )); then
+      echo "FAIL: interruption drill ($label) transfer never started" >&2
+      tail -n 40 "$drill_log" >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+  kill -KILL "$drill_pid"
+  wait "$drill_pid" 2>/dev/null || true
+  local copied_before_kill
+  copied_before_kill="$(drill_count)"
+  echo "Interruption drill ($label): controller killed after $copied_before_kill of $drill_messages messages"
+  # The engine must not outlive its controller and keep writing unsupervised.
+  local engine_deadline=$((SECONDS + 20))
+  while pgrep -f "imapsync.*$drill_user" >/dev/null; do
+    if (( SECONDS > engine_deadline )); then
+      echo "FAIL: imapsync kept running after its controller was killed ($label)" >&2
+      pgrep -af "imapsync.*$drill_user" >&2 || true
+      exit 1
+    fi
+    sleep 0.5
+  done
+  echo "PASS: the engine stopped with its killed controller ($label)"
+
+  XDG_CONFIG_HOME="$drill_config" run_product recover "$drill_state"
+  if [[ "$restore" == restore ]]; then
+    # Resume from a ledger restored out of a post-crash backup rather than
+    # the original file, as after losing the host's state volume.
+    local drill_backup="$app_runtime/drill-$label-backup.db"
+    XDG_CONFIG_HOME="$drill_config" run_product backup "$drill_state" "$drill_backup"
+    drill_state="$app_runtime/drill-$label-restored.db"
+    XDG_CONFIG_HOME="$drill_config" run_product restore "$drill_backup" "$drill_state"
+    echo "PASS: interrupted drill ledger ($label) backed up and restored for resume"
+  fi
+  XDG_CONFIG_HOME="$drill_config" run_product_live headless "$drill_state" live \
+    --acknowledge-destination-loss \
+    --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+    --diagnostic-log "$diagnostic_dir"
+  local drill_status drill_final
+  drill_status="$(XDG_CONFIG_HOME="$drill_config" run_product status "$drill_state")"
+  drill_final="$(drill_count)"
+  printf 'Integration assertion: interruption drill (%s) destination count=%s (killed at %s)\n' \
+    "$label" "$drill_final" "$copied_before_kill" >> "$product_log"
+  if [[ "$drill_final" -eq "$drill_messages" ]]; then
+    if ! grep -q '"state": "verified"' <<<"$drill_status"; then
+      echo "FAIL: resumed drill ($label) copied every message but did not verify" >&2
+      printf '%s\n' "$drill_status" >&2
+      exit 1
+    fi
+    echo "PASS: interrupted migration ($label) resumed to exactly $drill_messages verified messages"
+  elif [[ "$strict" == strict ]] || grep -q '"state": "verified"' <<<"$drill_status"; then
+    echo "FAIL: resumed drill ($label) holds $drill_final of $drill_messages messages (state below)" >&2
+    printf '%s\n' "$drill_status" >&2
+    exit 1
+  else
+    echo "PASS: resumed drill ($label) holds $drill_final of $drill_messages messages and verification flagged the difference"
+  fi
+}
+
+if [[ "$test_engine" != Dovecot ]] && (( scale_messages == 0 )); then
+  run_interruption_drill defaults false strict restore
+  run_interruption_drill uid-cache true flagged
+fi
