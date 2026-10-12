@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make the provider cooldown reset test use an injected monotonic timestamp
+  instead of subtracting elapsed time from `Instant::now()`. Windows can start
+  with a monotonic clock origin less than the test's simulated quiet period,
+  causing an underflow panic unrelated to the limiter behavior.
 - After the packaged imapsync lab showed that a parent-death SIGTERM could let
   the engine finish an in-flight large APPEND after its controller was killed,
   use SIGKILL for Linux crash-only parent-death containment and reject the

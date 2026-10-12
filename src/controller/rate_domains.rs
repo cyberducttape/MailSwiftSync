@@ -437,6 +437,16 @@ impl RateDomainLimiter {
         error: &str,
         sides: Vec<Side>,
     ) -> Vec<(DomainKey, Instant)> {
+        self.observe_failure_on_at(admission, error, sides, Instant::now())
+    }
+
+    fn observe_failure_on_at(
+        &self,
+        admission: &Admission,
+        error: &str,
+        sides: Vec<Side>,
+        now: Instant,
+    ) -> Vec<(DomainKey, Instant)> {
         let Some(first_side) = sides.first().copied() else {
             return Vec::new();
         };
@@ -471,7 +481,6 @@ impl RateDomainLimiter {
         let Ok(mut state) = self.state.lock() else {
             return Vec::new();
         };
-        let now = Instant::now();
         let mut penalized = Vec::new();
         for side in sides {
             // global, provider, tenant, credential, mailbox — broadest first.
@@ -1023,14 +1032,20 @@ mod tests {
             "{second:?} should double {first:?}"
         );
 
+        let quiet_period_start = Instant::now();
         limiter
             .state
             .lock()
             .unwrap()
             .get_mut(&mailbox)
             .unwrap()
-            .blocked_until = Instant::now() - ESCALATION_RESET_AFTER - Duration::from_secs(1);
-        limiter.observe_failure(&admission, "Host1 too many requests");
+            .blocked_until = quiet_period_start;
+        limiter.observe_failure_on_at(
+            &admission,
+            "Host1 too many requests",
+            vec![Side::Source],
+            quiet_period_start + ESCALATION_RESET_AFTER + Duration::from_secs(1),
+        );
         assert_eq!(limiter.snapshot(&mailbox).unwrap().3, 1);
     }
 
