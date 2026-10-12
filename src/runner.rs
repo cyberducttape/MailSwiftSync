@@ -90,7 +90,7 @@ use crate::{
     credentials::SecretString,
     process::{
         ProcessOutcome, READER_DRAIN_TIMEOUT, attach_child_supervisor, configure_process_group,
-        for_each_lossy_line, process_identity, receive_reader_result, terminate_process_group,
+        for_each_revocable_lossy_line, process_identity, terminate_process_group,
         wait_with_timeout,
     },
     truncate_utf8, verification,
@@ -250,7 +250,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let mut last_durable_progress_event: Option<std::time::Instant> = None;
     let (out_reader_tx, out_reader_rx) = mpsc::sync_channel(1);
     let out_thread = thread::spawn(move || {
-        let result = for_each_lossy_line(stdout, |line| {
+        let result = for_each_revocable_lossy_line(stdout, &out_secrets, |line| {
             let Some(safe) = out_secrets.redact(line) else {
                 return;
             };
@@ -333,7 +333,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let err_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let (err_reader_tx, err_reader_rx) = mpsc::sync_channel(1);
     let err_thread = thread::spawn(move || {
-        let result = for_each_lossy_line(stderr, |line| {
+        let result = for_each_revocable_lossy_line(stderr, &err_secrets, |line| {
             let Some(safe) = err_secrets.redact(line) else {
                 return;
             };
@@ -478,17 +478,23 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         eprintln!("[process-debug] streaming wait returned; joining stdout reader");
     }
     let reader_deadline = std::time::Instant::now() + READER_DRAIN_TIMEOUT;
-    let stdout_reader = receive_reader_result(out_reader_rx, out_thread, reader_deadline, "stdout");
-    if stdout_reader.is_err() {
-        reader_secrets.revoke();
-    }
+    let stdout_reader = crate::process::receive_revocable_reader_result(
+        out_reader_rx,
+        out_thread,
+        reader_deadline,
+        "stdout",
+        &reader_secrets,
+    );
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] stdout reader joined; joining stderr reader");
     }
-    let stderr_reader = receive_reader_result(err_reader_rx, err_thread, reader_deadline, "stderr");
-    if stderr_reader.is_err() {
-        reader_secrets.revoke();
-    }
+    let stderr_reader = crate::process::receive_revocable_reader_result(
+        err_reader_rx,
+        err_thread,
+        reader_deadline,
+        "stderr",
+        &reader_secrets,
+    );
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] stderr reader joined");
     }
@@ -1066,9 +1072,10 @@ mod tests {
         let _ = fs::remove_file(pid_file);
         let _ = fs::remove_file(script);
 
+        let error = result.expect_err("timed-out pipe holder was reported as complete");
         assert!(
-            result.is_err(),
-            "timed-out pipe holder was reported as complete"
+            error.contains("reader was stopped"),
+            "revoked pipe drainer did not terminate: {error}"
         );
         let observed = observed.lock().unwrap();
         assert!(

@@ -11,6 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 
@@ -29,11 +31,34 @@ const MAX_CAPTURED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 /// deadline.
 pub(crate) const READER_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[cfg(test)]
 pub(crate) fn receive_reader_result<T>(
     receiver: std::sync::mpsc::Receiver<T>,
     handle: thread::JoinHandle<()>,
     deadline: Instant,
     stream_name: &str,
+) -> Result<T, String> {
+    receive_reader_result_with_cancel(receiver, handle, deadline, stream_name, || {})
+}
+
+pub(crate) fn receive_revocable_reader_result<T>(
+    receiver: std::sync::mpsc::Receiver<T>,
+    handle: thread::JoinHandle<()>,
+    deadline: Instant,
+    stream_name: &str,
+    secrets: &RevocableReaderSecrets,
+) -> Result<T, String> {
+    receive_reader_result_with_cancel(receiver, handle, deadline, stream_name, || {
+        secrets.revoke();
+    })
+}
+
+fn receive_reader_result_with_cancel<T, F: FnOnce()>(
+    receiver: std::sync::mpsc::Receiver<T>,
+    handle: thread::JoinHandle<()>,
+    deadline: Instant,
+    stream_name: &str,
+    cancel: F,
 ) -> Result<T, String> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     match receiver.recv_timeout(remaining) {
@@ -42,15 +67,37 @@ pub(crate) fn receive_reader_result<T>(
             .map_err(|_| format!("{stream_name} reader thread panicked"))
             .map(|_| result),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            // The reader owns the OS pipe and cannot be force-joined safely.
-            // Dropping the handle detaches it; the bounded caller error lets
-            // the controller finish while the thread exits when the inherited
-            // descriptor is eventually closed.
-            drop(handle);
-            Err(format!(
-                "{stream_name} reader did not close within {} seconds after process supervision ended",
-                READER_DRAIN_TIMEOUT.as_secs()
-            ))
+            cancel();
+            // Revocable pipe readers poll readiness, so they can notice the
+            // cancellation even when an escaped descendant keeps the pipe
+            // open. A short grace period gives those threads time to release
+            // their handles without compromising the caller's deadline.
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(_) => {
+                    handle.join().map_err(|_| {
+                        format!("{stream_name} reader thread panicked while stopping")
+                    })?;
+                    Err(format!(
+                        "{stream_name} reader did not drain within {} seconds; reader was stopped",
+                        READER_DRAIN_TIMEOUT.as_secs()
+                    ))
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    handle.join().map_err(|_| {
+                        format!("{stream_name} reader thread panicked while stopping")
+                    })?;
+                    Err(format!(
+                        "{stream_name} reader thread exited without a result"
+                    ))
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    drop(handle);
+                    Err(format!(
+                        "{stream_name} reader did not close within {} seconds after process supervision ended; drainer remains detached",
+                        READER_DRAIN_TIMEOUT.as_secs()
+                    ))
+                }
+            }
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
             "{stream_name} reader thread exited without a result"
@@ -96,30 +143,132 @@ pub(crate) struct CapturedOutput {
 /// Shared secret-redaction context for subprocess reader threads. A reader
 /// may outlive its controller if a detached descendant inherits the pipe, so
 /// callers can revoke this context on timeout to release credentials even
-/// while the reader continues draining bytes.
+/// while the reader is being interrupted without waiting for pipe EOF.
+struct RevocableReaderState {
+    revoked: AtomicBool,
+    secrets: Mutex<Option<Vec<SecretString>>>,
+}
+
 #[derive(Clone)]
-pub(crate) struct RevocableReaderSecrets(Arc<Mutex<Option<Vec<SecretString>>>>);
+pub(crate) struct RevocableReaderSecrets(Arc<RevocableReaderState>);
 
 impl RevocableReaderSecrets {
     pub(crate) fn new(secrets: &[SecretString]) -> Self {
-        Self(Arc::new(Mutex::new(Some(secrets.to_vec()))))
+        Self(Arc::new(RevocableReaderState {
+            revoked: AtomicBool::new(false),
+            secrets: Mutex::new(Some(secrets.to_vec())),
+        }))
     }
 
     pub(crate) fn revoke(&self) {
+        self.0.revoked.store(true, Ordering::Release);
         let mut secrets = self
             .0
+            .secrets
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         secrets.take();
     }
 
     pub(crate) fn redact(&self, line: String) -> Option<String> {
-        let secrets = self.0.lock().ok()?;
+        if self.is_revoked() {
+            return None;
+        }
+        let secrets = self.0.secrets.lock().ok()?;
+        if self.is_revoked() {
+            return None;
+        }
         let secrets = secrets.as_ref()?;
         Some(redact_known_secrets(
             line,
             secrets.iter().map(SecretString::as_str),
         ))
+    }
+
+    fn is_revoked(&self) -> bool {
+        self.0.revoked.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PipeReadiness {
+    Readable,
+    NoData,
+    Closed,
+}
+
+pub(crate) trait PipePolling: Read {
+    fn readiness(&self) -> std::io::Result<PipeReadiness>;
+}
+
+type ReaderReadinessProbe<R> = dyn Fn(&R) -> std::io::Result<PipeReadiness>;
+
+#[cfg(unix)]
+impl<T: Read + AsRawFd> PipePolling for T {
+    fn readiness(&self) -> std::io::Result<PipeReadiness> {
+        let mut descriptor = libc::pollfd {
+            fd: self.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // Polling allows a revocable drainer to observe cancellation even if
+        // a descendant retains the pipe without producing data.
+        let result = unsafe { libc::poll(&mut descriptor, 1, 10) };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(PipeReadiness::NoData);
+            }
+            return Err(error);
+        }
+        if result == 0 {
+            return Ok(PipeReadiness::NoData);
+        }
+        if descriptor.revents & libc::POLLIN != 0 {
+            return Ok(PipeReadiness::Readable);
+        }
+        if descriptor.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Ok(PipeReadiness::Closed);
+        }
+        Ok(PipeReadiness::NoData)
+    }
+}
+
+#[cfg(windows)]
+impl<T: Read + AsRawHandle> PipePolling for T {
+    fn readiness(&self) -> std::io::Result<PipeReadiness> {
+        let mut available = 0_u32;
+        // SAFETY: the reader owns a live anonymous-pipe handle; zero buffer
+        // size is valid when only querying the available-byte count.
+        let success = unsafe {
+            windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                self.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        };
+        if success != 0 {
+            return Ok(if available > 0 {
+                PipeReadiness::Readable
+            } else {
+                PipeReadiness::NoData
+            });
+        }
+        let error = std::io::Error::last_os_error();
+        if matches!(error.raw_os_error(), Some(109 | 233)) {
+            return Ok(PipeReadiness::Closed);
+        }
+        Err(error)
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl<T: Read> PipePolling for T {
+    fn readiness(&self) -> std::io::Result<PipeReadiness> {
+        Ok(PipeReadiness::Readable)
     }
 }
 
@@ -309,6 +458,7 @@ pub(crate) fn collect_redacted_lines<R: Read>(
 /// line. The callback is intentionally invoked before bounded diagnostic
 /// retention, allowing semantic reducers to process arbitrarily large engine
 /// reports in constant memory.
+#[cfg(test)]
 pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
     reader: R,
     secrets: &[SecretString],
@@ -323,45 +473,69 @@ pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
             ))
         },
         &mut callback,
+        None,
+        None,
     )
 }
 
 /// Variant for readers whose controller may revoke secret access while this
-/// function is still draining an inherited subprocess pipe. Revoked lines are
-/// discarded, but the underlying pipe continues to be drained.
-pub(crate) fn collect_revocably_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
+/// function is consuming an inherited subprocess pipe. Revoked lines are
+/// discarded, and readiness polling lets the reader exit without waiting for
+/// an escaped descendant to close its copy of the pipe.
+pub(crate) fn collect_revocably_redacted_lines_with_callback<R: PipePolling, F: FnMut(&str)>(
     reader: R,
     secrets: &RevocableReaderSecrets,
     mut callback: F,
 ) -> std::io::Result<CapturedOutput> {
-    collect_lines_with_transform(reader, |line| secrets.redact(line), &mut callback)
+    let is_revoked = || secrets.is_revoked();
+    let readiness = |reader: &R| reader.readiness();
+    collect_lines_with_transform(
+        reader,
+        |line| secrets.redact(line),
+        &mut callback,
+        Some(&is_revoked),
+        Some(&readiness),
+    )
 }
 
 fn collect_lines_with_transform<R: Read, F: FnMut(&str)>(
     reader: R,
     mut transform: impl FnMut(String) -> Option<String>,
     callback: &mut F,
+    cancelled: Option<&dyn Fn() -> bool>,
+    readiness: Option<&ReaderReadinessProbe<R>>,
 ) -> std::io::Result<CapturedOutput> {
     let mut lines = Vec::new();
     let mut retained_bytes: usize = 0;
     let mut truncated = false;
-    for_each_lossy_line(reader, |line| {
-        let Some(line) = transform(line) else {
-            return;
-        };
-        callback(&line);
-        let within_limits = lines.len() < MAX_CAPTURED_OUTPUT_LINES
-            && retained_bytes.saturating_add(line.len()) <= MAX_CAPTURED_OUTPUT_BYTES;
-        if within_limits {
-            retained_bytes = retained_bytes.saturating_add(line.len());
-            lines.push(line);
-        } else if !truncated {
-            lines.push(format!(
+    for_each_lossy_line_inner(
+        reader,
+        |line| {
+            if cancelled.is_some_and(|is_cancelled| is_cancelled()) {
+                return;
+            }
+            let Some(line) = transform(line) else {
+                return;
+            };
+            if cancelled.is_some_and(|is_cancelled| is_cancelled()) {
+                return;
+            }
+            callback(&line);
+            let within_limits = lines.len() < MAX_CAPTURED_OUTPUT_LINES
+                && retained_bytes.saturating_add(line.len()) <= MAX_CAPTURED_OUTPUT_BYTES;
+            if within_limits {
+                retained_bytes = retained_bytes.saturating_add(line.len());
+                lines.push(line);
+            } else if !truncated {
+                lines.push(format!(
                 "[diagnostics truncated after {MAX_CAPTURED_OUTPUT_LINES} lines or {MAX_CAPTURED_OUTPUT_BYTES} bytes]"
             ));
-            truncated = true;
-        }
-    })?;
+                truncated = true;
+            }
+        },
+        cancelled,
+        readiness,
+    )?;
     Ok(CapturedOutput { lines, truncated })
 }
 
@@ -394,16 +568,72 @@ pub(crate) fn read_lossy_lines<R: Read>(reader: R) -> Vec<String> {
 }
 
 /// Consume subprocess output incrementally while tolerating malformed UTF-8.
+#[cfg(test)]
 pub(crate) fn for_each_lossy_line<R: Read, F: FnMut(String)>(
+    reader: R,
+    callback: F,
+) -> std::io::Result<()> {
+    for_each_lossy_line_inner(reader, callback, None, None)
+}
+
+pub(crate) fn for_each_revocable_lossy_line<R: PipePolling, F: FnMut(String)>(
+    reader: R,
+    secrets: &RevocableReaderSecrets,
+    callback: F,
+) -> std::io::Result<()> {
+    let is_revoked = || secrets.is_revoked();
+    let readiness = |reader: &R| reader.readiness();
+    for_each_lossy_line_inner(reader, callback, Some(&is_revoked), Some(&readiness))
+}
+
+fn for_each_lossy_line_inner<R: Read, F: FnMut(String)>(
     mut reader: R,
     mut callback: F,
+    cancelled: Option<&dyn Fn() -> bool>,
+    readiness: Option<&ReaderReadinessProbe<R>>,
 ) -> std::io::Result<()> {
     let mut chunk = [0_u8; 8192];
     let mut line = Vec::with_capacity(8192);
     let mut line_started = false;
     let mut truncated = false;
     loop {
-        let bytes_read = reader.read(&mut chunk)?;
+        if cancelled.is_some_and(|is_cancelled| is_cancelled()) {
+            return Ok(());
+        }
+        let readiness = if cancelled.is_some() {
+            readiness
+                .ok_or_else(|| std::io::Error::other("revocable reader has no readiness probe"))?(
+                &reader,
+            )?
+        } else {
+            PipeReadiness::Readable
+        };
+        match readiness {
+            PipeReadiness::NoData => {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            PipeReadiness::Closed => {
+                if line_started {
+                    emit_lossy_line(&line, truncated, &mut callback);
+                }
+                return Ok(());
+            }
+            PipeReadiness::Readable => {}
+        }
+        let bytes_read = match reader.read(&mut chunk) {
+            Err(error)
+                if cancelled.is_some()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) =>
+            {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            result => result?,
+        };
         if bytes_read == 0 {
             if line_started {
                 emit_lossy_line(&line, truncated, &mut callback);
@@ -411,6 +641,9 @@ pub(crate) fn for_each_lossy_line<R: Read, F: FnMut(String)>(
             return Ok(());
         }
         for byte in &chunk[..bytes_read] {
+            if cancelled.is_some_and(|is_cancelled| is_cancelled()) {
+                return Ok(());
+            }
             if *byte == b'\n' {
                 emit_lossy_line(&line, truncated, &mut callback);
                 line.clear();
@@ -618,58 +851,23 @@ mod tests {
         assert_eq!(redact_known_secrets("clean".into(), ["", "x"]), "clean");
     }
 
-    struct ChannelReader(std::sync::mpsc::Receiver<Vec<u8>>);
-
-    impl Read for ChannelReader {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            match self.0.recv() {
-                Ok(bytes) => {
-                    assert!(bytes.len() <= buffer.len());
-                    buffer[..bytes.len()].copy_from_slice(&bytes);
-                    Ok(bytes.len())
-                }
-                Err(_) => Ok(0),
-            }
-        }
-    }
-
     #[test]
-    fn revoking_reader_secrets_releases_them_and_suppresses_later_lines() {
+    fn revoking_reader_secrets_releases_secret_access() {
         let secret = SecretString::from("sensitive-canary".to_owned());
         let secrets = RevocableReaderSecrets::new(std::slice::from_ref(&secret));
         drop(secret);
-        let (input_tx, input_rx) = std::sync::mpsc::channel();
-        let (observed_tx, observed_rx) = std::sync::mpsc::channel();
-        let reader_secrets = secrets.clone();
-        let reader = thread::spawn(move || {
-            collect_revocably_redacted_lines_with_callback(
-                ChannelReader(input_rx),
-                &reader_secrets,
-                |line| observed_tx.send(line.to_owned()).unwrap(),
-            )
-            .unwrap()
-        });
-
-        input_tx
-            .send(b"before sensitive-canary\n".to_vec())
-            .unwrap();
         assert_eq!(
-            observed_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            "before [REDACTED]"
+            secrets
+                .redact("before sensitive-canary".to_owned())
+                .as_deref(),
+            Some("before [REDACTED]")
         );
-
         secrets.revoke();
         assert!(
             secrets
                 .redact("sensitive-canary after".to_owned())
                 .is_none()
         );
-        input_tx.send(b"after sensitive-canary\n".to_vec()).unwrap();
-        drop(input_tx);
-
-        let output = reader.join().unwrap();
-        assert_eq!(output.lines, ["before [REDACTED]"]);
-        assert!(observed_rx.try_recv().is_err());
     }
 
     #[test]

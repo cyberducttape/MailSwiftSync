@@ -1,8 +1,9 @@
 //! Read-only qualification-envelope diagnostics for operators.
 
 use crate::process::{
-    CapturedOutput, READER_DRAIN_TIMEOUT, collect_redacted_lines_with_callback,
-    configure_process_group, receive_reader_result, wait_with_timeout,
+    CapturedOutput, READER_DRAIN_TIMEOUT, RevocableReaderSecrets,
+    collect_revocably_redacted_lines_with_callback, configure_process_group,
+    receive_revocable_reader_result, wait_with_timeout,
 };
 use crate::{core::Engine, migration_plan::Form, verification::ImapsyncOutputProfile};
 use fs2::available_space;
@@ -218,21 +219,36 @@ fn check_executable_version_with_reader_timeout(
             detail: format!("{path}: could not capture version diagnostics"),
         };
     };
+    let reader_secrets = RevocableReaderSecrets::new(&[]);
+    let stdout_secrets = reader_secrets.clone();
     let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel(1);
     let stdout_thread = thread::spawn(move || {
-        let _ = stdout_tx.send(capture_doctor_output(stdout));
+        let _ = stdout_tx.send(capture_doctor_output_revocable(stdout, &stdout_secrets));
     });
+    let stderr_secrets = reader_secrets.clone();
     let (stderr_tx, stderr_rx) = std::sync::mpsc::sync_channel(1);
     let stderr_thread = thread::spawn(move || {
-        let _ = stderr_tx.send(capture_doctor_output(stderr));
+        let _ = stderr_tx.send(capture_doctor_output_revocable(stderr, &stderr_secrets));
     });
     let cancel = AtomicBool::new(false);
     let outcome = wait_with_timeout(&mut child, IMAPSYNC_DOCTOR_TIMEOUT, &cancel);
     let reader_deadline = Instant::now() + reader_drain_timeout;
-    let stdout = receive_reader_result(stdout_rx, stdout_thread, reader_deadline, "stdout")
-        .and_then(|output| output.map_err(|error| format!("stdout capture failed: {error}")));
-    let stderr = receive_reader_result(stderr_rx, stderr_thread, reader_deadline, "stderr")
-        .and_then(|output| output.map_err(|error| format!("stderr capture failed: {error}")));
+    let stdout = receive_revocable_reader_result(
+        stdout_rx,
+        stdout_thread,
+        reader_deadline,
+        "stdout",
+        &reader_secrets,
+    )
+    .and_then(|output| output.map_err(|error| format!("stdout capture failed: {error}")));
+    let stderr = receive_revocable_reader_result(
+        stderr_rx,
+        stderr_thread,
+        reader_deadline,
+        "stderr",
+        &reader_secrets,
+    )
+    .and_then(|output| output.map_err(|error| format!("stderr capture failed: {error}")));
     let reader_failure = stdout
         .as_ref()
         .err()
@@ -291,8 +307,16 @@ fn is_qualified_version(version_line: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 fn capture_doctor_output<R: std::io::Read>(reader: R) -> std::io::Result<CapturedOutput> {
-    collect_redacted_lines_with_callback(reader, &[], |_| {})
+    crate::process::collect_redacted_lines_with_callback(reader, &[], |_| {})
+}
+
+fn capture_doctor_output_revocable<R: crate::process::PipePolling>(
+    reader: R,
+    secrets: &RevocableReaderSecrets,
+) -> std::io::Result<CapturedOutput> {
+    collect_revocably_redacted_lines_with_callback(reader, secrets, |_| {})
 }
 
 fn first_captured_line(output: Option<&CapturedOutput>) -> Option<String> {
@@ -547,8 +571,8 @@ mod tests {
 
         assert_eq!(check.status, "blocked", "{}", check.detail);
         assert!(
-            check.detail.contains("reader did not close within"),
-            "expected bounded reader-drain diagnostic, got: {}",
+            check.detail.contains("reader was stopped"),
+            "expected interrupted reader-drain diagnostic, got: {}",
             check.detail
         );
         assert!(

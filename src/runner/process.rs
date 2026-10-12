@@ -350,20 +350,24 @@ pub(crate) fn run_capture_lines(
         eprintln!("[process-debug] capture wait returned; joining stdout reader");
     }
     let reader_deadline = std::time::Instant::now() + crate::process::READER_DRAIN_TIMEOUT;
-    let stdout_lines =
-        crate::process::receive_reader_result(out_reader_rx, out_thread, reader_deadline, "stdout");
-    if stdout_lines.is_err() {
-        reader_secrets.revoke();
-    }
+    let stdout_lines = crate::process::receive_revocable_reader_result(
+        out_reader_rx,
+        out_thread,
+        reader_deadline,
+        "stdout",
+        &reader_secrets,
+    );
     let stdout_lines = stdout_lines?.map_err(|error| format!("stdout reader failed: {error}"));
     if debug_supervision {
         eprintln!("[process-debug] stdout reader joined; joining stderr reader");
     }
-    let stderr_lines =
-        crate::process::receive_reader_result(err_reader_rx, err_thread, reader_deadline, "stderr");
-    if stderr_lines.is_err() {
-        reader_secrets.revoke();
-    }
+    let stderr_lines = crate::process::receive_revocable_reader_result(
+        err_reader_rx,
+        err_thread,
+        reader_deadline,
+        "stderr",
+        &reader_secrets,
+    );
     let stderr_lines = stderr_lines?.map_err(|error| format!("stderr reader failed: {error}"));
     if debug_supervision {
         eprintln!("[process-debug] stderr reader joined");
@@ -496,7 +500,11 @@ mod tests {
         }
         assert!(observed.lock().unwrap().is_empty());
         let _ = std::fs::remove_file(&pid_file);
-        assert!(result.is_err(), "detached pipe holder was reported cleanly");
+        let error = result.expect_err("detached pipe holder was reported cleanly");
+        assert!(
+            error.contains("reader was stopped"),
+            "revoked pipe drainer did not terminate: {error}"
+        );
         assert!(
             elapsed < READER_DRAIN_TIMEOUT + Duration::from_secs(2),
             "capture exceeded its bounded reader deadline: {elapsed:?}"

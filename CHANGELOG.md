@@ -2,10 +2,11 @@
 
 ## Unreleased
 
-- Revoke capture and live-transfer reader secret references when bounded pipe
-  draining times out, and discard later output from detached descendants while
-  continuing to drain inherited pipes. Cover secret revocation and late-output
-  suppression with reader and escaped-descendant regressions.
+- Cancel capture, live-transfer, and doctor pipe drainers when bounded draining
+  times out. Revocation releases secret references and readiness polling lets
+  reader threads exit even when detached descendants retain inherited pipes;
+  late output is discarded. Cover these behaviors with escaped-descendant
+  regressions.
 - Version the support bundle as format 2 and replace exported project,
   mailbox-job, and run identifiers with per-bundle-salted, type-separated
   SHA-256 pseudonyms, preserving in-artifact joins without cross-export linkage.
