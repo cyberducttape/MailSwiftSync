@@ -6,6 +6,8 @@ pub use support::core;
 
 #[path = "../../src/imap_probe/fetch_parser.rs"]
 mod fetch_parser;
+#[path = "../../src/imap_probe/uid.rs"]
+mod uid;
 #[path = "line_endings.rs"]
 mod line_endings;
 #[path = "../../src/imap_probe/literal_framing.rs"]

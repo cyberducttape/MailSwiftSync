@@ -2,7 +2,7 @@
 
 use super::{MAX_MESSAGE_FETCH_RESPONSE_BYTES, MAX_UID_SET_BYTES, MESSAGE_FETCH_PAGE_SIZE};
 
-const MAX_IMAP_UID: u64 = u32::MAX as u64;
+use super::uid::validate_imap_uid;
 use crate::core;
 #[cfg(test)]
 use crate::imap_protocol::is_untagged_response;
@@ -111,16 +111,6 @@ pub(super) fn parse_uid_search_response(
         .collect::<Result<Vec<_>, _>>()?;
     uids.sort_unstable();
     Ok(uids)
-}
-
-pub(super) fn validate_imap_uid(uid: u64, host: &str, mailbox: &str) -> Result<u64, String> {
-    if uid == 0 || uid > MAX_IMAP_UID {
-        return Err(format!(
-            "{host}: folder {mailbox} returned UID {uid} outside the IMAP 1..={} domain",
-            MAX_IMAP_UID
-        ));
-    }
-    Ok(uid)
 }
 
 /// Parse the UID values returned by a sequence-number `FETCH (... UID)`

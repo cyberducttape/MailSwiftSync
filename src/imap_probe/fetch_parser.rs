@@ -161,7 +161,7 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
 fn parsed_fetch_uid(protocol_text: &str, mailbox: &str, context: &str) -> Result<u64, String> {
     let uid = fetch_number(protocol_text, "UID")
         .ok_or_else(|| format!("{context} record omitted or returned an invalid UID"))?;
-    super::fetch_pages::validate_imap_uid(uid, "IMAP server", mailbox)
+    super::uid::validate_imap_uid(uid, "IMAP server", mailbox)
 }
 
 #[derive(Debug)]
