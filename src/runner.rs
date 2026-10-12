@@ -165,17 +165,6 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         );
     }
     let mut command = execution_command(executable, args, env)?;
-    let launch_admitted_at = if let Some((limiter, path)) = launch_limiter {
-        Some(limiter.acquire_scoped_at(path, cancel).ok_or_else(|| {
-            if cancel.load(Ordering::Relaxed) {
-                format!("{executable} launch cancelled before process start")
-            } else {
-                format!("{executable} launch refused: process-start limiter unavailable")
-            }
-        })?)
-    } else {
-        None
-    };
     let launch_executable = if let Some(transfer_pass) = transfer_pass {
         crate::plan_identity::revalidate_executable(executable, &transfer_pass.executable_identity)?
     } else {
@@ -184,11 +173,23 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     if launch_executable.to_string_lossy() != executable {
         command = execution_command(&launch_executable.to_string_lossy(), args, env)?;
     }
-    let mut child = spawn_retrying_busy_executable(&mut command)
-        .map_err(|error| format!("could not start {executable}: {error}"))?;
-    if let (Some((limiter, path)), Some(admitted_at)) = (launch_limiter, launch_admitted_at) {
-        limiter.observe_success_for(path, admitted_at);
-    }
+    let mut child = if let Some((limiter, path)) = launch_limiter {
+        limiter
+            .launch_scoped(path, cancel, || {
+                spawn_retrying_busy_executable(&mut command)
+            })
+            .ok_or_else(|| {
+                if cancel.load(Ordering::Relaxed) {
+                    format!("{executable} launch cancelled before process start")
+                } else {
+                    format!("{executable} launch refused: process-start limiter unavailable")
+                }
+            })?
+            .map_err(|error| format!("could not start {executable}: {error}"))?
+    } else {
+        spawn_retrying_busy_executable(&mut command)
+            .map_err(|error| format!("could not start {executable}: {error}"))?
+    };
     let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
         Ok(supervisor) => supervisor,

@@ -802,6 +802,7 @@ impl ProcessLaunchLimiter {
     /// Take launch tokens and return the exact admission instant. Feedback
     /// uses this timestamp so a slow OS spawn cannot make a pre-penalty permit
     /// appear to be a successful post-penalty launch.
+    #[cfg(test)]
     pub(crate) fn acquire_scoped_at(
         &self,
         path: &RateDomainPath,
@@ -810,6 +811,68 @@ impl ProcessLaunchLimiter {
         self.acquire_scoped_inner(Some(path), cancel)
     }
 
+    /// Apply launch admission and perform the OS spawn while holding the
+    /// shared bucket lock. A detached permit is unsafe here: a worker can be
+    /// descheduled after acquiring it and later spawn alongside a newer
+    /// permit. The closure must therefore contain only the bounded spawn
+    /// operation, not preparation or process supervision.
+    pub(crate) fn launch_scoped<T, E>(
+        &self,
+        path: &RateDomainPath,
+        cancel: &AtomicBool,
+        launch: impl FnOnce() -> Result<T, E>,
+    ) -> Option<Result<T, E>> {
+        let keys = path
+            .all()
+            .filter(|key| key.level() != DomainLevel::Global)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut launch = Some(launch);
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            let wait = {
+                let mut state = self.state.lock().ok()?;
+                let now = Instant::now();
+                state.global.refill(now, self.ceiling_per_second);
+                let mut wait = state.global.wait();
+                for key in &keys {
+                    if let Some(bucket) = state.scoped.get_mut(key) {
+                        bucket.refill(now, self.ceiling_per_second);
+                        if let Some(domain_wait) = bucket.wait() {
+                            wait =
+                                Some(wait.map_or(domain_wait, |current| current.max(domain_wait)));
+                        }
+                    }
+                }
+                if let Some(wait) = wait {
+                    Some(wait)
+                } else {
+                    state.global.tokens -= 1.0;
+                    for key in &keys {
+                        if let Some(bucket) = state.scoped.get_mut(key) {
+                            bucket.tokens -= 1.0;
+                        }
+                    }
+                    let launched_at = Instant::now();
+                    let result = launch.take().expect("launch closure is used once")();
+                    if result.is_ok() {
+                        state.global.success(self.ceiling_per_second, launched_at);
+                        for key in &keys {
+                            if let Some(bucket) = state.scoped.get_mut(key) {
+                                bucket.success(self.ceiling_per_second, launched_at);
+                            }
+                        }
+                    }
+                    return Some(result);
+                }
+            };
+            thread::sleep(wait?.min(Duration::from_millis(100)));
+        }
+    }
+
+    #[cfg(test)]
     fn acquire_scoped_inner(
         &self,
         path: Option<&RateDomainPath>,
@@ -915,6 +978,7 @@ impl ProcessLaunchLimiter {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_success_for(&self, path: &RateDomainPath, launched_at: Instant) {
         if let Ok(mut state) = self.state.lock() {
             state.global.success(self.ceiling_per_second, launched_at);

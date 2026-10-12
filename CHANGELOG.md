@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Serialize process-start admission with the OS spawn so workers delayed after
+  taking a launch token cannot later burst together when a provider cooldown
+  releases. Revalidate the executable before entering the bounded spawn
+  critical section; keep cooldown-release spacing covered by the scheduler
+  regression test.
+- Refresh the generated capability-review date after rechecking the current
+  scale evidence, security findings, and release gates.
 - Record the current-main packaged-imapsync 100k-message qualification run,
   its proof and resource measurements, and its unsigned generic-fixture limits.
 - Record the current-main 10k-message/1-GiB payload run separately from body
