@@ -136,6 +136,13 @@ class ProviderQualificationPackTests(unittest.TestCase):
         self.assertEqual(
             pack["phases"][0]["destination_version"], "provider-destination-1"
         )
+        digest = pack["evidence_digest"]
+        digest_payload = {
+            key: value for key, value in pack.items() if key != "evidence_digest"
+        }
+        self.assertEqual(digest, MODULE.sha256(digest_payload))
+        digest_payload["tested"]["fixture_id"] = "tampered-fixture"
+        self.assertNotEqual(digest, MODULE.sha256(digest_payload))
         if jsonschema is not None:
             schema_path = (
                 SCRIPT.parent.parent

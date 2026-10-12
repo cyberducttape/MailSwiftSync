@@ -19,8 +19,9 @@ The pack contains phase run IDs, proof and dataset digests, scenario coverage,
 aggregate counters, tested binary identities, and explicit limitations. It does
 not contain endpoints, mailbox names, credentials, message content, or free-text
 known-issue details. Output is private and non-overwriting. The `evidence_digest`
-binds the phase summaries to the pack, but is not a signature or proof that the
-evidence was independently authenticated.
+is SHA-256 over canonical JSON of the complete pack except the digest field
+itself, so edits to the top-level summary or phase records are detectable. It
+is not a signature or proof that the evidence was independently authenticated.
 
 The output shape is defined by
 `tests/provider-evidence/pack-schema.json`; downstream tooling should validate

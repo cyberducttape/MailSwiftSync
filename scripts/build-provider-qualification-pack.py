@@ -299,7 +299,7 @@ def build_pack(evidence_dir: Path, source: str, destination: str, policy_path: P
             }
         )
     tested_at = sorted(phase["tested_at"] for phase in phases)
-    return {
+    pack = {
         "format": "mailswiftsync-provider-qualification-pack",
         "schema_version": 1,
         "provider_pair": pair,
@@ -330,9 +330,14 @@ def build_pack(evidence_dir: Path, source: str, destination: str, policy_path: P
             "The pack is evidence of the tested scenarios; it is not a universal provider guarantee.",
             "A release must still pass scripts/verify-evidence-gate.sh --release with the retained evidence bundle.",
         ],
-        "evidence_digest": sha256(phases),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Bind every exported claim, including the duplicated top-level summary,
+    # to one canonical digest. Excluding only the digest avoids a recursive
+    # definition while making edits to status, provenance, limitations, or
+    # the generation timestamp detectable by downstream tooling.
+    pack["evidence_digest"] = sha256(pack)
+    return pack
 
 
 def main() -> int:
