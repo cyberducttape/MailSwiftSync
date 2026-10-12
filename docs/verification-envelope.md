@@ -131,6 +131,25 @@ compared flags for 980,000 messages. This confirms the synthetic durable-stage
 measurement on the current revision only; it remains neither an IMAP
 integration nor a provider, large-transfer, or production-host qualification.
 
+A duplicate-heavy current-head run at commit `6f714fb07ea2bb708cc61b69882aef1e2a8ae22a`
+on 2026-10-12 used the same shared Ryzen 7 7735U workstation (Ubuntu 26.04.1
+x86_64, Linux 7.0.0-38-generic, Rust 1.92.0, ext4 on NVMe). The synthetic
+`duplicate_ids` fixture assigns every 100th row to a hot Message-ID (1% of
+rows); rows whose indices are 0 or 1 modulo 10 use an ID keyed by their
+50-row block, except those hot-ID rows. Thus the block-keyed groups contain
+nine or ten messages and cover about 19% of rows. The fixture also changes
+2% of destination sizes. At 1,000,000 messages per endpoint, staging took
+24.084 s and reconciliation took 26.625 s (37,558 messages/s); restart
+reconciliation took 26.738 s. FLAGS comparison took 9.845 s and covered
+980,000 unambiguous messages. Peak RSS was 21 MiB; the stage directory
+measured 732,151,808 B after staging and peaked at 1,153,976,072 B during
+reconciliation, with a 101,443,336 B peak rollback journal. Reconciliation
+wrote 679,972,864 B, and the fixture produced 20,000 changed-size mismatches.
+The case passed the script's 64 MiB RSS and 20,000 messages/s thresholds.
+This is synthetic SQLite reconciliation evidence for one host and fixture
+only; it does not establish mailbox/provider behavior, end-to-end network
+performance, report-commit cost, or a safe disk ceiling.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of

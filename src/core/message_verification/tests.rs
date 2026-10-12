@@ -1612,8 +1612,9 @@ fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
 enum BenchShape {
     /// Unique Message-IDs; 2% of destination sizes differ.
     Typical,
-    /// 20% of messages share a Message-ID in groups of five and 1% share one
-    /// "hot" Message-ID; 2% of destination sizes differ.
+    /// About 19% of messages share block-keyed Message-IDs in groups of nine
+    /// or ten, 1% share one "hot" Message-ID, and 2% of destination sizes
+    /// differ.
     DuplicateIds,
     /// Half the messages have no Message-ID; a tenth of those also share one
     /// date/size bucket, so they cannot be paired at all.

@@ -60,6 +60,12 @@
   `927f04b1cf4baa1519d8dab3a4430ad3bcfa4c3b` with SQLite staging under the
   workstation's ext4/NVMe filesystem: 21 MiB peak RSS and 41,978 reconciled
   messages/s. This is not end-to-end or provider qualification.
+- Measure the 1M-per-endpoint duplicate-ID fixture at current commit
+  `6f714fb07ea2bb708cc61b69882aef1e2a8ae22a`: 37,558 reconciled messages/s,
+  21 MiB peak RSS, and a 1.15 GB peak stage directory on the shared
+  ext4/NVMe workstation. Correct the fixture description to match its actual
+  nine/ten-message groups and 1% hot ID; this remains synthetic SQLite-only
+  evidence, not provider or end-to-end qualification.
 - Document service-identity keyring validation and credential rotation,
   revocation, export, crash-residue, and policy-administration procedures;
   clarify that systemd hardening does not isolate the engine from the worker UID.
