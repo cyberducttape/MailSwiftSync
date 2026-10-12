@@ -857,7 +857,9 @@ impl BatchAttemptRunner {
         let delay = transient_retry_delay_for_provider(provider, error, task.attempt);
         let _ = self.tx.try_send(Event::RetryScheduled {
             job_id: task.job_id.clone(),
-            attempt: u32::try_from(task.attempt + 2).unwrap_or(u32::MAX),
+            // `attempt` is the retry ordinal (the first retry is 1), while
+            // `task.attempt` counts retries already performed.
+            attempt: u32::try_from(task.attempt.saturating_add(1)).unwrap_or(u32::MAX),
             max_retries: u32::try_from(self.retry_count).unwrap_or(u32::MAX),
             delay,
             failure_class: classify_failure_for_provider(provider, error).label(),
@@ -1406,7 +1408,7 @@ mod tests {
         else {
             panic!("expected a durable retry schedule");
         };
-        assert_eq!(attempt, 2);
+        assert_eq!(attempt, 1);
         assert_eq!(max_retries, 2);
         assert_eq!(failure_class, "capacity");
         assert!(!delay.is_zero());
@@ -1414,6 +1416,40 @@ mod tests {
             panic!("transient failure must return the task to the scheduler");
         };
         assert_eq!(task.attempt, 1);
+    }
+
+    #[test]
+    fn second_scheduled_retry_is_reported_as_two_of_two() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let runner = test_runner(tx);
+        let mut task = test_unpreparable_task(5);
+        task.attempt = 1;
+        let worker = thread::spawn(move || {
+            runner.retry_later(
+                task,
+                "generic",
+                "Host2: NO [UNAVAILABLE] server busy",
+                "transient failure",
+            )
+        });
+
+        let mut scheduled = None;
+        for _ in 0..3 {
+            if let Event::RetryScheduled {
+                attempt,
+                max_retries,
+                ..
+            } = rx.recv().unwrap()
+            {
+                scheduled = Some((attempt, max_retries));
+                break;
+            }
+        }
+        assert_eq!(scheduled, Some((2, 2)));
+        assert!(matches!(
+            worker.join().unwrap(),
+            AttemptOutcome::Retry { .. }
+        ));
     }
 
     #[test]
