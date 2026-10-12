@@ -637,4 +637,88 @@ mod tests {
             core::MessageMetadataStage::cleanup_durable_stage(&stage_path).unwrap();
         });
     }
+
+    #[test]
+    fn committed_evidence_cleans_up_its_verification_stage() {
+        with_app(|app| {
+            let project = app
+                .store
+                .create_project("committed-evidence", "source", "destination")
+                .unwrap();
+            let job = app
+                .store
+                .add_mailbox(
+                    &project.id,
+                    "source@example.test",
+                    "destination@example.test",
+                )
+                .unwrap();
+            app.store
+                .begin_run(&project.id, &job, "committed-run", "imapsync")
+                .unwrap();
+            let stage_state_path = app.state_path.clone().unwrap();
+            let stage_path = core::durable_stage_path(&stage_state_path, &job);
+            std::fs::create_dir_all(stage_path.parent().unwrap()).unwrap();
+            std::fs::write(&stage_path, b"committed verification stage").unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "committed-run".into(),
+                project_id: project.id.clone(),
+                job_id: Some(job.clone()),
+                batch_job_ids: Vec::new(),
+                batch_child_run_ids: Vec::new(),
+                batch_child_indices: Default::default(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Single,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: Some(stage_state_path),
+            });
+            app.run_id = Some("committed-run".into());
+            let evidence = core::MailboxEvidence {
+                verification_method: core::VerificationMethod::MetadataReconciliation,
+                verification_outcome: Some(core::VerificationOutcome::ExactMetadataMatch),
+                source_messages: 1,
+                destination_messages: 1,
+                source_bytes: 8,
+                destination_bytes: 8,
+                unmatched_messages: Some(0),
+                failed_messages: 0,
+                source_folders: 1,
+                destination_folders: 1,
+                authoritative: false,
+                missing_messages: 0,
+                extra_messages: 0,
+                modified_messages: 0,
+                probable_messages: 0,
+                rfc_message_id_matches: 1,
+                synthetic_identity_matches: 0,
+                flag_verification: Some(core::FlagVerification {
+                    compared_messages: 1,
+                    mismatched_messages: 0,
+                    excepted_messages: 0,
+                }),
+            };
+            let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+            sender.send(Event::Evidence(evidence)).unwrap();
+            sender
+                .send(Event::Finished(Ok(StreamOutcome::Completed)))
+                .unwrap();
+            drop(sender);
+            app.receiver = Some(receiver);
+            for _ in 0..10 {
+                app.poll();
+            }
+
+            let snapshot = app
+                .store
+                .project_report_snapshot(&project.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.mailboxes[0].job.state, "verified");
+            assert!(!stage_path.exists(), "committed evidence stage remains");
+        });
+    }
 }
