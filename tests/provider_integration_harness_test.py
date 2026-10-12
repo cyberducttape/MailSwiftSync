@@ -17,9 +17,24 @@ SCALE_COMPLETION_WAIT = (ROOT / "scripts" / "scale-container-completion-wait.sh"
 STORAGE_FAULT_SCRIPT = (ROOT / "scripts" / "engine-storage-fault-smoke.sh").read_text(encoding="utf-8")
 PROCESS_SUPERVISION_SCRIPT = (ROOT / "scripts" / "process-supervision-chaos-smoke.sh").read_text(encoding="utf-8")
 SCALE_WORKFLOW = (ROOT / ".github" / "workflows" / "scale-qualification.yml").read_text(encoding="utf-8")
+INTEGRATION_WORKFLOW = (ROOT / ".github" / "workflows" / "integration.yml").read_text(encoding="utf-8")
+OAUTH_IMAPSYNC_SMOKE = (ROOT / "scripts" / "oauth-imapsync-refresh-smoke.py").read_text(encoding="utf-8")
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
+    def test_packaged_engine_oauth_callback_contract_is_exercised_without_provider_secrets(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("oauth-imapsync-refresh-smoke.py", dockerfile)
+        self.assertIn("Exercise packaged imapsync OAuth refresh callbacks", INTEGRATION_WORKFLOW)
+        self.assertIn("oauth-imapsync-refresh-smoke.py", INTEGRATION_WORKFLOW)
+        self.assertIn('EXPECTED_VERSION = "2.314"', OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn('"--oauthrefreshcmd1", source_command', OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn('"--oauthrefreshcmd2", destination_command', OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn("self.authenticated.add(user)", OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn("self.expected_users[user]", OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn("callback-written token", OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn("does not qualify token expiry", OAUTH_IMAPSYNC_SMOKE)
+
     def test_smoke_harness_does_not_emit_release_qualification_records(self):
         self.assertNotIn("generate-provider-evidence.py", SCRIPT)
         self.assertIn("NOT PROVIDER QUALIFICATION", SCRIPT)

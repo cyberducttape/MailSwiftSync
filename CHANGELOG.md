@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a credential-free integration check against packaged imapsync 2.314 that
+  verifies source and destination OAuth refresh callbacks run before XOAUTH2
+  login and that the engine rereads callback-updated token files. Keep live
+  provider expiry/reconnect and refresh-token rotation explicitly unqualified.
 - Correct the live-provider smoke claim: it exchanges OAuth refresh configuration
   before transfer but uses static access-token files, so it does not qualify
   imapsync reconnect refresh or token rotation during a long migration. Keep
