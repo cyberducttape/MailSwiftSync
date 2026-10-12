@@ -25,6 +25,31 @@ independent verification result. `completed` means the engine reported a
 successful transfer; it must never be rendered as `verified` unless the
 configured verifier produced authoritative evidence for the same run and plan.
 
+## Recent non-qualifying generic-lab evidence
+
+The following reproducible lab run is retained as engineering evidence only;
+it does not satisfy the required size matrix, direct-imapsync comparison,
+provider qualification, or signed-result acceptance criteria.
+
+| Field | Observed value |
+|---|---|
+| GitHub Actions run | [38197707897](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38197707897) |
+| MailSwiftSync commit | `f99dfa4ed11596b5b219fa91bbaa76295e867270` |
+| Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)` |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875` |
+| Scenario | 10,000 generated messages; 1 GiB aggregate body payload |
+| Harness wall time | 84 seconds, including fixture setup, transfer, verification, delta, and evidence exports; not a direct-engine A/B measurement |
+| Initial proof | 10,016 source and destination messages; zero missing, extra, modified, or flag-mismatched messages; 100% FLAGS coverage; metadata only, bodies not compared |
+| Post-delta proof | 10,017 source and destination messages; zero missing, extra, modified, or unmatched messages; metadata only, bodies not compared |
+| Sampled resources | 373,397,913-byte sampled peak container memory; cgroup peak anonymous 223,051,776 bytes and file cache 2,251,911,168 bytes |
+| Artifact | [Actions artifact 11724766653](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38197707897/artifacts/11724766653), archive SHA-256 `39cb92158efc925a306ce88ab3c9830052355fb8e6d25a8dc6429aa382da8e3b` |
+
+The artifact is an unsigned CI artifact (the customer-proof JSON is
+digest-wrapped, not independently signed). Its retention expires on
+2027-01-10. This result is specific to the disposable fixture and must not be
+presented as a hosted-provider, content-integrity, 10/50/100-GiB, or
+production-readiness claim.
+
 ## Required measurements
 
 Capture wall-clock duration, source/destination message and byte totals,
