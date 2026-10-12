@@ -20,39 +20,19 @@ refresh tokens.
 ## Linux systemd
 
 Create a dedicated service account and ledger directory, install the verified
-release binary at `/usr/local/bin/mailswiftsync`, and adjust the paths below to
-your deployment. Do not run the service as root.
+release binary as `/usr/bin/mailswiftsync`, and review the canonical unit below
+for your deployment. Do not run the service as root.
 
-```ini
-# /etc/systemd/system/mailswiftsync-supervise.service
-[Unit]
-Description=MailSwiftSync supervised migration controller
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=mailswiftsync
-Group=mailswiftsync
-ExecStart=/usr/local/bin/mailswiftsync supervise /var/lib/mailswiftsync/state.db 30 0
-Restart=on-failure
-RestartSec=10s
-TimeoutStopSec=90s
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/mailswiftsync
-StateDirectory=mailswiftsync
-StateDirectoryMode=0700
-RuntimeDirectory=mailswiftsync
-RuntimeDirectoryMode=0700
-Environment=XDG_RUNTIME_DIR=/run/mailswiftsync
-
-[Install]
-WantedBy=multi-user.target
-```
+The canonical, syntax-checkable unit is
+[`mailswiftsync-supervise.service`](mailswiftsync-supervise.service). Debian
+and RPM packages install it as documentation at
+`/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service`; inspect and
+copy it to `/etc/systemd/system/mailswiftsync-supervise.service`, adjusting
+the paths and service identity if needed. The unit drops all Linux
+capabilities, restricts address families to Unix and IP networking, makes
+system paths read-only, and limits writes to the ledger directory. These
+systemd restrictions do not isolate the engine from data accessible to the
+worker UID; keep that account dedicated and unprivileged.
 
 Before enabling it, verify the binary and ledger as the service account:
 

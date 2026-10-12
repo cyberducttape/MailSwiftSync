@@ -26,6 +26,38 @@ fn doc_files_exist() {
 }
 
 #[test]
+fn systemd_service_example_uses_a_restricted_worker_sandbox() {
+    let service = fs::read_to_string("docs/distribution/mailswiftsync-supervise.service")
+        .expect("canonical systemd service example should exist");
+    let guide = fs::read_to_string("docs/distribution/SERVICE.md")
+        .expect("service deployment guide should exist");
+    assert!(guide.contains("mailswiftsync-supervise.service"));
+    assert!(guide.contains("/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service"));
+    for directive in [
+        "User=mailswiftsync",
+        "NoNewPrivileges=true",
+        "CapabilityBoundingSet=",
+        "AmbientCapabilities=",
+        "PrivateDevices=true",
+        "ProtectSystem=strict",
+        "ProtectHome=true",
+        "ProtectKernelTunables=true",
+        "ProtectKernelModules=true",
+        "ProtectControlGroups=true",
+        "RestrictSUIDSGID=true",
+        "RestrictRealtime=true",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+        "LockPersonality=true",
+        "ReadWritePaths=/var/lib/mailswiftsync",
+    ] {
+        assert!(
+            service.contains(directive),
+            "systemd service example is missing sandbox directive {directive:?}"
+        );
+    }
+}
+
+#[test]
 fn readme_mentions_production_status() {
     let readme = fs::read_to_string("README.md").expect("Could not read README.md");
     assert!(

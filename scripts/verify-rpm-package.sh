@@ -10,6 +10,7 @@ for required in \
   "/usr/bin/mailswiftsync" \
   "/usr/share/doc/mailswiftsync/README.md" \
   "/usr/share/doc/mailswiftsync/INSTALL.md" \
+  "/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service" \
   "/usr/share/doc/mailswiftsync/LICENSE" \
   "/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt" \
   "/usr/share/man/man1/mailswiftsync.1.gz" \

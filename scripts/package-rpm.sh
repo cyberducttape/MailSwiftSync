@@ -56,6 +56,8 @@ install -m 0644 README.md LICENSE PRODUCTION_STATUS.md \
   "$payload/usr/share/doc/mailswiftsync/"
 install -m 0644 docs/distribution/INSTALL.md \
   "$payload/usr/share/doc/mailswiftsync/INSTALL.md"
+install -m 0644 docs/distribution/mailswiftsync-supervise.service \
+  "$payload/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service"
 install -m 0644 assets/fonts/OFL.txt \
   "$payload/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt"
 install -m 0644 docs/distribution/mailswiftsync.1 \
@@ -99,6 +101,7 @@ cp -a "$payload/." %{buildroot}/
 %attr(0755,root,root) /usr/bin/mailswiftsync
 %doc /usr/share/doc/mailswiftsync/README.md
 %doc /usr/share/doc/mailswiftsync/INSTALL.md
+%doc /usr/share/doc/mailswiftsync/mailswiftsync-supervise.service
 %doc /usr/share/doc/mailswiftsync/PRODUCTION_STATUS.md
 %doc /usr/share/doc/mailswiftsync/LICENSE
 %doc /usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt
