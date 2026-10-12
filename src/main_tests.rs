@@ -408,6 +408,17 @@ fn support_bundle_excludes_topology_and_diagnostic_material() {
     store
         .record_transfer_attempt_started("run-provenance", 1, &intent)
         .unwrap();
+    store
+        .register_process(&core::ActiveProcess {
+            run_id: "run-provenance".into(),
+            job_id: first_job.as_deref().unwrap().into(),
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "imapsync".into(),
+        })
+        .unwrap();
     drop(store);
 
     headless::export_support_bundle_with_sample_limit(&state, &output, 2).unwrap();
@@ -452,6 +463,14 @@ fn support_bundle_excludes_topology_and_diagnostic_material() {
                 .as_str()
                 .unwrap()
         )
+    );
+    assert_eq!(
+        value["projects"][0]["recent_runs"][0]["run_id"],
+        value["active_processes"][0]["run_id"]
+    );
+    assert_eq!(
+        value["projects"][0]["recent_runs"][0]["job_id"],
+        value["active_processes"][0]["job_id"]
     );
     assert!(!text.contains("source.internal"));
     assert!(!text.contains("destination.internal"));
