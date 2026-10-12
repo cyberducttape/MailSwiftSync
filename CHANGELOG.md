@@ -11,6 +11,9 @@
   overwriting an existing artifact. Bind pack-wide claims and summaries in the
   evidence digest, not only the phase array. Reject unknown environment
   identities and bump the breaking candidate-pack contract to format v2.
+- Add an offline qualification-pack verifier for duplicate-key rejection,
+  canonical whole-pack digest checking, and strict schema validation; the
+  verified status remains candidate, not release-qualified.
 - Cancel capture, live-transfer, and doctor pipe drainers when bounded draining
   times out. Revocation releases secret references and readiness polling lets
   reader threads exit even when detached descendants retain inherited pipes;

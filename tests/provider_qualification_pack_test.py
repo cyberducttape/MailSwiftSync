@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,10 +13,19 @@ except ImportError:  # Installed by the provider-evidence CI requirements.
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "build-provider-qualification-pack.py"
+VERIFY_SCRIPT = (
+    Path(__file__).parents[1] / "scripts" / "verify-provider-qualification-pack.py"
+)
 SPEC = importlib.util.spec_from_file_location("provider_qualification_pack", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
+VERIFY_SPEC = importlib.util.spec_from_file_location(
+    "verify_provider_qualification_pack", VERIFY_SCRIPT
+)
+VERIFY_MODULE = importlib.util.module_from_spec(VERIFY_SPEC)
+assert VERIFY_SPEC.loader is not None
+VERIFY_SPEC.loader.exec_module(VERIFY_MODULE)
 
 
 PHASES = {
@@ -224,8 +235,44 @@ class ProviderQualificationPackTests(unittest.TestCase):
             first_contents = output.read_bytes()
             self.assertEqual(MODULE.main(), 1)
             self.assertEqual(output.read_bytes(), first_contents)
+            if jsonschema is not None:
+                completed = subprocess.run(
+                    [sys.executable, str(VERIFY_SCRIPT), str(output)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn("not release-qualified", completed.stdout)
         finally:
             MODULE.sys.argv = original_argv
+
+    def test_pack_verifier_rejects_tampering_and_duplicate_json_keys(self):
+        pack = self.build()
+        path = self.directory / "pack.json"
+        path.write_text(json.dumps(pack), encoding="utf-8")
+        changed = json.loads(path.read_text(encoding="utf-8"))
+        changed["tested"]["fixture_id"] = "tampered"
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "digest does not match"):
+            VERIFY_MODULE.verify_pack(path)
+        path.write_text('{"status":"a","status":"b"}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+            VERIFY_MODULE.parse_pack(path)
+
+    def test_pack_verifier_rejects_symlinks_and_oversized_inputs(self):
+        target = self.directory / "target.json"
+        target.write_text("{}", encoding="utf-8")
+        link = self.directory / "link.json"
+        link.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+            VERIFY_MODULE.parse_pack(link)
+
+        oversized = self.directory / "oversized.json"
+        with oversized.open("wb") as handle:
+            handle.truncate(VERIFY_MODULE.MAX_PACK_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "validation limit"):
+            VERIFY_MODULE.parse_pack(oversized)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,17 @@ known-issue details. Output is private and non-overwriting. The `evidence_digest
 is SHA-256 over canonical JSON of the complete pack except the digest field
 itself, so edits to the top-level summary or phase records are detectable. It
 is not a signature or proof that the evidence was independently authenticated.
+Verify a retained pack before consuming it:
+
+```bash
+python3 -m pip install --requirement scripts/requirements-provider-qualification.txt
+python3 scripts/verify-provider-qualification-pack.py \
+  google-workspace-to-microsoft365.pack.json
+```
+
+The verifier checks duplicate keys, the canonical digest, and the v2 JSON
+schema. It reports a valid *candidate*, never a release-qualified provider
+claim.
 
 The output shape is defined by
 `tests/provider-evidence/pack-schema.json`; downstream tooling should validate
