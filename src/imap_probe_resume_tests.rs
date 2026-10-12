@@ -297,6 +297,8 @@ where
         stage,
         side: SIDE,
         count,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
     };
     let mut consecutive_reconnects = 0;
     fetch_mailbox_with_session_reconnect(
