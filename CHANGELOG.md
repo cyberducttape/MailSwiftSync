@@ -4,7 +4,8 @@
 
 - Ship the canonical systemd supervisor unit in Debian/RPM documentation and
   harden it with an unprivileged identity, empty capability sets, restricted
-  networking, and read-only system paths.
+  networking, and read-only system paths. CI runs an offline systemd security
+  analysis on the canonical unit.
 - Add a real-engine 64 MiB APPEND interruption case. The lab waits until the
   destination Maildir contains a partial message before killing the controller,
   then resumes and independently verifies exactly one message. CI observed

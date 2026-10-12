@@ -33,6 +33,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
+      - name: Analyze systemd supervisor security profile
+        run: >-
+          systemd-analyze security --offline=yes
+          docs/distribution/mailswiftsync-supervise.service --no-pager
       - name: Verify documentation claims against capability manifest
         run: |
           python3 scripts/verify-capability-claims.py --write
