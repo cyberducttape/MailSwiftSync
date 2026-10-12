@@ -668,6 +668,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn export_summary_uses_native_engine_label_when_durable_version_is_unknown() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("native-proof", "source", "destination")
+            .unwrap();
+        let job = store
+            .add_mailbox(&project.id, "source@example.com", "destination@example.com")
+            .unwrap();
+        let mut form = crate::Form::default();
+        form.profile.engine = core::Engine::Dovecot;
+        let plan_snapshot = form.plan_snapshot();
+        store
+            .begin_run_with_snapshot(
+                &project.id,
+                &job,
+                "native-run",
+                "Dovecot native",
+                &plan_snapshot,
+            )
+            .unwrap();
+        store
+            .record_engine_version("native-run", "unknown")
+            .unwrap();
+
+        let reader = store.project_export_reader(&project.id).unwrap().unwrap();
+        let summary = ExportSummary::collect(&reader).unwrap();
+        assert_eq!(
+            summary.engine_identities,
+            BTreeSet::from(["Dovecot native".into()])
+        );
+    }
+
     fn snapshot(phase: core::Phase, state: &str, evidence: bool) -> core::ProjectReportSnapshot {
         core::ProjectReportSnapshot {
             project: core::Project {
