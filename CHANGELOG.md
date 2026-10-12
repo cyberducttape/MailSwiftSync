@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- Revoke subprocess-reader secret references when bounded pipe draining times
-  out, and discard later output from detached descendants while continuing to
-  drain inherited pipes. Cover secret revocation and late-output suppression
-  with reader and escaped-descendant regressions.
+- Revoke capture and live-transfer reader secret references when bounded pipe
+  draining times out, and discard later output from detached descendants while
+  continuing to drain inherited pipes. Cover secret revocation and late-output
+  suppression with reader and escaped-descendant regressions.
 - Version the support bundle as format 2 and replace exported project,
   mailbox-job, and run identifiers with per-bundle-salted, type-separated
   SHA-256 pseudonyms, preserving in-artifact joins without cross-export linkage.

@@ -113,7 +113,7 @@ impl RevocableReaderSecrets {
         secrets.take();
     }
 
-    fn redact(&self, line: String) -> Option<String> {
+    pub(crate) fn redact(&self, line: String) -> Option<String> {
         let secrets = self.0.lock().ok()?;
         let secrets = secrets.as_ref()?;
         Some(redact_known_secrets(

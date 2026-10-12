@@ -223,7 +223,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     };
     let out_tx = tx.clone();
     let out_prefix = prefix.to_owned();
-    let out_secrets = secrets.to_vec();
+    let reader_secrets = crate::process::RevocableReaderSecrets::new(secrets);
+    let out_secrets = reader_secrets.clone();
     let tail = Arc::new(Mutex::new(BoundedLineBuffer::new()));
     let evidence = Arc::new(Mutex::new(
         verification::ImapsyncEvidenceAccumulator::default(),
@@ -250,10 +251,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let (out_reader_tx, out_reader_rx) = mpsc::sync_channel(1);
     let out_thread = thread::spawn(move || {
         let result = for_each_lossy_line(stdout, |line| {
-            let safe = crate::process::redact_known_secrets(
-                line,
-                out_secrets.iter().map(SecretString::as_str),
-            );
+            let Some(safe) = out_secrets.redact(line) else {
+                return;
+            };
             record_process_tail(&out_tail, &safe);
             if let Some(logger) = &out_logger
                 && logger
@@ -322,7 +322,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     });
     let err_tx = tx.clone();
     let err_prefix = prefix.to_owned();
-    let err_secrets = secrets.to_vec();
+    let err_secrets = reader_secrets.clone();
     let err_tail = Arc::clone(&tail);
     let err_evidence = Arc::clone(&evidence);
     let err_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
@@ -334,10 +334,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let (err_reader_tx, err_reader_rx) = mpsc::sync_channel(1);
     let err_thread = thread::spawn(move || {
         let result = for_each_lossy_line(stderr, |line| {
-            let safe = crate::process::redact_known_secrets(
-                line,
-                err_secrets.iter().map(SecretString::as_str),
-            );
+            let Some(safe) = err_secrets.redact(line) else {
+                return;
+            };
             record_process_tail(&err_tail, &safe);
             if let Some(logger) = &err_logger
                 && logger
@@ -480,10 +479,16 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     }
     let reader_deadline = std::time::Instant::now() + READER_DRAIN_TIMEOUT;
     let stdout_reader = receive_reader_result(out_reader_rx, out_thread, reader_deadline, "stdout");
+    if stdout_reader.is_err() {
+        reader_secrets.revoke();
+    }
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] stdout reader joined; joining stderr reader");
     }
     let stderr_reader = receive_reader_result(err_reader_rx, err_thread, reader_deadline, "stderr");
+    if stderr_reader.is_err() {
+        reader_secrets.revoke();
+    }
     if process_supervision_debug_enabled() {
         eprintln!("[process-debug] stderr reader joined");
     }
@@ -755,14 +760,15 @@ mod tests {
     };
     use crate::{
         BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES, StreamOutcome,
-        imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile,
+        credentials::SecretString, imap_probe::MailboxDescriptor,
+        verification::ImapsyncOutputProfile,
     };
     use std::{
         collections::HashSet,
         fs,
         os::unix::fs::PermissionsExt,
         process::Command,
-        sync::{atomic::AtomicBool, mpsc},
+        sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
         thread,
         time::Duration,
     };
@@ -969,6 +975,116 @@ mod tests {
         assert_eq!(identity.version, "imapsync 2.314");
         assert_eq!(identity.output_profile, ImapsyncOutputProfile::Packaged2314);
         fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn streaming_reader_revokes_secrets_and_suppresses_late_descendant_output() {
+        if crate::plan_identity::resolve_executable("setsid").is_none()
+            || crate::plan_identity::resolve_executable("python3").is_none()
+        {
+            eprintln!("skipping streaming descendant test: setsid or python3 is unavailable");
+            return;
+        }
+        let script = std::env::temp_dir().join(format!(
+            "mailswiftsync-stream-descendant-{}-{}.sh",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let pid_file = std::env::temp_dir().join(format!(
+            "mailswiftsync-stream-descendant-{}-{}.pid",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(
+            &script,
+            "#!/bin/sh\n\
+             setsid python3 -c 'import os, time; open(os.environ[\"MAILSWIFTSYNC_TEST_PID_FILE\"], \"w\").write(str(os.getpid())); print(\"secret-canary-before\", flush=True); time.sleep(7); print(\"secret-canary-after\", flush=True); time.sleep(30)' &\n\
+             exit 0\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let (tx, rx) = mpsc::sync_channel(16);
+        let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+        let controller_lines = Arc::clone(&observed);
+        let controller = thread::spawn(move || {
+            while let Ok(event) = rx.recv() {
+                match event {
+                    Event::ProcessStarted(.., reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    Event::RunLine { text, .. } => {
+                        controller_lines.lock().unwrap().push(text);
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let cancel = AtomicBool::new(false);
+        let pid_file_secret = SecretString::from(pid_file.to_string_lossy().into_owned());
+        let result = run_streaming(RunContext {
+            executable: &script.to_string_lossy(),
+            args: &[],
+            env: &[("MAILSWIFTSYNC_TEST_PID_FILE".to_owned(), pid_file_secret)],
+            tx: &tx,
+            run_id: "detached-stream-run",
+            job_id: "detached-stream-job",
+            project_id: "detached-stream-project",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[SecretString::from("secret-canary")],
+            timeout: Duration::from_secs(2),
+            dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
+            attempt_number: 1,
+            transfer_pass: None,
+            launch_limiter: None,
+        });
+
+        let detached_pid = (0..20).find_map(|_| {
+            fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|value| value.trim().parse::<libc::pid_t>().ok())
+                .or_else(|| {
+                    thread::sleep(Duration::from_millis(25));
+                    None
+                })
+        });
+        // The escaped descendant prints a second canary after the five-second
+        // bounded drain. Normal live-transfer drainers must suppress it too.
+        thread::sleep(Duration::from_secs(3));
+        if let Some(pid) = detached_pid {
+            // SAFETY: this test fixture wrote the PID to its private PID file.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+        drop(tx);
+        controller.join().unwrap();
+        let _ = fs::remove_file(pid_file);
+        let _ = fs::remove_file(script);
+
+        assert!(
+            result.is_err(),
+            "timed-out pipe holder was reported as complete"
+        );
+        let observed = observed.lock().unwrap();
+        assert!(
+            observed
+                .iter()
+                .any(|line| line.contains("[REDACTED]-before")),
+            "pre-timeout output should remain available and redacted: {observed:?}"
+        );
+        assert!(
+            observed.iter().all(|line| !line.contains("secret-canary")),
+            "streaming logs exposed a secret: {observed:?}"
+        );
+        assert!(
+            observed.iter().all(|line| !line.contains("canary-after")),
+            "late descendant output reached the controller: {observed:?}"
+        );
     }
 
     #[test]
