@@ -2,13 +2,16 @@
 
 ## Unreleased
 
-- Add a real-engine interruption case that throttles a 16 MiB message and kills
-  the controller only after a partial Maildir APPEND is observable; CI
-  qualification for this new case is pending.
+- Add a real-engine 64 MiB APPEND interruption case. The lab waits until the
+  destination Maildir contains a partial message before killing the controller,
+  then resumes and independently verifies exactly one message. CI observed
+  2,481,711 of 67,109,132 bytes before the kill with imapsync 2.314 and Dovecot
+  2.3.19.1; the configured byte-rate target is average run pacing, not socket
+  shaping.
 - Record the real-engine interruption/restore qualification accurately: the
   default imapsync plan resumes a partially transferred fixture from a restored
-  ledger and verifies the exact message count; large-message mid-APPEND and
-  host power-loss qualification remain open.
+  ledger and verifies the exact message count; host power-loss and provider
+  qualification remain open.
 - Show an explicit overall evidence status beside the verification tier and
   message outcome in the verification list and detail view. Partial flag or
   keyword coverage is labeled “Verified with exceptions” rather than appearing

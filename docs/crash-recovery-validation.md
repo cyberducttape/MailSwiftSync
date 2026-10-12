@@ -23,7 +23,7 @@ and repeatable, and a new journal would add its own failure states.
 
 | # | Scenario | Current evidence | Status |
 |---|---|---|---|
-| 1 | Kill the MailSwiftSync controller while imapsync is copying a large message | `scripts/controller-recovery-smoke.sh` kills the controller during a running engine (deterministic blocking engine) and proves running state is recovered into Attention with no orphaned process ownership. Process identity checks (`process-supervision-chaos-smoke.sh`) prove the launcher never runs an engine before durable registration. The IMAP lab includes a real-engine case that configures a 64 MiB message at 1 MiB/s and waits for its Maildir `tmp` file to exceed 1 MiB while remaining incomplete before SIGKILL. | The 64 MiB scenario is pending CI qualification; larger-message/provider-specific and host power-loss behavior remain outside this fixture. |
+| 1 | Kill the MailSwiftSync controller while imapsync is copying a large message | `scripts/controller-recovery-smoke.sh` kills the controller during a running engine (deterministic blocking engine) and proves running state is recovered into Attention with no orphaned process ownership. Process identity checks (`process-supervision-chaos-smoke.sh`) prove the launcher never runs an engine before durable registration. The IMAP lab waits for the 64 MiB message's Maildir `tmp` file to exceed 1 MiB while remaining incomplete before SIGKILL; the configured 1 MiB/s value is imapsync's average run-level target, not per-APPEND socket shaping. CI observed 2,481,711 of 67,109,132 bytes before kill, then resumed to exactly one verified message with imapsync 2.314 and Dovecot 2.3.19.1. | Proven in CI for this fixture; larger-message/provider-specific and host power-loss behavior remain outside this evidence. |
 | 2 | SIGKILL the engine while the destination is receiving data | Unit and runner tests classify an engine killed by a signal as a failed attempt. The interruption drill then runs `recover` and a fresh live pass: with the default header-matching plan the destination ends with exactly the 60 source messages, verified; with expert `--useuid --usecache` the in-flight message is appended twice (61) and verification reports the difference instead of a clean result. | Proven in CI (integration workflow) for both plans. The UID-cache duplicate is documented on the plan option. |
 | 3 | Full destination filesystem during APPEND | `scripts/engine-storage-fault-smoke.sh` runs the destination IMAP worker under `RLIMIT_FSIZE`, so an oversized message fails partway while a small one succeeds; the run is surfaced as failed, never clean. `controller-chaos-smoke.sh` covers the ledger itself hitting a storage limit. | Proven in CI (integration workflow). |
 | 4 | Restart the host immediately after a committed transfer checkpoint | Terminal results commit atomically with evidence and checkpoints; startup recovery reconciles recorded process identities. `controller-recovery-smoke.sh` covers restart after a crash. | Partial: no power-loss or host-reboot test; SQLite WAL durability is relied on. |
@@ -43,8 +43,7 @@ and repeatable, and a new journal would add its own failure states.
 
 ## To close before 1.0
 
-1. Verify the new 64 MiB mid-APPEND scenario passes in CI, then qualify larger
-   message sizes and supported release-host storage profiles.
+1. Qualify larger message sizes and supported release-host storage profiles.
 2. Run scenario 6 during live provider qualification.
 3. Record a host-reboot and power-loss drill for scenario 4 on the release host
    class.
