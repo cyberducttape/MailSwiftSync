@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retain durable verification staging when the evidence commit is rejected
+  and the controller falls back to an operator-attention run; cleanup now
+  occurs only after the evidence-bearing terminal transaction succeeds.
 - Bound `doctor` engine-version output draining after the child exits; a
   detached descendant that inherits stdout/stderr can no longer hang
   diagnostics indefinitely, and incomplete capture is reported as blocked.

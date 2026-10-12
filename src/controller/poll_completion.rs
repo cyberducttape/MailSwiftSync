@@ -165,6 +165,16 @@ impl App {
                 } else {
                     self.store.finish_run(run_id, run_status, &detail)
                 };
+                // Only the evidence-bearing terminal transaction authorizes
+                // deleting its staging database. The attention fallback
+                // below may successfully persist a failed run after the
+                // evidence transaction was rejected; that is not an evidence
+                // commit and must leave the stage available for diagnosis.
+                let evidence_commit_succeeded = !was_bulk_run
+                    && run_context.job_id.is_some()
+                    && run_status == "completed"
+                    && terminal_evidence.is_some()
+                    && terminal_write.is_ok();
                 // An invariant rejection is deterministic: retrying the same
                 // write would hang the controller forever. Record the run as
                 // failed and the mailbox for operator review, with the reason,
@@ -225,7 +235,7 @@ impl App {
                         Some(run_context.credential_fingerprint.clone());
                 }
                 if terminal_write_ok {
-                    if terminal_evidence.is_some()
+                    if evidence_commit_succeeded
                         && let Some(path) = run_context
                             .verification_state_path
                             .as_deref()
@@ -546,6 +556,10 @@ mod tests {
             app.store
                 .begin_run(&project.id, &job, "rejected-run", "imapsync")
                 .unwrap();
+            let stage_state_path = app.state_path.clone().unwrap();
+            let stage_path = core::durable_stage_path(&stage_state_path, &job);
+            std::fs::create_dir_all(stage_path.parent().unwrap()).unwrap();
+            std::fs::write(&stage_path, b"retained verification stage").unwrap();
             app.active_run = Some(ActiveRunContext {
                 run_id: "rejected-run".into(),
                 project_id: project.id.clone(),
@@ -560,7 +574,7 @@ mod tests {
                 credential_fingerprint: String::new(),
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
-                verification_state_path: None,
+                verification_state_path: Some(stage_state_path),
             });
             app.run_id = Some("rejected-run".into());
             // An exact label over counters that disagree violates a store
@@ -610,12 +624,17 @@ mod tests {
                 .unwrap();
             assert_eq!(run.run.status, "failed");
             assert!(
+                stage_path.exists(),
+                "uncommitted evidence stage was removed"
+            );
+            assert!(
                 run.run.detail.contains(
                     "ledger rejected the write: an exact verification label contradicts the evidence counters"
                 ),
                 "{}",
                 run.run.detail
             );
+            core::MessageMetadataStage::cleanup_durable_stage(&stage_path).unwrap();
         });
     }
 }
