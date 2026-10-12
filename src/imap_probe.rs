@@ -19,6 +19,8 @@ mod namespace_parser;
 mod protocol;
 mod resolver;
 mod tls;
+#[path = "imap_probe/uid.rs"]
+mod uid;
 use auth::{authenticate_imap_stream, reconnect_and_authenticate_imap_stream};
 #[cfg(test)]
 use fetch_pages::parse_uid_search_response;
