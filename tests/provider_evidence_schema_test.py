@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 SCHEMA_PATH = Path(__file__).parent / "provider-evidence" / "schema.json"
+PACK_SCHEMA_PATH = Path(__file__).parent / "provider-evidence" / "pack-schema.json"
 
 
 def reject_duplicate_keys(pairs):
@@ -20,6 +21,10 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
     def setUpClass(cls):
         cls.schema = json.loads(
             SCHEMA_PATH.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+        cls.pack_schema = json.loads(
+            PACK_SCHEMA_PATH.read_text(encoding="utf-8"),
             object_pairs_hook=reject_duplicate_keys,
         )
 
@@ -69,6 +74,15 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
         }
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(instance, self.schema)
+
+    def test_qualification_pack_schema_cannot_claim_release_qualification(self):
+        properties = self.pack_schema["properties"]
+        self.assertEqual(properties["status"].get("const"), "qualification_candidate")
+        self.assertEqual(properties["release_gate_required"].get("const"), True)
+        phase_properties = properties["phases"]["items"]["properties"]
+        self.assertFalse(phase_properties["test_summary"].get("additionalProperties", True))
+        self.assertFalse(phase_properties["results"].get("additionalProperties", True))
+        self.assertNotIn("known_issues", phase_properties["results"].get("properties", {}))
 
 
 if __name__ == "__main__":

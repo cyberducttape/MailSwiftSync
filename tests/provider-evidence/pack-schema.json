@@ -8,6 +8,7 @@
     "schema_version",
     "provider_pair",
     "status",
+    "release_gate_required",
     "qualification_bundle_id",
     "tested",
     "qualification_window",
@@ -20,7 +21,8 @@
     "format": {"const": "mailswiftsync-provider-qualification-pack"},
     "schema_version": {"const": 1},
     "provider_pair": {"type": "string", "pattern": "^[a-z0-9_]+->[a-z0-9_]+$"},
-    "status": {"const": "qualified"},
+    "status": {"const": "qualification_candidate"},
+    "release_gate_required": {"const": true},
     "qualification_bundle_id": {"type": "string", "minLength": 1},
     "tested": {
       "type": "object",
@@ -82,8 +84,63 @@
           "proof_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "test_dataset_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "scenario_ids": {"type": "array", "items": {"type": "string"}},
-          "test_summary": {"type": "object"},
-          "results": {"type": "object"}
+          "test_summary": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mailboxes_tested",
+              "messages_total",
+              "bytes_total",
+              "destination_messages_total",
+              "destination_bytes_total",
+              "folders_total",
+              "destination_folders_total"
+            ],
+            "properties": {
+              "mailboxes_tested": {"type": "integer", "minimum": 0},
+              "messages_total": {"type": "integer", "minimum": 0},
+              "bytes_total": {"type": "integer", "minimum": 0},
+              "destination_messages_total": {"type": "integer", "minimum": 0},
+              "destination_bytes_total": {"type": "integer", "minimum": 0},
+              "folders_total": {"type": "integer", "minimum": 0},
+              "destination_folders_total": {"type": "integer", "minimum": 0},
+              "maximum_message_bytes": {"type": "integer", "minimum": 0},
+              "large_messages_tested": {"type": "integer", "minimum": 0},
+              "unicode_folders_observed": {"type": "boolean"},
+              "unicode_folders_tested": {"type": "integer", "minimum": 0},
+              "special_use_folders_observed": {"type": "boolean"},
+              "special_folders_tested": {"type": "integer", "minimum": 0},
+              "mismatch_planted": {"type": "boolean"},
+              "mismatch_detected": {"type": "boolean"}
+            }
+          },
+          "results": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "overall_result",
+              "messages_covered_by_aggregate_evidence",
+              "verification_confidence"
+            ],
+            "properties": {
+              "overall_result": {"const": "pass"},
+              "messages_covered_by_aggregate_evidence": {"type": "integer", "minimum": 0},
+              "messages_verified": {"type": "integer", "minimum": 0},
+              "verification_confidence": {"enum": ["high", "not_applicable"]},
+              "exceptions_accepted": {"type": "integer", "const": 0},
+              "mismatches": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "exact_match": {"type": "integer", "minimum": 0},
+                  "content_match": {"type": "integer", "minimum": 0},
+                  "missing": {"type": "integer", "const": 0},
+                  "extra": {"type": "integer", "const": 0},
+                  "changed": {"type": "integer", "const": 0}
+                }
+              }
+            }
+          }
         }
       }
     },

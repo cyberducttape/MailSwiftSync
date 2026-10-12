@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Keep provider-pair evidence packs explicitly marked as qualification
+  candidates until the signed release gate passes. Require consistent fixture,
+  dataset, provider, and binary identities across phases; reject exceptions,
+  aggregate-only evidence, insufficient test volumes, and mismatched endpoint
+  totals. Omit free-text issue details from exported packs and publish output
+  privately without overwriting an existing artifact.
 - Cancel capture, live-transfer, and doctor pipe drainers when bounded draining
   times out. Revocation releases secret references and readiness polling lets
   reader threads exit even when detached descendants retain inherited pipes;
