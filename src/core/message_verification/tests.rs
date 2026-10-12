@@ -2009,6 +2009,8 @@ fn durable_stage_reconciliation_benchmark() {
             summary.changed_count
         )
     });
+    // This ignored benchmark reports only aggregate measurements from generated
+    // synthetic messages; do not add customer mailbox values or identifiers here.
     eprintln!(
         "verification-scale shape={} messages_per_side={messages} outcome={first_outcome} staging_ms={staging_ms} staging_rows_per_sec={} staging_read_bytes={} staging_write_bytes={} staging_read_syscalls={} staging_write_syscalls={} reconcile_ms={reconcile_ms} reconcile_messages_per_sec={} reconcile_read_bytes={} reconcile_write_bytes={} reconcile_read_syscalls={} reconcile_write_syscalls={} flags_ms={flags_ms} flags_compared={} resumed_reconcile_ms={resumed_ms} resumed_write_bytes={} cpu_seconds={cpu_seconds:.1} peak_rss_mib={} rss_start_mib={} rss_after_staging_mib={} stage_bytes_after_staging={stage_bytes} peak_stage_bytes_during_reconcile={peak_stage_bytes} peak_journal_bytes={peak_journal_bytes} stage_bytes_after_reconcile={final_stage_bytes} mismatch_rows={recorded}{summary_fields}",
         shape.label(),
