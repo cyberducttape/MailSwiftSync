@@ -6,8 +6,11 @@
   the engine finish an in-flight large APPEND after its controller was killed,
   use SIGKILL for Linux crash-only parent-death containment and reject the
   pre-exec parent-death race. Operator cancellation remains graceful. A
-  subprocess regression covers an engine that ignores SIGTERM; the real IMAP
-  interruption scenario remains unqualified until the post-fix CI rerun passes.
+  subprocess regression covers an engine that ignores SIGTERM; the post-fix
+  packaged Dovecot 2.3.19.1 / imapsync 2.314 CI drill stopped the engine after
+  observing 3,145,263 of 67,109,132 bytes in flight, then resumed to exactly
+  one verified message. This qualifies the fixture only, not provider or
+  host-power-loss behavior.
 - Ship the canonical systemd supervisor unit in Debian/RPM documentation and
   harden it with an unprivileged identity, empty capability sets, restricted
   networking, and read-only system paths. CI runs an offline systemd security
