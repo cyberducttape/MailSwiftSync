@@ -64,7 +64,9 @@ pub use evidence::{
     VerificationAcceptance, VerificationDimensions, VerificationEvidence, VerificationMethod,
     VerificationOutcome, coverage_percent,
 };
-pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
+pub(crate) use message_extraction::{
+    ExtractedMessage, ExtractedMessages, MailboxMessageKey, MessageIdentityProvenance,
+};
 pub(crate) use message_staging::{
     FolderCursor, FolderSnapshot, MessageMetadataStage, StagedMessageSide, durable_stage_path,
 };
@@ -88,7 +90,7 @@ pub use transfer_passes::{
 };
 pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 30;
+pub const CURRENT_SCHEMA_VERSION: i64 = 31;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

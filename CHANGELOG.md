@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+- Remove unused `MPL-2.0` and `OpenSSL` entries from the dependency-license
+  allowlist so future crates require an explicit license review.
+- Retain durable verification staging when the evidence commit is rejected
+  and the controller falls back to an operator-attention run; cleanup now
+  occurs only after the evidence-bearing terminal transaction succeeds.
+- Bound `doctor` engine-version output draining after the child exits; a
+  detached descendant that inherits stdout/stderr can no longer hang
+  diagnostics indefinitely, and incomplete capture is reported as blocked.
+- Prune staged rows for folders absent from a fresh endpoint LIST, then
+  atomically invalidate each live folder's messages, fingerprints, cursors,
+  and PERMANENTFLAGS before refetch. This prevents stale-folder evidence
+  without duplicating a mailbox-wide deletion journal on every retry.
+- Benchmark durable verification through the same SQLite-staged mismatch path
+  used by live runs; the prior harness materialized mismatch details in memory
+  and could hit its separate 64 MiB ephemeral-report limit on adversarial data.
+- Record a fresh durable verification-scale matrix through 1,000,000 messages
+  per endpoint at the synthetic SQLite reconciliation layer, with host profile,
+  peak RSS, stage/journal footprint, throughput, and explicit qualification
+  limits.
+- Reconfirm the 1M-message typical durable-stage benchmark on commit
+  `927f04b1cf4baa1519d8dab3a4430ad3bcfa4c3b` with SQLite staging under the
+  workstation's ext4/NVMe filesystem: 21 MiB peak RSS and 41,978 reconciled
+  messages/s. This is not end-to-end or provider qualification.
+- Document service-identity keyring validation and credential rotation,
+  revocation, export, crash-residue, and policy-administration procedures;
+  clarify that systemd hardening does not isolate the engine from the worker UID.
+- Allow `=` in typed folder-mapping destinations; retain the engine-required
+  restriction on source names and explain it precisely.
+- Version post-migration report artifacts as v2 and encode an unrecorded
+  `total_skipped` count as `null` with explicit `unavailable` status; manually
+  supplied counts remain numeric and marked available. Use the same v2
+  format marker on both durable and explicitly supplied report exports.
+- Compare duplicate-message FLAGS with streaming frequency maps, retaining one
+  key per distinct canonical flag set instead of one entry per message.
+- Enforce fresh folder rescans after verification restarts: live folders are
+  atomically invalidated even when UIDVALIDITY, UIDNEXT, and EXISTS are
+  unchanged, while rows for deleted/renamed folders are pruned against fresh
+  LIST inventory. Body fingerprints are never reused and durable cursors are
+  recovery metadata, not reusable verification evidence.
+- Keep synthetic header fingerprints out of exact RFC Message-ID reconciliation. Persist RFC-ID and synthetic-candidate counts separately in evidence history and signed/report exports.
+- Exclude synthetic header identities from FLAGS and keyword fidelity coverage; only real RFC Message-ID groups establish comparable flag pairs.
+- Refresh automatic OAuth credentials on native verifier reconnects and before standalone re-verification, not only before live transfer and imapsync reconnects.
+- Upgrade ledger schema to v31 with nonnegative identity-provenance counters; prior ledgers migrate with zero-valued legacy counters.
+- Use a private local HMAC key for new OAuth rotation-recovery fingerprints while retaining one-time compatibility with existing version-1 SHA-256 recovery records.
+- Document the non-secret input and filename-only purpose of the stable OAuth keyring-ID digest flagged by password-hashing analysis.
+- Version customer proof exports as v2 to identify the expanded evidence fields, including identity provenance counts.
+
 - Run project report, project JSON, customer-proof, and health exports on a
   background worker with its own read-only ledger connection; a fleet-scale
   export no longer freezes the window, and a second export waits for the
@@ -39,7 +86,6 @@
 - Drop a redundant second URI-userinfo pass from diagnostic line redaction.
 - Fix Windows-only clippy findings in the OAuth refresh guard, lock
   contention check, and credential tests.
-
 - Harden opt-in diagnostic redaction for hyphenated and camel-case credential
   field names, underscore-prefixed OAuth fields, and quoted JSON-style keys;
   quoted values with escaped quotes are redacted as a whole rather than leaving
@@ -298,7 +344,7 @@
 - Keep 100k-row queues responsive after admission. Presented queue states
   probed `runs` for every row, so with one child run per mailbox each state
   change cost about 290 ms for queue counts and 410 ms for an all-selected
-  summary, freezing the first Mailboxes frame for about 760 ms. Schema v30
+  summary, freezing the first Mailboxes frame for about 760 ms. The queue-facts migration
   adds trigger-maintained run, queued-run, and acceptance counts to the queue
   facts, plus a covering index; counts, filters, selection summaries, and
   visible pages now read that projection (16 ms each, 49 ms first frame).

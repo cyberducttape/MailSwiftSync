@@ -19,7 +19,7 @@ mod namespace_parser;
 mod protocol;
 mod resolver;
 mod tls;
-use auth::authenticate_imap_stream;
+use auth::{authenticate_imap_stream, reconnect_and_authenticate_imap_stream};
 #[cfg(test)]
 use fetch_pages::parse_uid_search_response;
 use fetch_pages::{
@@ -276,8 +276,8 @@ trait MessageSink {
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
     /// Rows currently staged for one folder generation. Compared against the
-    /// server's EXISTS after a scan so rows kept from an interrupted run can
-    /// never stand in for messages that were expunged in the meantime.
+    /// server's EXISTS after a scan to require complete coverage of the
+    /// current SELECT snapshot.
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String>;
     fn uid_page(
         &self,
@@ -291,12 +291,12 @@ trait MessageSink {
     fn flags_match_page(&self, _messages: &crate::core::ExtractedMessages) -> Result<bool, String> {
         Ok(true)
     }
-    fn resume_after_uid(
+    fn begin_mailbox_scan(
         &mut self,
         _mailbox: &str,
         _snapshot: crate::core::FolderSnapshot,
-    ) -> Result<Option<u64>, String> {
-        Ok(None)
+    ) -> Result<(), String> {
+        Ok(())
     }
     fn checkpoint_page(
         &mut self,
@@ -324,18 +324,23 @@ trait MessageSink {
     ) -> Result<(), String> {
         Ok(())
     }
+    fn retain_mailboxes(&mut self, _mailboxes: &HashSet<String>) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct StageMessageSink<'a> {
     stage: &'a mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
     count: usize,
+    mailbox_counts: HashMap<String, usize>,
+    active_mailbox: Option<String>,
 }
 
 impl MessageSink for StageMessageSink<'_> {
     fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String> {
         self.stage.insert_messages(self.side, messages)?;
-        self.count = self.count.saturating_add(messages.len());
+        self.add_current_attempt_messages(messages.len())?;
         Ok(())
     }
 
@@ -346,16 +351,24 @@ impl MessageSink for StageMessageSink<'_> {
     ) -> Result<(), String> {
         self.stage
             .insert_messages_with_fingerprints(self.side, messages, fingerprints)?;
-        self.count = self.count.saturating_add(messages.len());
+        self.add_current_attempt_messages(messages.len())?;
         Ok(())
     }
 
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String> {
         self.stage.delete_mailbox(self.side, mailbox)?;
-        self.count = self
-            .stage
-            .count(self.side)
-            .map_err(|error| error.to_string())? as usize;
+        self.reset_mailbox_count(mailbox);
+        if self.active_mailbox.as_deref() == Some(mailbox) {
+            self.active_mailbox = None;
+        }
+        Ok(())
+    }
+
+    fn retain_mailboxes(&mut self, mailboxes: &HashSet<String>) -> Result<(), String> {
+        self.stage.retain_mailboxes(self.side, mailboxes)?;
+        self.count = 0;
+        self.mailbox_counts.clear();
+        self.active_mailbox = None;
         Ok(())
     }
 
@@ -396,30 +409,16 @@ impl MessageSink for StageMessageSink<'_> {
             .record_permanent_flags(self.side, mailbox, permanent_flags)
     }
 
-    fn resume_after_uid(
+    fn begin_mailbox_scan(
         &mut self,
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
-    ) -> Result<Option<u64>, String> {
-        let cursor = self.stage.resume_mailbox(self.side, mailbox, snapshot)?;
-        if cursor.is_some() {
-            // FLAGS are mutable without changing UIDVALIDITY, UIDNEXT, or
-            // EXISTS. The stage snapshot therefore cannot prove that the
-            // flags stored before an interruption are still current. Keep the
-            // durable cursor for recovery metadata, but rescan this folder
-            // from the beginning so a flag-only change is never reused as
-            // verified evidence.
-            self.stage.delete_mailbox(self.side, mailbox)?;
-            // Recreate the cursor for the fresh scan after removing the stale
-            // rows. `checkpoint_page` requires a cursor bound to this SELECT
-            // snapshot.
-            self.stage.resume_mailbox(self.side, mailbox, snapshot)?;
-        }
-        self.count = self
-            .stage
-            .count(self.side)
-            .map_err(|error| error.to_string())? as usize;
-        Ok(None)
+    ) -> Result<(), String> {
+        self.stage
+            .begin_mailbox_scan(self.side, mailbox, snapshot)?;
+        self.reset_mailbox_count(mailbox);
+        self.active_mailbox = Some(mailbox.to_owned());
+        Ok(())
     }
 
     fn checkpoint_page(
@@ -440,6 +439,36 @@ impl MessageSink for StageMessageSink<'_> {
     ) -> Result<(), String> {
         self.stage
             .complete_mailbox(self.side, mailbox, snapshot, last_uid)
+    }
+}
+
+impl StageMessageSink<'_> {
+    fn add_current_attempt_messages(&mut self, count: usize) -> Result<(), String> {
+        let mailbox = self
+            .active_mailbox
+            .clone()
+            .ok_or_else(|| "message page arrived before a folder scan began".to_owned())?;
+        let total = self
+            .count
+            .checked_add(count)
+            .ok_or_else(|| "verification message count overflowed".to_owned())?;
+        let mailbox_count = self
+            .mailbox_counts
+            .get(&mailbox)
+            .copied()
+            .unwrap_or_default()
+            .checked_add(count)
+            .ok_or_else(|| "verification folder message count overflowed".to_owned())?;
+        self.count = total;
+        self.mailbox_counts.insert(mailbox, mailbox_count);
+        Ok(())
+    }
+
+    fn reset_mailbox_count(&mut self, mailbox: &str) {
+        if let Some(previous) = self.mailbox_counts.remove(mailbox) {
+            self.count = self.count.saturating_sub(previous);
+        }
+        self.mailbox_counts.insert(mailbox.to_owned(), 0);
     }
 }
 
@@ -845,8 +874,8 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         uidnext,
         exists: start_exists,
     };
+    sink.begin_mailbox_scan(mailbox, snapshot)?;
     sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
-    let resume_after_uid = sink.resume_after_uid(mailbox, snapshot)?;
     let enumerated_uid_count = enumerate_uid_pages(
         stream,
         host,
@@ -855,7 +884,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         &mut response,
         &mut buffer,
         budget,
-        resume_after_uid,
         if body_hash.is_some() {
             FetchPagePlanner::body()
         } else {
@@ -980,10 +1008,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         )
         .into());
     }
-    // Pages staged before an interruption are not refetched on resume. Any
-    // message expunged since then leaves a stale row behind, so the staged
-    // folder must hold exactly the server's current message count. A
-    // mismatch discards the folder's stage and rescans it from the start.
+    // The stage was invalidated when this scan began. Require complete
+    // coverage of the current SELECT snapshot; no rows from an interrupted
+    // scan can stand in for newly fetched messages.
     let staged = sink.mailbox_len(mailbox, start_uidvalidity)?;
     if staged != start_exists {
         return Err(MailboxFetchError::Changed(format!(
@@ -1169,7 +1196,6 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     response: &mut String,
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
-    resume_after_uid: Option<u64>,
     mut planner: FetchPagePlanner,
     mut consume_page: F,
 ) -> Result<u64, String>
@@ -1209,11 +1235,10 @@ where
         }
         let uids = parse_uid_fetch_response(response, host, mailbox, sequence_start, sequence_end)?;
         enumerated_uid_count = enumerated_uid_count.saturating_add(uids.len() as u64);
-        // Skip exactly the UIDs already staged before an interruption. Page
-        // sizes adapt, so page boundaries are not stable across runs and
-        // cannot be used to decide what was already fetched.
-        let mut offset =
-            resume_after_uid.map_or(0, |resume| uids.partition_point(|uid| *uid <= resume));
+        // Every scan starts from the first extant UID. Durable staged pages
+        // are invalidated before enumeration because their FLAGS and body
+        // evidence cannot be proven current after an interruption.
+        let mut offset = 0;
         while offset < uids.len() {
             let (count, uid_set) = encode_uid_page(&uids[offset..], planner.size());
             let uid_page = &uids[offset..offset + count];
@@ -1245,6 +1270,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     state_budget: &MessageStateBudget,
     body_hash: Option<&BodyHashOptions<'_>>,
     excluded_mailboxes: &HashSet<String>,
+    reconnect_credential: &mut dyn FnMut() -> Result<crate::credentials::SecretString, String>,
     sink: &mut C,
 ) -> Result<FetchedAccountSummary, String> {
     budget.check()?;
@@ -1310,6 +1336,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     mailboxes.sort();
     mailboxes.dedup();
     let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
+    sink.retain_mailboxes(&mailbox_inventory)?;
     let mut total_exists = 0_u64;
     let mut incomplete_folders = HashMap::new();
     let mut incomplete_folder_count = 0_usize;
@@ -1343,22 +1370,23 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                     consecutive_session_reconnects =
                         consecutive_session_reconnects.saturating_add(1);
                     let reconnected: Result<_, String> = (|| {
-                        let (new_stream, new_greeting) = connect_tls_stream_with_budget(
-                            host,
-                            transport,
-                            ca_bundle,
-                            certificate_pin_sha256,
-                            budget,
-                        )?;
-                        let (new_stream, new_post_auth_response) = authenticate_imap_stream(
-                            new_stream,
-                            host,
-                            user,
-                            credential,
-                            auth_method,
-                            new_greeting,
-                            Some(budget),
-                        )?;
+                        let (new_stream, new_post_auth_response) =
+                            reconnect_and_authenticate_imap_stream(
+                                host,
+                                user,
+                                auth_method,
+                                Some(budget),
+                                reconnect_credential,
+                                || {
+                                    connect_tls_stream_with_budget(
+                                        host,
+                                        transport,
+                                        ca_bundle,
+                                        certificate_pin_sha256,
+                                        budget,
+                                    )
+                                },
+                            )?;
                         Ok((
                             new_stream,
                             advertises_capability(&new_post_auth_response, "CONDSTORE"),
@@ -1436,39 +1464,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes(
-    host: &str,
-    user: &str,
-    credential: &str,
-    auth_method: &str,
-    transport: &str,
-    ca_bundle: &str,
-    certificate_pin_sha256: &str,
-    budget: &MessageFetchBudget<'_>,
-    state_budget: &MessageStateBudget,
-    body_hash: Option<&BodyHashOptions<'_>>,
-    stage: &mut crate::core::MessageMetadataStage,
-    side: crate::core::StagedMessageSide,
-) -> Result<FetchedAccountSummary, String> {
-    fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
-        host,
-        user,
-        credential,
-        auth_method,
-        transport,
-        ca_bundle,
-        certificate_pin_sha256,
-        budget,
-        state_budget,
-        body_hash,
-        &HashSet::new(),
-        stage,
-        side,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
+pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding_refresh(
     host: &str,
     user: &str,
     credential: &str,
@@ -1480,16 +1476,17 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
     state_budget: &MessageStateBudget,
     body_hash: Option<&BodyHashOptions<'_>>,
     excluded_mailboxes: &HashSet<String>,
+    reconnect_credential: &mut dyn FnMut() -> Result<crate::credentials::SecretString, String>,
     stage: &mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
 ) -> Result<FetchedAccountSummary, String> {
-    let count = stage.count(side).map_err(|error| error.to_string())? as usize;
-    if body_hash.is_some() && count > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT {
-        return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
-            "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
-        )));
-    }
-    let mut sink = StageMessageSink { stage, side, count };
+    let mut sink = StageMessageSink {
+        stage,
+        side,
+        count: 0,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
+    };
     fetch_tls_account_messages_with_sink(
         host,
         user,
@@ -1502,6 +1499,7 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding(
         state_budget,
         body_hash,
         excluded_mailboxes,
+        reconnect_credential,
         &mut sink,
     )
 }

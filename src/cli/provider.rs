@@ -687,7 +687,7 @@ mod oauth_refresh_lock_tests {
         let file_recovery_path = oauth_refresh_file_recovery_path(&file_config_path).unwrap();
         crate::atomic_artifact::write_private_atomic(
             &file_recovery_path,
-            &encode_oauth_refresh_recovery(&previous, &rotated),
+            &encode_oauth_refresh_recovery(&previous, &rotated).unwrap(),
         )
         .unwrap();
         let file_recovered =

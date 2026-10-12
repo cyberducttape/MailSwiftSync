@@ -15,7 +15,7 @@ const RUN_PASS_BATCH: usize = 400;
 
 /// One mailbox with its latest acceptance, current evidence, the evidence
 /// run's plan snapshot, and flag coverage; decoded by `export_mailbox_from_row`.
-const MAILBOX_EXPORT_SELECT: &str = "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,r.id,r.plan_snapshot,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN runs r ON r.id=e.run_id LEFT JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id";
+const MAILBOX_EXPORT_SELECT: &str = "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,e.rfc_message_id_matches,e.synthetic_identity_matches,r.id,r.plan_snapshot,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN runs r ON r.id=e.run_id LEFT JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id";
 
 pub struct ProjectExportReader<'a> {
     store: &'a StateStore,
@@ -236,7 +236,7 @@ fn export_mailbox_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReportMa
     // Evidence is only reported with its run row present (r.id).
     let evidence = match (
         row.get::<_, Option<String>>(9)?,
-        row.get::<_, Option<String>>(25)?,
+        row.get::<_, Option<String>>(27)?,
     ) {
         (Some(run_id), Some(_)) => Some((
             run_id,
@@ -260,9 +260,11 @@ fn export_mailbox_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReportMa
                 extra_messages: sqlite_u64(row.get(22)?)?,
                 modified_messages: sqlite_u64(row.get(23)?)?,
                 probable_messages: sqlite_u64(row.get(24)?)?,
-                flag_verification: super::evidence_ops::flag_verification_from_row(row, 27)?,
+                rfc_message_id_matches: sqlite_u64(row.get(25)?)?,
+                synthetic_identity_matches: sqlite_u64(row.get(26)?)?,
+                flag_verification: super::evidence_ops::flag_verification_from_row(row, 29)?,
             },
-            row.get::<_, Option<String>>(26)?,
+            row.get::<_, Option<String>>(28)?,
         )),
         _ => None,
     };

@@ -973,13 +973,15 @@ impl StateStore {
         let extra_messages = sqlite_i64(value.extra_messages)?;
         let modified_messages = sqlite_i64(value.modified_messages)?;
         let probable_messages = sqlite_i64(value.probable_messages)?;
+        let rfc_message_id_matches = sqlite_i64(value.rfc_message_id_matches)?;
+        let synthetic_identity_matches = sqlite_i64(value.synthetic_identity_matches)?;
         let verification_outcome = if successful_preflight {
             VerificationOutcome::Incomplete
         } else {
             value.verification_outcome()
         };
         let authoritative = value.authoritative && !successful_preflight;
-        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![job_id, run_id, value.verification_method().as_str(), verification_outcome.as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
+        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,rfc_message_id_matches,synthetic_identity_matches) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)", params![job_id, run_id, value.verification_method().as_str(), verification_outcome.as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, authoritative, missing_messages, extra_messages, modified_messages, probable_messages, rfc_message_id_matches, synthetic_identity_matches])?;
         super::evidence_ops::upsert_evidence_projection(
             &tx,
             job_id,

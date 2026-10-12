@@ -1,6 +1,7 @@
 //! In-memory metadata reconciliation: exact Message-ID, wrong-folder, and fingerprint passes.
 
 use super::*;
+use crate::core::MessageIdentityProvenance;
 
 pub(super) fn index_by_message_id(
     messages: &ExtractedMessages,
@@ -10,6 +11,7 @@ pub(super) fn index_by_message_id(
         if let Some(message_id) = message
             .message_id
             .as_deref()
+            .filter(|_| message.identity_provenance() == MessageIdentityProvenance::RfcMessageId)
             .map(str::trim)
             .filter(|message_id| !message_id.is_empty())
         {
@@ -420,6 +422,7 @@ impl MessageVerification {
         let mut estimated_detail_bytes = 0usize;
         let mut total_metadata_matches = 0_u64;
         let mut total_probable_matches = 0_u64;
+        let mut synthetic_identity_matches = 0_u64;
 
         let source_by_message_id = index_by_message_id(source_messages);
         let dest_by_message_id = index_by_message_id(dest_messages);
@@ -518,6 +521,13 @@ impl MessageVerification {
                 folder_mapping,
             );
         total_probable_matches = pass3_probable;
+        synthetic_identity_matches = pass3_matched_src
+            .iter()
+            .filter(|key| {
+                source_messages[*key].identity_provenance()
+                    == MessageIdentityProvenance::SyntheticHeaderFingerprint
+            })
+            .count() as u64;
         for key in &pass3_matched_src {
             unmatched_source.remove(key);
         }
@@ -642,7 +652,9 @@ impl MessageVerification {
             total_source: source_messages.len() as u64,
             total_destination: dest_messages.len() as u64,
             metadata_matches: total_metadata_matches,
+            rfc_message_id_matches: total_metadata_matches,
             probable_matches: total_probable_matches,
+            synthetic_identity_matches,
             missing_count,
             extra_count,
             duplicated_count,

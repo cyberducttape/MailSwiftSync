@@ -185,9 +185,14 @@ pub struct VerificationSummary {
     /// Messages with a unique Message-ID and matching available metadata.
     /// This is not content verification.
     pub metadata_matches: u64,
+    /// Exact metadata pairs whose source identity is an RFC Message-ID.
+    /// This currently equals `metadata_matches`; kept explicit for reports.
+    pub rfc_message_id_matches: u64,
     /// Unique internal-date + size pairings. These are reconciliation
     /// candidates, not proof of message identity.
     pub probable_matches: u64,
+    /// Probable pairs whose source used a generated header fingerprint.
+    pub synthetic_identity_matches: u64,
     pub missing_count: u64,
     pub extra_count: u64,
     pub duplicated_count: u64,

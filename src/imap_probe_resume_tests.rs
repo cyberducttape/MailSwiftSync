@@ -204,11 +204,12 @@ fn scan_with(
         max_body_bytes: 1 << 20,
         budget: &body_budget,
     };
-    let count = stage.count(SIDE).unwrap() as usize;
     let mut sink = StageMessageSink {
         stage,
         side: SIDE,
-        count,
+        count: 0,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
     };
     fetch_mailbox_with_stability_retry(
         server,
@@ -265,7 +266,7 @@ fn interrupted(
 ) -> MessageMetadataStage {
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     let snapshot = server.snapshot();
-    assert_eq!(stage.resume_mailbox(SIDE, "INBOX", snapshot).unwrap(), None);
+    stage.begin_mailbox_scan(SIDE, "INBOX", snapshot).unwrap();
     stage
         .insert_messages(SIDE, &staged_page(snapshot.uidvalidity, staged))
         .unwrap();
@@ -319,9 +320,27 @@ fn unchanged_resume_rescans_pages_to_refresh_mutable_flags() {
     let before = FolderServer::new(&uids, 9, PAGE * 2 + 6);
     let mut stage = interrupted(&before, 1..=PAGE, Some(PAGE));
     let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
+    // Only FLAGS change between attempts; UIDVALIDITY, UIDNEXT, and EXISTS
+    // remain identical. A stale staged value must not survive the restart.
+    let snapshot = server.snapshot();
+    let mut old_page = staged_page(snapshot.uidvalidity, 1..=PAGE);
+    old_page
+        .values_mut()
+        .for_each(|message| message.flags = Some(String::new()));
+    stage.insert_messages(SIDE, &old_page).unwrap();
+    server.flags.insert(1, "\\Seen".into());
+
     assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
     assert_eq!(server.fetched, uids);
     assert_eq!(staged_uids(&stage), uids);
+    let message = stage
+        .all_messages(SIDE)
+        .unwrap()
+        .into_iter()
+        .find(|(key, _)| key.uid == "1")
+        .unwrap()
+        .1;
+    assert_eq!(message.flags.as_deref(), Some("\\Seen"));
 }
 
 #[test]
@@ -560,11 +579,11 @@ fn resume_after_expunge_and_delivery_with_equal_exists_rescans_the_folder() {
 }
 
 #[test]
-fn body_hash_resume_restores_fingerprints_for_partially_staged_pages() {
+fn body_hash_rescan_replaces_partially_staged_pages_and_fingerprints() {
     let uids = folder(PAGE * 2 + 5);
     let before = FolderServer::new(&uids, 9, PAGE * 2 + 6);
-    // The crash landed after page rows committed but before their
-    // fingerprints and the cursor were written.
+    // Simulate a crash after page rows committed but before fingerprints and
+    // the cursor were written. Starting a new scan discards all old rows.
     let mut stage = interrupted(&before, 1..=PAGE, None);
     assert!(stage.content_fingerprints(SIDE).is_empty());
     let mut server = FolderServer::new(&uids, 9, PAGE * 2 + 6);
@@ -574,7 +593,7 @@ fn body_hash_resume_restores_fingerprints_for_partially_staged_pages() {
 }
 
 #[test]
-fn body_hash_resume_keeps_fingerprints_of_checkpointed_pages() {
+fn body_hash_rescan_refetches_checkpointed_pages_and_fingerprints() {
     let uids = folder(PAGE * 2 + 5);
     let mut first = FolderServer::new(&uids, 9, PAGE * 2 + 6);
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();

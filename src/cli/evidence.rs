@@ -333,6 +333,11 @@ fn run_reverify_one(
     })?;
     crate::runner::validate_body_hash_limits(&form)
         .map_err(|error| format!("Reverification refused: {error}"))?;
+    form.refresh_oauth_access_token(true)
+        .and_then(|_| form.refresh_oauth_access_token(false))
+        .map_err(|error| {
+            format!("Reverification refused: could not refresh OAuth credentials: {error}")
+        })?;
     let run_id = uuid::Uuid::new_v4().to_string();
     store
         .begin_verification_run_from_transfer(
@@ -678,6 +683,8 @@ fn reverify_result_json(
         "extra_messages": evidence.extra_messages,
         "modified_messages": evidence.modified_messages,
         "probable_messages": evidence.probable_messages,
+        "rfc_message_id_matches": evidence.rfc_message_id_matches,
+        "synthetic_identity_matches": evidence.synthetic_identity_matches,
         "mismatch_rows": core::MismatchSource::mismatch_count(mismatches),
         "folders": folder_count,
         "note": "Verification-only observation; the original migration result is unchanged and differences may reflect legitimate post-migration activity."
@@ -947,7 +954,19 @@ pub(super) fn post_report_command(arguments: std::env::ArgsOs) -> eframe::Result
     let report = crate::core::post_migration_report::PostMigrationReport::generate(
         values[0], values[1], values[2], values[3], values[4], values[5],
     );
-    match serde_json::to_string_pretty(&report) {
+    let value = serde_json::json!({
+        "format": crate::core::post_migration_report::POST_MIGRATION_REPORT_FORMAT,
+        "format_version": crate::core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION,
+        "report": report,
+        "count_semantics": {
+            "total_processed": "explicitly supplied by the command caller",
+            "total_skipped": "explicitly supplied by the command caller",
+            "total_skipped_availability": "available because the command caller supplied a count",
+            "total_failed": "explicitly supplied by the command caller",
+            "missing_extra_changed": "explicitly supplied by the command caller",
+        }
+    });
+    match serde_json::to_string_pretty(&value) {
         Ok(report) => {
             out!("{report}");
             Ok(())
@@ -1265,6 +1284,8 @@ mod tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
             flag_verification: None,
         }
     }

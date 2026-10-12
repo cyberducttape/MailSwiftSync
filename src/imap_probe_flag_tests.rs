@@ -11,8 +11,13 @@ fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer, side: Stage
     let cancelled = AtomicBool::new(false);
     let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
     let state_budget = MessageStateBudget::new();
-    let count = stage.count(side).unwrap() as usize;
-    let mut sink = StageMessageSink { stage, side, count };
+    let mut sink = StageMessageSink {
+        stage,
+        side,
+        count: 0,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
+    };
     fetch_mailbox_with_stability_retry(
         server,
         "imap.example.test",

@@ -149,6 +149,8 @@ fn evidence_is_durable_and_explainable() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.record_evidence(&job, &e).unwrap();
@@ -226,6 +228,8 @@ fn message_level_evidence_counts_round_trip_through_the_ledger() {
         extra_messages: 2,
         modified_messages: 1,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
 
@@ -259,18 +263,71 @@ fn probable_message_evidence_round_trips_without_becoming_exact() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 1,
+        rfc_message_id_matches: 7,
+        synthetic_identity_matches: 1,
         flag_verification: None,
     };
 
     db.record_evidence(&job, &evidence).unwrap();
 
     let loaded = db.evidence(&job).unwrap().unwrap();
+    let loaded_history = db.latest_evidence_for_run(&job).unwrap().unwrap().1;
+    assert_eq!(loaded_history.rfc_message_id_matches, 7);
+    assert_eq!(loaded_history.synthetic_identity_matches, 1);
     assert_eq!(loaded.probable_count(), 1);
     assert_eq!(
         loaded.verification_outcome(),
         VerificationOutcome::ProbableMatch
     );
     assert!(!loaded.is_exact_match());
+}
+
+#[test]
+fn schema_v30_migration_adds_identity_match_counters_to_current_and_history() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("identity-counter-migration", "source", "dest")
+        .unwrap();
+    let job = db.add_mailbox(&project.id, "source", "dest").unwrap();
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(VerificationOutcome::ProbableMatch),
+        source_messages: 1,
+        destination_messages: 1,
+        source_bytes: 8,
+        destination_bytes: 8,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 1,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 1,
+        flag_verification: None,
+    };
+    db.record_evidence(&job, &evidence).unwrap();
+    db.connection
+        .execute_batch(
+            "ALTER TABLE evidence DROP COLUMN rfc_message_id_matches;
+             ALTER TABLE evidence DROP COLUMN synthetic_identity_matches;
+             ALTER TABLE evidence_history DROP COLUMN rfc_message_id_matches;
+             ALTER TABLE evidence_history DROP COLUMN synthetic_identity_matches;
+             PRAGMA user_version=30;",
+        )
+        .unwrap();
+
+    db.migrate().unwrap();
+
+    let migrated = db.evidence(&job).unwrap().unwrap();
+    assert_eq!(migrated.rfc_message_id_matches, 0);
+    assert_eq!(migrated.synthetic_identity_matches, 0);
+    let historical = db.latest_evidence_for_run(&job).unwrap().unwrap().1;
+    assert_eq!(historical.rfc_message_id_matches, 0);
+    assert_eq!(historical.synthetic_identity_matches, 0);
 }
 
 #[test]
@@ -300,6 +357,8 @@ fn message_mismatch_details_commit_atomically_with_terminal_evidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     let mismatch = MessageMismatch {
@@ -594,6 +653,8 @@ fn folder_mismatch_cannot_claim_full_confidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert_eq!(evidence.confidence_percent(), 0);
@@ -623,6 +684,8 @@ fn balanced_aggregate_totals_cannot_hide_message_level_mismatches() {
         extra_messages: 1,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
 
@@ -661,6 +724,8 @@ fn empty_mailbox_with_failures_is_not_verified() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert_eq!(evidence.confidence_percent(), 0);
@@ -689,6 +754,8 @@ fn aggregate_match_has_bounded_but_nonmisleading_score() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert_eq!(evidence.confidence_percent(), 85);
@@ -908,6 +975,8 @@ fn newer_run_cannot_reuse_older_evidence_for_verified_state() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.begin_run(&project.id, &job, "run-with-evidence", "test")
@@ -961,6 +1030,8 @@ fn generic_terminal_completion_cannot_reuse_stale_evidence_for_verified() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.begin_run(&project.id, &job, "run-old-evidence", "imapsync")
@@ -1041,6 +1112,8 @@ fn project_cannot_complete_without_verified_mailboxes() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.finish_run_for_mailbox_with_evidence(
@@ -1494,6 +1567,8 @@ fn evidence_terminal_completion_allows_running_to_verified_atomically() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.register_process(&ActiveProcess {
@@ -1554,6 +1629,8 @@ fn preflight_evidence_and_plan_commit_atomically_without_certifying_mailbox() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
@@ -1629,6 +1706,8 @@ fn evidence_difference_is_not_promoted_to_verified_or_complete() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert!(
@@ -1690,6 +1769,8 @@ fn latest_evidence_resolves_to_its_own_run() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.finish_run_for_mailbox_with_evidence(
@@ -1759,6 +1840,8 @@ fn evidence_projection_migration_backfills_its_latest_history_run() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: Some(FlagVerification {
             compared_messages: 1,
             mismatched_messages: 0,
@@ -2498,6 +2581,8 @@ fn evidence_rejects_values_that_do_not_fit_sqlite_signed_integers() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert!(
@@ -2823,6 +2908,8 @@ fn verification_difference_requires_durable_exception_acceptance() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.begin_run(&project.id, &job, "exception-run", "imapsync")
@@ -2880,6 +2967,8 @@ fn verification_difference_requires_durable_exception_acceptance() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: Some(FlagVerification {
             compared_messages: 10,
             mismatched_messages: 0,
@@ -2982,6 +3071,8 @@ fn terminal_write_rejects_contradictory_exact_evidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert!(
@@ -3031,6 +3122,8 @@ fn verification_only_history_rejects_contradictory_exact_evidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert!(
@@ -3078,6 +3171,8 @@ fn terminal_write_rejects_non_authoritative_exact_engine_evidence() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert!(
@@ -3419,6 +3514,8 @@ fn project_report_snapshot_loads_related_rows_as_one_read_model() {
             extra_messages: 2,
             modified_messages: 1,
             probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
             flag_verification: None,
         },
     )
@@ -5183,6 +5280,8 @@ fn evidence_rejects_orphaned_run_ids() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     assert!(
@@ -5220,6 +5319,8 @@ fn evidence_rejects_a_run_for_a_different_mailbox() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
 
@@ -5574,6 +5675,8 @@ fn flag_evidence(
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification,
     }
 }
@@ -5856,6 +5959,8 @@ fn verification_drill_down_groups_pages_and_exports_without_storing_names() {
         extra_messages: 1,
         modified_messages: 1,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
@@ -6195,6 +6300,8 @@ fn difference_file_export_streams_every_row_across_pages_into_a_private_file() {
         extra_messages: 0,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     db.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(

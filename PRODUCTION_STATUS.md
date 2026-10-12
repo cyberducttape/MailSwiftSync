@@ -5,7 +5,7 @@
 |---|---|
 | Status | Technical Preview |
 | Package version | `0.1.0-alpha.1` |
-| SQLite schema version | `30` |
+| SQLite schema version | `31` |
 | Last reviewed | 2026-10-10 |
 | Qualified engine | `imapsync 2.314` |
 <!-- release-metadata:end -->

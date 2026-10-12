@@ -33,3 +33,7 @@ MailSwiftSync does not collect telemetry or retain passwords in its profile file
 ## Reporting checklist
 
 Include the affected MailSwiftSync version or commit, operating system, selected engine (imapsync or local Dovecot) and its version, desktop or headless execution, sanitized configuration details, reproduction steps, and whether any credential or mailbox data may have been exposed. Never attach real passwords, mailbox content, or unredacted logs.
+
+For operator procedures covering OAuth refresh-token rotation/revocation,
+exported credential files, interrupted migration residue, and local policy
+administration, see [the credential lifecycle runbook](docs/distribution/CREDENTIAL-LIFECYCLE.md).

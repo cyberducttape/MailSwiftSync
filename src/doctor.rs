@@ -1,8 +1,8 @@
 //! Read-only qualification-envelope diagnostics for operators.
 
 use crate::process::{
-    CapturedOutput, collect_redacted_lines_with_callback, configure_process_group,
-    wait_with_timeout,
+    CapturedOutput, READER_DRAIN_TIMEOUT, collect_redacted_lines_with_callback,
+    configure_process_group, receive_reader_result, wait_with_timeout,
 };
 use crate::{core::Engine, migration_plan::Form, verification::ImapsyncOutputProfile};
 use fs2::available_space;
@@ -12,7 +12,7 @@ use std::{
     process::{Command, Stdio},
     sync::atomic::AtomicBool,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const IMAPSYNC_DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
@@ -175,6 +175,15 @@ fn check_executable_version(
     name: &'static str,
     qualification: Option<fn(&str) -> bool>,
 ) -> DoctorCheck {
+    check_executable_version_with_reader_timeout(path, name, qualification, READER_DRAIN_TIMEOUT)
+}
+
+fn check_executable_version_with_reader_timeout(
+    path: &str,
+    name: &'static str,
+    qualification: Option<fn(&str) -> bool>,
+    reader_drain_timeout: Duration,
+) -> DoctorCheck {
     let mut command = Command::new(path);
     crate::process::apply_engine_environment(&mut command);
     command
@@ -209,12 +218,26 @@ fn check_executable_version(
             detail: format!("{path}: could not capture version diagnostics"),
         };
     };
-    let stdout_thread = thread::spawn(|| capture_doctor_output(stdout));
-    let stderr_thread = thread::spawn(|| capture_doctor_output(stderr));
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel(1);
+    let stdout_thread = thread::spawn(move || {
+        let _ = stdout_tx.send(capture_doctor_output(stdout));
+    });
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::sync_channel(1);
+    let stderr_thread = thread::spawn(move || {
+        let _ = stderr_tx.send(capture_doctor_output(stderr));
+    });
     let cancel = AtomicBool::new(false);
     let outcome = wait_with_timeout(&mut child, IMAPSYNC_DOCTOR_TIMEOUT, &cancel);
-    let stdout = stdout_thread.join().ok().and_then(Result::ok);
-    let stderr = stderr_thread.join().ok().and_then(Result::ok);
+    let reader_deadline = Instant::now() + reader_drain_timeout;
+    let stdout = receive_reader_result(stdout_rx, stdout_thread, reader_deadline, "stdout")
+        .and_then(|output| output.map_err(|error| format!("stdout capture failed: {error}")));
+    let stderr = receive_reader_result(stderr_rx, stderr_thread, reader_deadline, "stderr")
+        .and_then(|output| output.map_err(|error| format!("stderr capture failed: {error}")));
+    let reader_failure = stdout
+        .as_ref()
+        .err()
+        .or_else(|| stderr.as_ref().err())
+        .cloned();
     match outcome {
         Ok(outcome) if outcome.timed_out => DoctorCheck {
             name,
@@ -227,8 +250,15 @@ fn check_executable_version(
             detail: format!("{path} version probe was cancelled"),
         },
         Ok(outcome) if outcome.exit_code == Some(0) => {
-            let version = first_captured_line(stdout.as_ref())
-                .or_else(|| first_captured_line(stderr.as_ref()))
+            if let Some(error) = reader_failure {
+                return DoctorCheck {
+                    name,
+                    status: "blocked",
+                    detail: format!("{path} version output could not be drained: {error}"),
+                };
+            }
+            let version = first_captured_line(stdout.as_ref().ok())
+                .or_else(|| first_captured_line(stderr.as_ref().ok()))
                 .unwrap_or_else(|| "(no version output)".into());
             let status = match qualification {
                 Some(qualification) if qualification(&version) => "qualified",
@@ -457,5 +487,73 @@ mod tests {
         assert!(is_qualified_version("v2.314"));
         assert!(!is_qualified_version("imapsync 2.3140"));
         assert!(!is_qualified_version("imapsync 12.314"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn doctor_bounds_output_drain_when_detached_descendant_inherits_pipe() {
+        let Some(setsid) = crate::plan_identity::resolve_executable("setsid") else {
+            eprintln!("skipping doctor pipe-leak test: setsid is unavailable");
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "mss-doctor-pipe-leak-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join("fake-imapsync");
+        let pid_file = directory.join("detached.pid");
+        let script = format!(
+            "#!/bin/sh\n{} /bin/sh -c 'echo $$ > {}; exec /bin/sleep 2' &\ni=0\nwhile [ ! -s '{}' ] && [ \"$i\" -lt 100 ]; do sleep 0.01; i=$((i + 1)); done\n[ -s '{}' ] || exit 9\nprintf 'imapsync 2.314\\n'\n",
+            setsid.display(),
+            pid_file.display(),
+            pid_file.display(),
+            pid_file.display(),
+        );
+        std::fs::write(&executable, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let started = Instant::now();
+        let check = check_executable_version_with_reader_timeout(
+            &executable.to_string_lossy(),
+            "imapsync executable",
+            Some(is_qualified_version),
+            Duration::from_millis(100),
+        );
+        let elapsed = started.elapsed();
+
+        let detached_pid = (0..20).find_map(|_| {
+            std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|value| value.trim().parse::<libc::pid_t>().ok())
+                .or_else(|| {
+                    thread::sleep(Duration::from_millis(25));
+                    None
+                })
+        });
+        if let Some(pid) = detached_pid {
+            // SAFETY: the fixture created this detached process group and
+            // wrote its process ID to the private test directory.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+
+        assert_eq!(check.status, "blocked", "{}", check.detail);
+        assert!(
+            check.detail.contains("reader did not close within"),
+            "expected bounded reader-drain diagnostic, got: {}",
+            check.detail
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "doctor hung for {elapsed:?}"
+        );
     }
 }

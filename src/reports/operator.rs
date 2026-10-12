@@ -325,8 +325,8 @@ pub(crate) fn build_post_migration_report_json(
     }
     let report = core::post_migration_report::PostMigrationReport::from_project_snapshot(&snapshot);
     let value = serde_json::json!({
-        "format": "mailswiftsync-post-migration-report",
-        "format_version": 1,
+        "format": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT,
+        "format_version": core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION,
         "application_version": env!("CARGO_PKG_VERSION"),
         "project": {
             "id": snapshot.project.id,
@@ -337,7 +337,8 @@ pub(crate) fn build_post_migration_report_json(
         "report": report,
         "count_semantics": {
             "total_processed": "sum of source messages in durable mailbox evidence",
-            "total_skipped": "not recorded at message level by the durable ledger; remains zero and is surfaced as an exception",
+            "total_skipped": "null when the durable ledger has no message-level skipped count; consult total_skipped_availability",
+            "total_skipped_availability": "available only when the count is backed by durable or explicitly supplied evidence",
             "total_failed": "sum of failed messages in durable mailbox evidence",
             "missing_extra_changed": "sum of durable verification differences",
         },
@@ -595,6 +596,33 @@ mod project_json_tests {
     use super::*;
 
     #[test]
+    fn durable_post_migration_export_uses_v2_nullable_count_contract() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("report", "source.example", "destination.example")
+            .unwrap();
+        store.add_mailbox(&project.id, "user", "user").unwrap();
+
+        let report: serde_json::Value =
+            serde_json::from_str(&build_post_migration_report_json(&store, &project.id).unwrap())
+                .unwrap();
+
+        assert_eq!(
+            report["format"],
+            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT
+        );
+        assert_eq!(
+            report["format_version"],
+            core::post_migration_report::POST_MIGRATION_REPORT_FORMAT_VERSION
+        );
+        assert!(report["report"]["total_skipped"].is_null());
+        assert_eq!(
+            report["report"]["total_skipped_availability"],
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn project_json_streams_a_verifiable_report_with_every_mailbox_and_run() {
         let store = core::StateStore::in_memory().unwrap();
         let project = store
@@ -616,6 +644,8 @@ mod project_json_tests {
             extra_messages: 0,
             modified_messages: 0,
             probable_messages: 0,
+            rfc_message_id_matches: 3,
+            synthetic_identity_matches: 0,
             flag_verification: Some(core::FlagVerification {
                 compared_messages: 3,
                 mismatched_messages: 0,
@@ -677,6 +707,14 @@ mod project_json_tests {
         assert_eq!(
             report["mailboxes"][0]["evidence"]["evidence_level"],
             "Aggregate match — not message-body proof"
+        );
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["identity_match_counts"]["rfc_message_id_matches"],
+            3
+        );
+        assert_eq!(
+            report["mailboxes"][0]["evidence"]["identity_match_counts"]["synthetic_identity_matches"],
+            0
         );
         // The first mailbox's evidence run is older than the 20 most recent
         // runs; its verification report must still find it.

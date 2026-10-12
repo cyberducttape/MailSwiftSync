@@ -205,7 +205,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-customer-proof",
-        "format_version": 1,
+        "format_version": 2,
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
         "migration_id": project.id.clone(),
@@ -553,6 +553,8 @@ mod tests {
                     extra_messages: 0,
                     modified_messages: 0,
                     probable_messages: 0,
+                    rfc_message_id_matches: 0,
+                    synthetic_identity_matches: 0,
                     flag_verification: None,
                 },
             )
@@ -593,6 +595,7 @@ mod tests {
         let certificate: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
+        assert_eq!(certificate["format_version"], 2);
         assert_eq!(certificate["proof_signature"]["algorithm"], "Ed25519");
         let evidence = &certificate["mailboxes"][0]["evidence"];
         assert_eq!(
@@ -625,6 +628,14 @@ mod tests {
         );
         assert_eq!(evidence["message_coverage"]["checked_messages"], 0);
         assert_eq!(evidence["message_coverage"]["complete"], false);
+        assert_eq!(
+            evidence["identity_match_counts"]["rfc_message_id_matches"],
+            0
+        );
+        assert_eq!(
+            evidence["identity_match_counts"]["synthetic_identity_matches"],
+            0
+        );
         assert!(evidence["flag_verification"].is_null());
         assert!(!certificate.to_string().contains(&plan_snapshot));
         assert!(
@@ -673,6 +684,8 @@ mod tests {
                             extra_messages: 0,
                             modified_messages: 0,
                             probable_messages: 0,
+                            rfc_message_id_matches: 0,
+                            synthetic_identity_matches: 0,
                             flag_verification: None,
                         },
                         Some("plan".into()),

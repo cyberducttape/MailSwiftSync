@@ -60,6 +60,39 @@ pub struct ExtractedMessage {
     pub flags: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MessageIdentityProvenance {
+    #[default]
+    Missing,
+    RfcMessageId,
+    SyntheticHeaderFingerprint,
+}
+
+impl MessageIdentityProvenance {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::RfcMessageId => "rfc_message_id",
+            Self::SyntheticHeaderFingerprint => "synthetic_header_fingerprint",
+        }
+    }
+}
+
+impl ExtractedMessage {
+    /// Classify the identity value without conflating a generated header
+    /// digest with an RFC Message-ID. Synthetic values use a reserved
+    /// namespace assigned only by the header parser.
+    pub fn identity_provenance(&self) -> MessageIdentityProvenance {
+        match self.message_id.as_deref() {
+            Some(value) if value.starts_with("header-fingerprint:") => {
+                MessageIdentityProvenance::SyntheticHeaderFingerprint
+            }
+            Some(value) if !value.trim().is_empty() => MessageIdentityProvenance::RfcMessageId,
+            _ => MessageIdentityProvenance::Missing,
+        }
+    }
+}
+
 /// A source-to-destination mapping emitted by imapsync after a successful
 /// APPEND/COPY. Both UIDs are mailbox-local and must not be used as a
 /// cross-mailbox message identity.

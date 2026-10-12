@@ -382,6 +382,58 @@ fn message(message_id: Option<&str>, uid: &str, size: u64, date: &str) -> Extrac
 }
 
 #[test]
+fn synthetic_header_identity_never_counts_as_exact_metadata_match() {
+    let synthetic = format!("header-fingerprint:{}", "a".repeat(64));
+    let source = HashMap::from([(
+        MailboxMessageKey::new("INBOX", "1"),
+        message(Some(&synthetic), "1", 512, "01-Jan-2024 00:00:00 +0000"),
+    )]);
+    let destination = HashMap::from([(
+        MailboxMessageKey::new("INBOX", "9"),
+        message(Some(&synthetic), "9", 512, "01-Jan-2024 00:00:00 +0000"),
+    )]);
+
+    let (_, memory_summary) = MessageVerification::detect_mismatches(
+        "job-synthetic",
+        "run-memory",
+        &source,
+        &destination,
+    )
+    .unwrap();
+    assert_eq!(memory_summary.metadata_matches, 0);
+    assert_eq!(memory_summary.rfc_message_id_matches, 0);
+    assert_eq!(memory_summary.probable_matches, 1);
+    assert_eq!(memory_summary.synthetic_identity_matches, 1);
+    assert_eq!(
+        memory_summary.verification_outcome(),
+        VerificationOutcome::ProbableMatch
+    );
+
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    stage
+        .insert_messages(StagedMessageSide::Source, &source)
+        .unwrap();
+    stage
+        .insert_messages(StagedMessageSide::Destination, &destination)
+        .unwrap();
+    let (_, staged_summary) = MessageVerification::detect_mismatches_from_stage(
+        "job-synthetic",
+        "run-staged",
+        &stage,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(staged_summary.metadata_matches, 0);
+    assert_eq!(staged_summary.rfc_message_id_matches, 0);
+    assert_eq!(staged_summary.probable_matches, 1);
+    assert_eq!(staged_summary.synthetic_identity_matches, 1);
+    assert_eq!(
+        staged_summary.verification_outcome(),
+        VerificationOutcome::ProbableMatch
+    );
+}
+
+#[test]
 fn wrong_folder_message_with_different_body_is_classified_once() {
     let source_key = MailboxMessageKey::new("INBOX", "1");
     let dest_key = MailboxMessageKey::new("WrongFolder", "7");
@@ -481,7 +533,9 @@ fn summary_counters_must_equal_their_classification() {
         total_source: 1,
         total_destination: 1,
         metadata_matches: 1,
+        rfc_message_id_matches: 1,
         probable_matches: 0,
+        synthetic_identity_matches: 0,
         missing_count: 0,
         extra_count: 0,
         duplicated_count: 0,
@@ -746,7 +800,9 @@ fn validation_rejects_duplicate_classification_and_omitted_identity() {
         total_source: 2,
         total_destination: 2,
         metadata_matches: 1,
+        rfc_message_id_matches: 1,
         probable_matches: 1,
+        synthetic_identity_matches: 0,
         missing_count: 0,
         extra_count: 0,
         duplicated_count: 0,
@@ -1026,7 +1082,9 @@ fn evidence_level_is_fail_closed_and_named() {
         total_source: 1_000,
         total_destination: 1_000,
         metadata_matches,
+        rfc_message_id_matches: metadata_matches,
         probable_matches,
+        synthetic_identity_matches: 0,
         missing_count,
         extra_count,
         duplicated_count,
@@ -1879,12 +1937,8 @@ fn durable_stage_reconciliation_benchmark() {
     }
     let reconcile = |stage: &MessageMetadataStage| {
         let started = std::time::Instant::now();
-        let result = MessageVerification::detect_mismatches_from_stage(
-            "job-bench",
-            "run-bench",
-            stage,
-            &HashMap::new(),
-        );
+        let result =
+            MessageVerification::reconcile_stage("job-bench", "run-bench", stage, &HashMap::new());
         (result, started.elapsed().as_millis())
     };
     let (result, reconcile_ms) = reconcile(&stage);
@@ -1904,20 +1958,19 @@ fn durable_stage_reconciliation_benchmark() {
         std::fs::write(path, text).unwrap();
     }
     let final_stage_bytes = files_bytes();
-    let outcome =
-        |result: &Result<(Vec<MessageMismatch>, VerificationSummary), String>| match result {
-            Ok(_) => "ok".to_owned(),
-            Err(error) => match crate::core::VerificationLimit::from_detail(error) {
-                Some(limit) => format!("limit:{}", limit.code()),
-                None => panic!("reconciliation failed: {error}"),
-            },
-        };
+    let outcome = |result: &Result<(u64, VerificationSummary), String>| match result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => match crate::core::VerificationLimit::from_detail(error) {
+            Some(limit) => format!("limit:{}", limit.code()),
+            None => panic!("reconciliation failed: {error}"),
+        },
+    };
     let first_outcome = outcome(&result);
     let (recorded, summary) = match &result {
-        Ok((mismatches, summary)) => {
+        Ok((mismatch_count, summary)) => {
             assert_eq!(summary.total_source, staged[0] as u64);
             assert_eq!(summary.total_destination, staged[1] as u64);
-            (mismatches.len(), Some(summary.clone()))
+            (*mismatch_count, Some(summary.clone()))
         }
         Err(_) => (0, None),
     };
@@ -2292,6 +2345,8 @@ fn committed_mismatch_rows(
         extra_messages: 50,
         modified_messages: 0,
         probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
         flag_verification: None,
     };
     let mismatches = build(&job);

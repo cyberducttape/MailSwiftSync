@@ -10,7 +10,7 @@ pub(super) fn upsert_evidence_projection(
     authoritative: bool,
 ) -> rusqlite::Result<()> {
     tx.execute(
-        "INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,captured_at,run_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,CURRENT_TIMESTAMP,?17) ON CONFLICT(job_id) DO UPDATE SET verification_method=excluded.verification_method,verification_outcome=excluded.verification_outcome,source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,probable_messages=excluded.probable_messages,captured_at=excluded.captured_at,run_id=excluded.run_id",
+        "INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,rfc_message_id_matches,synthetic_identity_matches,captured_at,run_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,CURRENT_TIMESTAMP,?19) ON CONFLICT(job_id) DO UPDATE SET verification_method=excluded.verification_method,verification_outcome=excluded.verification_outcome,source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,probable_messages=excluded.probable_messages,rfc_message_id_matches=excluded.rfc_message_id_matches,synthetic_identity_matches=excluded.synthetic_identity_matches,captured_at=excluded.captured_at,run_id=excluded.run_id",
         params![
             job_id,
             value.verification_method().as_str(),
@@ -28,6 +28,8 @@ pub(super) fn upsert_evidence_projection(
             sqlite_i64(value.extra_messages)?,
             sqlite_i64(value.modified_messages)?,
             sqlite_i64(value.probable_messages)?,
+            sqlite_i64(value.rfc_message_id_matches)?,
+            sqlite_i64(value.synthetic_identity_matches)?,
             run_id,
         ],
     )?;
@@ -187,7 +189,7 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.execute(
-            "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,rfc_message_id_matches,synthetic_identity_matches) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
                 job_id,
                 run_id,
@@ -206,6 +208,8 @@ impl StateStore {
                 sqlite_i64(value.extra_messages)?,
                 sqlite_i64(value.modified_messages)?,
                 sqlite_i64(value.probable_messages)?,
+                sqlite_i64(value.rfc_message_id_matches)?,
+                sqlite_i64(value.synthetic_identity_matches)?,
             ],
         )?;
         if let Some(flags) = value.flag_verification {
@@ -564,6 +568,8 @@ impl StateStore {
         let extra_messages = sqlite_i64(value.extra_messages)?;
         let modified_messages = sqlite_i64(value.modified_messages)?;
         let probable_messages = sqlite_i64(value.probable_messages)?;
+        let rfc_message_id_matches = sqlite_i64(value.rfc_message_id_matches)?;
+        let synthetic_identity_matches = sqlite_i64(value.synthetic_identity_matches)?;
         let persisted_run_id = if run_id == "legacy" {
             if let Some(existing_run_id) = tx
                 .query_row(
@@ -585,7 +591,7 @@ impl StateStore {
         } else {
             run_id.to_owned()
         };
-        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![job_id, persisted_run_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
+        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,rfc_message_id_matches,synthetic_identity_matches) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)", params![job_id, persisted_run_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages, rfc_message_id_matches, synthetic_identity_matches])?;
         upsert_evidence_projection(
             &tx,
             job_id,
@@ -599,7 +605,7 @@ impl StateStore {
     }
     #[cfg(test)]
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
-        self.connection.query_row("SELECT e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM evidence e LEFT JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id WHERE e.job_id=?1", [job_id], |r| Ok(MailboxEvidence { verification_method: VerificationMethod::parse(&r.get::<_, String>(0)?).ok_or(rusqlite::Error::InvalidQuery)?, verification_outcome: Some(VerificationOutcome::parse(&r.get::<_, String>(1)?).ok_or(rusqlite::Error::InvalidQuery)?), source_messages: sqlite_u64(r.get(2)?)?, destination_messages: sqlite_u64(r.get(3)?)?, source_bytes: sqlite_u64(r.get(4)?)?, destination_bytes: sqlite_u64(r.get(5)?)?, unmatched_messages: sqlite_optional_u64(r.get(6)?)?, failed_messages: sqlite_u64(r.get(7)?)?, source_folders: sqlite_u64(r.get(8)?)?, destination_folders: sqlite_u64(r.get(9)?)?, authoritative:r.get::<_, i64>(10)? != 0, missing_messages: sqlite_u64(r.get(11)?)?, extra_messages: sqlite_u64(r.get(12)?)?, modified_messages: sqlite_u64(r.get(13)?)?, probable_messages: sqlite_u64(r.get(14)?)?, flag_verification: flag_verification_from_row(r, 15)? })).optional()
+        self.connection.query_row("SELECT e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,e.rfc_message_id_matches,e.synthetic_identity_matches,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM evidence e LEFT JOIN evidence_flag_verification f ON f.job_id=e.job_id AND f.run_id=e.run_id WHERE e.job_id=?1", [job_id], |r| Ok(MailboxEvidence { verification_method: VerificationMethod::parse(&r.get::<_, String>(0)?).ok_or(rusqlite::Error::InvalidQuery)?, verification_outcome: Some(VerificationOutcome::parse(&r.get::<_, String>(1)?).ok_or(rusqlite::Error::InvalidQuery)?), source_messages: sqlite_u64(r.get(2)?)?, destination_messages: sqlite_u64(r.get(3)?)?, source_bytes: sqlite_u64(r.get(4)?)?, destination_bytes: sqlite_u64(r.get(5)?)?, unmatched_messages: sqlite_optional_u64(r.get(6)?)?, failed_messages: sqlite_u64(r.get(7)?)?, source_folders: sqlite_u64(r.get(8)?)?, destination_folders: sqlite_u64(r.get(9)?)?, authoritative:r.get::<_, i64>(10)? != 0, missing_messages: sqlite_u64(r.get(11)?)?, extra_messages: sqlite_u64(r.get(12)?)?, modified_messages: sqlite_u64(r.get(13)?)?, probable_messages: sqlite_u64(r.get(14)?)?, rfc_message_id_matches: sqlite_u64(r.get(15)?)?, synthetic_identity_matches: sqlite_u64(r.get(16)?)?, flag_verification: flag_verification_from_row(r, 17)? })).optional()
     }
     #[cfg(test)]
     pub fn latest_evidence_for_run(
@@ -608,7 +614,7 @@ impl StateStore {
     ) -> rusqlite::Result<Option<(String, MailboxEvidence)>> {
         self.connection
             .query_row(
-                "SELECT h.run_id,h.verification_method,h.verification_outcome,h.source_messages,h.destination_messages,h.source_bytes,h.destination_bytes,h.unmatched_messages,h.failed_messages,h.source_folders,h.destination_folders,h.authoritative,h.missing_messages,h.extra_messages,h.modified_messages,h.probable_messages,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM evidence_history h LEFT JOIN evidence_flag_verification f ON f.job_id=h.job_id AND f.run_id=h.run_id WHERE h.job_id=?1 ORDER BY h.captured_at DESC, h.id DESC LIMIT 1",
+                "SELECT h.run_id,h.verification_method,h.verification_outcome,h.source_messages,h.destination_messages,h.source_bytes,h.destination_bytes,h.unmatched_messages,h.failed_messages,h.source_folders,h.destination_folders,h.authoritative,h.missing_messages,h.extra_messages,h.modified_messages,h.probable_messages,h.rfc_message_id_matches,h.synthetic_identity_matches,f.compared_messages,f.mismatched_messages,f.excepted_messages FROM evidence_history h LEFT JOIN evidence_flag_verification f ON f.job_id=h.job_id AND f.run_id=h.run_id WHERE h.job_id=?1 ORDER BY h.captured_at DESC, h.id DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok((
@@ -629,7 +635,9 @@ impl StateStore {
                             extra_messages: sqlite_u64(row.get(13)?)?,
                             modified_messages: sqlite_u64(row.get(14)?)?,
                             probable_messages: sqlite_u64(row.get(15)?)?,
-                            flag_verification: flag_verification_from_row(row, 16)?,
+                            rfc_message_id_matches: sqlite_u64(row.get(16)?)?,
+                            synthetic_identity_matches: sqlite_u64(row.get(17)?)?,
+                            flag_verification: flag_verification_from_row(row, 18)?,
                         },
                     ))
                 },
