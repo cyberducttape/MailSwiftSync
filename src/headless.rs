@@ -1236,7 +1236,7 @@ mod tests {
 
     #[test]
     fn support_references_are_stable_and_namespace_separated() {
-        let salt = [7_u8; 16];
+        let salt = uuid::Uuid::new_v4().into_bytes();
         let project = super::support_reference(&salt, "project", "same-ledger-id");
         assert_eq!(
             project,
@@ -1248,7 +1248,11 @@ mod tests {
         );
         assert_ne!(
             project,
-            super::support_reference(&[8_u8; 16], "project", "same-ledger-id")
+            super::support_reference(
+                &uuid::Uuid::new_v4().into_bytes(),
+                "project",
+                "same-ledger-id"
+            )
         );
         assert!(project.starts_with("project:"));
         assert_eq!(project.len(), "project:".len() + 64);
