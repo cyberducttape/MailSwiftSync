@@ -1,14 +1,14 @@
 use super::fetch_parser::{canonical_flag_set, parse_message_fetch_body_hashes_response_bytes};
 use super::{
     ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
-    MailboxFetchError, MessageFetchBudget, MessageStateBudget, StateReservation,
-    TaggedResponseScanner, authenticated_list_command, classify_mailbox_fetch_error,
-    format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
-    parse_message_fetch_metadata_response_bytes, parse_message_id_header, read_imap_list_response,
-    read_imap_list_response_with_mailboxes, read_with_deadline, record_list_entry,
-    tagged_response_outside_literals, write_imap_command,
+    MailboxFetchError, MessageFetchBudget, MessageSink, MessageStateBudget, StageMessageSink,
+    StateReservation, TaggedResponseScanner, authenticated_list_command,
+    classify_mailbox_fetch_error, format_folder_failures, parse_list_delimiter,
+    parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes, parse_message_id_header,
+    read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
+    record_list_entry, tagged_response_outside_literals, write_imap_command,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Cursor, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -992,4 +992,84 @@ fn account_failure_keeps_a_folder_limit_even_when_its_detail_is_omitted() {
     failures.remove("Z-large");
     let detail = format_folder_failures("imap.example", &failures, failures.len());
     assert_eq!(crate::core::VerificationLimit::from_detail(&detail), None);
+}
+
+#[test]
+fn resumed_stage_budget_counts_only_current_attempt_pages() {
+    let mut stage = crate::core::MessageMetadataStage::open_in_memory().unwrap();
+    let side = crate::core::StagedMessageSide::Source;
+    let snapshot = crate::core::FolderSnapshot {
+        uidvalidity: 42,
+        uidnext: 8,
+        exists: 1,
+    };
+    let stale = crate::core::ExtractedMessages::from([(
+        crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 42, "7"),
+        crate::core::ExtractedMessage {
+            message_id: Some("<old@example.test>".into()),
+            uid: Some("7".into()),
+            size_bytes: Some(64),
+            internal_date: None,
+            flags: Some("\\Seen".into()),
+        },
+    )]);
+    stage.begin_mailbox_scan(side, "INBOX", snapshot).unwrap();
+    stage.insert_messages(side, &stale).unwrap();
+    let retired_from_attempt = crate::core::ExtractedMessages::from([(
+        crate::core::MailboxMessageKey::with_uidvalidity("Archive", 9, "3"),
+        crate::core::ExtractedMessage {
+            message_id: Some("<archive@example.test>".into()),
+            uid: Some("3".into()),
+            size_bytes: Some(64),
+            internal_date: None,
+            flags: None,
+        },
+    )]);
+    stage
+        .begin_mailbox_scan(
+            side,
+            "Archive",
+            crate::core::FolderSnapshot {
+                uidvalidity: 9,
+                uidnext: 4,
+                exists: 1,
+            },
+        )
+        .unwrap();
+    stage.insert_messages(side, &retired_from_attempt).unwrap();
+
+    let mut sink = StageMessageSink {
+        stage: &mut stage,
+        side,
+        count: 0,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
+    };
+    sink.retain_mailboxes(&HashSet::from(["INBOX".to_owned(), "Archive".to_owned()]))
+        .unwrap();
+    assert_eq!(
+        sink.len(),
+        0,
+        "old staged rows are not current-attempt work"
+    );
+
+    sink.begin_mailbox_scan("INBOX", snapshot).unwrap();
+    let fresh = crate::core::ExtractedMessages::from([(
+        crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 42, "7"),
+        crate::core::ExtractedMessage {
+            message_id: Some("<new@example.test>".into()),
+            uid: Some("7".into()),
+            size_bytes: Some(64),
+            internal_date: None,
+            flags: None,
+        },
+    )]);
+    sink.insert_batch(&fresh).unwrap();
+    assert_eq!(sink.len(), 1);
+
+    // If the folder changes and is retried within this attempt, discard its
+    // prior fetched count without counting unrelated on-disk rows.
+    sink.rollback_mailbox("INBOX").unwrap();
+    assert_eq!(sink.len(), 0);
+    assert_eq!(sink.stage.count(side).unwrap(), 1);
 }

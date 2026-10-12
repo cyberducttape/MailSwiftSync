@@ -5,9 +5,10 @@
 - Bound `doctor` engine-version output draining after the child exits; a
   detached descendant that inherits stdout/stderr can no longer hang
   diagnostics indefinitely, and incomplete capture is reported as blocked.
-- Clear both endpoints' prior staged rows, fingerprints, cursors, and flag
-  capabilities before a verification retry so deleted or renamed folders
-  cannot contribute stale evidence.
+- Prune staged rows for folders absent from a fresh endpoint LIST, then
+  atomically invalidate each live folder's messages, fingerprints, cursors,
+  and PERMANENTFLAGS before refetch. This prevents stale-folder evidence
+  without duplicating a mailbox-wide deletion journal on every retry.
 - Benchmark durable verification through the same SQLite-staged mismatch path
   used by live runs; the prior harness materialized mismatch details in memory
   and could hit its separate 64 MiB ephemeral-report limit on adversarial data.
@@ -30,10 +31,11 @@
   format marker on both durable and explicitly supplied report exports.
 - Compare duplicate-message FLAGS with streaming frequency maps, retaining one
   key per distinct canonical flag set instead of one entry per message.
-- Enforce full folder rescans after verification restarts: staged message rows
-  and body fingerprints are atomically discarded even when UIDVALIDITY,
-  UIDNEXT, and EXISTS are unchanged. Clarify retry guidance so durable cursors
-  are documented as recovery metadata, not reusable verification evidence.
+- Enforce fresh folder rescans after verification restarts: live folders are
+  atomically invalidated even when UIDVALIDITY, UIDNEXT, and EXISTS are
+  unchanged, while rows for deleted/renamed folders are pruned against fresh
+  LIST inventory. Body fingerprints are never reused and durable cursors are
+  recovery metadata, not reusable verification evidence.
 - Keep synthetic header fingerprints out of exact RFC Message-ID reconciliation. Persist RFC-ID and synthetic-candidate counts separately in evidence history and signed/report exports.
 - Exclude synthetic header identities from FLAGS and keyword fidelity coverage; only real RFC Message-ID groups establish comparable flag pairs.
 - Refresh automatic OAuth credentials on native verifier reconnects and before standalone re-verification, not only before live transfer and imapsync reconnects.

@@ -324,18 +324,23 @@ trait MessageSink {
     ) -> Result<(), String> {
         Ok(())
     }
+    fn retain_mailboxes(&mut self, _mailboxes: &HashSet<String>) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct StageMessageSink<'a> {
     stage: &'a mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
     count: usize,
+    mailbox_counts: HashMap<String, usize>,
+    active_mailbox: Option<String>,
 }
 
 impl MessageSink for StageMessageSink<'_> {
     fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String> {
         self.stage.insert_messages(self.side, messages)?;
-        self.count = self.count.saturating_add(messages.len());
+        self.add_current_attempt_messages(messages.len())?;
         Ok(())
     }
 
@@ -346,16 +351,24 @@ impl MessageSink for StageMessageSink<'_> {
     ) -> Result<(), String> {
         self.stage
             .insert_messages_with_fingerprints(self.side, messages, fingerprints)?;
-        self.count = self.count.saturating_add(messages.len());
+        self.add_current_attempt_messages(messages.len())?;
         Ok(())
     }
 
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String> {
         self.stage.delete_mailbox(self.side, mailbox)?;
-        self.count = self
-            .stage
-            .count(self.side)
-            .map_err(|error| error.to_string())? as usize;
+        self.reset_mailbox_count(mailbox);
+        if self.active_mailbox.as_deref() == Some(mailbox) {
+            self.active_mailbox = None;
+        }
+        Ok(())
+    }
+
+    fn retain_mailboxes(&mut self, mailboxes: &HashSet<String>) -> Result<(), String> {
+        self.stage.retain_mailboxes(self.side, mailboxes)?;
+        self.count = 0;
+        self.mailbox_counts.clear();
+        self.active_mailbox = None;
         Ok(())
     }
 
@@ -403,10 +416,8 @@ impl MessageSink for StageMessageSink<'_> {
     ) -> Result<(), String> {
         self.stage
             .begin_mailbox_scan(self.side, mailbox, snapshot)?;
-        self.count = self
-            .stage
-            .count(self.side)
-            .map_err(|error| error.to_string())? as usize;
+        self.reset_mailbox_count(mailbox);
+        self.active_mailbox = Some(mailbox.to_owned());
         Ok(())
     }
 
@@ -428,6 +439,36 @@ impl MessageSink for StageMessageSink<'_> {
     ) -> Result<(), String> {
         self.stage
             .complete_mailbox(self.side, mailbox, snapshot, last_uid)
+    }
+}
+
+impl StageMessageSink<'_> {
+    fn add_current_attempt_messages(&mut self, count: usize) -> Result<(), String> {
+        let mailbox = self
+            .active_mailbox
+            .clone()
+            .ok_or_else(|| "message page arrived before a folder scan began".to_owned())?;
+        let total = self
+            .count
+            .checked_add(count)
+            .ok_or_else(|| "verification message count overflowed".to_owned())?;
+        let mailbox_count = self
+            .mailbox_counts
+            .get(&mailbox)
+            .copied()
+            .unwrap_or_default()
+            .checked_add(count)
+            .ok_or_else(|| "verification folder message count overflowed".to_owned())?;
+        self.count = total;
+        self.mailbox_counts.insert(mailbox, mailbox_count);
+        Ok(())
+    }
+
+    fn reset_mailbox_count(&mut self, mailbox: &str) {
+        if let Some(previous) = self.mailbox_counts.remove(mailbox) {
+            self.count = self.count.saturating_sub(previous);
+        }
+        self.mailbox_counts.insert(mailbox.to_owned(), 0);
     }
 }
 
@@ -833,8 +874,8 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         uidnext,
         exists: start_exists,
     };
-    sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
     sink.begin_mailbox_scan(mailbox, snapshot)?;
+    sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
     let enumerated_uid_count = enumerate_uid_pages(
         stream,
         host,
@@ -1295,6 +1336,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     mailboxes.sort();
     mailboxes.dedup();
     let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
+    sink.retain_mailboxes(&mailbox_inventory)?;
     let mut total_exists = 0_u64;
     let mut incomplete_folders = HashMap::new();
     let mut incomplete_folder_count = 0_usize;
@@ -1438,13 +1480,13 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding_ref
     stage: &mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
 ) -> Result<FetchedAccountSummary, String> {
-    let count = stage.count(side).map_err(|error| error.to_string())? as usize;
-    if body_hash.is_some() && count > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT {
-        return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
-            "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
-        )));
-    }
-    let mut sink = StageMessageSink { stage, side, count };
+    let mut sink = StageMessageSink {
+        stage,
+        side,
+        count: 0,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
+    };
     fetch_tls_account_messages_with_sink(
         host,
         user,

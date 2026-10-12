@@ -204,11 +204,12 @@ fn scan_with(
         max_body_bytes: 1 << 20,
         budget: &body_budget,
     };
-    let count = stage.count(SIDE).unwrap() as usize;
     let mut sink = StageMessageSink {
         stage,
         side: SIDE,
-        count,
+        count: 0,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
     };
     fetch_mailbox_with_stability_retry(
         server,

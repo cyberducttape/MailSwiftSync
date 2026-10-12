@@ -1,7 +1,7 @@
 //! Private SQLite staging for live metadata reconciliation.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     path::{Path, PathBuf},
 };
@@ -615,28 +615,27 @@ impl MessageMetadataStage {
         side: StagedMessageSide,
         mailbox: &str,
     ) -> Result<(), String> {
+        let tx = self
+            .connection()?
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        for table in [
+            "staged_messages",
+            "stage_fingerprints",
+            "stage_cursors",
+            "stage_permanent_flags",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE side=?1 AND mailbox=?2"),
+                params![side.as_i64(), mailbox],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        tx.commit().map_err(|error| error.to_string())?;
         self.content_fingerprints
             .retain(|(fingerprint_side, key), _| {
                 *fingerprint_side != side || key.mailbox.as_ref() != mailbox
             });
-        self.connection()?
-            .execute(
-                "DELETE FROM staged_messages WHERE side=?1 AND mailbox=?2",
-                params![side.as_i64(), mailbox],
-            )
-            .map_err(|e| e.to_string())?;
-        self.connection()?
-            .execute(
-                "DELETE FROM stage_fingerprints WHERE side=?1 AND mailbox=?2",
-                params![side.as_i64(), mailbox],
-            )
-            .map_err(|e| e.to_string())?;
-        self.connection()?
-            .execute(
-                "DELETE FROM stage_cursors WHERE side=?1 AND mailbox=?2",
-                params![side.as_i64(), mailbox],
-            )
-            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -659,7 +658,12 @@ impl MessageMetadataStage {
             .connection()?
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
-        for table in ["staged_messages", "stage_fingerprints", "stage_cursors"] {
+        for table in [
+            "staged_messages",
+            "stage_fingerprints",
+            "stage_cursors",
+            "stage_permanent_flags",
+        ] {
             tx.execute(
                 &format!("DELETE FROM {table} WHERE side=?1 AND mailbox=?2"),
                 params![side.as_i64(), mailbox],
@@ -801,28 +805,66 @@ impl MessageMetadataStage {
             .map_err(|error| error.to_string())
     }
 
-    /// Start a fresh account-wide verification attempt. Per-folder rescan
-    /// invalidation alone cannot remove staged rows for folders that were
-    /// deleted or renamed since an interrupted attempt. None of the old
-    /// messages, fingerprints, cursors, or advertised permanent flags are
-    /// reusable proof, so clear both endpoint inventories before fetching.
+    /// Start a new verification attempt. Reconciliation artifacts and
+    /// in-memory body proofs never cross attempt boundaries. Persisted folder
+    /// rows are pruned against each endpoint's fresh LIST and then invalidated
+    /// folder-by-folder before refetch, avoiding a mailbox-wide delete journal.
     pub(crate) fn begin_verification_attempt(&mut self) -> Result<(), String> {
         self.reset_reconciliation()?;
+        self.content_fingerprints.clear();
+        Ok(())
+    }
+
+    /// Keep staged data only for selectable folders in the current endpoint
+    /// inventory. All retained folders are still fully invalidated by
+    /// `begin_mailbox_scan` before they are fetched; this removes only orphaned
+    /// folders without journaling a second account-wide deletion.
+    pub(crate) fn retain_mailboxes(
+        &mut self,
+        side: StagedMessageSide,
+        current_mailboxes: &HashSet<String>,
+    ) -> Result<(), String> {
         let tx = self
             .connection()?
             .unchecked_transaction()
             .map_err(|error| error.to_string())?;
         tx.execute_batch(
-            "DELETE FROM staged_messages;
-             DELETE FROM stage_fingerprints;
-             DELETE FROM stage_cursors;
-             DELETE FROM stage_permanent_flags;",
+            "CREATE TEMP TABLE IF NOT EXISTS stage_current_mailboxes(
+                mailbox TEXT PRIMARY KEY
+             ) WITHOUT ROWID;
+             DELETE FROM stage_current_mailboxes;",
         )
-        .map_err(|error| format!("could not invalidate prior verification attempt: {error}"))?;
-        tx.commit().map_err(|error| {
-            format!("could not commit verification-stage invalidation: {error}")
-        })?;
-        self.content_fingerprints.clear();
+        .map_err(|error| format!("could not prepare current folder inventory: {error}"))?;
+        {
+            let mut insert = tx
+                .prepare_cached("INSERT INTO stage_current_mailboxes(mailbox) VALUES(?1)")
+                .map_err(|error| format!("could not prepare current folder inventory: {error}"))?;
+            for mailbox in current_mailboxes {
+                insert.execute([mailbox]).map_err(|error| {
+                    format!("could not stage current folder inventory: {error}")
+                })?;
+            }
+        }
+        for table in [
+            "staged_messages",
+            "stage_fingerprints",
+            "stage_cursors",
+            "stage_permanent_flags",
+        ] {
+            tx.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE side=?1 AND mailbox NOT IN \
+                     (SELECT mailbox FROM stage_current_mailboxes)"
+                ),
+                [side.as_i64()],
+            )
+            .map_err(|error| format!("could not prune stale verification folders: {error}"))?;
+        }
+        tx.commit()
+            .map_err(|error| format!("could not commit verification folder inventory: {error}"))?;
+        self.content_fingerprints.retain(|(stored_side, key), _| {
+            *stored_side != side || current_mailboxes.contains(key.mailbox.as_ref())
+        });
         Ok(())
     }
 
@@ -1273,6 +1315,43 @@ mod tests {
     }
 
     #[test]
+    fn beginning_a_fresh_folder_scan_invalidates_old_permanent_flags() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        let side = StagedMessageSide::Source;
+        stage
+            .record_permanent_flags(side, "INBOX", Some("\\Seen \\*"))
+            .unwrap();
+
+        stage
+            .begin_mailbox_scan(side, "INBOX", snapshot(42, 8, 0))
+            .unwrap();
+        let rows: i64 = stage
+            .connection_ref()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM stage_permanent_flags WHERE side=?1 AND mailbox='INBOX'",
+                [side.as_i64()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
+
+        stage
+            .record_permanent_flags(side, "INBOX", Some("\\Seen \\*"))
+            .unwrap();
+        let flags: Option<String> = stage
+            .connection_ref()
+            .unwrap()
+            .query_row(
+                "SELECT flags FROM stage_permanent_flags WHERE side=?1 AND mailbox='INBOX'",
+                [side.as_i64()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(flags.as_deref(), Some("\\Seen \\*"));
+    }
+
+    #[test]
     fn durable_stage_reopen_invalidates_rows_and_content_fingerprints() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("verification.sqlite");
@@ -1295,10 +1374,11 @@ mod tests {
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
         assert_eq!(stage.count(side).unwrap(), 1);
         assert!(stage.content_fingerprints(side).is_empty());
-        // A retry invalidates every old folder, including its flags and
-        // persisted body fingerprints, before it starts enumerating folders.
+        // Opening a retry retains disk-backed metadata only as inert state:
+        // body fingerprints are not reloaded and no old cursor is used to
+        // skip a page. The fresh inventory/scan performs invalidation.
         stage.begin_verification_attempt().unwrap();
-        assert_eq!(stage.count(side).unwrap(), 0);
+        assert_eq!(stage.count(side).unwrap(), 1);
         assert!(stage.content_fingerprints(side).is_empty());
         stage.finish().unwrap();
         assert!(!path.exists());
@@ -1311,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn new_attempt_discards_staged_folders_absent_from_current_inventory() {
+    fn fresh_inventory_prunes_retired_folders_and_live_scans_replace_stale_state() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("verification.sqlite");
         let snapshot = snapshot(42, 8, 1);
@@ -1347,14 +1427,20 @@ mod tests {
 
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
         stage.begin_verification_attempt().unwrap();
-        assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 0);
-        assert_eq!(stage.count(StagedMessageSide::Destination).unwrap(), 0);
-        assert!(stage.folder_cursors().unwrap().is_empty());
+        assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 1);
+        assert_eq!(stage.count(StagedMessageSide::Destination).unwrap(), 1);
         assert!(
             stage
                 .content_fingerprints(StagedMessageSide::Source)
                 .is_empty()
         );
+        let current_inventory = HashSet::from(["INBOX".to_owned()]);
+        for side in [StagedMessageSide::Source, StagedMessageSide::Destination] {
+            stage.retain_mailboxes(side, &current_inventory).unwrap();
+        }
+        assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 0);
+        assert_eq!(stage.count(StagedMessageSide::Destination).unwrap(), 0);
+        assert!(stage.folder_cursors().unwrap().is_empty());
         let fingerprint_rows: i64 = stage
             .connection_ref()
             .unwrap()

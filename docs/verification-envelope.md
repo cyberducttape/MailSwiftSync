@@ -183,9 +183,14 @@ state a client cannot store.
 ## Snapshot and cutover semantics
 
 The source and destination scans are not one atomic cross-server snapshot.
-At retry start, all staged rows and fingerprints from both endpoint scans are
-invalidated, including rows belonging to folders that have since been deleted
-or renamed.
+At retry start, prior reconciliation artifacts are removed and body
+fingerprints are not reloaded. After each endpoint's fresh LIST, rows,
+cursors, fingerprints, and permanent-flag capabilities for folders no longer
+selectable are pruned. Rows for currently listed folders can remain in SQLite
+until that folder is reached, but they are inert: the folder's scan-start
+transaction clears its old rows and capabilities before staging current
+data. This avoids an additional account-wide deletion journal while ensuring
+deleted or renamed folders cannot enter reconciliation.
 Each selected folder is checked for internal stability using its
 `UIDVALIDITY`, `UIDNEXT`, and `EXISTS` values and a second bounded FLAGS pass.
 The latter catches flag changes between the initial FETCH and the flag check;
@@ -225,9 +230,11 @@ transfer process. While verification is incomplete, its private SQLite stage
 retains one cursor per source and destination folder containing the folder
 snapshot (`UIDVALIDITY`, `UIDNEXT`, and `EXISTS`), the last staged UID, a
 completion flag, and the staged-row count. Each metadata or body-fingerprint
-page is committed before its cursor advances. On a new attempt, the staging
-layer atomically clears a folder's prior rows and body fingerprints and writes
-a fresh cursor, regardless of whether the snapshot matches. The cursor is
+page is committed before its cursor advances. On a new attempt, a fresh LIST
+prunes folders no longer selectable; when each current folder is reached, the
+staging layer atomically clears its prior rows, body fingerprints, cursor, and
+PERMANENTFLAGS and writes a fresh cursor, regardless of whether the snapshot
+matches. The cursor is
 recovery metadata only; it never authorizes skipping saved pages, because
 mutable FLAGS can change without changing the snapshot values, and the snapshot
 cannot validate previously fetched body fingerprints. This means a controller
@@ -385,7 +392,8 @@ project report exposes it per run as `verification_limit` (`code`,
 "Retryable" means the same plan may make progress on another attempt; it does
 not mean staged message pages are reused. Every new verification attempt
 atomically clears prior message rows and body fingerprints for a folder before
-fetching it again, even when UIDVALIDITY, UIDNEXT, and EXISTS are unchanged.
+fetching it again, even when UIDVALIDITY, UIDNEXT, and EXISTS are unchanged;
+folders absent from the fresh LIST are pruned before scanning begins.
 The stored cursor is diagnostic recovery/progress metadata only. A folder that
 stops at a limit tags the whole account result, even
 when its own detail is truncated from the folder-failure summary. A single
