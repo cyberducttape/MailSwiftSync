@@ -291,12 +291,13 @@ runtime image. Its proofs are smoke artifacts, not release qualification.
    validates the product's one-shot token-exchange path and provider IMAP
    access, but the harness supplies static access-token files to the migration
    profile. Separately, the packaged integration lab uses a credential-free
-   scripted IMAP peer to prove that imapsync 2.314 invokes both configured
-   refresh callbacks before XOAUTH2 authentication and reads the updated token
-   files. That deterministic engine-contract test does not qualify real-provider
-   expiry, reconnect behavior after expiry, refresh-token rotation, or long-lived
-   transfers. Those remain open until a short-lived-token/reconnect scenario is
-   exercised against real disposable provider mailboxes.
+   scripted IMAP peer to force a socket drop after OAuth login and prove that
+   imapsync 2.314 invokes both configured refresh callbacks before XOAUTH2
+   reauthentication and rereads the updated token files. That deterministic
+   engine-contract test does not qualify real-provider expiry, refresh-token
+   rotation, or long-lived transfers. Those remain open until a short-lived-token
+   scenario is exercised during migration against real disposable provider
+   mailboxes.
 
 Microsoft rotates refresh tokens on use and expires unused ones after about
 90 days; the job can only rewrite its temporary copy, so re-export and update

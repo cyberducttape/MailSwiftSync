@@ -76,12 +76,12 @@ fn live_provider_smoke_does_not_claim_mid_transfer_oauth_refresh_qualification()
 
     assert!(workflow.contains("does NOT prove mid-transfer token renewal"));
     assert!(workflow.contains("does not configure imapsync's per-reconnect refresh"));
-    assert!(guide.contains("scripted IMAP peer"));
-    assert!(guide.contains("invokes both configured"));
+    assert!(guide.contains("scripted IMAP peer to force a socket drop"));
+    assert!(guide.contains("invokes both configured refresh callbacks"));
     assert!(guide.contains("does not qualify real-provider"));
-    assert!(guide.contains("short-lived-token/reconnect scenario"));
-    assert!(recovery.contains("does not exercise expiry during a transfer"));
-    assert!(recovery.contains("requires a short-lived-token expiry/reconnect test"));
+    assert!(guide.contains("Those remain open until a short-lived-token"));
+    assert!(recovery.contains("does not exercise provider token expiry during transfer"));
+    assert!(recovery.contains("requires a short-lived-token expiry test"));
 }
 
 #[test]
