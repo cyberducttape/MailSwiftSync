@@ -1066,9 +1066,14 @@ echo "PASS: MailSwiftSync product integration verified $destination_messages mes
 # difference rather than report a silently verified result.
 run_interruption_drill() {
   local label="$1" useuid="$2" strict="$3" restore="${4:-}"
+  local drill_messages="${5:-60}" payload_bytes="${6:-0}"
+  local max_bytes_per_second="${7:-0}"
   local drill_user="drill-$label@example.test"
-  local drill_messages=60
   local name index drill_filename
+  if (( payload_bytes > 0 && max_bytes_per_second == 0 )); then
+    echo "FAIL: interruption drill ($label) needs a byte throttle to observe a partial APPEND" >&2
+    exit 1
+  fi
   for name in source destination; do
     mkdir -p "$workspace/$name/mail/$drill_user/Maildir"/{cur,new,tmp}
     printf '%s:{PLAIN}%s:%s:%s::%s::\n' "$drill_user" "$password" "$mail_uid" "$mail_gid" \
@@ -1076,9 +1081,13 @@ run_interruption_drill() {
   done
   for ((index = 1; index <= drill_messages; index++)); do
     printf -v drill_filename 'drill-%03d.eml' "$index"
+    local drill_path="$workspace/source/mail/$drill_user/Maildir/new/$drill_filename"
     printf 'From: drill-lab@example.test\nTo: %s\nSubject: Interruption drill %d\nMessage-ID: <mailswiftsync-drill-%s-%03d@example.test>\nDate: Tue, 01 Jan 2030 03:00:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nInterruption drill message %d.\n' \
       "$drill_user" "$index" "$label" "$index" "$index" \
-      > "$workspace/source/mail/$drill_user/Maildir/new/$drill_filename"
+      > "$drill_path"
+    if (( payload_bytes > 0 )); then
+      head -c "$payload_bytes" /dev/zero | tr '\000' 'A' >> "$drill_path"
+    fi
   done
   for name in source destination; do
     chown -R "$mail_uid:$mail_gid" "$workspace/$name/mail/$drill_user"
@@ -1098,6 +1107,7 @@ run_interruption_drill() {
     -e "s/^source_user = .*/source_user = \"$drill_user\"/" \
     -e "s/^destination_user = .*/destination_user = \"$drill_user\"/" \
     -e "s/^max_messages_per_second = .*/max_messages_per_second = 2/" \
+    -e "s/^max_bytes_per_second = .*/max_bytes_per_second = $max_bytes_per_second/" \
     -e "s/^useuid = .*/useuid = $useuid/" \
     -e "s/^usecache = .*/usecache = $useuid/" \
     "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" > "$drill_config/mailswiftsync/profile.toml"
@@ -1114,19 +1124,50 @@ run_interruption_drill() {
     > "$drill_log" 2>&1 &
   local drill_pid=$!
   local drill_deadline=$((SECONDS + 120))
-  while (( $(drill_count) < 5 )); do
-    if ! kill -0 "$drill_pid" 2>/dev/null; then
-      echo "FAIL: interruption drill ($label) finished before it could be interrupted" >&2
-      tail -n 40 "$drill_log" >&2
-      exit 1
-    fi
-    if (( SECONDS > drill_deadline )); then
-      echo "FAIL: interruption drill ($label) transfer never started" >&2
-      tail -n 40 "$drill_log" >&2
-      exit 1
-    fi
-    sleep 0.2
-  done
+  if (( payload_bytes > 0 )); then
+    # Maildir APPEND writes to tmp until the full literal is accepted, then
+    # atomically moves it to new/cur. The byte throttle keeps this partial
+    # file observable long enough to kill the controller inside APPEND.
+    local partial_append_bytes expected_message_bytes
+    local message_path="$workspace/source/mail/$drill_user/Maildir/new/drill-001.eml"
+    expected_message_bytes=$(stat -c '%s' "$message_path")
+    partial_append_bytes=0
+    while (( partial_append_bytes <= 1048576 || partial_append_bytes >= expected_message_bytes )); do
+      if ! kill -0 "$drill_pid" 2>/dev/null; then
+        echo "FAIL: interruption drill ($label) finished before a partial APPEND was observed" >&2
+        tail -n 40 "$drill_log" >&2
+        exit 1
+      fi
+      if (( SECONDS > drill_deadline )); then
+        echo "FAIL: interruption drill ($label) never exposed a partial destination APPEND" >&2
+        find "$drill_destination/tmp" -maxdepth 1 -type f -printf '%s bytes %p\n' >&2 || true
+        tail -n 40 "$drill_log" >&2
+        exit 1
+      fi
+      partial_append_bytes=0
+      while IFS= read -r file_bytes; do
+        if (( file_bytes > partial_append_bytes )); then
+          partial_append_bytes=$file_bytes
+        fi
+      done < <(find "$drill_destination/tmp" -maxdepth 1 -type f -printf '%s\n')
+      sleep 0.1
+    done
+    echo "Interruption drill ($label): killing during APPEND at $partial_append_bytes of $expected_message_bytes bytes"
+  else
+    while (( $(drill_count) < 5 )); do
+      if ! kill -0 "$drill_pid" 2>/dev/null; then
+        echo "FAIL: interruption drill ($label) finished before it could be interrupted" >&2
+        tail -n 40 "$drill_log" >&2
+        exit 1
+      fi
+      if (( SECONDS > drill_deadline )); then
+        echo "FAIL: interruption drill ($label) transfer never started" >&2
+        tail -n 40 "$drill_log" >&2
+        exit 1
+      fi
+      sleep 0.2
+    done
+  fi
   kill -KILL "$drill_pid"
   wait "$drill_pid" 2>/dev/null || true
   local copied_before_kill
@@ -1181,5 +1222,8 @@ run_interruption_drill() {
 
 if [[ "$test_engine" != Dovecot ]] && (( scale_messages == 0 )); then
   run_interruption_drill defaults false strict restore
+  # 16 MiB at 1 MiB/s leaves an observable partial Maildir tmp file before the
+  # controller is killed, exercising failure inside a single APPEND literal.
+  run_interruption_drill large-append false strict "" 1 16777216 1048576
   run_interruption_drill uid-cache true flagged
 fi

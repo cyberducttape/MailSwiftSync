@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a real-engine interruption case that throttles a 16 MiB message and kills
+  the controller only after a partial Maildir APPEND is observable; CI
+  qualification for this new case is pending.
 - Record the real-engine interruption/restore qualification accurately: the
   default imapsync plan resumes a partially transferred fixture from a restored
   ledger and verifies the exact message count; large-message mid-APPEND and

@@ -152,6 +152,26 @@ fn crash_recovery_docs_match_the_restored_ledger_integration_drill() {
 }
 
 #[test]
+fn integration_harness_contains_a_throttled_mid_append_interruption_case() {
+    let harness = fs::read_to_string("scripts/imap-integration-smoke.sh")
+        .expect("IMAP integration harness should exist");
+    let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation matrix should exist");
+
+    assert!(
+        harness
+            .contains("run_interruption_drill large-append false strict \"\" 1 16777216 1048576")
+            && harness.contains("16 MiB at 1 MiB/s leaves an observable partial Maildir tmp file")
+            && harness.contains("partial APPEND was observed"),
+        "the integration drill must wait for an incomplete large-message APPEND before killing the controller"
+    );
+    assert!(
+        recovery.contains("qualification is pending its CI run"),
+        "the crash-recovery matrix must not call the new scenario proven before CI exercises it"
+    );
+}
+
+#[test]
 fn documented_scale_workflow_timeout_matches_release_readiness() {
     let workflow = fs::read_to_string(".github/workflows/scale-qualification.yml")
         .expect("scale qualification workflow should exist");
