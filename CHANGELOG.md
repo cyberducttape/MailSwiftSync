@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remove unused `MPL-2.0` and `OpenSSL` entries from the dependency-license
+  allowlist so future crates require an explicit license review.
 - Retain durable verification staging when the evidence commit is rejected
   and the controller falls back to an operator-attention run; cleanup now
   occurs only after the evidence-bearing terminal transaction succeeds.
