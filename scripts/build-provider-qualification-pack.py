@@ -301,7 +301,7 @@ def build_pack(evidence_dir: Path, source: str, destination: str, policy_path: P
     tested_at = sorted(phase["tested_at"] for phase in phases)
     pack = {
         "format": "mailswiftsync-provider-qualification-pack",
-        "schema_version": 1,
+        "schema_version": 2,
         "provider_pair": pair,
         # This summary is not itself qualification evidence. Promotion remains
         # gated by signed evidence and the authoritative release validator.

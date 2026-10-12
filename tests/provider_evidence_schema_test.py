@@ -77,6 +77,7 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
 
     def test_qualification_pack_schema_cannot_claim_release_qualification(self):
         properties = self.pack_schema["properties"]
+        self.assertEqual(properties["schema_version"].get("const"), 2)
         self.assertEqual(properties["status"].get("const"), "qualification_candidate")
         self.assertEqual(properties["release_gate_required"].get("const"), True)
         phase_properties = properties["phases"]["items"]["properties"]

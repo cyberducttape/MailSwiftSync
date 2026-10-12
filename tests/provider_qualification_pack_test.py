@@ -126,6 +126,7 @@ class ProviderQualificationPackTests(unittest.TestCase):
 
     def test_pack_is_candidate_and_redacts_free_text_issue_details(self):
         pack = self.build()
+        self.assertEqual(pack["schema_version"], 2)
         self.assertEqual(pack["status"], "qualification_candidate")
         self.assertTrue(pack["release_gate_required"])
         serialized = json.dumps(pack)

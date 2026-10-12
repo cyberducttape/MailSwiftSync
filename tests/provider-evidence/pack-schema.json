@@ -19,7 +19,7 @@
   ],
   "properties": {
     "format": {"const": "mailswiftsync-provider-qualification-pack"},
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "provider_pair": {"type": "string", "pattern": "^[a-z0-9_]+->[a-z0-9_]+$"},
     "status": {"const": "qualification_candidate"},
     "release_gate_required": {"const": true},
