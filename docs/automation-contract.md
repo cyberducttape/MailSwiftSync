@@ -33,6 +33,14 @@ contains a mailbox ID, a `completed` or `failed` status, and either the normal
 `failed` count as incomplete evidence; the batch envelope is not a global
 point-in-time snapshot.
 
+`mailswiftsync risk <messages> <folders> <bytes>` emits the versioned
+`mailswiftsync-pre-migration-risk` format, version `1`. Its readiness score is
+explicitly `scale_only` and `advisory_only`; `not_evaluated` lists provider
+qualification, authentication, TLS, destination capacity, verification
+eligibility, worker disk capacity, maintenance window, and organization
+policy. A `ready` result means only that none of the scale-only warnings
+triggered. It never clears or substitutes for those unevaluated gates.
+
 The JSON contains project identity, durable lifecycle state, mailbox state
 counts, attention reasons, and bounded project summaries. Each fixture lists
 every field path with its allowed JSON types; `[]` marks array elements and
