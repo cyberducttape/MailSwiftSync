@@ -27,8 +27,8 @@ configured verifier produced authoritative evidence for the same run and plan.
 
 ## Recent non-qualifying generic-lab evidence
 
-The following reproducible lab run is retained as engineering evidence only;
-it does not satisfy the required size matrix, direct-imapsync comparison,
+The following reproducible lab runs are retained as engineering evidence
+only; they do not satisfy the required size matrix, direct-imapsync comparison,
 provider qualification, or signed-result acceptance criteria.
 
 | Field | Observed value |
@@ -44,11 +44,24 @@ provider qualification, or signed-result acceptance criteria.
 | Sampled resources | 373,397,913-byte sampled peak container memory; cgroup peak anonymous 223,051,776 bytes and file cache 2,251,911,168 bytes |
 | Artifact | [Actions artifact 11724766653](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38197707897/artifacts/11724766653), archive SHA-256 `39cb92158efc925a306ce88ab3c9830052355fb8e6d25a8dc6429aa382da8e3b` |
 
+| Field | Observed value |
+|---|---|
+| GitHub Actions run | [38198688096](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38198688096) |
+| MailSwiftSync commit | `f99dfa4ed11596b5b219fa91bbaa76295e867270` |
+| Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)` |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875` |
+| Scenario | 100,000 generated messages; small-message payload shape |
+| Harness wall time | 1,052 seconds; first live pass 15m04s and incremental live pass 79s, based on recorded phase markers |
+| Initial proof | 100,016 source and destination messages / 28,681,943 bytes; zero missing, extra, modified, or flag-mismatched messages; 100% FLAGS coverage; metadata only, bodies not compared |
+| Post-delta proof | 100,017 source and destination messages; zero missing, extra, modified, or unmatched messages; metadata only, bodies not compared |
+| Sampled resources | 1,270,236,577-byte sampled peak container memory; cgroup peak anonymous 533,807,104 bytes and file cache 1,208,299,520 bytes; sampled imapsync Perl RSS peak 472,309,760 bytes |
+| Artifact | [Actions artifact 11724779821](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38198688096/artifacts/11724779821), archive SHA-256 `033917ecc0d77c7d03ca65ef3a77f094f3495fb460db03c6cb4a258de442f32f` |
+
 The artifact is an unsigned CI artifact (the customer-proof JSON is
 digest-wrapped, not independently signed). Its retention expires on
-2027-01-10. This result is specific to the disposable fixture and must not be
-presented as a hosted-provider, content-integrity, 10/50/100-GiB, or
-production-readiness claim.
+2027-01-10 for both runs. These results are specific to the disposable fixture
+and must not be presented as hosted-provider, content-integrity, 1/10/50/100-GiB
+large-mailbox, or production-readiness qualification.
 
 ## Required measurements
 
