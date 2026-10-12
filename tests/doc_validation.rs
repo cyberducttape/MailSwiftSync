@@ -33,6 +33,9 @@ fn systemd_service_example_uses_a_restricted_worker_sandbox() {
         .expect("service deployment guide should exist");
     assert!(guide.contains("mailswiftsync-supervise.service"));
     assert!(guide.contains("/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service"));
+    assert!(guide.contains("it is not a D-Bus session bus"));
+    assert!(guide.contains("DBUS_SESSION_BUS_ADDRESS"));
+    assert!(guide.contains("Do not copy a desktop operator's bus address"));
     for directive in [
         "User=mailswiftsync",
         "NoNewPrivileges=true",

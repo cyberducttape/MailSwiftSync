@@ -58,6 +58,17 @@ Before starting the service, confirm the operational hand-off:
   authenticated read-only preflight under the service identity before
   admitting live work. If that backend cannot be made reliably available, do
   not treat keyring references as provisioned for unattended service use.
+- The sample unit sets `XDG_RUNTIME_DIR=/run/mailswiftsync` to a private
+  runtime directory; it is not a D-Bus session bus. If the selected Linux
+  keyring backend uses Secret Service, provision a persistent user bus and
+  keyring lifecycle for the dedicated service account, then configure
+  `DBUS_SESSION_BUS_ADDRESS` in a systemd drop-in to that account's bus only
+  after verifying its socket path and permissions on the target distribution.
+  Do not copy a desktop operator's bus address or point the service at another
+  UID's bus. The bus and keyring must be available and usable after reboot,
+  without an interactive desktop login; otherwise unattended keyring-backed
+  OAuth is not provisioned. Re-run the authenticated preflight with the final
+  drop-in and sandbox.
 - The service account can access the approved engine executable, runtime
   directory, ledger, and any explicitly configured trust bundle, but not
   unrelated customer files.
