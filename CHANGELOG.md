@@ -10,7 +10,7 @@
   pack, omit free-text issue details, and publish output privately without
   overwriting an existing artifact. Bind pack-wide claims and summaries in the
   evidence digest, not only the phase array. Reject unknown environment
-  identities and bump the breaking candidate-pack contract to schema version 2.
+  identities and bump the breaking candidate-pack contract to format v2.
 - Cancel capture, live-transfer, and doctor pipe drainers when bounded draining
   times out. Revocation releases secret references and readiness polling lets
   reader threads exit even when detached descendants retain inherited pipes;

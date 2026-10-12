@@ -26,7 +26,7 @@ is not a signature or proof that the evidence was independently authenticated.
 The output shape is defined by
 `tests/provider-evidence/pack-schema.json`; downstream tooling should validate
 the candidate against that schema before further handling. The current
-breaking candidate/status and provenance contract is schema version 2; version
+breaking candidate/status and provenance contract is pack format v2; version
 1 packs are not interchangeable with it.
 
 The builder refuses missing or duplicate phases, mixed identities or datasets,
