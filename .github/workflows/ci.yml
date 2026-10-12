@@ -191,7 +191,10 @@ jobs:
 
   cross-platform-build:
     name: Build (${{ matrix.target }})
-    timeout-minutes: 20
+    # A clean release compile can exceed 20 minutes on hosted runners for the
+    # x86_64 Linux target; retain a finite bound while allowing that measured
+    # workload to finish.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

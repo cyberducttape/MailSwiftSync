@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Raise the bounded cross-platform release-build job timeout from 20 to 30
+  minutes after the clean x86_64 Linux target compile exceeded the prior CI
+  limit; keep the existing per-job timeout rather than disabling the guard.
 - Make the provider cooldown reset test use an injected monotonic timestamp
   instead of subtracting elapsed time from `Instant::now()`. Windows can start
   with a monotonic clock origin less than the test's simulated quiet period,
