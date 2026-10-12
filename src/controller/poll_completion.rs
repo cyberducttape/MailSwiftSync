@@ -507,6 +507,33 @@ mod tests {
         result.unwrap()
     }
 
+    fn exact_metadata_evidence() -> core::MailboxEvidence {
+        core::MailboxEvidence {
+            verification_method: core::VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(core::VerificationOutcome::ExactMetadataMatch),
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 8,
+            destination_bytes: 8,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            rfc_message_id_matches: 1,
+            synthetic_identity_matches: 0,
+            flag_verification: Some(core::FlagVerification {
+                compared_messages: 1,
+                mismatched_messages: 0,
+                excepted_messages: 0,
+            }),
+        }
+    }
+
     #[test]
     fn completed_transfer_with_a_verification_limit_records_the_limit_for_review() {
         let error = core::VerificationLimit::BodyHashMessageCount
@@ -677,32 +704,10 @@ mod tests {
                 verification_state_path: Some(stage_state_path),
             });
             app.run_id = Some("committed-run".into());
-            let evidence = core::MailboxEvidence {
-                verification_method: core::VerificationMethod::MetadataReconciliation,
-                verification_outcome: Some(core::VerificationOutcome::ExactMetadataMatch),
-                source_messages: 1,
-                destination_messages: 1,
-                source_bytes: 8,
-                destination_bytes: 8,
-                unmatched_messages: Some(0),
-                failed_messages: 0,
-                source_folders: 1,
-                destination_folders: 1,
-                authoritative: false,
-                missing_messages: 0,
-                extra_messages: 0,
-                modified_messages: 0,
-                probable_messages: 0,
-                rfc_message_id_matches: 1,
-                synthetic_identity_matches: 0,
-                flag_verification: Some(core::FlagVerification {
-                    compared_messages: 1,
-                    mismatched_messages: 0,
-                    excepted_messages: 0,
-                }),
-            };
             let (sender, receiver) = std::sync::mpsc::sync_channel(8);
-            sender.send(Event::Evidence(evidence)).unwrap();
+            sender
+                .send(Event::Evidence(exact_metadata_evidence()))
+                .unwrap();
             sender
                 .send(Event::Finished(Ok(StreamOutcome::Completed)))
                 .unwrap();
@@ -719,6 +724,85 @@ mod tests {
                 .unwrap();
             assert_eq!(snapshot.mailboxes[0].job.state, "verified");
             assert!(!stage_path.exists(), "committed evidence stage remains");
+        });
+    }
+
+    #[test]
+    fn cutover_lookup_error_preserves_phase_after_evidence_commit() {
+        with_app(|app| {
+            let project = app
+                .store
+                .create_project("cutover-read-failure", "source", "destination")
+                .unwrap();
+            app.store
+                .transition(&project.id, core::Phase::Preflight)
+                .unwrap();
+            let job = app
+                .store
+                .add_mailbox(
+                    &project.id,
+                    "source@example.test",
+                    "destination@example.test",
+                )
+                .unwrap();
+            app.store
+                .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
+                .unwrap();
+            let phase_before_completion = app
+                .store
+                .project_report_snapshot(&project.id)
+                .unwrap()
+                .unwrap()
+                .project
+                .phase;
+            app.store
+                .begin_run(&project.id, &job, "cutover-read-error-run", "imapsync")
+                .unwrap();
+            // Make only the cutover-stage SELECT fail. SQLite can still write
+            // the evidence, terminal run, and ordinary project phase, so the
+            // assertion catches the former .ok().flatten() fail-open path.
+            app.store.drop_cutover_table_for_test().unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "cutover-read-error-run".into(),
+                project_id: project.id.clone(),
+                job_id: Some(job),
+                batch_job_ids: Vec::new(),
+                batch_child_run_ids: Vec::new(),
+                batch_child_indices: Default::default(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Single,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: None,
+            });
+            app.run_id = Some("cutover-read-error-run".into());
+            let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+            sender
+                .send(Event::Evidence(exact_metadata_evidence()))
+                .unwrap();
+            sender
+                .send(Event::Finished(Ok(StreamOutcome::Completed)))
+                .unwrap();
+            drop(sender);
+            app.receiver = Some(receiver);
+            for _ in 0..10 {
+                app.poll();
+            }
+
+            let snapshot = app
+                .store
+                .project_report_snapshot(&project.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.mailboxes[0].job.state, "verified");
+            assert_eq!(snapshot.project.phase, phase_before_completion);
+            assert!(app.durability_error);
+            assert!(app.output.iter().any(|line| {
+                line.contains("read cutover workflow before phase advancement failed")
+            }));
         });
     }
 }
