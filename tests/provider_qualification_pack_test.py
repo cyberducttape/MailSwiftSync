@@ -181,6 +181,20 @@ class ProviderQualificationPackTests(unittest.TestCase):
                     self.build()
                 self.write_phase("recovery_test", evidence("recovery_test"))
 
+    def test_unknown_or_unavailable_fixture_and_provider_versions_are_rejected(self):
+        for field, value in (
+            ("source_version", "unknown"),
+            ("destination_version", "N/A"),
+            ("fixture_id", "unspecified"),
+        ):
+            with self.subTest(field=field):
+                _, changed = self.read_phase("live_pilot")
+                changed[field] = value
+                self.write_phase("live_pilot", changed)
+                with self.assertRaisesRegex(ValueError, f"{field} must identify"):
+                    self.build()
+                self.write_phase("live_pilot", evidence("live_pilot"))
+
     def test_policy_counts_and_source_destination_totals_are_enforced(self):
         _, value = self.read_phase("live_pilot")
         value["test_summary"]["destination_messages_total"] = 1

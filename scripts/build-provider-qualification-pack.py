@@ -60,6 +60,13 @@ REQUIRED_IDENTITY = (
     "destination_version",
     "fixture_id",
 )
+MUST_BE_KNOWN_IDENTITY = (
+    "mailswiftsync_version",
+    "source_version",
+    "destination_version",
+    "fixture_id",
+)
+UNKNOWN_IDENTITY_VALUES = {"unknown", "unspecified", "n/a", "na", "not available"}
 
 
 def fail(message: str) -> "NoReturn":
@@ -133,7 +140,10 @@ def validate_evidence(value: dict, path: Path, pair: str, policy: dict) -> None:
     for field in REQUIRED_IDENTITY:
         if not isinstance(value.get(field), str) or not value[field]:
             fail(f"{path}: missing identity field {field}")
-    if value["mailswiftsync_commit"] == "unknown":
+    for field in MUST_BE_KNOWN_IDENTITY:
+        if value[field].strip().casefold() in UNKNOWN_IDENTITY_VALUES:
+            fail(f"{path}: {field} must identify the tested version or fixture")
+    if value["mailswiftsync_commit"].strip().casefold() in UNKNOWN_IDENTITY_VALUES:
         fail(f"{path}: MailSwiftSync commit identity is unknown")
     for field in ("mailswiftsync_binary_sha256", "imapsync_binary_sha256", "proof_digest", "test_dataset_digest"):
         if not SHA256_RE.fullmatch(value[field]):
