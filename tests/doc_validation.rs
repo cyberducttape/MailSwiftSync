@@ -246,6 +246,12 @@ fn current_scale_observation_keeps_qualification_limits_explicit() {
         "Level 2 metadata only, bodies not compared",
         "This is unsigned CI evidence from a generic disposable fixture",
         "no direct-imapsync A/B baseline",
+        "38218024314",
+        "4a75c0682a7aa3907d3a7a597c7923a1dde510a9",
+        "11732703115",
+        "9f3e736685cdd0d98dcfbdd9623afb2203870133cf1f6b11c485dc5f4355a2ab",
+        "10,000 generated messages with 1,073,741,824 bytes aggregate generated body payload",
+        "not proof that message bodies were hashed",
     ] {
         assert!(
             adoption.contains(evidence),
@@ -253,8 +259,8 @@ fn current_scale_observation_keeps_qualification_limits_explicit() {
         );
     }
     assert!(
-        status.contains("latest packaged-engine scale run on 2026-10-12")
-            && status.contains("not body-integrity proof, a direct-imapsync A/B"),
+        status.contains("latest packaged-engine scale runs on 2026-10-12")
+            && status.contains("not body-integrity proofs, a direct-imapsync A/B"),
         "production status must report the latest run without overstating its qualification"
     );
 }

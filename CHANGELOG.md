@@ -4,6 +4,8 @@
 
 - Record the current-main packaged-imapsync 100k-message qualification run,
   its proof and resource measurements, and its unsigned generic-fixture limits.
+- Record the current-main 10k-message/1-GiB payload run separately from body
+  hashing, including its proof and sampled resource measurements.
 - Further restrict the Linux supervisor service from changing system clock,
   kernel logs, hostname, or namespaces, and limit it to the native syscall ABI.
   Keep these restrictions covered by the service-unit contract test and

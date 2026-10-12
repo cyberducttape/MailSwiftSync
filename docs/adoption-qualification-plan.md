@@ -52,6 +52,26 @@ provider compatibility, body integrity, or a direct-engine performance
 comparison. The generated fixture is deterministic and has no separate random
 seed. It is not a 1/10/50/100-GiB qualification.
 
+### 2026-10-12: 10k messages with 1 GiB aggregate body payload
+
+| Field | Observed value |
+|---|---|
+| GitHub Actions run / commit | [38218024314](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38218024314) / `4a75c0682a7aa3907d3a7a597c7923a1dde510a9` |
+| Runner / runtime | `ubuntu-24.04`; Debian Bookworm container; Rust `1.92` release build |
+| Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)`; 10,000 generated messages with 1,073,741,824 bytes aggregate generated body payload plus 16 baseline messages |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| Plan SHA-256 | `d4ced1c31c066f5cd30c19f850d667f5d827335ea921dfdb9d0fea1d0446e103` |
+| Harness wall time | 92 seconds, including fixture setup, transfer, verification, delta, and proof export; no direct-imapsync A/B baseline |
+| Initial proof | 10,016 source/destination messages and 1,075,944,871 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
+| Post-delta proof | 10,017 source/destination messages and 1,075,945,185 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
+| Sampled resources | 370,986,188-byte sampled container peak; cgroup anonymous peak 222,351,360 bytes and file-cache peak 2,252,386,304 bytes; sampled MailSwiftSync RSS peak 28,389,376 bytes and imapsync Perl RSS peak 203,968,512 bytes |
+| Artifact | [Actions artifact 11732703115](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38218024314/artifacts/11732703115), SHA-256 `9f3e736685cdd0d98dcfbdd9623afb2203870133cf1f6b11c485dc5f4355a2ab`; expires 2027-01-10 |
+
+This is unsigned generic-lab evidence. The 1 GiB value is transferred message
+payload, not proof that message bodies were hashed: the evidence level is
+metadata-only. The run does not qualify a 1 GiB single message, a 10 GiB
+mailbox, hosted-provider behavior, or direct-engine overhead.
+
 | Field | Observed value |
 |---|---|
 | GitHub Actions run | [38197707897](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38197707897) |
