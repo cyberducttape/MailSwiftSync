@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Correct the live-provider smoke claim: it exchanges OAuth refresh configuration
+  before transfer but uses static access-token files, so it does not qualify
+  imapsync reconnect refresh or token rotation during a long migration. Keep
+  that runtime scenario explicitly open in the provider and recovery test plans.
 - Keep automatic OAuth refresh fail-closed on Windows until native imapsync
   command-shell behavior is qualified, and add regression coverage for the
   refusal and POSIX quoting of paths containing spaces, Unicode, apostrophes,

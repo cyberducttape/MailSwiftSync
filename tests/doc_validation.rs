@@ -66,6 +66,23 @@ fn systemd_service_example_uses_a_restricted_worker_sandbox() {
 }
 
 #[test]
+fn live_provider_smoke_does_not_claim_mid_transfer_oauth_refresh_qualification() {
+    let workflow = fs::read_to_string(".github/workflows/provider-smoke.yml")
+        .expect("live provider smoke workflow should exist");
+    let guide = fs::read_to_string("docs/provider-testing-guide.md")
+        .expect("provider testing guide should exist");
+    let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash recovery matrix should exist");
+
+    assert!(workflow.contains("does NOT prove mid-transfer token renewal"));
+    assert!(workflow.contains("does not configure imapsync's per-reconnect refresh"));
+    assert!(guide.contains("does not qualify mid-transfer renewal"));
+    assert!(guide.contains("dedicated short-lived-token/reconnect scenario"));
+    assert!(recovery.contains("the harness leaves imapsync's reconnect callback unset"));
+    assert!(recovery.contains("requires a dedicated short-lived-token/reconnect test"));
+}
+
+#[test]
 fn readme_mentions_production_status() {
     let readme = fs::read_to_string("README.md").expect("Could not read README.md");
     assert!(
