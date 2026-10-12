@@ -407,7 +407,11 @@ prove, and applies the same conservative recovery transition as GUI startup.
 `support-bundle` emits a private, sanitized JSON artifact for incident triage;
 it excludes endpoints, credentials, plan snapshots, command paths, mailbox
 content, diagnostic text, and customer-controlled project names while retaining
-schema, platform, health, and bounded run metadata. For large projects it includes exact mailbox totals and
+schema, platform, health, and bounded run metadata. In format version 2,
+project, mailbox-job, and run identifiers are per-bundle salted, type-separated
+SHA-256 pseudonyms. References remain joinable within one artifact but cannot
+be correlated across separately exported bundles.
+For large projects it includes exact mailbox totals and
 state counts plus a clearly marked sample of at most 1,000 mailbox statuses.
 `customer-proof` emits the same customer-safe proof artifact available from the
 GUI and refuses to export until the selected project is durably complete with

@@ -375,6 +375,8 @@ fn support_bundle_excludes_topology_and_diagnostic_material() {
     create_private_test_directory(&directory);
     let state = directory.join("state.db");
     let output = directory.join("support.json");
+    let second_output = directory.join("support-second.json");
+    let sampled_output = directory.join("support-sampled.json");
     let store = core::StateStore::open(&state).unwrap();
     let project = store
         .create_project(
@@ -408,10 +410,49 @@ fn support_bundle_excludes_topology_and_diagnostic_material() {
         .unwrap();
     drop(store);
 
-    headless::export_support_bundle_with_sample_limit(&state, &output, 1).unwrap();
+    headless::export_support_bundle_with_sample_limit(&state, &output, 2).unwrap();
     let text = std::fs::read_to_string(&output).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(value["format"], "mailswiftsync-support-bundle");
+    assert_eq!(value["format_version"], 2);
+    assert!(!text.contains(&project.id));
+    assert!(!text.contains(first_job.as_deref().unwrap()));
+    assert!(!text.contains("run-provenance"));
+    assert_eq!(
+        value["redaction"]["record_identifiers"],
+        "per_bundle_salted_sha256_pseudonyms"
+    );
+    assert!(
+        value["projects"][0]["project_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("project:")
+    );
+    assert!(
+        value["projects"][0]["mailboxes"][0]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("mailbox:")
+    );
+    assert!(
+        value["projects"][0]["recent_runs"][0]["run_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("run:")
+    );
+    let mailbox_ids = value["projects"][0]["mailboxes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|mailbox| mailbox["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        mailbox_ids.contains(
+            &value["projects"][0]["recent_runs"][0]["job_id"]
+                .as_str()
+                .unwrap()
+        )
+    );
     assert!(!text.contains("source.internal"));
     assert!(!text.contains("destination.internal"));
     assert!(!text.contains("Acme Corp Exchange Migration"));
@@ -425,10 +466,31 @@ fn support_bundle_excludes_topology_and_diagnostic_material() {
     assert_eq!(pass["command_sha256"].as_str().unwrap().len(), 64);
     assert!(pass.get("command").is_none());
     assert_eq!(value["projects"][0]["mailbox_count"], 2);
-    assert_eq!(value["projects"][0]["mailbox_sample_limit"], 1);
-    assert_eq!(value["projects"][0]["mailboxes_truncated"], true);
+    assert_eq!(value["projects"][0]["mailbox_sample_limit"], 2);
+    assert_eq!(value["projects"][0]["mailboxes_truncated"], false);
     assert_eq!(
         value["projects"][0]["mailboxes"].as_array().unwrap().len(),
+        2
+    );
+
+    headless::export_support_bundle_with_sample_limit(&state, &second_output, 2).unwrap();
+    let second: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&second_output).unwrap()).unwrap();
+    assert_ne!(
+        value["projects"][0]["project_id"], second["projects"][0]["project_id"],
+        "separate support exports must not expose linkable identifiers"
+    );
+
+    headless::export_support_bundle_with_sample_limit(&state, &sampled_output, 1).unwrap();
+    let sampled: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&sampled_output).unwrap()).unwrap();
+    assert_eq!(sampled["projects"][0]["mailbox_sample_limit"], 1);
+    assert_eq!(sampled["projects"][0]["mailboxes_truncated"], true);
+    assert_eq!(
+        sampled["projects"][0]["mailboxes"]
+            .as_array()
+            .unwrap()
+            .len(),
         1
     );
     let _ = std::fs::remove_dir_all(directory);

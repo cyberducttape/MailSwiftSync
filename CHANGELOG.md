@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Version the support bundle as format 2 and replace exported project,
+  mailbox-job, and run identifiers with per-bundle-salted, type-separated
+  SHA-256 pseudonyms, preserving in-artifact joins without cross-export linkage.
 - Serialize process-start admission with the OS spawn so workers delayed after
   taking a launch token cannot later burst together when a provider cooldown
   releases. Revalidate the executable before entering the bounded spawn

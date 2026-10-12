@@ -7,6 +7,7 @@ use crate::{
     secret_runtime_base, terminate_recorded_process_group,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
@@ -15,6 +16,27 @@ const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL: usize = 100_000;
 const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
 const MAX_HEADLESS_RUN_DETAIL_BYTES: usize = 4_096;
+
+/// Preserve joins inside a support artifact without exposing ledger IDs or
+/// making raw identifiers correlate across export namespaces.
+pub(crate) fn support_reference(salt: &[u8; 16], kind: &str, value: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"mailswiftsync-support-v2\0");
+    hasher.update(salt);
+    hasher.update([0]);
+    hasher.update(kind.as_bytes());
+    hasher.update([0]);
+    hasher.update(value.as_bytes());
+    let digest = hasher.finalize();
+    let mut reference = String::with_capacity(kind.len() + 1 + digest.len() * 2);
+    let _ = write!(reference, "{kind}:");
+    for byte in digest {
+        let _ = write!(reference, "{byte:02x}");
+    }
+    reference
+}
 
 /// Versioned automation output contracts. `format_version` changes only for
 /// breaking changes (removed, renamed, or retyped fields); additive fields keep
@@ -106,6 +128,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
     sample_limit: u32,
 ) -> Result<(), String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let identifier_salt = *uuid::Uuid::new_v4().as_bytes();
     let sample_limit = sample_limit.min(SUPPORT_MAILBOX_SAMPLE_LIMIT);
     let projects = store
         .recent_projects(1_000)
@@ -130,7 +153,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             .iter()
             .map(|(job, attention_reason)| {
                 Ok(serde_json::json!({
-                    "id": job.id,
+                    "id": support_reference(&identifier_salt, "mailbox", &job.id),
                     "state": job.state,
                     "attention_reason": attention_reason.as_ref().map(|reason| reason.as_str()),
                 }))
@@ -143,9 +166,9 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             .into_iter()
             .map(|run| {
                 Ok(serde_json::json!({
-                    "run_id": run.id,
-                    "job_id": run.job_id,
-                    "parent_run_id": run.parent_run_id,
+                    "run_id": support_reference(&identifier_salt, "run", &run.id),
+                    "job_id": run.job_id.as_deref().map(|id| support_reference(&identifier_salt, "mailbox", id)),
+                    "parent_run_id": run.parent_run_id.as_deref().map(|id| support_reference(&identifier_salt, "run", id)),
                     "engine": run.engine,
                     "engine_version": store.engine_version(&run.id)
                         .map_err(|error| error.to_string())?,
@@ -179,7 +202,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             })
             .collect::<Result<Vec<_>, String>>()?;
         project_values.push(serde_json::json!({
-            "project_id": project.id,
+            "project_id": support_reference(&identifier_salt, "project", &project.id),
             "phase": project.phase.as_str(),
             "mailbox_count": counts.total,
             "mailbox_sample_limit": sample_limit,
@@ -201,15 +224,15 @@ pub(crate) fn export_support_bundle_with_sample_limit(
         .into_iter()
         .map(|process| {
             serde_json::json!({
-                "run_id": process.run_id,
-                "job_id": process.job_id,
+                "run_id": support_reference(&identifier_salt, "run", &process.run_id),
+                "job_id": support_reference(&identifier_salt, "mailbox", &process.job_id),
                 "pid": process.pid,
             })
         })
         .collect::<Vec<_>>();
     let value = serde_json::json!({
         "format": "mailswiftsync-support-bundle",
-        "format_version": 1,
+        "format_version": 2,
         "application_version": env!("CARGO_PKG_VERSION"),
         "schema_version": core::CURRENT_SCHEMA_VERSION,
         "platform": {
@@ -223,6 +246,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             "endpoints": "excluded",
             "credentials": "excluded",
             "project_names": "excluded",
+            "record_identifiers": "per_bundle_salted_sha256_pseudonyms",
             "plan_snapshots": "excluded",
             "command_paths": "excluded",
             "transfer_commands": "digest_only",
@@ -1209,6 +1233,26 @@ fn last_durability_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
 mod tests {
     use super::{last_durability_detail, last_verification_detail};
     use crate::BoundedLineBuffer;
+
+    #[test]
+    fn support_references_are_stable_and_namespace_separated() {
+        let salt = [7_u8; 16];
+        let project = super::support_reference(&salt, "project", "same-ledger-id");
+        assert_eq!(
+            project,
+            super::support_reference(&salt, "project", "same-ledger-id")
+        );
+        assert_ne!(
+            project,
+            super::support_reference(&salt, "run", "same-ledger-id")
+        );
+        assert_ne!(
+            project,
+            super::support_reference(&[8_u8; 16], "project", "same-ledger-id")
+        );
+        assert!(project.starts_with("project:"));
+        assert_eq!(project.len(), "project:".len() + 64);
+    }
 
     #[test]
     fn unverified_live_states_map_to_documented_exit_codes() {

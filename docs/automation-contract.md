@@ -81,6 +81,11 @@ storage schema migrates and is **not** a compatibility signal: dispatch on
 
 Reports, proofs, certificates, and support bundles carry their own `format`
 markers and are artifact formats, not part of this automation contract.
+The `mailswiftsync-support-bundle` artifact uses format version `2`: project,
+mailbox-job, and run identifiers are type-separated pseudonyms derived with a
+fresh per-bundle salt, preserving joins inside one bundle without correlating
+identifiers across separately exported bundles. Consumers of version `1` must
+update before accepting version `2`.
 The `mailswiftsync-post-migration-report` artifact uses format version `2`:
 `report.total_skipped` is `null` when the ledger has no trustworthy message-
 level count, and `report.total_skipped_availability` is `unavailable`. A

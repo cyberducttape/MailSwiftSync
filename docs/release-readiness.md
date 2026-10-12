@@ -133,8 +133,11 @@ reconciliation as successful.
 - A headless `support-bundle <state.db> <output.json>` export provides a
   sanitized incident artifact containing platform/schema/health facts without
   credentials, endpoints, plans, command paths, mailbox content, or diagnostic
-  text. Large projects retain exact mailbox totals and state counts while
-  limiting detailed mailbox statuses to an explicitly marked 1,000-row sample.
+  text. Format version 2 replaces project, mailbox-job, and run IDs with
+  per-bundle-salted, type-separated SHA-256 pseudonyms, retaining joins within
+  an artifact without straightforward correlation across exports. Large
+  projects retain exact mailbox totals and state counts while limiting detailed
+  mailbox statuses to an explicitly marked 1,000-row sample.
 - Headless preflight/live and batch commands support opt-in
   `--diagnostic-log <directory>` transcripts. Each batch child has a separate
   file; project and mailbox job IDs are hashed in filenames and project IDs are
