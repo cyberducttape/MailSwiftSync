@@ -127,7 +127,11 @@ pub(crate) fn set_engine_execution_profile(profile: EngineExecutionProfile) {
 }
 
 pub(crate) fn engine_execution_profile() -> EngineExecutionProfile {
-    if ENGINE_EXECUTION_PROFILE.load(Ordering::Relaxed) == 1 {
+    execution_profile_from_raw(ENGINE_EXECUTION_PROFILE.load(Ordering::Relaxed))
+}
+
+fn execution_profile_from_raw(value: u8) -> EngineExecutionProfile {
+    if value == 1 {
         EngineExecutionProfile::Hardened
     } else {
         EngineExecutionProfile::Compatibility
@@ -674,7 +678,30 @@ fn emit_lossy_line<F: FnMut(String)>(line: &[u8], truncated: bool, callback: &mu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
+    use std::{cell::RefCell, collections::VecDeque, io};
+
+    struct ScriptedPipeReader {
+        readiness: RefCell<VecDeque<io::Result<PipeReadiness>>>,
+        reads: VecDeque<io::Result<Vec<u8>>>,
+    }
+
+    impl Read for ScriptedPipeReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let bytes = self.reads.pop_front().unwrap_or_else(|| Ok(Vec::new()))?;
+            let length = bytes.len().min(buffer.len());
+            buffer[..length].copy_from_slice(&bytes[..length]);
+            Ok(length)
+        }
+    }
+
+    impl PipePolling for ScriptedPipeReader {
+        fn readiness(&self) -> io::Result<PipeReadiness> {
+            self.readiness
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or(Ok(PipeReadiness::Closed))
+        }
+    }
 
     #[test]
     fn lock_contention_errors_are_recognized_across_platforms() {
@@ -868,6 +895,53 @@ mod tests {
                 .redact("sensitive-canary after".to_owned())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn revocable_line_reader_polls_readiness_and_preserves_partial_lines() {
+        let reader = ScriptedPipeReader {
+            readiness: RefCell::new(VecDeque::from([
+                Ok(PipeReadiness::NoData),
+                Ok(PipeReadiness::Readable),
+                Ok(PipeReadiness::Readable),
+                Ok(PipeReadiness::NoData),
+                Ok(PipeReadiness::Readable),
+                Ok(PipeReadiness::Closed),
+            ])),
+            reads: VecDeque::from([
+                Ok(b"first\r\npar".to_vec()),
+                Err(io::Error::from(io::ErrorKind::Interrupted)),
+                Ok(b"tial\n".to_vec()),
+            ]),
+        };
+        let secrets = RevocableReaderSecrets::new(&[]);
+        let mut lines = Vec::new();
+
+        for_each_revocable_lossy_line(reader, &secrets, |line| lines.push(line)).unwrap();
+
+        assert_eq!(lines, ["first", "partial"]);
+    }
+
+    #[test]
+    fn revocable_line_reader_stops_after_revocation_and_propagates_pipe_errors() {
+        let secrets = RevocableReaderSecrets::new(&[]);
+        secrets.revoke();
+        let cancelled_reader = ScriptedPipeReader {
+            readiness: RefCell::new(VecDeque::new()),
+            reads: VecDeque::new(),
+        };
+        let mut lines = Vec::new();
+        for_each_revocable_lossy_line(cancelled_reader, &secrets, |line| lines.push(line)).unwrap();
+        assert!(lines.is_empty());
+
+        let error_reader = ScriptedPipeReader {
+            readiness: RefCell::new(VecDeque::from([Ok(PipeReadiness::Readable)])),
+            reads: VecDeque::from([Err(io::Error::from(io::ErrorKind::PermissionDenied))]),
+        };
+        let active_secrets = RevocableReaderSecrets::new(&[]);
+        let error =
+            for_each_revocable_lossy_line(error_reader, &active_secrets, |_| {}).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
@@ -1818,6 +1892,18 @@ pub(crate) fn recorded_process_is_gone(process: &core::ActiveProcess) -> bool {
 #[cfg(test)]
 mod execution_profile_tests {
     use super::*;
+
+    #[test]
+    fn execution_profile_decodes_hardened_and_compatibility_values() {
+        assert_eq!(
+            execution_profile_from_raw(1),
+            EngineExecutionProfile::Hardened
+        );
+        assert_eq!(
+            execution_profile_from_raw(0),
+            EngineExecutionProfile::Compatibility
+        );
+    }
 
     #[test]
     fn hardened_engine_environment_removes_perl_and_inherited_ca_overrides() {

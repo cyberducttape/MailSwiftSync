@@ -442,12 +442,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn capture_returns_when_a_detached_descendant_holds_pipes_open() {
-        if crate::plan_identity::resolve_executable("setsid").is_none()
-            || crate::plan_identity::resolve_executable("python3").is_none()
-        {
-            eprintln!(
-                "skipping detached-descendant capture test: setsid or python3 is unavailable"
-            );
+        if crate::plan_identity::resolve_executable("python3").is_none() {
+            eprintln!("skipping detached-descendant capture test: python3 is unavailable");
             return;
         }
         let pid_file = std::env::temp_dir().join(format!(
@@ -456,7 +452,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let pid_file_text = pid_file.to_string_lossy().into_owned();
-        let command = "setsid python3 -c 'import os, time; open(os.environ[\"MAILSWIFT_SYNC_DETACHED_PID_FILE\"], \"w\").write(str(os.getpid())); time.sleep(7); print(\"secret-canary\", flush=True); time.sleep(30)' & exit 0";
+        let command = "python3 -c 'import os, time; child=os.fork(); child and os._exit(0); os.setsid(); open(os.environ[\"MAILSWIFT_SYNC_DETACHED_PID_FILE\"], \"w\").write(str(os.getpid())); time.sleep(7); print(\"secret-canary\", flush=True); time.sleep(30)' & while [ ! -s \"$MAILSWIFT_SYNC_DETACHED_PID_FILE\" ]; do sleep 0.01; done; exit 0";
         let cancel = AtomicBool::new(false);
         let observed = Arc::new(Mutex::new(Vec::<String>::new()));
         let observer_lines = Arc::clone(&observed);
@@ -487,16 +483,26 @@ mod tests {
                     None
                 })
         });
+        let detached_pid = detached_pid.unwrap_or_else(|| {
+            panic!("detached descendant did not publish its PID; capture result: {result:?}")
+        });
+        // Prove the descendant survived outside the process group supervised
+        // for the capture command; otherwise process-group cleanup can close
+        // the pipes and make this test pass without exercising revocation.
+        // SAFETY: PID was written by the fixture and is killed below.
+        let descendant_group = unsafe { libc::getpgid(detached_pid) };
+        // SAFETY: same validated test-owned PID.
+        let descendant_session = unsafe { libc::getsid(detached_pid) };
+        assert_eq!(descendant_group, detached_pid);
+        assert_eq!(descendant_session, detached_pid);
         // The descendant writes only after the controller's five-second
         // reader deadline. Its inherited pipe must not keep forwarding output
         // after run_capture_lines has returned.
         std::thread::sleep(Duration::from_secs(3));
-        if let Some(pid) = detached_pid {
-            // SAFETY: the test fixture created this process and the PID was
-            // read from the PID file the fixture wrote.
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-            }
+        // SAFETY: the test fixture created this process and its PID was read
+        // from the private PID file it wrote.
+        unsafe {
+            libc::kill(detached_pid, libc::SIGKILL);
         }
         assert!(observed.lock().unwrap().is_empty());
         let _ = std::fs::remove_file(&pid_file);

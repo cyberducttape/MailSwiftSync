@@ -5,8 +5,11 @@
 - Cancel capture, live-transfer, and doctor pipe drainers when bounded draining
   times out. Revocation releases secret references and readiness polling lets
   reader threads exit even when detached descendants retain inherited pipes;
-  late output is discarded. Cover these behaviors with escaped-descendant
-  regressions.
+  late output is discarded. The live-transfer and capture regressions verify
+  each test descendant remains alive in a separate session, avoiding a
+  process-group cleanup race that could mask the pipe-drainer behavior. Add
+  readiness-polling, cancellation, pipe-error, and execution-profile decode
+  regressions to cover both reader outcomes and security profiles.
 - Version the support bundle as format 2 and replace exported project,
   mailbox-job, and run identifiers with per-bundle-salted, type-separated
   SHA-256 pseudonyms, preserving in-artifact joins without cross-export linkage.

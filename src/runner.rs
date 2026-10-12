@@ -986,10 +986,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn streaming_reader_revokes_secrets_and_suppresses_late_descendant_output() {
-        if crate::plan_identity::resolve_executable("setsid").is_none()
-            || crate::plan_identity::resolve_executable("python3").is_none()
-        {
-            eprintln!("skipping streaming descendant test: setsid or python3 is unavailable");
+        if crate::plan_identity::resolve_executable("python3").is_none() {
+            eprintln!("skipping streaming descendant test: python3 is unavailable");
             return;
         }
         let script = std::env::temp_dir().join(format!(
@@ -1005,7 +1003,8 @@ mod tests {
         fs::write(
             &script,
             "#!/bin/sh\n\
-             setsid python3 -c 'import os, time; open(os.environ[\"MAILSWIFTSYNC_TEST_PID_FILE\"], \"w\").write(str(os.getpid())); print(\"secret-canary-before\", flush=True); time.sleep(7); print(\"secret-canary-after\", flush=True); time.sleep(30)' &\n\
+             python3 -c 'import os, time; child=os.fork(); child and os._exit(0); os.setsid(); open(os.environ[\"MAILSWIFTSYNC_TEST_PID_FILE\"], \"w\").write(str(os.getpid())); print(\"secret-canary-before\", flush=True); time.sleep(7); print(\"secret-canary-after\", flush=True); time.sleep(30)' &\n\
+             while [ ! -s \"$MAILSWIFTSYNC_TEST_PID_FILE\" ]; do sleep 0.01; done\n\
              exit 0\n",
         )
         .unwrap();
@@ -1013,11 +1012,14 @@ mod tests {
 
         let (tx, rx) = mpsc::sync_channel(16);
         let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+        let supervised_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let controller_pid = Arc::clone(&supervised_pid);
         let controller_lines = Arc::clone(&observed);
         let controller = thread::spawn(move || {
             while let Ok(event) = rx.recv() {
                 match event {
-                    Event::ProcessStarted(.., reply) => {
+                    Event::ProcessStarted(_, _, pid, _, _, _, _, reply) => {
+                        controller_pid.store(pid, std::sync::atomic::Ordering::Relaxed);
                         let _ = reply.send(Ok(()));
                     }
                     Event::RunLine { text, .. } => {
@@ -1058,14 +1060,27 @@ mod tests {
                     None
                 })
         });
+        let detached_pid = detached_pid.expect("detached descendant did not publish its PID");
+        let supervised_pid = supervised_pid.load(std::sync::atomic::Ordering::Relaxed);
+        assert_ne!(supervised_pid, 0, "migration leader PID was not recorded");
+        // The descendant explicitly creates a new session; prove it remains
+        // alive outside the migration process group after run_streaming has
+        // returned, so this exercises pipe cancellation rather than merely
+        // observing process-group cleanup.
+        // SAFETY: PID was written by this test's child process and is checked
+        // before the fixture is killed below.
+        let descendant_group = unsafe { libc::getpgid(detached_pid) };
+        // SAFETY: same validated, test-owned child PID as above.
+        let descendant_session = unsafe { libc::getsid(detached_pid) };
+        assert_eq!(descendant_group, detached_pid);
+        assert_eq!(descendant_session, detached_pid);
+        assert_ne!(descendant_group as u32, supervised_pid);
         // The escaped descendant prints a second canary after the five-second
         // bounded drain. Normal live-transfer drainers must suppress it too.
         thread::sleep(Duration::from_secs(3));
-        if let Some(pid) = detached_pid {
-            // SAFETY: this test fixture wrote the PID to its private PID file.
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-            }
+        // SAFETY: this test fixture wrote the PID to its private PID file.
+        unsafe {
+            libc::kill(detached_pid, libc::SIGKILL);
         }
         drop(tx);
         controller.join().unwrap();
