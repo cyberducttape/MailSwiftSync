@@ -894,6 +894,54 @@ fn metadata_fetch_parser_rejects_duplicate_uids() {
 }
 
 #[test]
+fn all_fetch_parsers_enforce_the_imap_uid_domain() {
+    let invalid_uids = ["0", "4294967296", "18446744073709551615"];
+    for uid in invalid_uids {
+        let metadata =
+            format!("* 1 FETCH (UID {uid} RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n");
+        assert!(
+            super::parse_message_fetch_metadata_response_bytes(
+                metadata.as_bytes(),
+                "INBOX",
+                Some(77)
+            )
+            .unwrap_err()
+            .contains("outside the IMAP")
+        );
+
+        let flags = format!("* 1 FETCH (UID {uid} FLAGS (\\Seen))\r\nv002 OK FETCH completed\r\n");
+        assert!(
+            super::fetch_parser::parse_message_fetch_flags_response_bytes(
+                flags.as_bytes(),
+                std::sync::Arc::from("INBOX"),
+                Some(77)
+            )
+            .unwrap_err()
+            .contains("outside the IMAP")
+        );
+
+        let body =
+            format!("* 1 FETCH (UID {uid} BODY[] {{1}}\r\nx)\r\nv002 OK FETCH completed\r\n");
+        assert!(
+            parse_message_fetch_body_hashes_response_bytes(body.as_bytes(), "INBOX", Some(77), 1)
+                .unwrap_err()
+                .contains("outside the IMAP")
+        );
+    }
+
+    let valid_max = b"* 1 FETCH (UID 4294967295 RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n";
+    let messages =
+        super::parse_message_fetch_metadata_response_bytes(valid_max, "INBOX", Some(77)).unwrap();
+    assert!(
+        messages.contains_key(&crate::core::MailboxMessageKey::with_uidvalidity(
+            "INBOX",
+            77,
+            "4294967295"
+        ))
+    );
+}
+
+#[test]
 fn fetch_page_coverage_rejects_missing_and_unexpected_uids() {
     let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17)\r\n* 2 FETCH (UID 101 RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n";
     let messages =
