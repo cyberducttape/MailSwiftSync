@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Show an explicit overall evidence status beside the verification tier and
+  message outcome in the verification list and detail view. Partial flag or
+  keyword coverage is labeled “Verified with exceptions” rather than appearing
+  as an unqualified exact result.
 - Remove the unmaintained `ttf-parser` dependency from the Linux Wayland
   decoration path. Keep Adwaita client-side decorations and dynamic Wayland
   loading, while omitting decoration title text; retain the app's X11,

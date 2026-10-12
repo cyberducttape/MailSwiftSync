@@ -270,7 +270,7 @@ impl App {
                                             .as_ref()
                                             .map(|(_, evidence, _)| {
                                                 format!(
-                                                    "{} · {}",
+                                                    "{} · {} · {}",
                                                     self.language.message(verification_level_key(
                                                         evidence.verification_method(),
                                                         evidence.verification_outcome(),
@@ -279,7 +279,9 @@ impl App {
                                                         evidence
                                                             .verification_outcome()
                                                             .display_label()
-                                                    )
+                                                    ),
+                                                    self.language
+                                                        .message(verification_status_key(evidence))
                                                 )
                                             })
                                             .unwrap_or_else(|| {
@@ -451,6 +453,14 @@ impl App {
                             } else {
                                 "ui.not-complete"
                             }));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(self.language.message("ui.overall-evidence-status"))
+                                    .strong()
+                                    .family(crate::ui::fonts::medium()),
+                            );
+                            ui.label(self.language.message(verification_status_key(evidence)));
                         });
                         ui.horizontal(|ui| {
                             ui.label(
@@ -751,6 +761,14 @@ fn verification_level_key(
     }
 }
 
+fn verification_status_key(evidence: &crate::core::MailboxEvidence) -> &'static str {
+    match evidence.verification_status() {
+        "verified" => "ui.verification-status-verified",
+        "verified_with_exceptions" => "ui.verification-status-exceptions",
+        _ => "ui.verification-status-incomplete",
+    }
+}
+
 fn verification_confidence_key(evidence: &crate::core::MailboxEvidence) -> &'static str {
     if matches!(
         evidence.verification_outcome(),
@@ -770,8 +788,35 @@ fn verification_confidence_key(evidence: &crate::core::MailboxEvidence) -> &'sta
 
 #[cfg(test)]
 mod tests {
-    use super::{verification_confidence_key, verification_level_key};
-    use crate::core::{VerificationMethod, VerificationOutcome};
+    use super::{verification_confidence_key, verification_level_key, verification_status_key};
+    use crate::core::{FlagVerification, MailboxEvidence, VerificationMethod, VerificationOutcome};
+
+    fn evidence_with_flag_coverage(compared_messages: u64) -> MailboxEvidence {
+        MailboxEvidence {
+            verification_method: VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+            source_messages: 10,
+            destination_messages: 10,
+            source_bytes: 100,
+            destination_bytes: 100,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            rfc_message_id_matches: 10,
+            synthetic_identity_matches: 0,
+            flag_verification: Some(FlagVerification {
+                compared_messages,
+                mismatched_messages: 0,
+                excepted_messages: 0,
+            }),
+        }
+    }
 
     #[test]
     fn evidence_methods_map_to_precise_operator_levels() {
@@ -843,6 +888,25 @@ mod tests {
         assert_eq!(
             verification_confidence_key(&changed),
             "ui.confidence-review"
+        );
+    }
+
+    #[test]
+    fn overall_label_does_not_confuse_partial_flags_with_verified_evidence() {
+        let partial = evidence_with_flag_coverage(0);
+        assert_eq!(
+            partial.verification_outcome(),
+            VerificationOutcome::ExactMetadataMatch
+        );
+        assert_eq!(
+            verification_status_key(&partial),
+            "ui.verification-status-exceptions"
+        );
+
+        let complete = evidence_with_flag_coverage(10);
+        assert_eq!(
+            verification_status_key(&complete),
+            "ui.verification-status-verified"
         );
     }
 }
