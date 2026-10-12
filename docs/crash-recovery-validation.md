@@ -29,7 +29,7 @@ and repeatable, and a new journal would add its own failure states.
 | 4 | Restart the host immediately after a committed transfer checkpoint | Terminal results commit atomically with evidence and checkpoints; startup recovery reconciles recorded process identities. `controller-recovery-smoke.sh` covers restart after a crash. | Partial: no power-loss or host-reboot test; SQLite WAL durability is relied on. |
 | 5 | Source-folder changes after transfer but before verification | Verification cursors record each folder's SELECT snapshot (UIDVALIDITY, UIDNEXT, EXISTS); a changed snapshot forces a rescan, and changes between scans appear as differences rather than as a clean result (`src/imap_probe_resume_tests.rs`: expunge-and-deliver, new arrivals, flag-only changes). | Proven at unit level against scripted IMAP servers; not yet against a live provider. |
 | 6 | Rotate OAuth credentials while a migration is disconnected | Refresh before launch, during qualified imapsync reconnects, and before verification; keyring/config write failures retain a private recovery record, reconcile before the next exchange, and refuse to overwrite a newer operator value (unit tests). Recovery records are not encrypted and rely on owner-only filesystem protection. | Open: requires live Google/Microsoft tenants. |
-| 7 | Restore the ledger after a crash and resume a partially completed mailbox | `controller-chaos-smoke.sh` proves `restore` rejects a corrupt or truncated backup and that restoring a verified backup returns the ledger to normal operation; migration backups are taken before schema upgrades. | Partial: no lab resumes a partially transferred mailbox from a restored ledger and verifies the result. |
+| 7 | Restore the ledger after a crash and resume a partially completed mailbox | `controller-chaos-smoke.sh` proves `restore` rejects a corrupt or truncated backup. The IMAP lab's default-plan interruption drill kills the controller mid-transfer, recovers the run, backs up and restores the ledger to a new path, resumes the mailbox, and requires exactly the source message count plus verified state. | Proven in CI (integration workflow) for the default header-matching plan; this does not establish per-message checkpoints or host power-loss durability. |
 
 ## Related protections
 
@@ -43,9 +43,8 @@ and repeatable, and a new journal would add its own failure states.
 
 ## To close before 1.0
 
-1. Add real-engine interruption labs for scenarios 1 and 2: interrupt a
-   transfer of a large message, rerun, and require a clean independent
-   verification with no duplicates.
-2. Add a restored-ledger resume lab for scenario 7.
-3. Run scenario 6 during live provider qualification.
-4. Record a host-reboot drill for scenario 4 on the release host class.
+1. Extend the interruption drill to kill imapsync while a single large message
+   is being appended; the current real-engine drill uses small messages.
+2. Run scenario 6 during live provider qualification.
+3. Record a host-reboot and power-loss drill for scenario 4 on the release host
+   class.

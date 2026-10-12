@@ -134,7 +134,7 @@ not become live qualification without reviewed evidence.
 |---------|--------|-----------------|
 | Checkpoint persistence | ⚠️ Partial | Run-level state and UIDVALIDITY-bound Dovecot checkpoints are durable; per-message transfer checkpoints remain incomplete |
 | Transfer attempt history | ✅ Initial layer | Engine attempt start/finish and bounded failure class are durably recorded and exposed in customer-proof run metadata; this is not a per-message resume index |
-| Resume from interruption | ⚠️ Engine-dependent | Dovecot resumes from its validated opaque engine state; imapsync reruns idempotently and may rescan/revisit prior work |
+| Resume from interruption | ⚠️ Engine-dependent | Dovecot resumes from its validated opaque engine state; imapsync reruns idempotently and may rescan/revisit prior work. The CI IMAP lab kills the controller mid-transfer, then recovers; the default header-matching plan is backed up, restored to a new ledger path, resumed, and verified to exactly the source count. Expert `--useuid --usecache` can duplicate the in-flight message, which verification flags. This proves run-level recovery for the tested fixture, not per-message checkpoints or host power-loss durability. |
 | Crash recovery | ✅ | Startup process identity/recovery paths are wired |
 | Time-to-completion estimates | ⚠️ Estimate for imapsync only | Activity derives bounded rolling throughput and an explicitly labelled ETA from imapsync progress; Dovecot runs do not expose transfer progress and therefore do not produce an ETA |
 | Recovery guidance | ⚠️ Partial GUI | Activity renders localized fail-closed guidance for interruption, transport, and throttling attention states; configuration and verification findings retain their dedicated remediation views |

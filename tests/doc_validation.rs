@@ -127,6 +127,31 @@ fn production_readiness_surfaces_have_one_conservative_source() {
 }
 
 #[test]
+fn crash_recovery_docs_match_the_restored_ledger_integration_drill() {
+    let harness = fs::read_to_string("scripts/imap-integration-smoke.sh")
+        .expect("IMAP integration harness should exist");
+    let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation matrix should exist");
+
+    assert!(
+        harness.contains("run_interruption_drill defaults false strict restore")
+            && harness.contains("run_product backup \"$drill_state\" \"$drill_backup\"")
+            && harness.contains("run_product restore \"$drill_backup\" \"$drill_state\""),
+        "the default real-engine interruption scenario must back up and restore the ledger before resuming"
+    );
+    assert!(
+        recovery
+            .contains("Proven in CI (integration workflow) for the default header-matching plan")
+            && recovery.contains(
+                "does not establish per-message checkpoints or host power-loss durability"
+            )
+            && !recovery
+                .contains("no lab resumes a partially transferred mailbox from a restored ledger"),
+        "recovery documentation must reflect the tested scope and retain its limitations"
+    );
+}
+
+#[test]
 fn documented_scale_workflow_timeout_matches_release_readiness() {
     let workflow = fs::read_to_string(".github/workflows/scale-qualification.yml")
         .expect("scale qualification workflow should exist");

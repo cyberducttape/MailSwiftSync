@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Record the real-engine interruption/restore qualification accurately: the
+  default imapsync plan resumes a partially transferred fixture from a restored
+  ledger and verifies the exact message count; large-message mid-APPEND and
+  host power-loss qualification remain open.
 - Show an explicit overall evidence status beside the verification tier and
   message outcome in the verification list and detail view. Partial flag or
   keyword coverage is labeled “Verified with exceptions” rather than appearing
