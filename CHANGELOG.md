@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Record the current packaged imapsync and native Dovecot smoke artifacts with
+  proof digests and evidence levels; explicitly keep this generic-lab result
+  outside provider and scale qualification.
 - Assert that packaged imapsync and native Dovecot customer-proof artifacts
   identify the transfer engine actually exercised by the integration lab;
   exclude verification-only runs from that summary and include the engine name

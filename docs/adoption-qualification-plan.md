@@ -31,6 +31,30 @@ The following reproducible lab runs are retained as engineering evidence
 only; they do not satisfy the required size matrix, direct-imapsync comparison,
 provider qualification, or signed-result acceptance criteria.
 
+### 2026-10-12: packaged-engine identity and recovery smoke
+
+| Field | Observed value |
+|---|---|
+| GitHub Actions run / commit | [38242243581](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38242243581) / `ac0caed27db8fe4f5130d4f4b9ab1022ecd5f5c4` |
+| Runner / runtime | `ubuntu-24.04`; Debian Bookworm container; Rust `1.92` release build |
+| Fixture | Disposable generic IMAP backed by Dovecot `2.3.19.1 (9b53102964)`; seeded 16 messages and one idempotent-delta message |
+| Packaged imapsync | `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| `doveadm` transfer executable | SHA-256 `170ac4879a7ad4784f7a5dcd30ff44ab35635710c071f06d937ad084c3827a98` |
+| Packaged imapsync evidence | Initial 16/16 and post-delta 17/17; Level 2 metadata reconciliation; 100% FLAGS coverage; zero missing, extra, or modified messages. Top-level engine is `imapsync 2.314`. |
+| Native Dovecot evidence | Initial 16/16 and post-delta 17/17; Level 1 aggregate evidence (not independent message-level reconciliation). Top-level engine is `Dovecot native`. |
+| Artifacts | [imapsync artifact 11743153569](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38242243581/artifacts/11743153569), [native Dovecot artifact 11743702084](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38242243581/artifacts/11743702084); both integration jobs passed. The packaged imapsync job additionally passed controller-recovery, controller-storage-fault, and engine-storage-fault steps. |
+
+The four exported proof files passed the packaged verifier. Their SHA-256 file
+hashes are `085193a9ca36176e7101f361c42a7422d24968e5b3bfa42f6138023f34bb8146`
+(imapsync initial), `ce74c3c470752bf9303810e4f1d1c75f945e5fff333925243bbbb0b5b16bc686`
+(imapsync post-delta), `80ca3ac3764e10dbb696e19c57be8de53af416f920a4ca2a0b20e09566d053d3`
+(Dovecot initial), and `9aed90c12427b61686844cd156230206cc022c83ac24704b4a6ee41854fd1ff8`
+(Dovecot post-delta). These are unsigned generic-lab artifacts; checksum
+verification detects accidental corruption, not signer identity or provider
+compatibility. The small fixture confirms the report-label regression and
+recovery smoke paths only; it is not a scale result, direct-engine A/B, or a
+hosted-provider qualification.
+
 ### 2026-10-12: 100k small-message run on current main
 
 | Field | Observed value |
