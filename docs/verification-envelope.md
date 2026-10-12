@@ -150,6 +150,32 @@ This is synthetic SQLite reconciliation evidence for one host and fixture
 only; it does not establish mailbox/provider behavior, end-to-end network
 performance, report-commit cost, or a safe disk ceiling.
 
+At current commit `f9f4501c5ed4894412c25d684d3c698122b3321a`, the same
+benchmark was rerun on 2026-10-12 with its stage explicitly under the
+repository's ext4-on-NVMe filesystem (not the host's tmpfs `/tmp`). The host
+was Ubuntu 26.04.1 x86_64 / Linux 7.0.0-38-generic, Rust 1.92.0, on an AMD
+Ryzen 7 7735U workstation. Each run used 1,000,000 messages per endpoint,
+durable SQLite staging, reconciliation, flag comparison, and a restart
+reconciliation. All three shapes passed the script's 64 MiB peak-RSS and
+20,000 messages/s reconciliation gates:
+
+| Shape | Stage write | Reconcile time / rate | Reconcile write | Peak RSS | Peak stage / journal | Flags compared | Mismatch rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Typical | 948,060,160 B | 22.323 s / 44,796/s | 683,937,792 B | 20 MiB | 1,151,854,544 B / 100,894,672 B | 980,000 | 20,000 changed |
+| Mismatch-heavy | 1,021,054,976 B | 31.758 s / 31,488/s | 882,282,496 B | 20 MiB | 1,094,510,640 B / 100,894,672 B | 500,000 | 600,000 (100,000 missing, 100,000 extra, 400,000 changed) |
+| Duplicate IDs | 1,017,860,096 B | 24.481 s / 40,848/s | 679,940,096 B | 20 MiB | 1,153,976,072 B / 101,443,336 B | 980,000 | 20,000 changed |
+
+The stage directory after initial staging was 730,079,232 B (typical),
+727,031,808 B (mismatch-heavy), and 732,151,808 B (duplicate IDs). Restart
+reconciliation took 22.690 s, 32.748 s, and 24.682 s respectively. The
+duplicate-ID shape uses block-keyed groups of nine or ten and a hot ID for 1%
+of rows; it is not a single million-message duplicate group. These are
+repeatable synthetic durable-SQLite measurements on one shared workstation,
+not IMAP fetches, transfers, customer mailbox data, provider qualification,
+full-process peak RSS, or a production disk-capacity guarantee. The measured
+peak stage and journal sizes should be included in target-host free-space
+planning; the benchmark does not establish a safe aggregate disk ceiling.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of
@@ -433,6 +459,12 @@ The durable-stage benchmark can be run at different per-endpoint sizes with:
 MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES=100000 \
   cargo test --release durable_stage_reconciliation_benchmark -- --ignored --nocapture
 ```
+
+For the scale script, the stage defaults to `target/verification-scale` and
+the selected filesystem is printed before measurements begin. Set
+`MAILSWIFTSYNC_RECONCILIATION_BENCH_DIR` to a path on the storage class being
+qualified; do not treat a tmpfs or container overlay result as physical-disk
+evidence.
 
 This isolated synthetic benchmark must not be cited as end-to-end migration or
 provider qualification evidence.

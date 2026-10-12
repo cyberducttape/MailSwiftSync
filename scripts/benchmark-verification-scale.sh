@@ -14,10 +14,16 @@ set -euo pipefail
 #   MAILSWIFTSYNC_VERIFY_MIN_RECONCILE_RATE   reconciled messages/sec, any size (20000)
 #   MAILSWIFTSYNC_VERIFY_SIZES                space-separated per-side counts
 #   MAILSWIFTSYNC_VERIFY_SHAPES               space-separated fixture shapes
+#   MAILSWIFTSYNC_RECONCILIATION_BENCH_DIR    stage parent (defaults under target/)
 sizes=${MAILSWIFTSYNC_VERIFY_SIZES:-"1000 10000 100000 500000 1000000"}
 shapes=${MAILSWIFTSYNC_VERIFY_SHAPES:-typical}
 rss_budget=${MAILSWIFTSYNC_VERIFY_PEAK_RSS_BUDGET_MIB:-64}
 min_rate=${MAILSWIFTSYNC_VERIFY_MIN_RECONCILE_RATE:-20000}
+stage_parent=${MAILSWIFTSYNC_RECONCILIATION_BENCH_DIR:-"$PWD/target/verification-scale"}
+mkdir -p -- "$stage_parent"
+export MAILSWIFTSYNC_RECONCILIATION_BENCH_DIR="$stage_parent"
+printf 'verification_stage_parent=%s\n' "$stage_parent"
+df -PT -- "$stage_parent"
 
 cargo test --locked --release --no-run --bin mailswiftsync >/dev/null 2>&1
 
