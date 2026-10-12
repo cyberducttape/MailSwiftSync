@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Remove the unmaintained `ttf-parser` dependency from the Linux Wayland
+  decoration path. Keep Adwaita client-side decorations and dynamic Wayland
+  loading, while omitting decoration title text; retain the app's X11,
+  Wayland, accessibility, and rendering features.
 - Apply the IMAP 32-bit UID-domain check to metadata, FLAGS, and body FETCH
   parsing as well as UID enumeration, rejecting zero and out-of-range values
   before they enter verification staging.
