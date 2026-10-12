@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- After the packaged imapsync lab showed that a parent-death SIGTERM could let
+  the engine finish an in-flight large APPEND after its controller was killed,
+  use SIGKILL for Linux crash-only parent-death containment and reject the
+  pre-exec parent-death race. Operator cancellation remains graceful. A
+  subprocess regression covers an engine that ignores SIGTERM; the real IMAP
+  interruption scenario remains unqualified until the post-fix CI rerun passes.
 - Ship the canonical systemd supervisor unit in Debian/RPM documentation and
   harden it with an unprivileged identity, empty capability sets, restricted
   networking, and read-only system paths. CI runs an offline systemd security

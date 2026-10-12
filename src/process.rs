@@ -1269,13 +1269,30 @@ pub(crate) fn configure_process_group(command: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        #[cfg(target_os = "linux")]
+        // Captured before fork so the child can detect a parent crash that
+        // races with installing PR_SET_PDEATHSIG in its pre-exec hook.
+        #[cfg(target_os = "linux")]
+        let expected_parent_pid = unsafe { libc::getpid() };
         // Each migration gets its own session so cancellation cannot leave a
         // shell/wrapper descendant running against the destination.
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
                 #[cfg(target_os = "linux")]
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
-                    return Err(std::io::Error::last_os_error());
+                {
+                    // Parent death is a crash path: no controller remains to
+                    // enforce a graceful-shutdown deadline, so do not let an
+                    // engine defer SIGTERM while it finishes an in-flight
+                    // IMAP literal. Normal cancellation still uses TERM then
+                    // KILL in wait_with_timeout.
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::getppid() != expected_parent_pid {
+                        return Err(std::io::Error::other(
+                            "controller exited before engine process supervision was installed",
+                        ));
+                    }
                 }
                 if libc::setsid() == -1 {
                     return Err(std::io::Error::last_os_error());

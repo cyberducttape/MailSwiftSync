@@ -2573,6 +2573,90 @@ fn ledger_instance_lock_excludes_a_second_process() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+#[allow(clippy::zombie_processes)] // The parent is intentionally killed by the supervising test.
+fn parent_death_kills_an_engine_that_ignores_sigterm() {
+    let Some(marker_path) = std::env::var_os("MAILSWIFTSYNC_PDEATH_CHILD_MARKER") else {
+        return;
+    };
+    let mut command = Command::new("sh");
+    command.args(["-c", "trap '' TERM; exec sleep 300"]);
+    configure_process_group(&mut command);
+    let child = command
+        .spawn()
+        .expect("supervised test engine should start");
+    std::fs::write(marker_path, child.id().to_string())
+        .expect("test engine PID should be visible to parent");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_parent_death_signal_is_immediate_even_when_engine_ignores_term() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-pdeath-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    create_private_test_directory(&directory);
+    let marker_path = directory.join("engine.pid");
+    let mut parent = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::parent_death_kills_an_engine_that_ignores_sigterm",
+            "--nocapture",
+        ])
+        .env("MAILSWIFTSYNC_PDEATH_CHILD_MARKER", &marker_path)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !marker_path.exists() {
+        if let Some(status) = parent.try_wait().unwrap() {
+            panic!("parent-death helper exited before starting engine: {status}");
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = parent.kill();
+            let _ = parent.wait();
+            panic!("parent-death helper did not publish the engine PID");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let engine_pid: u32 = std::fs::read_to_string(&marker_path)
+        .unwrap()
+        .parse()
+        .expect("engine PID should be numeric");
+
+    parent.kill().expect("helper parent should be killed");
+    let status = parent.wait().unwrap();
+    assert!(
+        !status.success(),
+        "helper parent unexpectedly exited cleanly"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let stat = std::fs::read_to_string(format!("/proc/{engine_pid}/stat")).ok();
+        let running = stat
+            .as_deref()
+            .and_then(|stat| stat.rsplit_once(") "))
+            .and_then(|(_, fields)| fields.split_whitespace().next())
+            .is_some_and(|state| state != "Z" && state != "X");
+        if !running {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            terminate_process_group_by_pid(engine_pid);
+            std::fs::remove_dir_all(directory).unwrap();
+            panic!("engine survived parent death despite ignoring SIGTERM");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn recorded_process_group_termination_stops_orphaned_child() {

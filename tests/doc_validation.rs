@@ -202,9 +202,11 @@ fn integration_harness_contains_a_throttled_mid_append_interruption_case() {
         "the integration drill must wait for an incomplete large-message APPEND before killing the controller"
     );
     assert!(
-        recovery.contains("CI observed 2,481,711 of 67,109,132 bytes before kill")
-            && recovery.contains("larger-message/provider-specific and host power-loss behavior remain outside this evidence"),
-        "the crash-recovery matrix must record the bounded CI evidence without overstating its scope"
+        recovery.contains("An earlier CI run observed 2,481,711 of 67,109,132 bytes before kill")
+            && recovery.contains("CI at `6f714fb` observed 8,388,143 bytes")
+            && recovery.contains("Open pending post-fix CI rerun")
+            && recovery.contains("Linux parent-death handling used SIGTERM"),
+        "the crash-recovery matrix must preserve the reproduced containment failure and require a post-fix rerun"
     );
 }
 
