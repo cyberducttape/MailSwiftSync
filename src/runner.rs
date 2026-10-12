@@ -89,9 +89,9 @@ use crate::{
     MAX_PROCESS_TAIL_LINES, StreamOutcome, core,
     credentials::SecretString,
     process::{
-        ProcessOutcome, READER_DRAIN_TIMEOUT, attach_child_supervisor,
-        collect_redacted_lines_with_callback, configure_process_group, for_each_lossy_line,
-        process_identity, receive_reader_result, terminate_process_group, wait_with_timeout,
+        ProcessOutcome, READER_DRAIN_TIMEOUT, attach_child_supervisor, configure_process_group,
+        for_each_lossy_line, process_identity, receive_reader_result, terminate_process_group,
+        wait_with_timeout,
     },
     truncate_utf8, verification,
 };

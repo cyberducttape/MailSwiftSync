@@ -286,26 +286,35 @@ pub(crate) fn run_capture_lines(
             return Err("stderr pipe unavailable; child cancelled before supervision".into());
         }
     };
-    let out_secrets = secrets.to_vec();
+    let reader_secrets = crate::process::RevocableReaderSecrets::new(secrets);
+    let out_secrets = reader_secrets.clone();
     let out_observer = observer.clone();
     let (out_reader_tx, out_reader_rx) = mpsc::sync_channel(1);
     let out_thread = thread::spawn(move || {
-        let result = collect_redacted_lines_with_callback(stdout, &out_secrets, |line| {
-            if let Some(observer) = &out_observer {
-                observer(line);
-            }
-        });
+        let result = crate::process::collect_revocably_redacted_lines_with_callback(
+            stdout,
+            &out_secrets,
+            |line| {
+                if let Some(observer) = &out_observer {
+                    observer(line);
+                }
+            },
+        );
         let _ = out_reader_tx.send(result);
     });
-    let err_secrets = secrets.to_vec();
+    let err_secrets = reader_secrets.clone();
     let err_observer = observer;
     let (err_reader_tx, err_reader_rx) = mpsc::sync_channel(1);
     let err_thread = thread::spawn(move || {
-        let result = collect_redacted_lines_with_callback(stderr, &err_secrets, |line| {
-            if let Some(observer) = &err_observer {
-                observer(line);
-            }
-        });
+        let result = crate::process::collect_revocably_redacted_lines_with_callback(
+            stderr,
+            &err_secrets,
+            |line| {
+                if let Some(observer) = &err_observer {
+                    observer(line);
+                }
+            },
+        );
         let _ = err_reader_tx.send(result);
     });
     let registration = durable.map(|(tx, run_id, job_id)| {
@@ -341,23 +350,21 @@ pub(crate) fn run_capture_lines(
         eprintln!("[process-debug] capture wait returned; joining stdout reader");
     }
     let reader_deadline = std::time::Instant::now() + crate::process::READER_DRAIN_TIMEOUT;
-    let stdout_lines = crate::process::receive_reader_result(
-        out_reader_rx,
-        out_thread,
-        reader_deadline,
-        "stdout",
-    )?
-    .map_err(|error| format!("stdout reader failed: {error}"));
+    let stdout_lines =
+        crate::process::receive_reader_result(out_reader_rx, out_thread, reader_deadline, "stdout");
+    if stdout_lines.is_err() {
+        reader_secrets.revoke();
+    }
+    let stdout_lines = stdout_lines?.map_err(|error| format!("stdout reader failed: {error}"));
     if debug_supervision {
         eprintln!("[process-debug] stdout reader joined; joining stderr reader");
     }
-    let stderr_lines = crate::process::receive_reader_result(
-        err_reader_rx,
-        err_thread,
-        reader_deadline,
-        "stderr",
-    )?
-    .map_err(|error| format!("stderr reader failed: {error}"));
+    let stderr_lines =
+        crate::process::receive_reader_result(err_reader_rx, err_thread, reader_deadline, "stderr");
+    if stderr_lines.is_err() {
+        reader_secrets.revoke();
+    }
+    let stderr_lines = stderr_lines?.map_err(|error| format!("stderr reader failed: {error}"));
     if debug_supervision {
         eprintln!("[process-debug] stderr reader joined");
     }
@@ -445,20 +452,25 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let pid_file_text = pid_file.to_string_lossy().into_owned();
-        let command = "setsid python3 -c 'import ctypes, os, time; ctypes.CDLL(None).prctl(1, 0, 0, 0, 0); open(os.environ[\"MAILSWIFTSYNC_DETACHED_PID_FILE\"], \"w\").write(str(os.getpid())); time.sleep(30)' & exit 0";
+        let command = "setsid python3 -c 'import os, time; open(os.environ[\"MAILSWIFT_SYNC_DETACHED_PID_FILE\"], \"w\").write(str(os.getpid())); time.sleep(7); print(\"secret-canary\", flush=True); time.sleep(30)' & exit 0";
         let cancel = AtomicBool::new(false);
+        let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+        let observer_lines = Arc::clone(&observed);
+        let observer: OutputObserver = Arc::new(move |line| {
+            observer_lines.lock().unwrap().push(line.to_owned());
+        });
         let started = std::time::Instant::now();
         let result = run_capture_lines(
             "sh",
             &["-c".into(), command.into()],
             &[(
-                "MAILSWIFTSYNC_DETACHED_PID_FILE".into(),
+                "MAILSWIFT_SYNC_DETACHED_PID_FILE".into(),
                 SecretString::from(pid_file_text),
             )],
             &cancel,
-            &[],
+            &[SecretString::from("secret-canary")],
             Duration::from_secs(2),
-            None,
+            Some(observer),
             None,
         );
         let elapsed = started.elapsed();
@@ -471,6 +483,10 @@ mod tests {
                     None
                 })
         });
+        // The descendant writes only after the controller's five-second
+        // reader deadline. Its inherited pipe must not keep forwarding output
+        // after run_capture_lines has returned.
+        std::thread::sleep(Duration::from_secs(3));
         if let Some(pid) = detached_pid {
             // SAFETY: the test fixture created this process and the PID was
             // read from the PID file the fixture wrote.
@@ -478,6 +494,7 @@ mod tests {
                 libc::kill(pid, libc::SIGKILL);
             }
         }
+        assert!(observed.lock().unwrap().is_empty());
         let _ = std::fs::remove_file(&pid_file);
         assert!(result.is_err(), "detached pipe holder was reported cleanly");
         assert!(

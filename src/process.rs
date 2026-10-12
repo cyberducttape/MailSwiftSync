@@ -4,7 +4,7 @@ use std::{
     path::Path,
     process::{Child, Command},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
     thread,
@@ -91,6 +91,36 @@ pub(crate) fn engine_execution_profile() -> EngineExecutionProfile {
 pub(crate) struct CapturedOutput {
     pub(crate) lines: Vec<String>,
     pub(crate) truncated: bool,
+}
+
+/// Shared secret-redaction context for subprocess reader threads. A reader
+/// may outlive its controller if a detached descendant inherits the pipe, so
+/// callers can revoke this context on timeout to release credentials even
+/// while the reader continues draining bytes.
+#[derive(Clone)]
+pub(crate) struct RevocableReaderSecrets(Arc<Mutex<Option<Vec<SecretString>>>>);
+
+impl RevocableReaderSecrets {
+    pub(crate) fn new(secrets: &[SecretString]) -> Self {
+        Self(Arc::new(Mutex::new(Some(secrets.to_vec()))))
+    }
+
+    pub(crate) fn revoke(&self) {
+        let mut secrets = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        secrets.take();
+    }
+
+    fn redact(&self, line: String) -> Option<String> {
+        let secrets = self.0.lock().ok()?;
+        let secrets = secrets.as_ref()?;
+        Some(redact_known_secrets(
+            line,
+            secrets.iter().map(SecretString::as_str),
+        ))
+    }
 }
 
 /// Exclusive ownership of the application state workspace. Recovery must
@@ -284,11 +314,41 @@ pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
     secrets: &[SecretString],
     mut callback: F,
 ) -> std::io::Result<CapturedOutput> {
+    collect_lines_with_transform(
+        reader,
+        |line| {
+            Some(redact_known_secrets(
+                line,
+                secrets.iter().map(SecretString::as_str),
+            ))
+        },
+        &mut callback,
+    )
+}
+
+/// Variant for readers whose controller may revoke secret access while this
+/// function is still draining an inherited subprocess pipe. Revoked lines are
+/// discarded, but the underlying pipe continues to be drained.
+pub(crate) fn collect_revocably_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
+    reader: R,
+    secrets: &RevocableReaderSecrets,
+    mut callback: F,
+) -> std::io::Result<CapturedOutput> {
+    collect_lines_with_transform(reader, |line| secrets.redact(line), &mut callback)
+}
+
+fn collect_lines_with_transform<R: Read, F: FnMut(&str)>(
+    reader: R,
+    mut transform: impl FnMut(String) -> Option<String>,
+    callback: &mut F,
+) -> std::io::Result<CapturedOutput> {
     let mut lines = Vec::new();
     let mut retained_bytes: usize = 0;
     let mut truncated = false;
     for_each_lossy_line(reader, |line| {
-        let line = redact_known_secrets(line, secrets.iter().map(SecretString::as_str));
+        let Some(line) = transform(line) else {
+            return;
+        };
         callback(&line);
         let within_limits = lines.len() < MAX_CAPTURED_OUTPUT_LINES
             && retained_bytes.saturating_add(line.len()) <= MAX_CAPTURED_OUTPUT_BYTES;
@@ -556,6 +616,60 @@ mod tests {
             "token=[REDACTED] password=[REDACTED]"
         );
         assert_eq!(redact_known_secrets("clean".into(), ["", "x"]), "clean");
+    }
+
+    struct ChannelReader(std::sync::mpsc::Receiver<Vec<u8>>);
+
+    impl Read for ChannelReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            match self.0.recv() {
+                Ok(bytes) => {
+                    assert!(bytes.len() <= buffer.len());
+                    buffer[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Err(_) => Ok(0),
+            }
+        }
+    }
+
+    #[test]
+    fn revoking_reader_secrets_releases_them_and_suppresses_later_lines() {
+        let secret = SecretString::from("sensitive-canary".to_owned());
+        let secrets = RevocableReaderSecrets::new(std::slice::from_ref(&secret));
+        drop(secret);
+        let (input_tx, input_rx) = std::sync::mpsc::channel();
+        let (observed_tx, observed_rx) = std::sync::mpsc::channel();
+        let reader_secrets = secrets.clone();
+        let reader = thread::spawn(move || {
+            collect_revocably_redacted_lines_with_callback(
+                ChannelReader(input_rx),
+                &reader_secrets,
+                |line| observed_tx.send(line.to_owned()).unwrap(),
+            )
+            .unwrap()
+        });
+
+        input_tx
+            .send(b"before sensitive-canary\n".to_vec())
+            .unwrap();
+        assert_eq!(
+            observed_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "before [REDACTED]"
+        );
+
+        secrets.revoke();
+        assert!(
+            secrets
+                .redact("sensitive-canary after".to_owned())
+                .is_none()
+        );
+        input_tx.send(b"after sensitive-canary\n".to_vec()).unwrap();
+        drop(input_tx);
+
+        let output = reader.join().unwrap();
+        assert_eq!(output.lines, ["before [REDACTED]"]);
+        assert!(observed_rx.try_recv().is_err());
     }
 
     #[test]
