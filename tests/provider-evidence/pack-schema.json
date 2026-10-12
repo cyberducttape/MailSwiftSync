@@ -30,6 +30,9 @@
       "required": [
         "source_provider",
         "destination_provider",
+        "source_version",
+        "destination_version",
+        "fixture_id",
         "source_auth_method",
         "destination_auth_method",
         "engine",
@@ -42,6 +45,9 @@
       "properties": {
         "source_provider": {"type": "string"},
         "destination_provider": {"type": "string"},
+        "source_version": {"type": "string", "minLength": 1},
+        "destination_version": {"type": "string", "minLength": 1},
+        "fixture_id": {"type": "string", "minLength": 1},
         "source_auth_method": {"type": "string"},
         "destination_auth_method": {"type": "string"},
         "engine": {"type": "string"},
@@ -72,6 +78,9 @@
           "run_id",
           "proof_digest",
           "test_dataset_digest",
+          "fixture_id",
+          "source_version",
+          "destination_version",
           "scenario_ids",
           "test_summary",
           "results"
@@ -83,6 +92,9 @@
           "run_id": {"type": "string"},
           "proof_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "test_dataset_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "fixture_id": {"type": "string", "minLength": 1},
+          "source_version": {"type": "string", "minLength": 1},
+          "destination_version": {"type": "string", "minLength": 1},
           "scenario_ids": {"type": "array", "items": {"type": "string"}},
           "test_summary": {
             "type": "object",

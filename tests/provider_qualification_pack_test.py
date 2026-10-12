@@ -4,6 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+try:
+    import jsonschema
+except ImportError:  # Installed by the provider-evidence CI requirements.
+    jsonschema = None
+
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "build-provider-qualification-pack.py"
 SPEC = importlib.util.spec_from_file_location("provider_qualification_pack", SCRIPT)
@@ -126,6 +131,19 @@ class ProviderQualificationPackTests(unittest.TestCase):
         serialized = json.dumps(pack)
         self.assertNotIn("private-mailbox@example.test", serialized)
         self.assertEqual(pack["phases"][0]["results"]["overall_result"], "pass")
+        self.assertEqual(pack["tested"]["fixture_id"], "fixture-1")
+        self.assertEqual(pack["tested"]["source_version"], "provider-source-1")
+        self.assertEqual(
+            pack["phases"][0]["destination_version"], "provider-destination-1"
+        )
+        if jsonschema is not None:
+            schema_path = (
+                SCRIPT.parent.parent
+                / "tests"
+                / "provider-evidence"
+                / "pack-schema.json"
+            )
+            jsonschema.validate(pack, json.loads(schema_path.read_text(encoding="utf-8")))
 
     def test_exceptions_and_aggregate_only_evidence_cannot_be_called_qualified(self):
         for result, confidence in (

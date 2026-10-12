@@ -83,6 +83,18 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
         self.assertFalse(phase_properties["test_summary"].get("additionalProperties", True))
         self.assertFalse(phase_properties["results"].get("additionalProperties", True))
         self.assertNotIn("known_issues", phase_properties["results"].get("properties", {}))
+        tested_properties = properties["tested"]["properties"]
+        self.assertTrue(
+            {"fixture_id", "source_version", "destination_version"}.issubset(
+                properties["tested"]["required"]
+            )
+        )
+        self.assertTrue(
+            {"fixture_id", "source_version", "destination_version"}.issubset(
+                properties["phases"]["items"]["required"]
+            )
+        )
+        self.assertIn("fixture_id", tested_properties)
 
 
 if __name__ == "__main__":

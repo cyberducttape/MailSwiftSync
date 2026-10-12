@@ -259,6 +259,9 @@ def build_pack(evidence_dir: Path, source: str, destination: str, policy_path: P
                 "run_id": value["run_id"],
                 "proof_digest": value["proof_digest"],
                 "test_dataset_digest": value["test_dataset_digest"],
+                "fixture_id": value["fixture_id"],
+                "source_version": value["source_version"],
+                "destination_version": value["destination_version"],
                 "scenario_ids": sorted(value["scenario_ids"]),
                 "test_summary": {
                     key: item
@@ -308,6 +311,9 @@ def build_pack(evidence_dir: Path, source: str, destination: str, policy_path: P
         "tested": {
             "source_provider": source,
             "destination_provider": destination,
+            "source_version": first["source_version"],
+            "destination_version": first["destination_version"],
+            "fixture_id": first["fixture_id"],
             "source_auth_method": first["source_auth_method"],
             "destination_auth_method": first["destination_auth_method"],
             "engine": first["engine"],
