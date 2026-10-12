@@ -11,7 +11,14 @@ categories = ["command-line-utilities", "gui", "network-programming"]
 
 [dependencies]
 base64 = "0.23"
-eframe = { version = "0.35", features = ["default"] }
+eframe = { version = "0.35", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "wayland",
+    "web_screen_reader",
+    "wgpu",
+    "x11",
+] }
 egui_extras = "0.35"
 rfd = "0.17"
 dirs-next = "2"
@@ -49,4 +56,14 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemServices",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Keep Wayland client-side decorations without enabling winit's default
+# ab_glyph renderer, which pulls in the unmaintained ttf-parser crate to parse
+# installed system fonts. The built-in Adwaita controls remain; title text is
+# omitted by this renderer.
+winit = { version = "0.30.13", default-features = false, features = [
+    "wayland-csd-adwaita-notitle",
+    "wayland-dlopen",
 ] }
