@@ -5,6 +5,9 @@
 - Bound `doctor` engine-version output draining after the child exits; a
   detached descendant that inherits stdout/stderr can no longer hang
   diagnostics indefinitely, and incomplete capture is reported as blocked.
+- Clear both endpoints' prior staged rows, fingerprints, cursors, and flag
+  capabilities before a verification retry so deleted or renamed folders
+  cannot contribute stale evidence.
 - Benchmark durable verification through the same SQLite-staged mismatch path
   used by live runs; the prior harness materialized mismatch details in memory
   and could hit its separate 64 MiB ephemeral-report limit on adversarial data.

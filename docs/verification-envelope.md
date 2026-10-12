@@ -183,6 +183,9 @@ state a client cannot store.
 ## Snapshot and cutover semantics
 
 The source and destination scans are not one atomic cross-server snapshot.
+At retry start, all staged rows and fingerprints from both endpoint scans are
+invalidated, including rows belonging to folders that have since been deleted
+or renamed.
 Each selected folder is checked for internal stability using its
 `UIDVALIDITY`, `UIDNEXT`, and `EXISTS` values and a second bounded FLAGS pass.
 The latter catches flag changes between the initial FETCH and the flag check;
