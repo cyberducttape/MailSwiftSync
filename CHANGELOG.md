@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Apply the IMAP 32-bit UID-domain check to metadata, FLAGS, and body FETCH
+  parsing as well as UID enumeration, rejecting zero and out-of-range values
+  before they enter verification staging.
 - Exercise cross-process ledger-lock recovery by forcibly terminating the
   lock-owning subprocess and verifying another process can acquire ownership.
 - Make single-mailbox completion banners state the recorded verification tier:

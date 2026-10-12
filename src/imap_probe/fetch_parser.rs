@@ -30,9 +30,7 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
     let mut messages = HashMap::new();
     for record in fetch_records(response) {
         let record = record?;
-        let uid = fetch_number(&record.protocol_text, "UID")
-            .ok_or_else(|| "IMAP FETCH record omitted UID".to_owned())?
-            .to_string();
+        let uid = parsed_fetch_uid(&record.protocol_text, &mailbox, "IMAP FETCH")?.to_string();
         let key = crate::core::MailboxMessageKey::with_shared_mailbox(
             Arc::clone(&mailbox),
             uidvalidity,
@@ -85,8 +83,7 @@ pub(super) fn parse_message_fetch_flags_response_bytes(
     let mut messages = HashMap::new();
     for record in fetch_records(response) {
         let record = record?;
-        let uid = fetch_number(&record.protocol_text, "UID")
-            .ok_or_else(|| "IMAP FLAGS FETCH record omitted UID".to_owned())?;
+        let uid = parsed_fetch_uid(&record.protocol_text, &mailbox, "IMAP FLAGS FETCH")?;
         let flags = fetch_flags(&record.protocol_text);
         let key = crate::core::MailboxMessageKey::with_shared_mailbox(
             Arc::clone(&mailbox),
@@ -127,8 +124,7 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
     let mut total_bytes = 0usize;
     for record in fetch_records(response) {
         let record = record?;
-        let uid = fetch_number(&record.protocol_text, "UID")
-            .ok_or_else(|| "IMAP body FETCH record omitted UID".to_owned())?;
+        let uid = parsed_fetch_uid(&record.protocol_text, &mailbox, "IMAP body FETCH")?;
         let body = record
             .frame
             .literal_after(b"BODY[]")
@@ -160,6 +156,12 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
         fingerprints,
         total_bytes,
     })
+}
+
+fn parsed_fetch_uid(protocol_text: &str, mailbox: &str, context: &str) -> Result<u64, String> {
+    let uid = fetch_number(protocol_text, "UID")
+        .ok_or_else(|| format!("{context} record omitted or returned an invalid UID"))?;
+    super::fetch_pages::validate_imap_uid(uid, "IMAP server", mailbox)
 }
 
 #[derive(Debug)]

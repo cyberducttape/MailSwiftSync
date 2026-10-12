@@ -113,7 +113,7 @@ pub(super) fn parse_uid_search_response(
     Ok(uids)
 }
 
-fn validate_imap_uid(uid: u64, host: &str, mailbox: &str) -> Result<u64, String> {
+pub(super) fn validate_imap_uid(uid: u64, host: &str, mailbox: &str) -> Result<u64, String> {
     if uid == 0 || uid > MAX_IMAP_UID {
         return Err(format!(
             "{host}: folder {mailbox} returned UID {uid} outside the IMAP 1..={} domain",
