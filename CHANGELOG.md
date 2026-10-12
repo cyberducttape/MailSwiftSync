@@ -9,6 +9,10 @@
   per endpoint at the synthetic SQLite reconciliation layer, with host profile,
   peak RSS, stage/journal footprint, throughput, and explicit qualification
   limits.
+- Reconfirm the 1M-message typical durable-stage benchmark on commit
+  `927f04b1cf4baa1519d8dab3a4430ad3bcfa4c3b` with SQLite staging under the
+  workstation's ext4/NVMe filesystem: 21 MiB peak RSS and 41,978 reconciled
+  messages/s. This is not end-to-end or provider qualification.
 - Document service-identity keyring validation and credential rotation,
   revocation, export, crash-residue, and policy-administration procedures;
   clarify that systemd hardening does not isolate the engine from the worker UID.

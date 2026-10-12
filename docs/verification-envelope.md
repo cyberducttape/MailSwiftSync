@@ -116,6 +116,21 @@ engine transfer, the final ledger evidence commit, real mailbox distributions,
 or provider behavior, and do not establish capacity on other storage or a
 10/50/100 GiB transfer.
 
+A current-head repeat of the 1M typical case on 2026-10-12 at commit
+`927f04b1cf4baa1519d8dab3a4430ad3bcfa4c3b` used the same shared Ryzen 7 7735U
+workstation (Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, Rust 1.92.0,
+ext4 on NVMe), with its SQLite stage explicitly placed under the ext4-backed
+repository rather than the host's tmpfs `/tmp`. Staging took 27.250 s;
+reconciliation took 23.822 s (41,978 messages/s); FLAGS comparison took
+6.484 s; restart reconciliation took 23.266 s. Peak RSS was 21 MiB. The stage
+directory was 730,079,232 B after staging and peaked at 1,151,854,544 B during
+reconciliation; the peak rollback journal was 100,894,672 B. Filesystem
+accounting reported 948,056,064 B written during staging and 709,632,000 B
+during reconciliation. The fixture recorded 20,000 changed-ID mismatches and
+compared flags for 980,000 messages. This confirms the synthetic durable-stage
+measurement on the current revision only; it remains neither an IMAP
+integration nor a provider, large-transfer, or production-host qualification.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of
