@@ -460,6 +460,12 @@ MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES=100000 \
   cargo test --release durable_stage_reconciliation_benchmark -- --ignored --nocapture
 ```
 
+For the scale script, the stage defaults to `target/verification-scale` and
+the selected filesystem is printed before measurements begin. Set
+`MAILSWIFTSYNC_RECONCILIATION_BENCH_DIR` to a path on the storage class being
+qualified; do not treat a tmpfs or container overlay result as physical-disk
+evidence.
+
 This isolated synthetic benchmark must not be cited as end-to-end migration or
 provider qualification evidence.
 # Identity evidence qualification
