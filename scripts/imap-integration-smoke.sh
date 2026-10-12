@@ -1222,8 +1222,8 @@ run_interruption_drill() {
 
 if [[ "$test_engine" != Dovecot ]] && (( scale_messages == 0 )); then
   run_interruption_drill defaults false strict restore
-  # 16 MiB at 1 MiB/s leaves an observable partial Maildir tmp file before the
+  # 64 MiB at 1 MiB/s leaves an observable partial Maildir tmp file before the
   # controller is killed, exercising failure inside a single APPEND literal.
-  run_interruption_drill large-append false strict "" 1 16777216 1048576
+  run_interruption_drill large-append false strict "" 1 67108864 1048576
   run_interruption_drill uid-cache true flagged
 fi

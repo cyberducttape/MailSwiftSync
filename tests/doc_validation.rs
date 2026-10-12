@@ -160,13 +160,13 @@ fn integration_harness_contains_a_throttled_mid_append_interruption_case() {
 
     assert!(
         harness
-            .contains("run_interruption_drill large-append false strict \"\" 1 16777216 1048576")
-            && harness.contains("16 MiB at 1 MiB/s leaves an observable partial Maildir tmp file")
+            .contains("run_interruption_drill large-append false strict \"\" 1 67108864 1048576")
+            && harness.contains("64 MiB at 1 MiB/s leaves an observable partial Maildir tmp file")
             && harness.contains("partial APPEND was observed"),
         "the integration drill must wait for an incomplete large-message APPEND before killing the controller"
     );
     assert!(
-        recovery.contains("qualification is pending its CI run"),
+        recovery.contains("scenario is pending CI qualification"),
         "the crash-recovery matrix must not call the new scenario proven before CI exercises it"
     );
 }
