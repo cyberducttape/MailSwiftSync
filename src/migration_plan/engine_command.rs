@@ -353,11 +353,7 @@ fn append_oauth_refresh_command(
     if refresh_id.is_empty() {
         return Ok(());
     }
-    if cfg!(windows) {
-        return Err(
-            "automatic OAuth refresh is not enabled on Windows until imapsync refresh-command quoting is qualified for the Windows command shell".to_owned(),
-        );
-    }
+    require_oauth_refresh_shell_support(cfg!(windows))?;
     let config = form
         .load_oauth_refresh_config(side == 1)?
         .ok_or_else(|| {
@@ -386,6 +382,16 @@ fn append_oauth_refresh_command(
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn require_oauth_refresh_shell_support(is_windows: bool) -> Result<(), String> {
+    if is_windows {
+        Err(
+            "automatic OAuth refresh is not enabled on Windows until imapsync refresh-command quoting is qualified for the Windows command shell".to_owned(),
+        )
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) struct PreparedCommand {
@@ -649,5 +655,33 @@ impl Form {
         // The userdb lookup validates the local destination identity without
         // touching the mailbox store.
         vec![(self.profile.doveadm_path.clone(), user)]
+    }
+}
+
+#[cfg(test)]
+mod oauth_refresh_command_tests {
+    use super::{require_oauth_refresh_shell_support, shell_quote};
+
+    #[test]
+    fn windows_oauth_refresh_remains_fail_closed() {
+        let error = require_oauth_refresh_shell_support(true).unwrap_err();
+        assert!(error.contains("not enabled on Windows"));
+        assert!(error.contains("command shell"));
+    }
+
+    #[test]
+    fn native_oauth_refresh_guard_matches_the_host_platform() {
+        assert_eq!(
+            require_oauth_refresh_shell_support(cfg!(windows)).is_ok(),
+            !cfg!(windows)
+        );
+    }
+
+    #[test]
+    fn posix_refresh_command_quotes_spaces_unicode_and_shell_metacharacters() {
+        assert_eq!(
+            shell_quote("/tmp/Mail Swift/配置'sync;$()"),
+            "'/tmp/Mail Swift/配置'\\''sync;$()'"
+        );
     }
 }

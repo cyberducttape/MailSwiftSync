@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep automatic OAuth refresh fail-closed on Windows until native imapsync
+  command-shell behavior is qualified, and add regression coverage for the
+  refusal and POSIX quoting of paths containing spaces, Unicode, apostrophes,
+  and shell metacharacters.
 - Record the current packaged imapsync and native Dovecot smoke artifacts with
   proof digests and evidence levels; explicitly keep this generic-lab result
   outside provider and scale qualification.
