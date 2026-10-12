@@ -3,10 +3,21 @@ use serde::{Deserialize, Serialize};
 const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 100_000;
 const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
+pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
+pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 1;
 
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreMigrationRisk {
+    pub format: String,
+    pub format_version: u32,
+    /// This report evaluates only the scale facts supplied by the caller.
+    /// It is not an end-to-end migration readiness decision.
+    pub assessment_scope: String,
+    /// Hard gates are evaluated elsewhere and are never cleared by this score.
+    pub advisory_only: bool,
+    /// Important readiness checks for which this scale-only report has no evidence.
+    pub not_evaluated: Vec<String>,
     pub total_messages: u64,
     pub total_folders: u64,
     pub total_size_gb: f64,
@@ -148,6 +159,20 @@ impl PreMigrationRisk {
         };
 
         PreMigrationRisk {
+            format: PRE_MIGRATION_RISK_FORMAT.to_owned(),
+            format_version: PRE_MIGRATION_RISK_FORMAT_VERSION,
+            assessment_scope: "scale_only".to_owned(),
+            advisory_only: true,
+            not_evaluated: vec![
+                "provider_qualification".to_owned(),
+                "authentication".to_owned(),
+                "tls".to_owned(),
+                "destination_capacity".to_owned(),
+                "verification_eligibility".to_owned(),
+                "worker_disk_capacity".to_owned(),
+                "maintenance_window".to_owned(),
+                "organization_policy".to_owned(),
+            ],
             total_messages,
             total_folders,
             total_size_gb,
@@ -193,6 +218,32 @@ mod tests {
         let risk = PreMigrationRisk::assess(1000, 5, 100_000_000, "provider=gmail");
         assert!(risk.warnings.is_empty());
         assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
+    }
+
+    #[test]
+    fn scale_score_explicitly_disclaims_unassessed_readiness_gates() {
+        let risk = PreMigrationRisk::assess(100, 5, 100_000_000, "");
+        assert_eq!(risk.assessment_scope, "scale_only");
+        assert!(risk.advisory_only);
+        for gate in [
+            "provider_qualification",
+            "authentication",
+            "tls",
+            "destination_capacity",
+            "verification_eligibility",
+            "worker_disk_capacity",
+            "maintenance_window",
+            "organization_policy",
+        ] {
+            assert!(risk.not_evaluated.iter().any(|value| value == gate));
+        }
+        let value = serde_json::to_value(risk).unwrap();
+        assert_eq!(value["format"], PRE_MIGRATION_RISK_FORMAT);
+        assert_eq!(value["format_version"], PRE_MIGRATION_RISK_FORMAT_VERSION);
+        assert_eq!(value["estimated_readiness"], "ready");
+        assert_eq!(value["assessment_scope"], "scale_only");
+        assert_eq!(value["advisory_only"], true);
+        assert!(value["not_evaluated"].as_array().unwrap().len() >= 8);
     }
 
     #[test]

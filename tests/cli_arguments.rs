@@ -108,6 +108,31 @@ fn post_report_command_emits_versioned_nullable_count_semantics() {
 }
 
 #[test]
+fn risk_command_marks_its_readiness_score_as_scale_only_and_advisory() {
+    let output = run(&["risk", "100", "5", "100000000"]);
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["format"], "mailswiftsync-pre-migration-risk");
+    assert_eq!(report["format_version"], 1);
+    assert_eq!(report["assessment_scope"], "scale_only");
+    assert_eq!(report["advisory_only"], true);
+    assert_eq!(report["estimated_readiness"], "ready");
+    let not_evaluated = report["not_evaluated"].as_array().unwrap();
+    for gate in [
+        "provider_qualification",
+        "authentication",
+        "tls",
+        "destination_capacity",
+        "verification_eligibility",
+        "worker_disk_capacity",
+        "maintenance_window",
+        "organization_policy",
+    ] {
+        assert!(not_evaluated.iter().any(|value| value == gate));
+    }
+}
+
+#[test]
 fn batch_headless_accepts_opt_in_diagnostic_directory() {
     let root = std::env::temp_dir().join(format!(
         "mailswiftsync-cli-batch-diagnostic-{}",

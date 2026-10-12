@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Version pre-migration risk JSON and mark its score as scale-only/advisory;
+  enumerate authentication, TLS, provider, capacity, verification, disk,
+  maintenance-window, and policy gates that this score does not evaluate.
 - Remove unused `MPL-2.0` and `OpenSSL` entries from the dependency-license
   allowlist so future crates require an explicit license review.
 - Retain durable verification staging when the evidence commit is rejected
