@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Exercise imapsync's OAuth refresh callback with a credential-free IMAP peer.
 
-This verifies the pinned engine contract: it runs each refresh command before
-XOAUTH2 authentication and reads the access-token file after the callback.
-It does not qualify token expiry or provider refresh-token rotation against a
-real OAuth provider.
+This verifies the pinned engine contract: after a forced IMAP socket drop, it
+runs each refresh command before XOAUTH2 reauthentication and rereads the
+callback-updated access-token file. It does not qualify token expiry or
+provider refresh-token rotation against a real OAuth provider.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ class MockImapPeer:
     def __init__(self, expected_users: dict[str, str]) -> None:
         self.expected_users = expected_users
         self.authenticated: set[str] = set()
+        self.auth_counts = {user: 0 for user in expected_users}
         self.logged_out: set[str] = set()
         self.errors: list[str] = []
         self.commands: list[str] = []
@@ -111,11 +112,12 @@ class MockImapPeer:
                             ),
                             None,
                         )
-                        expected = (
-                            f"user={user}\x01auth=Bearer {self.expected_users[user]}\x01\x01"
-                            if user is not None
-                            else None
-                        )
+                        if user is not None:
+                            self.auth_counts[user] += 1
+                            token = f"{self.expected_users[user]}-{self.auth_counts[user]}"
+                            expected = f"user={user}\x01auth=Bearer {token}\x01\x01"
+                        else:
+                            expected = None
                         if user is None or decoded != expected:
                             self.errors.append("XOAUTH2 did not contain the callback-written token")
                             stream.write(f"{tag} NO OAuth fixture rejected credentials\r\n".encode())
@@ -123,6 +125,11 @@ class MockImapPeer:
                         self.authenticated.add(user)
                         authenticated_user = user
                         stream.write(f"{tag} OK authenticated\r\n".encode())
+                        # Force an authenticated session to die before the
+                        # caller's next IMAP operation. imapsync must reopen
+                        # it and run the callback again for XOAUTH2.
+                        if self.auth_counts[user] == 1:
+                            break
                     elif command == "LOGOUT":
                         if authenticated_user is not None:
                             self.logged_out.add(authenticated_user)
@@ -163,16 +170,19 @@ def main() -> int:
             token_file = root / f"token {index}.txt"
             token_file.write_text("stale-token\n", encoding="utf-8")
             marker = root / f"callback {index}.marker"
+            marker_path = shlex.quote(str(marker))
+            token_path = shlex.quote(str(token_file))
+            token_prefix = shlex.quote(token)
             command = " ".join(
                 (
                     "/bin/sh -c",
                     shlex.quote(
-                        f"printf '%s\\n' invoked > {shlex.quote(str(marker))}; "
-                        f"printf '%s\\n' {shlex.quote(token)} > {shlex.quote(str(token_file))}"
+                        f"if [ -f {marker_path} ]; then count=$(cat {marker_path}); else count=0; fi; "
+                        f"count=$((count + 1)); printf '%s\\n' \"$count\" > {marker_path}; "
+                        f"printf '%s-%s\\n' {token_prefix} \"$count\" > {token_path}"
                     ),
                 )
             )
-            expected[user] = token
             if index == 1:
                 source_token, source_command = token_file, command
             else:
@@ -214,16 +224,21 @@ def main() -> int:
         callbacks_present = all(
             (root / f"callback {index}.marker").is_file() for index in (1, 2)
         )
-        tokens_updated = all(
-            (root / f"token {index}.txt").read_text(encoding="utf-8").strip() == token
-            for index, token in enumerate(expected.values(), start=1)
+        callbacks_match_auth = all(
+            (root / f"callback {index}.marker").is_file()
+            and (root / f"callback {index}.marker").read_text(encoding="utf-8").strip()
+            == str(peer.auth_counts[user])
+            and (root / f"token {index}.txt").read_text(encoding="utf-8").strip()
+            == f"{token}-{peer.auth_counts[user]}"
+            for index, (user, token) in enumerate(expected.items(), start=1)
         )
         if (
             result.returncode != 0
             or peer.errors
             or peer.authenticated != set(expected)
+            or any(count < 2 for count in peer.auth_counts.values())
             or not callbacks_present
-            or not tokens_updated
+            or not callbacks_match_auth
         ):
             # Do not print imapsync's raw transcript: it is external process
             # output and must never become a channel for accidental secrets.
@@ -231,8 +246,10 @@ def main() -> int:
             raise SystemExit(f"FAIL: imapsync OAuth refresh callback fixture failed: {detail}")
 
     print(
-        f"PASS: imapsync {EXPECTED_VERSION} refreshed both OAuth token files "
-        "before XOAUTH2 authentication"
+        f"PASS: imapsync {EXPECTED_VERSION} invoked OAuth callbacks for "
+        f"all XOAUTH2 authentications after forced reconnect "
+        f"(source={peer.auth_counts['source@example.test']}, "
+        f"destination={peer.auth_counts['dest@example.test']})"
     )
     return 0
 

@@ -32,6 +32,8 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn('"--oauthrefreshcmd2", destination_command', OAUTH_IMAPSYNC_SMOKE)
         self.assertIn("self.authenticated.add(user)", OAUTH_IMAPSYNC_SMOKE)
         self.assertIn("self.expected_users[user]", OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn("after a forced IMAP socket drop", OAUTH_IMAPSYNC_SMOKE)
+        self.assertIn("any(count < 2 for count in peer.auth_counts.values())", OAUTH_IMAPSYNC_SMOKE)
         self.assertIn("callback-written token", OAUTH_IMAPSYNC_SMOKE)
         self.assertIn("does not qualify token expiry", OAUTH_IMAPSYNC_SMOKE)
 
