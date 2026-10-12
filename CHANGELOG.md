@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Make single-mailbox completion banners state the recorded verification tier:
+  metadata-only runs explicitly say message bodies were not compared, bounded
+  body-fingerprint runs disclaim full byte-for-byte proof, and aggregate/engine
+  evidence disclaims independent per-message verification. A missing method on
+  a `verified` result now produces a warning instead of an unqualified success.
 - Version pre-migration risk JSON and mark its score as scale-only/advisory;
   enumerate authentication, TLS, provider, capacity, verification, disk,
   maintenance-window, and policy gates that this score does not evaluate.

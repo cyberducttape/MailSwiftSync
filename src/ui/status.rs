@@ -312,6 +312,7 @@ pub(crate) fn successful_run_status(
     dry_run: bool,
     was_bulk_run: bool,
     final_state: Option<&str>,
+    verification_method: Option<core::VerificationMethod>,
 ) -> &'static str {
     if dry_run {
         "Preflight completed successfully"
@@ -319,7 +320,23 @@ pub(crate) fn successful_run_status(
         "Batch transfer completed; review per-mailbox verification results"
     } else {
         match final_state {
-            Some("verified") => "Migration completed and verified",
+            Some("verified") => match verification_method {
+                Some(core::VerificationMethod::MetadataReconciliation) => {
+                    "Migration completed; message metadata and supported flags verified. Message bodies were not compared."
+                }
+                Some(core::VerificationMethod::BodyHash) => {
+                    "Migration completed; bounded message-content fingerprints and supported flags verified. This is not full byte-for-byte proof."
+                }
+                Some(core::VerificationMethod::AggregateEngine) => {
+                    "Migration completed; engine-reported aggregate evidence only. Individual messages and bodies were not independently verified."
+                }
+                Some(core::VerificationMethod::NativeDovecot) => {
+                    "Migration completed; Dovecot aggregate evidence recorded. Individual messages and bodies were not independently verified."
+                }
+                None => {
+                    "Migration completed, but evidence details are unavailable. Review the ledger before sign-off."
+                }
+            },
             Some("verified_with_exceptions") => {
                 "Migration completed with accepted verification exceptions"
             }
@@ -338,12 +355,13 @@ pub(crate) fn successful_run_severity(
     dry_run: bool,
     was_bulk_run: bool,
     final_state: Option<&str>,
+    verification_method: Option<core::VerificationMethod>,
 ) -> StatusSeverity {
     if dry_run {
         StatusSeverity::Success
     } else if was_bulk_run {
         StatusSeverity::Warning
-    } else if matches!(final_state, Some("verified")) {
+    } else if matches!(final_state, Some("verified")) && verification_method.is_some() {
         StatusSeverity::Success
     } else {
         StatusSeverity::Warning

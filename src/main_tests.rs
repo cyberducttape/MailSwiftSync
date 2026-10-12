@@ -131,7 +131,7 @@ fn default_live_imapsync_plan_preserves_metadata_for_verification() {
     // If evidence is unavailable after a successful transfer, the
     // controller's terminal policy is review-required, not failed.
     assert_eq!(
-        successful_run_status(false, false, None),
+        successful_run_status(false, false, None, None),
         "Migration completed; verification requires operator review"
     );
 }
@@ -1742,19 +1742,46 @@ fn failure_taxonomy_keeps_operator_actions_distinct() {
 #[test]
 fn successful_live_status_never_overclaims_missing_evidence() {
     assert_eq!(
-        successful_run_status(false, false, Some("verified")),
-        "Migration completed and verified"
+        successful_run_status(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::MetadataReconciliation),
+        ),
+        "Migration completed; message metadata and supported flags verified. Message bodies were not compared."
     );
     assert_eq!(
-        successful_run_status(false, false, Some("delta_required")),
+        successful_run_status(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::BodyHash),
+        ),
+        "Migration completed; bounded message-content fingerprints and supported flags verified. This is not full byte-for-byte proof."
+    );
+    assert_eq!(
+        successful_run_status(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::NativeDovecot),
+        ),
+        "Migration completed; Dovecot aggregate evidence recorded. Individual messages and bodies were not independently verified."
+    );
+    assert_eq!(
+        successful_run_status(false, false, Some("verified"), None),
+        "Migration completed, but evidence details are unavailable. Review the ledger before sign-off."
+    );
+    assert_eq!(
+        successful_run_status(false, false, Some("delta_required"), None),
         "Dovecot synchronization completed with changes pending; repeat the final pass until exit code 0"
     );
     assert_eq!(
-        successful_run_status(false, false, None),
+        successful_run_status(false, false, None, None),
         "Migration completed; verification requires operator review"
     );
     assert_eq!(
-        successful_run_status(false, true, None),
+        successful_run_status(false, true, None, None),
         "Batch transfer completed; review per-mailbox verification results"
     );
 }
@@ -3161,20 +3188,29 @@ fn headless_batch_success_requires_verified_terminal_states() {
 #[test]
 fn run_status_severity_is_typed_and_independent_of_display_text() {
     assert_eq!(
-        successful_run_severity(false, false, Some("verified")),
+        successful_run_severity(
+            false,
+            false,
+            Some("verified"),
+            Some(core::VerificationMethod::MetadataReconciliation),
+        ),
         StatusSeverity::Success
     );
     assert_eq!(
-        successful_run_severity(false, false, Some("delta_required")),
+        successful_run_severity(false, false, Some("delta_required"), None),
         StatusSeverity::Warning
     );
     assert_eq!(
-        successful_run_severity(false, true, None),
+        successful_run_severity(false, true, None, None),
         StatusSeverity::Warning
     );
     assert_eq!(
-        successful_run_severity(true, false, None),
+        successful_run_severity(true, false, None, None),
         StatusSeverity::Success
+    );
+    assert_eq!(
+        successful_run_severity(false, false, Some("verified"), None),
+        StatusSeverity::Warning
     );
 }
 

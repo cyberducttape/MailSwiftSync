@@ -36,6 +36,9 @@ impl App {
             // as a fallback, because that would bypass the profile invariant
             // and could promote incomplete output.
             let terminal_evidence = self.pending_evidence.clone();
+            let verification_method = terminal_evidence
+                .as_ref()
+                .map(|evidence| evidence.verification_method());
             let terminal_checkpoint = if !was_bulk_run && succeeded {
                 self.pending_checkpoint.clone()
             } else {
@@ -379,12 +382,14 @@ impl App {
                                 run_context.dry_run,
                                 was_bulk_run,
                                 direct_final_state,
+                                verification_method,
                             ))
                             .to_owned(),
                         successful_run_severity(
                             run_context.dry_run,
                             was_bulk_run,
                             direct_final_state,
+                            verification_method,
                         ),
                     ),
                     Err(e) => (
