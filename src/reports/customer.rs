@@ -35,11 +35,30 @@ fn execution_profile(plan_snapshot: &str) -> &'static str {
 }
 
 fn engine_identity(engine: &str, version: Option<&str>) -> String {
-    version
+    let engine = engine.trim();
+    let engine_name = if engine.to_ascii_lowercase().starts_with("imapsync") {
+        "imapsync"
+    } else if engine.to_ascii_lowercase().starts_with("dovecot") {
+        "Dovecot native"
+    } else if engine.is_empty() {
+        "unknown engine"
+    } else {
+        engine
+    };
+    let version = version
         .map(str::trim)
-        .filter(|version| !version.is_empty() && !version.eq_ignore_ascii_case("unknown"))
-        .map(str::to_owned)
-        .unwrap_or_else(|| engine.to_owned())
+        .filter(|version| !version.is_empty() && !version.eq_ignore_ascii_case("unknown"));
+    match version {
+        Some(version)
+            if version
+                .to_ascii_lowercase()
+                .starts_with(&engine_name.to_ascii_lowercase()) =>
+        {
+            version.to_owned()
+        }
+        Some(version) => format!("{engine_name} {version}"),
+        None => engine_name.to_owned(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,6 +346,12 @@ impl ExportSummary {
             Ok(())
         })?;
         reader.for_each_run(|run| {
+            // Independent reverification is a Rust-side audit, not another
+            // transfer engine. Keep it in the run history, but don't let it
+            // erase the top-level identity of the engine that moved mail.
+            if run.run.engine == "imap-verification" {
+                return Ok(());
+            }
             summary.engine_identities.insert(engine_identity(
                 &run.run.engine,
                 run.engine_version.as_deref(),
@@ -531,11 +556,15 @@ mod tests {
             .add_mailbox(&project.id, "source@example.com", "destination@example.com")
             .unwrap();
         store
-            .begin_run_with_snapshot(&project.id, &job, "run-proof", "imapsync", &plan_snapshot)
+            .begin_run_with_snapshot(
+                &project.id,
+                &job,
+                "run-proof",
+                "imapsync fallback",
+                &plan_snapshot,
+            )
             .unwrap();
-        store
-            .record_engine_version("run-proof", "imapsync 2.314")
-            .unwrap();
+        store.record_engine_version("run-proof", "2.314").unwrap();
         store
             .finish_run_for_mailbox_with_evidence(
                 &project.id,
@@ -663,7 +692,15 @@ mod tests {
         assert_eq!(engine_identity("imapsync", None), "imapsync");
         assert_eq!(engine_identity("imapsync", Some("  ")), "imapsync");
         assert_eq!(
-            engine_identity("imapsync", Some("imapsync 2.314")),
+            engine_identity("imapsync fallback", Some("2.314")),
+            "imapsync 2.314"
+        );
+        assert_eq!(
+            engine_identity("Dovecot native", Some("2.3.19.1")),
+            "Dovecot native 2.3.19.1"
+        );
+        assert_eq!(
+            engine_identity("imapsync fallback", Some("imapsync 2.314")),
             "imapsync 2.314"
         );
     }
@@ -691,6 +728,18 @@ mod tests {
             .unwrap();
         store
             .record_engine_version("native-run", "unknown")
+            .unwrap();
+        store
+            .finish_run("native-run", "completed", "transfer complete")
+            .unwrap();
+        store
+            .begin_verification_run_from_transfer(
+                &project.id,
+                &job,
+                "verification-run",
+                "native-run",
+                &plan_snapshot,
+            )
             .unwrap();
 
         let reader = store.project_export_reader(&project.id).unwrap().unwrap();

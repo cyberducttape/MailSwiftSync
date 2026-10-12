@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Assert that packaged imapsync and native Dovecot customer-proof artifacts
+  identify the transfer engine actually exercised by the integration lab;
+  exclude verification-only runs from that summary and include the engine name
+  when a durable record contains only a bare version number.
 - Fall back to the engine name in customer-proof summaries when the recorded
   engine version is missing or reported as `unknown`, preventing native-engine
   certificates from exporting an ambiguous top-level engine identity.

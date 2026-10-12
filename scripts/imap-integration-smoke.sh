@@ -856,6 +856,15 @@ run_product customer-proof "$state" "$proof" \
   --source-provider generic_imap --destination-provider generic_imap \
   --source-auth password --destination-auth password --fixture-id packaged-generic-imap \
   --scenario-ids basic-small,idempotent-delta
+if [[ "$test_engine" == Dovecot ]]; then
+  expected_proof_engine='"engine": "Dovecot native'
+else
+  expected_proof_engine='"engine": "imapsync 2.314"'
+fi
+if ! grep -Fq -- "$expected_proof_engine" "$proof"; then
+  echo "FAIL: customer proof did not identify the executed engine ($expected_proof_engine)" >&2
+  exit 1
+fi
 run_product verify "$proof"
 echo "PASS: packaged customer proof exported and verified"
 
@@ -935,6 +944,10 @@ run_product customer-proof "$state" "$post_delta_proof" \
   --source-auth password --destination-auth password --fixture-id packaged-generic-imap \
   --scenario-ids idempotent-delta
 run_product verify "$post_delta_proof"
+if ! grep -Fq -- "$expected_proof_engine" "$post_delta_proof"; then
+  echo "FAIL: post-delta customer proof did not identify the transfer engine ($expected_proof_engine)" >&2
+  exit 1
+fi
 echo "PASS: post-delta customer proof exported and verified"
 if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
   cp -- "$post_delta_proof" "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/customer-proof-post-delta.json"
