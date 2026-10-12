@@ -3,9 +3,12 @@ name: Live provider smoke
 # Manually dispatched smoke run against operator-owned Google Workspace and
 # Microsoft 365 test tenants: dry pilot, interruption + recovery into a
 # separate destination mailbox, and a live pilot, using the packaged runtime
-# image (pinned imapsync 2.314). It proves OAuth refresh, live transfer, and
-# recovery against real providers. It is NOT release qualification: the
-# smoke proofs it retains cannot satisfy scripts/verify-evidence-gate.sh.
+# image (pinned imapsync 2.314). It exchanges supplied refresh configurations
+# for initial access tokens, then tests live transfer and recovery against real
+# providers. The harness does not configure imapsync's per-reconnect refresh
+# callback, so it does NOT prove mid-transfer token renewal or refresh-token
+# rotation during reconnect. It is NOT release qualification: the smoke proofs
+# it retains cannot satisfy scripts/verify-evidence-gate.sh.
 #
 # Secrets live in the `live-providers` environment. Each *_REFRESH_CONFIG is
 # the JSON written by
