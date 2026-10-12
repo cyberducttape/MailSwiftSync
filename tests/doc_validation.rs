@@ -233,6 +233,33 @@ fn documented_scale_workflow_timeout_matches_release_readiness() {
 }
 
 #[test]
+fn current_scale_observation_keeps_qualification_limits_explicit() {
+    let adoption = fs::read_to_string("docs/adoption-qualification-plan.md")
+        .expect("adoption qualification evidence should exist");
+    let status =
+        fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
+    for evidence in [
+        "38215860881",
+        "55242c879118610b7d54043743c549e8197201ef",
+        "11733295124",
+        "c7ecfa4c0497e41a0dac3bc84ceb412b5d0e1bafdc332c3f493e73192dcff2ff",
+        "Level 2 metadata only, bodies not compared",
+        "This is unsigned CI evidence from a generic disposable fixture",
+        "no direct-imapsync A/B baseline",
+    ] {
+        assert!(
+            adoption.contains(evidence),
+            "scale qualification evidence is missing {evidence:?}"
+        );
+    }
+    assert!(
+        status.contains("latest packaged-engine scale run on 2026-10-12")
+            && status.contains("not body-integrity proof, a direct-imapsync A/B"),
+        "production status must report the latest run without overstating its qualification"
+    );
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");

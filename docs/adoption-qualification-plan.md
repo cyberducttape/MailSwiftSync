@@ -31,6 +31,27 @@ The following reproducible lab runs are retained as engineering evidence
 only; they do not satisfy the required size matrix, direct-imapsync comparison,
 provider qualification, or signed-result acceptance criteria.
 
+### 2026-10-12: 100k small-message run on current main
+
+| Field | Observed value |
+|---|---|
+| GitHub Actions run / commit | [38215860881](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38215860881) / `55242c879118610b7d54043743c549e8197201ef` |
+| Runner / runtime | `ubuntu-24.04`; Debian Bookworm container; Rust `1.92` release build |
+| Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)`; deterministic sequential message IDs, 100,000 generated small messages plus 16 baseline messages |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| Plan SHA-256 | `15f41abf60ee19a9100a281a16b4466a898ebe8ddc2c9b3eb6174ba02141b2dd` |
+| Harness wall time | 813 seconds, including fixture setup, seed transfer, verification, re-verification, delta, and proof export; no direct-imapsync A/B baseline |
+| Initial proof | 100,016 source/destination messages and 28,681,943 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
+| Post-delta proof | 100,017 source/destination messages and 28,682,257 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
+| Sampled resources | 1,269,162,835-byte sampled container peak; cgroup anonymous peak 532,496,384 bytes and file-cache peak 1,207,676,928 bytes; sampled MailSwiftSync RSS peak 29,798,400 bytes and imapsync Perl RSS peak 472,358,912 bytes |
+| Artifact | [Actions artifact 11733295124](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38215860881/artifacts/11733295124), SHA-256 `c7ecfa4c0497e41a0dac3bc84ceb412b5d0e1bafdc332c3f493e73192dcff2ff`; expires 2027-01-10 |
+
+This is unsigned CI evidence from a generic disposable fixture. The recorded
+container and package digests make the run identifiable, but do not establish
+provider compatibility, body integrity, or a direct-engine performance
+comparison. The generated fixture is deterministic and has no separate random
+seed. It is not a 1/10/50/100-GiB qualification.
+
 | Field | Observed value |
 |---|---|
 | GitHub Actions run | [38197707897](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38197707897) |
