@@ -1,17 +1,30 @@
 //! Parsing helpers for non-literal IMAP LIST records.
 
-/// Parse the final mailbox-name atom from a normal, non-literal LIST record.
-/// Literal names are handled after their bounded bytes have been collected.
+/// Parse the mailbox-name field from a normal, non-literal LIST record.
+/// Extended LIST data may follow this field; literal names are handled after
+/// their bounded bytes have been collected.
 pub(super) fn mailbox_name(line: &str) -> Option<String> {
-    let tokens = tokens(line)?;
+    let (tokens, mailbox_index) = list_fields(line)?;
     tokens
-        .last()
+        .get(mailbox_index)
         .filter(|value| !value.starts_with('{'))
         .cloned()
 }
 
 pub(super) fn delimiter(line: &str) -> Option<String> {
+    let (tokens, mailbox_index) = list_fields(line)?;
+    let delimiter = tokens.get(mailbox_index - 1)?;
+    (!delimiter.is_empty() && !delimiter.eq_ignore_ascii_case("NIL")).then(|| delimiter.to_owned())
+}
+
+/// Return tokens and the mailbox-name index for `* LIST (attrs) delimiter
+/// mailbox [extended-data]`. Only the fixed LIST prefix determines the
+/// mailbox name; RFC 5258 extension fields are deliberately ignored.
+fn list_fields(line: &str) -> Option<(Vec<String>, usize)> {
     let tokens = tokens(line)?;
+    if tokens.first()?.as_str() != "*" || !tokens.get(1)?.eq_ignore_ascii_case("LIST") {
+        return None;
+    }
     let mut index = 2;
     if tokens.get(index)?.starts_with('(') {
         while !tokens.get(index)?.ends_with(')') {
@@ -19,8 +32,12 @@ pub(super) fn delimiter(line: &str) -> Option<String> {
         }
         index += 1;
     }
-    let delimiter = tokens.get(index)?;
-    (!delimiter.is_empty()).then(|| delimiter.to_owned())
+    // The delimiter and mailbox name are the next two fields. The LIST
+    // grammar requires an attribute list, so the mailbox cannot precede it.
+    if index < 3 || tokens.len() <= index + 1 {
+        return None;
+    }
+    Some((tokens, index + 1))
 }
 
 /// Tokenize the bounded, non-literal portion of a LIST response. Quoted

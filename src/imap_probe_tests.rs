@@ -341,6 +341,29 @@ fn list_parser_extracts_delimiter_after_attributes() {
 }
 
 #[test]
+fn list_parser_reads_mailbox_before_extended_list_data() {
+    let response = r#"* LIST (\HasChildren) "/" "Projects" (CHILDINFO ("SUBSCRIBED"))"#;
+    assert_eq!(parse_list_mailbox_name(response), Some("Projects".into()));
+    assert_eq!(parse_list_delimiter(response), Some("/".into()));
+
+    let spaced_attributes =
+        r#"* LIST (\HasChildren \Subscribed) "/" "Team Mail" (OLDNAME ("Old Team"))"#;
+    assert_eq!(
+        parse_list_mailbox_name(spaced_attributes),
+        Some("Team Mail".into())
+    );
+    assert_eq!(parse_list_delimiter(spaced_attributes), Some("/".into()));
+}
+
+#[test]
+fn list_parser_preserves_nil_delimiter_as_absent() {
+    assert_eq!(
+        parse_list_delimiter(r#"* LIST (\HasNoChildren) NIL "INBOX""#),
+        None
+    );
+}
+
+#[test]
 fn list_parser_collects_selectable_mailboxes_without_retaining_default_inventory() {
     let response = b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n\
                        * LIST (\\Noselect) \"/\" \"Archive\"\r\n\
