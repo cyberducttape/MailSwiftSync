@@ -124,31 +124,33 @@ pub(super) fn parse_uid_fetch_response(
     sequence_start: u64,
     sequence_end: u64,
 ) -> Result<Vec<u64>, String> {
-    let mut uids = Vec::new();
+    let mut sequence_uids = Vec::new();
+    let mut sequences = HashSet::new();
     for line in response.lines() {
-        let mut fields = line.split_whitespace();
-        if fields.next() != Some("*")
-            || fields
-                .next()
-                .and_then(|value| value.parse::<u64>().ok())
-                .is_none()
-            || !fields
-                .next()
-                .is_some_and(|value| value.eq_ignore_ascii_case("FETCH"))
-        {
+        let mut tokens = line.split_whitespace();
+        if tokens.next() != Some("*") {
             continue;
         }
-        let mut tokens = line.split_whitespace();
-        let _asterisk = tokens.next();
-        let sequence = tokens
-            .next()
-            .and_then(|value| value.parse::<u64>().ok())
-            .ok_or_else(|| {
-                format!("{host}: FETCH {mailbox} returned an invalid sequence number")
-            })?;
+        let Some(sequence_token) = tokens.next() else {
+            continue;
+        };
+        let Some(response_type) = tokens.next() else {
+            continue;
+        };
+        if !response_type.eq_ignore_ascii_case("FETCH") {
+            continue;
+        }
+        let sequence = sequence_token
+            .parse::<u64>()
+            .map_err(|_| format!("{host}: FETCH {mailbox} returned an invalid sequence number"))?;
         if !(sequence_start..=sequence_end).contains(&sequence) {
             return Err(format!(
                 "{host}: FETCH {mailbox} returned sequence {sequence} outside requested range {sequence_start}:{sequence_end}"
+            ));
+        }
+        if !sequences.insert(sequence) {
+            return Err(format!(
+                "{host}: FETCH {mailbox} returned duplicate sequence number {sequence}"
             ));
         }
         let mut uid = None;
@@ -163,12 +165,34 @@ pub(super) fn parse_uid_fetch_response(
         let uid = uid.ok_or_else(|| {
             format!("{host}: FETCH {mailbox} sequence {sequence} did not return a valid UID")
         })?;
-        uids.push(validate_imap_uid(uid, host, mailbox)?);
+        sequence_uids.push((sequence, validate_imap_uid(uid, host, mailbox)?));
     }
-    uids.sort_unstable();
-    if uids.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(format!("{host}: FETCH {mailbox} returned duplicate UIDs"));
+    if sequence_start == 0 || sequence_end < sequence_start {
+        return Err(format!(
+            "{host}: FETCH {mailbox} was given an invalid sequence range {sequence_start}:{sequence_end}"
+        ));
     }
+    let expected_count = sequence_end
+        .checked_sub(sequence_start)
+        .and_then(|count| count.checked_add(1))
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| format!("{host}: FETCH {mailbox} sequence range is too large"))?;
+    if sequences.len() != expected_count {
+        return Err(format!(
+            "{host}: FETCH {mailbox} returned {} of {expected_count} requested sequence numbers ({sequence_start}:{sequence_end})",
+            sequences.len()
+        ));
+    }
+    sequence_uids.sort_unstable_by_key(|(sequence, _)| *sequence);
+    if sequence_uids.windows(2).any(|pair| pair[0].1 >= pair[1].1) {
+        return Err(format!(
+            "{host}: FETCH {mailbox} returned UIDs inconsistent with sequence order"
+        ));
+    }
+    let uids = sequence_uids
+        .into_iter()
+        .map(|(_, uid)| uid)
+        .collect::<Vec<_>>();
     Ok(uids)
 }
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Record the current-main GitHub Actions 10k-message / 1 GiB aggregate-payload
+  generic Dovecot run with exact commit, engine and plan digests, resource
+  samples, proof digests, and explicit metadata-only evidence limits.
+- Reject incomplete or malformed sequence-number FETCH inventory pages,
+  including duplicate/missing sequence numbers and UIDs inconsistent with
+  sequence order; require UID order to remain monotonic across pages.
 - Record a fresh 1M-per-endpoint maximum-envelope durable verification repeat
   for mismatch-heavy and duplicate-ID fixtures, including stage I/O, journal,
   flags, and RSS; retain explicit synthetic-only capacity limitations.
