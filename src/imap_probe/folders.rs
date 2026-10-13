@@ -78,7 +78,6 @@ fn read_imap_list_response_inner<S: Read>(
     let started = Instant::now();
     let mut last_read = Instant::now();
     let mut literal_remaining = 0_usize;
-    let mut literal_separator_remaining = 0_u8;
     let mut literal_header: Option<String> = None;
     let mut literal_value = Vec::new();
     let mut summary = ListInventorySummary::default();
@@ -116,25 +115,6 @@ fn read_imap_list_response_inner<S: Read>(
                 literal_value.extend_from_slice(&buffer[offset..offset + consumed]);
                 literal_remaining -= consumed;
                 offset += consumed;
-                if literal_remaining == 0 {
-                    if let Some(header) = literal_header.take() {
-                        record_list_entry(
-                            &header,
-                            Some(&literal_value),
-                            &mut summary,
-                            &mut mailbox_details,
-                            &mut inventory_bytes,
-                        )?;
-                    }
-                    literal_value.clear();
-                    literal_separator_remaining = 2;
-                }
-                continue;
-            }
-            if literal_separator_remaining > 0 {
-                let consumed = literal_separator_remaining.min((count - offset) as u8);
-                literal_separator_remaining -= consumed;
-                offset += consumed as usize;
                 continue;
             }
             let byte = buffer[offset];
@@ -146,8 +126,35 @@ fn read_imap_list_response_inner<S: Read>(
             if byte != b'\n' {
                 continue;
             }
+            if line.len() < 2 || line[line.len() - 2] != b'\r' {
+                return Err("IMAP LIST response record did not end with CRLF".into());
+            }
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end_matches(['\r', '\n']);
+
+            // A literal is one field inside a LIST response, not the end of
+            // the response. Consume and validate the actual CRLF (and any
+            // trailing extension fields) before committing the mailbox entry.
+            if let Some(header) = literal_header.take() {
+                if list_literal_size(text).is_some() {
+                    return Err(
+                        "IMAP LIST literal in trailing extension data is unsupported".into(),
+                    );
+                }
+                if !text.is_empty() && !text.chars().next().is_some_and(char::is_whitespace) {
+                    return Err("malformed data after IMAP LIST mailbox literal".into());
+                }
+                record_list_entry(
+                    &header,
+                    Some(&literal_value),
+                    &mut summary,
+                    &mut mailbox_details,
+                    &mut inventory_bytes,
+                )?;
+                literal_value.clear();
+                line.clear();
+                continue;
+            }
             let literal_size = list_literal_size(text);
             if is_untagged_response(text, "LIST") && literal_size.is_none() {
                 record_list_entry(

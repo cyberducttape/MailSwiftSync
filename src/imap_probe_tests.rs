@@ -392,6 +392,27 @@ fn list_parser_decodes_literal_mailbox_names() {
 }
 
 #[test]
+fn list_literal_parsing_consumes_crlf_before_trailing_extension_fields() {
+    let response = b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects (CHILDINFO (\"SUBSCRIBED\"))\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    super::read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
+fn list_literal_parser_rejects_non_whitespace_trailing_framing() {
+    let response =
+        b"* LIST (\\HasNoChildren) \"/\" {8}\r\nProjectxBAD\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("malformed data after IMAP LIST mailbox literal"));
+}
+
+#[test]
 fn list_parser_rejects_an_empty_mailbox_name_literal_explicitly() {
     let response = b"* LIST (\\HasNoChildren) \"/\" {0}\r\na005 OK LIST completed\r\n";
     let mut stream = Cursor::new(response);
