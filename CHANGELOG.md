@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Record a fresh 1M-per-endpoint maximum-envelope durable verification repeat
+  for mismatch-heavy and duplicate-ID fixtures, including stage I/O, journal,
+  flags, and RSS; retain explicit synthetic-only capacity limitations.
 - Record a fresh 100k-per-endpoint durable verification benchmark for typical,
   mismatch-heavy, and duplicate-ID synthetic fixtures, including host and
   stage/journal/RSS observations while keeping provider and capacity claims

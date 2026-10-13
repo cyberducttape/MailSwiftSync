@@ -342,6 +342,28 @@ fn verification_envelope_records_current_head_adversarial_scale_observations() {
 }
 
 #[test]
+fn verification_envelope_records_current_head_maximum_stress_observations() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "930439da071f2d2dcf3d38a83ae727ac5175f8d6",
+        "maximum-envelope stress repeat",
+        "31,360/s",
+        "40,247/s",
+        "1,094,514,640 B / 100,894,672 B",
+        "1,153,976,072 B / 101,443,336 B",
+        "801,488,896 B during reconciliation",
+        "713,072,640 B during reconciliation",
+        "do not establish a safe disk ceiling or GA",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "maximum-envelope verification observation is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
