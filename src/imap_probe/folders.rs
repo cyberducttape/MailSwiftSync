@@ -176,17 +176,20 @@ fn read_imap_list_response_inner<S: Read>(
                 }
                 return Ok(summary);
             }
-            if let Some(literal_size) = list_literal_size(text)
-                && literal_size > 0
-            {
+            if let Some(literal_size) = list_literal_size(text) {
                 if literal_size > MAX_IMAP_LIST_LITERAL_BYTES {
                     return Err("IMAP LIST literal exceeded 1 MiB".into());
                 }
                 if is_untagged_response(text, "LIST") {
+                    if literal_size == 0 {
+                        return Err(
+                            "IMAP LIST returned an empty mailbox-name literal; unsupported".into(),
+                        );
+                    }
                     literal_header = Some(text.to_owned());
                     literal_value.clear();
+                    literal_remaining = literal_size;
                 }
-                literal_remaining = literal_size;
             }
             line.clear();
         }

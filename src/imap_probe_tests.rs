@@ -392,6 +392,15 @@ fn list_parser_decodes_literal_mailbox_names() {
 }
 
 #[test]
+fn list_parser_rejects_an_empty_mailbox_name_literal_explicitly() {
+    let response = b"* LIST (\\HasNoChildren) \"/\" {0}\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("empty mailbox-name literal"));
+}
+
+#[test]
 fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
     let response = b"* 1 FETCH (UID 5 RFC822.SIZE 100 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <a@example.com>\r\n\r\n)\r\n\
                        * 2 FETCH (UID 9 RFC822.SIZE 200 INTERNALDATE \"02-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] NIL)\r\n\
