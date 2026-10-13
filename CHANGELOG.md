@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Bump the pre-migration risk report to format v3, identify supplied mailbox
+  facts as source-endpoint inventory, and estimate the shared body-hash byte
+  budget using both endpoints under an explicit equal-size assumption. Keep
+  destination size and actual fetched bytes labeled unknown; warn at the
+  correct half-budget source threshold and fail visibly on projection overflow.
 - Bump the pre-migration risk JSON contract to v2 and replace the ambiguous
   `estimated_readiness: "ready"` result with `scale_assessment: "scale_clear"`.
   A warning-free scale-only assessment does not establish migration readiness;

@@ -4,7 +4,7 @@ const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 100_000;
 const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
-pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 2;
+pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 3;
 
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +20,14 @@ pub struct PreMigrationRisk {
     pub not_evaluated: Vec<String>,
     pub total_messages: u64,
     pub total_folders: u64,
+    /// Input size is for one source-endpoint inventory; destination size is
+    /// not measured by this scale-only API.
+    pub size_input_scope: String,
     pub total_size_gb: f64,
+    /// Advisory equal-size source + destination projection. `None` means the
+    /// sum cannot be represented as a u64.
+    pub estimated_combined_body_hash_bytes: Option<u64>,
+    pub body_hash_byte_projection: String,
     pub warnings: Vec<RiskWarning>,
     /// Advisory score for the scale facts supplied to `assess`. This is never
     /// a substitute for hard preflight gates or provider qualification.
@@ -137,14 +144,21 @@ impl PreMigrationRisk {
             });
         }
 
-        if total_size_bytes > DEFAULT_BODY_HASH_BYTE_BUDGET {
+        let estimated_combined_body_hash_bytes = total_size_bytes.checked_mul(2);
+        if estimated_combined_body_hash_bytes
+            .is_none_or(|combined| combined > DEFAULT_BODY_HASH_BYTE_BUDGET)
+        {
             warnings.push(RiskWarning {
                 severity: WarningSeverity::Info,
                 category: "verification".to_string(),
-                message: format!(
-                    "Body proof may exceed the default {}-byte combined hash budget; message-size distribution and configured proof budget require review",
-                    DEFAULT_BODY_HASH_BYTE_BUDGET
-                ),
+                message: match estimated_combined_body_hash_bytes {
+                    Some(combined) => format!(
+                        "Equal-size source/destination projection is {combined} bytes, above the default {DEFAULT_BODY_HASH_BYTE_BUDGET}-byte combined body-hash budget; actual destination size and fetched RFC822 bytes are unknown, so review the measured proof budget"
+                    ),
+                    None => format!(
+                        "Equal-size source/destination projection cannot be represented; review actual endpoint sizes against the default {DEFAULT_BODY_HASH_BYTE_BUDGET}-byte combined body-hash budget"
+                    ),
+                },
             });
         }
 
@@ -178,7 +192,11 @@ impl PreMigrationRisk {
             ],
             total_messages,
             total_folders,
+            size_input_scope: "source_endpoint_inventory".to_owned(),
             total_size_gb,
+            estimated_combined_body_hash_bytes,
+            body_hash_byte_projection: "source_bytes_plus_equal_size_destination_estimate"
+                .to_owned(),
             warnings,
             readiness_score: score,
             scale_assessment,
@@ -255,7 +273,7 @@ mod tests {
         let risk = PreMigrationRisk::assess(
             METADATA_VERIFICATION_MESSAGE_LIMIT + 1,
             5,
-            DEFAULT_BODY_HASH_BYTE_BUDGET + 1,
+            DEFAULT_BODY_HASH_BYTE_BUDGET / 2 + 1,
             "",
         );
         let messages = risk
@@ -274,9 +292,36 @@ mod tests {
         assert!(
             messages
                 .iter()
-                .any(|message| message.contains("combined hash budget"))
+                .any(|message| message.contains("Equal-size source/destination projection"))
+        );
+        assert_eq!(
+            risk.estimated_combined_body_hash_bytes,
+            Some(DEFAULT_BODY_HASH_BYTE_BUDGET + 2)
         );
         assert_eq!(risk.readiness_score, 85);
         assert_eq!(risk.scale_assessment, ScaleAssessment::ReviewRequired);
+    }
+
+    #[test]
+    fn body_hash_projection_uses_both_endpoints_and_handles_overflow() {
+        let at_budget = PreMigrationRisk::assess(100, 5, DEFAULT_BODY_HASH_BYTE_BUDGET / 2, "");
+        assert_eq!(
+            at_budget.estimated_combined_body_hash_bytes,
+            Some(DEFAULT_BODY_HASH_BYTE_BUDGET)
+        );
+        assert!(!at_budget.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("equal-size source/destination projection")
+        }));
+
+        let overflow = PreMigrationRisk::assess(100, 5, u64::MAX, "");
+        assert_eq!(overflow.estimated_combined_body_hash_bytes, None);
+        assert!(
+            overflow
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("projection cannot be represented") })
+        );
     }
 }

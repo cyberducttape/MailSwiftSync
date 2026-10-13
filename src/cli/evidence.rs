@@ -902,11 +902,11 @@ pub(super) fn risk_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()
     let (Some(messages), Some(folders), Some(bytes)) =
         (arguments.next(), arguments.next(), arguments.next())
     else {
-        eprintln!("Usage: mailswiftsync risk <messages> <folders> <bytes>");
+        eprintln!("Usage: mailswiftsync risk <source-messages> <source-folders> <source-bytes>");
         std::process::exit(2);
     };
     if arguments.next().is_some() {
-        eprintln!("Usage: mailswiftsync risk <messages> <folders> <bytes>");
+        eprintln!("Usage: mailswiftsync risk <source-messages> <source-folders> <source-bytes>");
         std::process::exit(2);
     }
     let parsed = messages

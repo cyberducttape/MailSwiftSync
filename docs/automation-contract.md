@@ -33,16 +33,21 @@ contains a mailbox ID, a `completed` or `failed` status, and either the normal
 `failed` count as incomplete evidence; the batch envelope is not a global
 point-in-time snapshot.
 
-`mailswiftsync risk <messages> <folders> <bytes>` emits the versioned
-`mailswiftsync-pre-migration-risk` format, version `2`. Its score is
+`mailswiftsync risk <source-messages> <source-folders> <source-bytes>` emits the versioned
+`mailswiftsync-pre-migration-risk` format, version `3`. The inventory inputs
+describe the source endpoint only. The report exposes that scope and an
+equal-size source-plus-destination body-hash byte projection; destination size
+and actual fetched RFC822 bytes remain unknown, so this projection is advisory
+and does not replace runtime budget enforcement. Its score is
 explicitly `scale_only` and `advisory_only`; `not_evaluated` lists provider
 qualification, authentication, TLS, destination capacity, verification
 eligibility, worker disk capacity, maintenance window, and organization
 policy. `scale_assessment: "scale_clear"` means only that none of the
 scale-only warnings triggered. It is deliberately not named `ready` and never
 clears or substitutes for those unevaluated gates. Version 2 removed the
-ambiguous version-1 `estimated_readiness: "ready"` value; consumers must
-handle the new field and enum before accepting this report.
+ambiguous version-1 `estimated_readiness: "ready"` value, and version 3
+clarified one-endpoint size scope and added the combined-byte projection;
+consumers must handle the new fields and enum before accepting this report.
 
 The JSON contains project identity, durable lifecycle state, mailbox state
 counts, attention reasons, and bounded project summaries. Each fixture lists
