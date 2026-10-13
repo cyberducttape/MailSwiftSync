@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reconcile release-readiness stage-disk guidance with the retained 1M-per-side
+  typical, mismatch-heavy, and duplicate-ID measurements; report observed
+  workload ranges and the correct rollback-journal denominator instead of a
+  fixed per-message multiplier. Add a documentation regression check.
 - Bump the pre-migration risk report to format v3, identify supplied mailbox
   facts as source-endpoint inventory, and estimate the shared body-hash byte
   budget using both endpoints under an explicit equal-size assumption. Keep

@@ -285,6 +285,41 @@ fn current_scale_observation_keeps_qualification_limits_explicit() {
 }
 
 #[test]
+fn verification_disk_sizing_uses_measured_ranges_not_a_fixed_multiplier() {
+    let readiness = fs::read_to_string("docs/release-readiness.md")
+        .expect("release-readiness scale evidence should exist");
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "727–732 MB after",
+        "1,095–1,154 MB",
+        "+51–58%",
+        "no safe general",
+        "16% of the post-staging size",
+    ] {
+        assert!(
+            readiness.contains(evidence),
+            "release-readiness disk estimate is missing {evidence:?}"
+        );
+    }
+    for evidence in [
+        "730,079,232 B after staging",
+        "peaked at 1,151,854,544 B",
+        "727,031,808 B",
+        "1,094,510,640 B",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "verification benchmark evidence is missing {evidence:?}"
+        );
+    }
+    assert!(
+        !readiness.contains("475 bytes per message per side, plus about 50%"),
+        "measured workload-specific data must not be summarized as a fixed multiplier"
+    );
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
