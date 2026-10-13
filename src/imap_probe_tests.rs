@@ -341,6 +341,29 @@ fn list_parser_extracts_delimiter_after_attributes() {
 }
 
 #[test]
+fn list_parser_reads_mailbox_before_extended_list_data() {
+    let response = r#"* LIST (\HasChildren) "/" "Projects" (CHILDINFO ("SUBSCRIBED"))"#;
+    assert_eq!(parse_list_mailbox_name(response), Some("Projects".into()));
+    assert_eq!(parse_list_delimiter(response), Some("/".into()));
+
+    let spaced_attributes =
+        r#"* LIST (\HasChildren \Subscribed) "/" "Team Mail" (OLDNAME ("Old Team"))"#;
+    assert_eq!(
+        parse_list_mailbox_name(spaced_attributes),
+        Some("Team Mail".into())
+    );
+    assert_eq!(parse_list_delimiter(spaced_attributes), Some("/".into()));
+}
+
+#[test]
+fn list_parser_preserves_nil_delimiter_as_absent() {
+    assert_eq!(
+        parse_list_delimiter(r#"* LIST (\HasNoChildren) NIL "INBOX""#),
+        None
+    );
+}
+
+#[test]
 fn list_parser_collects_selectable_mailboxes_without_retaining_default_inventory() {
     let response = b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n\
                        * LIST (\\Noselect) \"/\" \"Archive\"\r\n\
@@ -366,6 +389,36 @@ fn list_parser_decodes_literal_mailbox_names() {
     super::read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
         .unwrap();
     assert_eq!(mailboxes, ["Sent Items"]);
+}
+
+#[test]
+fn list_literal_parsing_consumes_crlf_before_trailing_extension_fields() {
+    let response = b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects (CHILDINFO (\"SUBSCRIBED\"))\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    super::read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
+fn list_literal_parser_rejects_non_whitespace_trailing_framing() {
+    let response =
+        b"* LIST (\\HasNoChildren) \"/\" {8}\r\nProjectxBAD\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("malformed data after IMAP LIST mailbox literal"));
+}
+
+#[test]
+fn list_parser_rejects_an_empty_mailbox_name_literal_explicitly() {
+    let response = b"* LIST (\\HasNoChildren) \"/\" {0}\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("empty mailbox-name literal"));
 }
 
 #[test]

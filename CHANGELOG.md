@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Parse the mailbox name and delimiter from their fixed IMAP LIST fields rather
+  than assuming the mailbox is the final token; ignore following RFC 5258
+  extended data, preserve NIL hierarchy delimiters as absent, and reject
+  unsupported zero-length mailbox-name literals explicitly. Validate CRLF
+  framing after mailbox-name literals instead of blindly dropping two bytes.
 - Add a bounded 5 ms backoff when IMAP and OAuth socket reads, writes, or TLS
   handshakes report `TimedOut`/`WouldBlock`; retain absolute deadlines and
   cancellation checks, and cover immediate `WouldBlock` with a regression test.
