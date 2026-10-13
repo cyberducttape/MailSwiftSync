@@ -41,7 +41,7 @@ pub(super) fn write_imap_command<S: Write>(
                     std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                continue;
+                super::wait_for_io_retry(budget.deadline, Some(budget.cancel));
             }
             Err(error) => return Err(format!("{operation}: {error}")),
         }

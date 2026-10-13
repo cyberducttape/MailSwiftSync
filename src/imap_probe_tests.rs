@@ -18,6 +18,17 @@ struct TimeoutThenData {
     data: Cursor<Vec<u8>>,
 }
 
+struct AlwaysWouldBlock {
+    calls: usize,
+}
+
+impl Read for AlwaysWouldBlock {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        self.calls += 1;
+        Err(io::Error::from(io::ErrorKind::WouldBlock))
+    }
+}
+
 impl Read for TimeoutThenData {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if !self.timed_out {
@@ -199,6 +210,18 @@ fn list_read_deadline_honors_cancellation_before_waiting_for_data() {
     )
     .unwrap_err();
     assert!(error.contains("cancelled by operator"));
+}
+
+#[test]
+fn immediate_would_block_retries_back_off_until_the_original_deadline() {
+    let mut stream = AlwaysWouldBlock { calls: 0 };
+    let mut buffer = [0_u8; 16];
+    let deadline = std::time::Instant::now() + Duration::from_millis(40);
+
+    let error = read_with_deadline(&mut stream, &mut buffer, deadline, None).unwrap_err();
+
+    assert!(error.contains("deadline exceeded"));
+    assert!(stream.calls < 100, "retry loop spun {} times", stream.calls);
 }
 
 #[test]
