@@ -134,7 +134,7 @@ jobs:
           fi
       - name: Upload test summary
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-test-summary
           path: dist/test-summary.md
@@ -164,7 +164,7 @@ jobs:
         run: python3 scripts/check-critical-coverage.py coverage.lcov --branch-lcov coverage-branches.lcov
       - name: Upload coverage report
         if: always() && hashFiles('coverage.lcov') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: critical-line-and-branch-coverage-lcov
           path: |
@@ -243,7 +243,7 @@ jobs:
           exit "$status"
       - name: Upload cross-platform build log
         if: failure() && matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-cross-build-log
           path: cross-build.log
@@ -299,7 +299,7 @@ jobs:
           exit "$status"
       - name: Upload native test log
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-test-log-${{ matrix.os }}
           path: native-test.log
