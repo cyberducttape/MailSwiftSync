@@ -196,6 +196,26 @@ full-process peak RSS, or a production disk-capacity guarantee. The measured
 peak stage and journal sizes should be included in target-host free-space
 planning; the benchmark does not establish a safe aggregate disk ceiling.
 
+A maximum-envelope stress repeat at current commit
+`930439da071f2d2dcf3d38a83ae727ac5175f8d6` on 2026-10-13 exercised the
+1,000,000-message-per-endpoint mismatch-heavy and duplicate-ID shapes on the
+same shared Ubuntu 26.04.1 / Ryzen 7 7735U / ext4-on-NVMe host. Both passed the
+64 MiB peak-RSS and 20,000 messages/s reconciliation thresholds:
+
+| Shape | Stage / reconcile time | Reconcile rate | Peak RSS | Stage after staging | Peak stage / journal | FLAGS compared | Mismatch rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mismatch-heavy | 23.823 s / 31.887 s | 31,360/s | 21 MiB | 727,031,808 B | 1,094,514,640 B / 100,894,672 B | 500,000 | 600,000 (100,000 missing, 100,000 extra, 400,000 changed) |
+| Duplicate IDs | 24.283 s / 24.846 s | 40,247/s | 20 MiB | 732,151,808 B | 1,153,976,072 B / 101,443,336 B | 980,000 | 20,000 changed |
+
+The mismatch-heavy case wrote 1,021,054,976 B while staging and
+801,488,896 B during reconciliation; the duplicate-ID case wrote
+1,017,864,192 B while staging and 713,072,640 B during reconciliation. These
+remain synthetic durable-SQLite figures on one shared host: they do not include
+IMAP reads, transfer-engine costs, final ledger evidence commits, or realistic
+provider distributions, and do not establish a safe disk ceiling or GA
+capacity. Re-run the benchmark on the target filesystem and workload before
+admission policy relies on these measurements.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of
