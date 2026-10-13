@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a bounded 5 ms backoff when IMAP and OAuth socket reads, writes, or TLS
+  handshakes report `TimedOut`/`WouldBlock`; retain absolute deadlines and
+  cancellation checks, and cover immediate `WouldBlock` with a regression test.
 - Record the current-main GitHub Actions 10k-message / 1 GiB aggregate-payload
   generic Dovecot run with exact commit, engine and plan digests, resource
   samples, proof digests, and explicit metadata-only evidence limits.

@@ -181,7 +181,9 @@ fn complete_tls_handshake(
                         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                     ) =>
             {
-                continue;
+                if let Some(budget) = budget {
+                    super::wait_for_io_retry(budget.deadline, Some(budget.cancel));
+                }
             }
             Err(error) => return Err(format!("{host}: TLS handshake failed: {error}")),
         }

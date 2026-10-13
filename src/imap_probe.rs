@@ -49,6 +49,20 @@ use protocol::{
     read_imap_tagged, read_imap_tagged_bytes_with_budget, read_imap_tagged_with_budget,
     read_imap_tagged_with_optional_budget, write_imap_command,
 };
+
+const TRANSIENT_IO_RETRY_BACKOFF: Duration = Duration::from_millis(5);
+
+/// Avoid a tight spin when a stream reports WouldBlock without sleeping.
+/// Callers retain their original absolute deadline and cancellation checks.
+pub(crate) fn wait_for_io_retry(deadline: Instant, cancel: Option<&AtomicBool>) {
+    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        return;
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if !remaining.is_zero() {
+        std::thread::sleep(remaining.min(TRANSIENT_IO_RETRY_BACKOFF));
+    }
+}
 use resolver::connect_racing;
 pub(crate) use tls::connect_tls_stream;
 use tls::connect_tls_stream_with_budget;
@@ -519,7 +533,7 @@ fn read_with_deadline<S: Read>(
                     std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                continue;
+                wait_for_io_retry(deadline, cancel);
             }
             Err(error) => return Err(error.to_string()),
         }

@@ -30,7 +30,7 @@ fn read_auth_chunk<S: Read>(
                     std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                continue;
+                crate::imap_probe::wait_for_io_retry(deadline, cancel);
             }
             Err(error) => return Err(error.to_string()),
         }
@@ -61,7 +61,7 @@ fn write_auth_bytes<S: Write>(
                     std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                continue;
+                crate::imap_probe::wait_for_io_retry(deadline, cancel);
             }
             Err(error) => return Err(error.to_string()),
         }
