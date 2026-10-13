@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refresh the locked `libc`, `skrifa`, `uuid`, and `zeroize` dependencies and
+  pin workflow artifact uploads to `actions/upload-artifact` v7.0.2; validate
+  the combined update against the current ZIP 9 / Calamine ZIP 8 lock graph.
 - Update the direct ZIP dependency to v9 while retaining the v8 version required
   by Calamine; handle fallible ZIP entry-name decoding explicitly in XLSX
   inspection and engine archive validation.

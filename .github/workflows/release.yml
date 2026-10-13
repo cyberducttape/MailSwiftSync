@@ -91,7 +91,7 @@ jobs:
           done < "$RUNNER_TEMP/provider-pairs.tsv"
       - name: Publish provider qualification packs
         if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-rc.') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: provider-qualification-packs-${{ github.ref_name }}
           path: ${{ runner.temp }}/mailswiftsync-qualification-packs
@@ -276,7 +276,7 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mailswiftsync-${{ matrix.target }}
           path: dist/*
@@ -308,7 +308,7 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/mailswiftsync-image-sbom.spdx.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mailswiftsync-sbom
           path: dist/mailswiftsync-*-sbom.*
@@ -422,7 +422,7 @@ jobs:
           }
       - name: Upload privileged Windows test evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-privileged-qualification-${{ github.sha }}
           path: windows-privileged-test.log
