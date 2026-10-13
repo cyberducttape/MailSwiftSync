@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Record a fresh 100k-per-endpoint durable verification benchmark for typical,
+  mismatch-heavy, and duplicate-ID synthetic fixtures, including host and
+  stage/journal/RSS observations while keeping provider and capacity claims
+  explicitly unqualified.
 - Reconcile release-readiness stage-disk guidance with the retained 1M-per-side
   typical, mismatch-heavy, and duplicate-ID measurements; report observed
   workload ranges and the correct rollback-journal denominator instead of a

@@ -150,6 +150,26 @@ This is synthetic SQLite reconciliation evidence for one host and fixture
 only; it does not establish mailbox/provider behavior, end-to-end network
 performance, report-commit cost, or a safe disk ceiling.
 
+A targeted 100,000-message-per-endpoint repeat at commit
+`0a4a5ea50bce9001d29961f046575150fd2fb175` on 2026-10-13 exercised typical,
+mismatch-heavy, and duplicate-ID fixtures with the stage on the workspace's
+ext4/NVMe filesystem. The host was the shared AMD Ryzen 7 7735U workstation
+(Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, Rust 1.92.0). All cases passed
+the script's 64 MiB peak-RSS and 20,000 messages/s reconciliation thresholds:
+
+| Shape | Stage / reconcile time | Reconcile rate | Peak RSS | Stage after staging | Peak stage / journal | FLAGS compared | Mismatch rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Typical | 2.196 s / 2.115 s | 47,281/s | 21 MiB | 70,328,320 B | 111,049,240 B / 9,722,392 B | 98,000 | 2,000 changed |
+| Mismatch-heavy | 2.207 s / 3.221 s | 31,046/s | 22 MiB | 70,131,712 B | 105,626,136 B / 9,722,392 B | 50,000 | 60,000 (10,000 missing, 10,000 extra, 40,000 changed) |
+| Duplicate IDs | 2.950 s / 2.499 s | 40,016/s | 21 MiB | 70,590,464 B | 111,356,464 B / 9,779,760 B | 98,000 | 2,000 changed |
+
+These are fresh synthetic durable-SQLite measurements, not IMAP fetching,
+engine transfer, final ledger evidence commit, real mailbox distributions, or
+provider qualification. The shared workstation and filesystem make them
+illustrative rather than a production capacity guarantee; in particular, they
+do not establish a universal per-message disk multiplier or safe aggregate
+stage-disk ceiling.
+
 At current commit `f9f4501c5ed4894412c25d684d3c698122b3321a`, the same
 benchmark was rerun on 2026-10-12 with its stage explicitly under the
 repository's ext4-on-NVMe filesystem (not the host's tmpfs `/tmp`). The host
