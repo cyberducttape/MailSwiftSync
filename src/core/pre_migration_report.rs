@@ -4,7 +4,7 @@ const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 100_000;
 const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
-pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 1;
+pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 2;
 
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +25,10 @@ pub struct PreMigrationRisk {
     /// Advisory score for the scale facts supplied to `assess`. This is never
     /// a substitute for hard preflight gates or provider qualification.
     pub readiness_score: u8,
-    pub estimated_readiness: MigrationReadiness,
+    /// Result of the scale-only analysis. `ScaleClear` does not imply that
+    /// the migration is ready to run; it means only that supplied scale facts
+    /// triggered no warning.
+    pub scale_assessment: ScaleAssessment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,8 +48,8 @@ pub enum WarningSeverity {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MigrationReadiness {
-    Ready,
+pub enum ScaleAssessment {
+    ScaleClear,
     ReviewRequired,
     BlockedByErrors,
 }
@@ -150,12 +153,12 @@ impl PreMigrationRisk {
             .iter()
             .filter(|w| w.severity == WarningSeverity::Error)
             .count();
-        let estimated_readiness = if error_count > 0 {
-            MigrationReadiness::BlockedByErrors
+        let scale_assessment = if error_count > 0 {
+            ScaleAssessment::BlockedByErrors
         } else if !warnings.is_empty() {
-            MigrationReadiness::ReviewRequired
+            ScaleAssessment::ReviewRequired
         } else {
-            MigrationReadiness::Ready
+            ScaleAssessment::ScaleClear
         };
 
         PreMigrationRisk {
@@ -178,18 +181,18 @@ impl PreMigrationRisk {
             total_size_gb,
             warnings,
             readiness_score: score,
-            estimated_readiness,
+            scale_assessment,
         }
     }
 
     #[allow(dead_code)]
-    pub fn is_ready(&self) -> bool {
-        self.estimated_readiness == MigrationReadiness::Ready
+    pub fn is_scale_clear(&self) -> bool {
+        self.scale_assessment == ScaleAssessment::ScaleClear
     }
 
     #[allow(dead_code)]
     pub fn has_blocking_errors(&self) -> bool {
-        self.estimated_readiness == MigrationReadiness::BlockedByErrors
+        self.scale_assessment == ScaleAssessment::BlockedByErrors
     }
 }
 
@@ -200,7 +203,7 @@ mod tests {
     #[test]
     fn small_migration_requires_review() {
         let risk = PreMigrationRisk::assess(1000, 5, 100_000_000, "");
-        assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
+        assert_eq!(risk.scale_assessment, ScaleAssessment::ScaleClear);
         assert!(risk.warnings.is_empty());
         assert_eq!(risk.readiness_score, 100);
     }
@@ -208,7 +211,7 @@ mod tests {
     #[test]
     fn large_migration_requires_review() {
         let risk = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "");
-        assert_eq!(risk.estimated_readiness, MigrationReadiness::ReviewRequired);
+        assert_eq!(risk.scale_assessment, ScaleAssessment::ReviewRequired);
         assert!(!risk.warnings.is_empty());
         assert_eq!(risk.readiness_score, 70);
     }
@@ -217,7 +220,7 @@ mod tests {
     fn provider_text_does_not_trigger_unsubstantiated_provider_warning() {
         let risk = PreMigrationRisk::assess(1000, 5, 100_000_000, "provider=gmail");
         assert!(risk.warnings.is_empty());
-        assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
+        assert_eq!(risk.scale_assessment, ScaleAssessment::ScaleClear);
     }
 
     #[test]
@@ -240,7 +243,8 @@ mod tests {
         let value = serde_json::to_value(risk).unwrap();
         assert_eq!(value["format"], PRE_MIGRATION_RISK_FORMAT);
         assert_eq!(value["format_version"], PRE_MIGRATION_RISK_FORMAT_VERSION);
-        assert_eq!(value["estimated_readiness"], "ready");
+        assert_eq!(value["scale_assessment"], "scale_clear");
+        assert!(value.get("estimated_readiness").is_none());
         assert_eq!(value["assessment_scope"], "scale_only");
         assert_eq!(value["advisory_only"], true);
         assert!(value["not_evaluated"].as_array().unwrap().len() >= 8);
@@ -273,6 +277,6 @@ mod tests {
                 .any(|message| message.contains("combined hash budget"))
         );
         assert_eq!(risk.readiness_score, 85);
-        assert_eq!(risk.estimated_readiness, MigrationReadiness::ReviewRequired);
+        assert_eq!(risk.scale_assessment, ScaleAssessment::ReviewRequired);
     }
 }

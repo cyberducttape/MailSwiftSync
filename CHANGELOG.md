@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Bump the pre-migration risk JSON contract to v2 and replace the ambiguous
+  `estimated_readiness: "ready"` result with `scale_assessment: "scale_clear"`.
+  A warning-free scale-only assessment does not establish migration readiness;
+  authentication, TLS, destination capacity, verification eligibility, policy,
+  and provider qualification remain unevaluated independent gates.
 - Add a credential-free integration check against packaged imapsync 2.314 that
   forces an IMAP disconnect and verifies source and destination OAuth refresh
   callbacks run before XOAUTH2 reauthentication and the engine rereads updated

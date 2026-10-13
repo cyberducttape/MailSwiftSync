@@ -170,10 +170,11 @@ fn risk_command_marks_its_readiness_score_as_scale_only_and_advisory() {
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["format"], "mailswiftsync-pre-migration-risk");
-    assert_eq!(report["format_version"], 1);
+    assert_eq!(report["format_version"], 2);
     assert_eq!(report["assessment_scope"], "scale_only");
     assert_eq!(report["advisory_only"], true);
-    assert_eq!(report["estimated_readiness"], "ready");
+    assert_eq!(report["scale_assessment"], "scale_clear");
+    assert!(report.get("estimated_readiness").is_none());
     let not_evaluated = report["not_evaluated"].as_array().unwrap();
     for gate in [
         "provider_qualification",
