@@ -440,7 +440,10 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
-        let entry_name = entry.name().to_owned();
+        let entry_name = entry
+            .name()
+            .map_err(|error| format!("Could not inspect worksheet entry name: {error}"))?
+            .into_owned();
         uncompressed_bytes = uncompressed_bytes.saturating_add(entry.size());
         validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
         if entry_name.ends_with("sharedStrings.xml") {
