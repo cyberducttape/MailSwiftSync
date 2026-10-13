@@ -317,8 +317,11 @@ fn unpack_windows_engine_with_limits(
         let entry = zip
             .by_index(index)
             .map_err(|error| format!("could not inspect the engine archive: {error}"))?;
+        let entry_name = entry
+            .name()
+            .map_err(|error| format!("could not read an engine archive entry name: {error}"))?;
         let Some(relative) = entry.enclosed_name() else {
-            return Err(format!("unsafe path in engine archive: {}", entry.name()));
+            return Err(format!("unsafe path in engine archive: {entry_name}"));
         };
         let Ok(inside) = relative.strip_prefix(WINDOWS_ARCHIVE_ROOT.trim_end_matches('/')) else {
             continue;
@@ -341,8 +344,11 @@ fn unpack_windows_engine_with_limits(
         let mut entry = zip
             .by_index(index)
             .map_err(|error| format!("could not read the engine archive: {error}"))?;
+        let entry_name = entry
+            .name()
+            .map_err(|error| format!("could not read an engine archive entry name: {error}"))?;
         let Some(relative) = entry.enclosed_name() else {
-            return Err(format!("unsafe path in engine archive: {}", entry.name()));
+            return Err(format!("unsafe path in engine archive: {entry_name}"));
         };
         let Ok(inside) = relative.strip_prefix(WINDOWS_ARCHIVE_ROOT.trim_end_matches('/')) else {
             continue;

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Update the direct ZIP dependency to v9 while retaining the v8 version required
+  by Calamine; handle fallible ZIP entry-name decoding explicitly in XLSX
+  inspection and engine archive validation.
 - Parse the mailbox name and delimiter from their fixed IMAP LIST fields rather
   than assuming the mailbox is the final token; ignore following RFC 5258
   extended data, preserve NIL hierarchy delimiters as absent, and reject
