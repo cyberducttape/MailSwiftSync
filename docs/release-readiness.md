@@ -481,9 +481,17 @@ reconciliation as successful.
   | 1,000,000 | 28 MiB | 633 MB | 1,055 MB | 101 MB | 111,856 | 72,061 | 26.6 |
 
   Controller memory is effectively flat in message count; the scaling cost is
-  private stage disk (about 475 bytes per message per side, plus about 50%
-  transient during reconciliation). The release workflow gates every size at
-  64 MiB peak RSS and 20,000 reconciled messages/s.
+  private stage disk. In the historical 2026-10-04 row above, 1,000,000
+  messages per side used 633 MB after staging and peaked at 1,055 MB during
+  reconciliation (+67%). More recent 2026-10-12 one-host synthetic runs in the
+  [verification envelope](verification-envelope.md) used 727–732 MB after
+  staging and peaked at 1,095–1,154 MB across typical, mismatch-heavy, and
+  duplicate-ID shapes (+51–58%), with rollback journals near 101 MB. For those
+  newer fixtures that is about 0.36 KB per staged endpoint message and
+  0.55–0.58 KB at sampled peak, not a universal sizing multiplier. Benchmark
+  the target filesystem and reserve additional headroom; no safe general
+  aggregate stage-disk ceiling is established. The release workflow gates
+  every size at 64 MiB peak RSS and 20,000 reconciled messages/s.
 
   Each benchmark line also reports phase-separated `/proc/self/io` read/write
   bytes and read/write syscall counts. `read_bytes` and `write_bytes` can be
@@ -495,10 +503,11 @@ reconciliation as successful.
 
   Reconciliation deliberately runs as one transaction on the private,
   per-verification stage. Measured at 1M messages per side, its rollback
-  journal peaks near 100 MB (about 10% of the stage), an interruption loses at
-  most about 18 seconds of recomputable work, and no other connection shares
-  the stage, so lock duration has no contender. Most transient growth is the
-  intermediate ranking tables, which chunked commits would not reduce; a
+  journal peaks near 100 MB (about 10% of the sampled peak directory size and
+  16% of the post-staging size in the 2026-10-04 measurement), an interruption
+  loses at most about 18 seconds of recomputable work, and no other connection
+  shares the stage, so lock duration has no contender. Most transient growth is
+  the intermediate ranking tables, which chunked commits would not reduce; a
   chunked/generation model is therefore not adopted unless a larger
   qualification shows the journal or lost work becoming material.
   The earlier repeated Maildir scans have been replaced by one pass, which
