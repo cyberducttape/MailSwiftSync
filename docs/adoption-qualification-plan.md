@@ -31,6 +31,27 @@ The following reproducible lab runs are retained as engineering evidence
 only; they do not satisfy the required size matrix, direct-imapsync comparison,
 provider qualification, or signed-result acceptance criteria.
 
+### 2026-10-12: current-main 10k-message / 1 GiB aggregate payload run
+
+| Field | Observed value |
+|---|---|
+| GitHub Actions run / commit | [38335597359](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38335597359) / `d4f440dbdebe8ca8ada4f2487c2c57ba164633be` |
+| Runner / runtime | `ubuntu-24.04`; Debian Bookworm runtime container; packaged release build |
+| Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)`; 10,000 generated messages with 1,073,741,824 bytes aggregate body payload plus 16 baseline messages |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| Plan SHA-256 | `3fe97ec011c5d699d8d9c0ea41590a8f185224c8423d10f0c0c19907aea58826` |
+| Harness wall time | 84 seconds, including fixture setup, transfer, verification, delta, and evidence exports; not a direct-imapsync A/B measurement |
+| Initial proof | 10,016 source/destination messages and 1,075,944,871 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
+| Post-delta proof | 10,017 source/destination messages and 1,075,945,185 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
+| Sampled resources | 371,929,907-byte sampled container peak; cgroup anonymous peak 221,642,752 bytes and file-cache peak 2,249,134,080 bytes; sampled MailSwiftSync RSS peak 25,747,456 bytes and imapsync Perl RSS peak 204,058,624 bytes |
+| Artifact | [Actions artifact 11784877465](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38335597359/artifacts/11784877465), expires 2027-01-11; initial proof SHA-256 `46b6fc20dc6e8a91fa74d3201ca270071ca936f3c04f42906170fb2a07e44416`, post-delta proof SHA-256 `b97e71863222c5586ad2f74a3faece384ec85081b7dcbe73e9dfb4e305ace8b1` |
+
+The artifact is unsigned CI evidence from a generic disposable fixture. The
+1 GiB figure is generated/transferred payload size, not body-hash coverage; the
+proof explicitly reports metadata reconciliation with bodies not compared.
+This run does not qualify hosted-provider behavior, a single 1 GiB message,
+10/50/100-GiB mailboxes, or direct-engine performance overhead.
+
 ### 2026-10-12: packaged-engine identity and recovery smoke
 
 | Field | Observed value |

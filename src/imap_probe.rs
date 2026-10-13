@@ -1259,6 +1259,7 @@ where
     let mut sequence_start = 1_u64;
     let mut enumerated_uid_count = 0_u64;
     let mut search_number = 0usize;
+    let mut last_enumerated_uid = None;
     while sequence_start <= exists {
         budget.check()?;
         let sequence_end = sequence_start
@@ -1288,6 +1289,14 @@ where
             ));
         }
         let uids = parse_uid_fetch_response(response, host, mailbox, sequence_start, sequence_end)?;
+        if let (Some(previous), Some(first)) = (last_enumerated_uid, uids.first())
+            && *first <= previous
+        {
+            return Err(format!(
+                "{host}: FETCH {mailbox} UID order changed across sequence pages"
+            ));
+        }
+        last_enumerated_uid = uids.last().copied().or(last_enumerated_uid);
         enumerated_uid_count = enumerated_uid_count.saturating_add(uids.len() as u64);
         // Every scan starts from the first extant UID. Durable staged pages
         // are invalidated before enumeration because their FLAGS and body

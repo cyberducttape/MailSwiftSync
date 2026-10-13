@@ -517,6 +517,17 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
         .is_err()
     );
     for response in [
+        "* 1 FETCH (UID 10)\r\n* 1 FETCH (UID 11)\r\nv002 OK FETCH completed\r\n",
+        "* 1 FETCH (UID 10)\r\nv002 OK FETCH completed\r\n",
+        "* invalid FETCH (UID 10)\r\nv002 OK FETCH completed\r\n",
+    ] {
+        assert!(
+            super::fetch_pages::parse_uid_fetch_response(response, "imap.example", "INBOX", 1, 2)
+                .is_err(),
+            "malformed or incomplete FETCH page was accepted: {response:?}"
+        );
+    }
+    for response in [
         "* 1 FETCH (UID 0)\r\nv003 OK FETCH completed\r\n",
         "* 1 FETCH (UID 4294967296)\r\nv003 OK FETCH completed\r\n",
         "* 1 FETCH (UID 18446744073709551615)\r\nv003 OK FETCH completed\r\n",
@@ -536,7 +547,7 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
         )
         .is_err()
     );
-    assert_eq!(
+    assert!(
         super::fetch_pages::parse_uid_fetch_response(
             "* 1 FETCH (UID 20)\r\n* 2 FETCH (UID 10)\r\nv005 OK FETCH completed\r\n",
             "imap.example",
@@ -544,8 +555,7 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
             1,
             2
         )
-        .unwrap(),
-        vec![10, 20]
+        .is_err()
     );
 }
 
