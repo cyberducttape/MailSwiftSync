@@ -320,6 +320,28 @@ fn verification_disk_sizing_uses_measured_ranges_not_a_fixed_multiplier() {
 }
 
 #[test]
+fn verification_envelope_records_current_head_adversarial_scale_observations() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "0a4a5ea50bce9001d29961f046575150fd2fb175",
+        "targeted 100,000-message-per-endpoint repeat",
+        "47,281/s",
+        "31,046/s",
+        "40,016/s",
+        "111,049,240 B / 9,722,392 B",
+        "105,626,136 B / 9,722,392 B",
+        "111,356,464 B / 9,779,760 B",
+        "do not establish a universal per-message disk multiplier",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "current-head verification observation is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
