@@ -350,7 +350,7 @@ reconciliation as successful.
   budget and per-class failure counters remain future work.
 - Live batch waves with mailbox-specific child runs, claim-before-launch, selective retry scopes, transactional plan checks, and per-mailbox evidence: independent message-level verification for encrypted imapsync children whose plan the verifier can reproduce, aggregate or engine evidence otherwise.
 - Aggregate source/destination folder, message, and virtual-size evidence.
-- The pre-migration risk report exposes an advisory 0–100 scale-readiness score
+- The pre-migration risk report exposes an advisory 0–100 scale-only score
   derived only from supplied message, folder, and size facts. It never clears
   authentication, TLS, capacity, verification, policy, or provider-qualification
   gates; those remain explicit pass/warning/block outcomes in preflight.

@@ -34,12 +34,15 @@ contains a mailbox ID, a `completed` or `failed` status, and either the normal
 point-in-time snapshot.
 
 `mailswiftsync risk <messages> <folders> <bytes>` emits the versioned
-`mailswiftsync-pre-migration-risk` format, version `1`. Its readiness score is
+`mailswiftsync-pre-migration-risk` format, version `2`. Its score is
 explicitly `scale_only` and `advisory_only`; `not_evaluated` lists provider
 qualification, authentication, TLS, destination capacity, verification
 eligibility, worker disk capacity, maintenance window, and organization
-policy. A `ready` result means only that none of the scale-only warnings
-triggered. It never clears or substitutes for those unevaluated gates.
+policy. `scale_assessment: "scale_clear"` means only that none of the
+scale-only warnings triggered. It is deliberately not named `ready` and never
+clears or substitutes for those unevaluated gates. Version 2 removed the
+ambiguous version-1 `estimated_readiness: "ready"` value; consumers must
+handle the new field and enum before accepting this report.
 
 The JSON contains project identity, durable lifecycle state, mailbox state
 counts, attention reasons, and bounded project summaries. Each fixture lists
