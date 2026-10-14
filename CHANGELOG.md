@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make the paused-tenant scheduler regression assert that unrelated work starts
+  before the actual cooldown deadline, rather than imposing an arbitrary
+  half-cooldown latency cutoff that flakes under loaded CI runners.
 - Require a tracked CONDSTORE `HIGHESTMODSEQ` before collecting IMAP FLAGS for
   fidelity evidence. Without it, continue metadata reconciliation but leave
   flag/keyword coverage incomplete so an untracked mutable flag observation
