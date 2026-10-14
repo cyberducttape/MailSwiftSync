@@ -589,7 +589,7 @@ printf '%s\n' "$2" '[::1]:993'"#,
                             "slow.example.test:993",
                             Duration::from_secs(10),
                             &|| cancelled.load(Ordering::Acquire),
-                            &outstanding,
+                            outstanding,
                         )
                     })
                 })
