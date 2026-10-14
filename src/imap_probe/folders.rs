@@ -232,6 +232,23 @@ pub(super) fn record_list_entry(
     if !is_untagged_response(line, "LIST") {
         return Ok(());
     }
+    // Validate the fixed LIST fields even when the caller only wants summary
+    // counts. Otherwise readiness probing can accept a malformed record that
+    // the later detailed inventory path would reject.
+    match literal_name {
+        Some(bytes) => {
+            std::str::from_utf8(bytes)
+                .map_err(|_| "IMAP LIST mailbox literal was not valid UTF-8".to_owned())?;
+        }
+        None => {
+            list_parser::mailbox_name(line)
+                .ok_or_else(|| "IMAP LIST mailbox name was missing or malformed".to_owned())?;
+        }
+    }
+    if !list_parser::has_fixed_fields(line) {
+        return Err("IMAP LIST delimiter or mailbox field was missing or malformed".to_owned());
+    }
+    let delimiter = list_parser::delimiter(line);
     summary.mailbox_count = summary.mailbox_count.saturating_add(1);
     if summary.mailbox_count > MAX_IMAP_LIST_MAILBOXES {
         return Err(format!(
@@ -255,7 +272,7 @@ pub(super) fn record_list_entry(
         };
         let descriptor_bytes = wire_name
             .len()
-            .saturating_add(list_parser::delimiter(line).as_ref().map_or(0, String::len))
+            .saturating_add(delimiter.as_ref().map_or(0, String::len))
             .saturating_add(special_use.iter().map(String::len).sum::<usize>())
             .saturating_add(256);
         *inventory_bytes = inventory_bytes.saturating_add(descriptor_bytes);
@@ -266,7 +283,7 @@ pub(super) fn record_list_entry(
         }
         details.push(MailboxDescriptor {
             wire_name,
-            delimiter: list_parser::delimiter(line),
+            delimiter,
             special_use,
             selectable,
         });
