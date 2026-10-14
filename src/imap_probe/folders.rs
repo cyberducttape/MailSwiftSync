@@ -132,7 +132,7 @@ fn read_imap_list_response_inner<S: Read>(
             }
             let text = match std::str::from_utf8(&line) {
                 Ok(text) => Cow::Borrowed(text),
-                Err(_) if is_list_response_bytes(&line) => {
+                Err(_) if literal_header.is_some() || is_list_response_bytes(&line) => {
                     return Err("IMAP LIST response record was not valid UTF-8".into());
                 }
                 Err(_) => String::from_utf8_lossy(&line),
