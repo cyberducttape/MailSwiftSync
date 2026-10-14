@@ -37,6 +37,8 @@ AB_DIGEST_FIELDS = (
     "baseline_artifact_sha256", "managed_artifact_sha256",
 )
 AB_ARTIFACTS = (
+    ("source_snapshot_file", "source_snapshot_sha256"),
+    ("destination_baseline_file", "destination_baseline_sha256"),
     ("baseline_artifact_file", "baseline_artifact_sha256"),
     ("managed_artifact_file", "managed_artifact_sha256"),
 )

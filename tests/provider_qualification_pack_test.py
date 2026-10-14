@@ -127,8 +127,10 @@ def evidence(phase):
                 "dataset_digest": "b" * 64,
                 "engine_binary_sha256": "e" * 64,
                 "engine_settings_sha256": "f" * 64,
-                "source_snapshot_sha256": "1" * 64,
-                "destination_baseline_sha256": "2" * 64,
+                "source_snapshot_file": "pending-source.json",
+                "source_snapshot_sha256": "0" * 64,
+                "destination_baseline_file": "pending-destination.json",
+                "destination_baseline_sha256": "0" * 64,
                 "baseline_artifact_file": "pending-baseline.txt",
                 "baseline_artifact_sha256": "0" * 64,
                 "managed_artifact_file": "pending-managed.txt",
@@ -164,11 +166,18 @@ class ProviderQualificationPackTests(unittest.TestCase):
                 comparison = observation.get("direct_imapsync_comparison")
                 if not comparison:
                     continue
-                for suffix, contents in (("baseline", b"direct baseline log"), ("managed", b"managed run log")):
+                for suffix, contents in (
+                    ("source_snapshot", b"source snapshot"),
+                    ("destination_baseline", b"destination baseline"),
+                    ("baseline", b"direct baseline log"),
+                    ("managed", b"managed run log"),
+                ):
                     name = f"{phase}-{index}-{suffix}.txt"
                     (self.evidence_dir / name).write_bytes(contents)
-                    comparison[f"{suffix}_artifact_file"] = name
-                    comparison[f"{suffix}_artifact_sha256"] = hashlib.sha256(contents).hexdigest()
+                    file_key = f"{suffix}_file" if suffix in {"source_snapshot", "destination_baseline"} else f"{suffix}_artifact_file"
+                    digest_key = f"{suffix}_sha256" if suffix in {"source_snapshot", "destination_baseline"} else f"{suffix}_artifact_sha256"
+                    comparison[file_key] = name
+                    comparison[digest_key] = hashlib.sha256(contents).hexdigest()
             (self.evidence_dir / f"{phase}.json").write_text(json.dumps(value), encoding="utf-8")
 
     def read_phase(self, phase):

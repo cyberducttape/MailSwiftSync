@@ -375,13 +375,15 @@
     "direct_imapsync_comparison": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseline_run_id", "dataset_digest", "engine_binary_sha256", "engine_settings_sha256", "source_snapshot_sha256", "destination_baseline_sha256", "baseline_artifact_file", "baseline_artifact_sha256", "managed_artifact_file", "managed_artifact_sha256", "baseline_metrics", "managed_metrics"],
+      "required": ["baseline_run_id", "dataset_digest", "engine_binary_sha256", "engine_settings_sha256", "source_snapshot_file", "source_snapshot_sha256", "destination_baseline_file", "destination_baseline_sha256", "baseline_artifact_file", "baseline_artifact_sha256", "managed_artifact_file", "managed_artifact_sha256", "baseline_metrics", "managed_metrics"],
       "properties": {
         "baseline_run_id": {"type": "string", "minLength": 1},
         "dataset_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "engine_binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "engine_settings_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_snapshot_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
         "source_snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "destination_baseline_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
         "destination_baseline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "baseline_artifact_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
         "baseline_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

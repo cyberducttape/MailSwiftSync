@@ -199,8 +199,10 @@ class EvidenceGateTests(unittest.TestCase):
                     "dataset_digest": "d" * 64,
                     "engine_binary_sha256": "b" * 64,
                     "engine_settings_sha256": "c" * 64,
-                    "source_snapshot_sha256": "e" * 64,
-                    "destination_baseline_sha256": "f" * 64,
+                    "source_snapshot_file": f"{key}-source.json",
+                    "source_snapshot_sha256": hashlib.sha256(b"source snapshot").hexdigest(),
+                    "destination_baseline_file": f"{key}-destination.json",
+                    "destination_baseline_sha256": hashlib.sha256(b"destination baseline").hexdigest(),
                     "baseline_artifact_file": f"{key}-direct.txt",
                     "baseline_artifact_sha256": hashlib.sha256(b"direct baseline").hexdigest(),
                     "managed_artifact_file": f"{key}-managed.txt",
@@ -208,6 +210,8 @@ class EvidenceGateTests(unittest.TestCase):
                     "baseline_metrics": metrics,
                     "managed_metrics": dict(metrics),
                 }
+                (evidence_dir / f"{key}-source.json").write_bytes(b"source snapshot")
+                (evidence_dir / f"{key}-destination.json").write_bytes(b"destination baseline")
                 (evidence_dir / f"{key}-direct.txt").write_bytes(b"direct baseline")
                 (evidence_dir / f"{key}-managed.txt").write_bytes(b"managed run")
             proof = {

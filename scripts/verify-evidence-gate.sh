@@ -245,6 +245,8 @@ for filename in files:
                     if not isinstance(baseline_run_id, str) or not baseline_run_id:
                         errors.append(f"{filename}: {scenario} A/B baseline_run_id is missing")
                     for file_field, digest_field in (
+                        ("source_snapshot_file", "source_snapshot_sha256"),
+                        ("destination_baseline_file", "destination_baseline_sha256"),
                         ("baseline_artifact_file", "baseline_artifact_sha256"),
                         ("managed_artifact_file", "managed_artifact_sha256"),
                     ):

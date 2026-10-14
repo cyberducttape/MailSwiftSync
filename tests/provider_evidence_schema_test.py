@@ -86,6 +86,8 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
         scenario_properties = self.schema["properties"]["scenario_observations"]["properties"]
         comparison = self.schema["$defs"]["direct_imapsync_comparison"]
         self.assertTrue(comparison["additionalProperties"] is False)
+        self.assertIn("source_snapshot_file", comparison["required"])
+        self.assertIn("destination_baseline_file", comparison["required"])
         self.assertIn("baseline_artifact_sha256", comparison["required"])
         self.assertIn("managed_artifact_sha256", comparison["required"])
         for key in ("large_mailbox_1gb", "large_mailbox_10gb", "large_mailbox_20gb", "large_mailbox_50gb", "large_mailbox_100gb"):
