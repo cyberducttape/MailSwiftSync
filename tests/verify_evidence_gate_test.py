@@ -75,6 +75,14 @@ class EvidenceGateTests(unittest.TestCase):
                 entry["required_scenarios_by_phase"]["live_pilot"],
             )
             self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-100gb"]["minimum_bytes"],
+                100 * 1024**3,
+            )
+            self.assertIn(
+                "large-mailbox-100gb",
+                entry["required_scenarios_by_phase"]["live_pilot"],
+            )
+            self.assertEqual(
                 set(entry["required_scenarios_by_phase"]),
                 set(entry["required_phases"]),
             )
@@ -140,6 +148,7 @@ class EvidenceGateTests(unittest.TestCase):
                     "large_mailbox_100k": {"mailbox_job_id": "job-a", "messages": 100000},
                     "large_mailbox_20gb": {"mailbox_job_id": "job-a", "bytes": 20 * 1024**3},
                     "large_mailbox_50gb": {"mailbox_job_id": "job-a", "bytes": 50 * 1024**3},
+                    "large_mailbox_100gb": {"mailbox_job_id": "job-a", "bytes": 100 * 1024**3},
                     "large_messages": {"maximum_message_bytes": 10485760},
                     "unicode_folders": {"observed": True},
                     "special_use_folders": {"observed": True},
@@ -218,6 +227,14 @@ class EvidenceGateTests(unittest.TestCase):
                 output,
             )
             self.assertIn(
+                "large-mailbox-100gb per-mailbox observation does not match verified customer-proof evidence",
+                output,
+            )
+            self.assertIn(
+                "large-mailbox-100gb does not contain at least 100 GiB",
+                output,
+            )
+            self.assertIn(
                 "large-mailbox-50gb does not contain at least 50 GiB",
                 output,
             )
@@ -254,6 +271,7 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("dry-pilot.json: large-mailbox-100k", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-20gb", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-50gb", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-100gb", rerun_output)
 
             # A basename check alone does not keep a qualification bundle
             # self-contained: a symlink can still resolve outside the bundle.

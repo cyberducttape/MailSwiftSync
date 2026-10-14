@@ -47,9 +47,9 @@ submit its smoke proofs to the release evidence policy.
    - Empty mailboxes (to test folder creation)
    - Small mailboxes (< 100 messages)
    - Separate, mailbox-bound scenarios for at least 100,000 messages, 20 GiB,
-     and 50 GiB. The release policy requires evidence for all three; a single
-     larger mailbox may satisfy both byte thresholds only when both scenarios
-     explicitly reference its durable mailbox job and proof totals.
+     50 GiB, and 100 GiB. The release policy requires evidence for all four; a
+     larger mailbox may satisfy multiple byte thresholds only when each
+     scenario explicitly references its durable mailbox job and proof totals.
    - Special-use folders (if exposed by provider)
    - Unicode folder names (to test encoding)
    - Message-size variety (plain text, HTML, attachments)
@@ -70,7 +70,7 @@ submit its smoke proofs to the release evidence policy.
 Large-mailbox observations must identify the durable mailbox job ID and match
 that mailbox's source message/byte totals in the referenced digest-verified
 customer proof. Aggregate totals across several smaller mailboxes do not count
-as a 100k-message, 20-GiB, or 50-GiB mailbox qualification.
+as a 100k-message, 20-GiB, 50-GiB, or 100-GiB mailbox qualification.
 
 ## Testing Procedure
 

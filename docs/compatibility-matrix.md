@@ -82,7 +82,7 @@ does not substitute for a hosted-provider qualification.
 | Fastmail → Google Workspace or Microsoft 365 | Not qualified | App-password source, OAuth destination, throttling, folder mapping, recovery |
 
 Every qualified pair must include tiny, 10k-message, 100k-message, and
-million-message accounts where available; 10+ GiB and 50+ GiB accounts;
+million-message accounts where available; 10+ GiB, 50+ GiB, and 100+ GiB accounts;
 folder-heavy mailboxes; large attachments; duplicate-heavy data;
 non-ASCII and renamed folders; and cancellation, token rotation, quota,
 disconnect, and final-delta scenarios. Until those runs produce signed

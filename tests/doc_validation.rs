@@ -820,6 +820,7 @@ fn compatibility_matrix_references_tested_providers() {
 fn provider_testing_guide_exists() {
     let guide = fs::read_to_string("docs/provider-testing-guide.md")
         .expect("Provider testing guide should exist");
+    let guide = guide.split_whitespace().collect::<Vec<_>>().join(" ");
 
     assert!(guide.contains("OAuth/XOAUTH2 preferred"));
     assert!(guide.contains("do not restore the removed Basic Authentication"));
@@ -827,13 +828,13 @@ fn provider_testing_guide_exists() {
         guide.contains("this guide does not assert a")
             && guide.contains("fixed commands-per-second rate")
     );
-    for mailbox_shape in ["100,000 messages", "20 GiB", "50 GiB"] {
+    for mailbox_shape in ["100,000 messages", "20 GiB", "50 GiB", "100 GiB"] {
         assert!(
             guide.contains(mailbox_shape),
             "Provider testing guide must disclose the {mailbox_shape} qualification scenario"
         );
     }
-    assert!(guide.contains("both scenarios"));
+    assert!(guide.contains("each scenario explicitly references"));
 }
 
 #[test]
