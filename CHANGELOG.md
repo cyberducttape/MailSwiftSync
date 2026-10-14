@@ -5,9 +5,11 @@
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Persist UTC scan-start and scan-completion timestamps per verified folder in
-  transfer provenance and version the project-report JSON contract to v3.
-  Legacy provenance remains explicitly timestamp-unknown; timestamps do not
-  imply an atomic cross-server snapshot.
+  transfer and standalone reverification provenance, export them in the
+  project report and reverify response, and version the project-report JSON
+  contract to v3 and the single-mailbox reverify response to v2. Legacy
+  provenance remains explicitly timestamp-unknown; timestamps do not imply an
+  atomic cross-server snapshot.
 - Require a balanced parenthesized IMAP FETCH data list with exactly one
   top-level UID before sequence inventory records can count as exact coverage;
   reject truncated lists, missing delimiters, and duplicate UID items.

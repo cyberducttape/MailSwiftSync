@@ -172,6 +172,7 @@ impl StateStore {
                 },
                 unfinished_transfer_attempt_count: row.get::<_, i64>(13)? as u64,
                 transfer_passes: Vec::new(),
+                verification_folders: Vec::new(),
             })
         })? {
             runs.push(row?);
@@ -182,8 +183,12 @@ impl StateStore {
             .map(|report_run| report_run.run.id.clone())
             .collect::<Vec<_>>();
         let mut transfer_passes = self.transfer_passes_for_runs(&run_ids)?;
+        let mut verification_folders = self.verification_folders_for_runs(&run_ids)?;
         for report_run in &mut runs {
             report_run.transfer_passes = transfer_passes
+                .remove(&report_run.run.id)
+                .unwrap_or_default();
+            report_run.verification_folders = verification_folders
                 .remove(&report_run.run.id)
                 .unwrap_or_default();
         }

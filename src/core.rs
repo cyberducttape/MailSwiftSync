@@ -25,6 +25,7 @@ mod engine;
 mod events;
 mod evidence;
 mod evidence_ops;
+pub(crate) use evidence_ops::VerificationOnlyRun;
 pub use evidence_ops::{MismatchFilter, MismatchFolderSummary, StoredMismatch};
 mod mailboxes;
 mod message_extraction;
@@ -90,7 +91,7 @@ pub use transfer_passes::{
 };
 pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 32;
+pub const CURRENT_SCHEMA_VERSION: i64 = 33;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

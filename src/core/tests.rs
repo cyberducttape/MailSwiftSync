@@ -2975,17 +2975,29 @@ fn verification_difference_requires_durable_exception_acceptance() {
             excepted_messages: 0,
         }),
     };
+    let mut observed_folder = pass_folder(PassSide::Source, "INBOX", true);
+    observed_folder.folder_digest = folder_digest(&project.id, "INBOX");
     db.begin_verification_run(&project.id, &job, "exact-recheck", "snapshot")
         .unwrap();
     db.finish_verification_only_run(
         &project.id,
         &job,
         "exact-recheck",
-        &exact_recheck,
-        &[],
-        "reverification",
+        VerificationOnlyRun {
+            evidence: &exact_recheck,
+            mismatches: &[],
+            folders: std::slice::from_ref(&observed_folder),
+            detail: "reverification",
+        },
     )
     .unwrap();
+    let report = db.project_report_snapshot(&project.id).unwrap().unwrap();
+    let recheck = report
+        .runs
+        .iter()
+        .find(|run| run.run.id == "exact-recheck")
+        .unwrap();
+    assert_eq!(recheck.verification_folders, [observed_folder]);
     let (_, reverified) = db.latest_evidence_for_run(&job).unwrap().unwrap();
     assert!(!reverified.authoritative);
     assert!(
@@ -3003,9 +3015,12 @@ fn verification_difference_requires_durable_exception_acceptance() {
         &project.id,
         &job,
         "exception-recheck",
-        &evidence,
-        &[],
-        "reverification still found the recorded difference",
+        VerificationOnlyRun {
+            evidence: &evidence,
+            mismatches: &[],
+            folders: &[],
+            detail: "reverification still found the recorded difference",
+        },
     )
     .unwrap();
     db.accept_verification_difference(
@@ -3131,9 +3146,12 @@ fn verification_only_history_rejects_contradictory_exact_evidence() {
             &project.id,
             &job,
             "reverify-invalid",
-            &evidence,
-            &[],
-            "contradictory exact re-verification",
+            VerificationOnlyRun {
+                evidence: &evidence,
+                mismatches: &[],
+                folders: &[],
+                detail: "contradictory exact re-verification",
+            },
         )
         .is_err()
     );
@@ -3142,6 +3160,50 @@ fn verification_only_history_rejects_contradictory_exact_evidence() {
         Some("running")
     );
     assert!(db.latest_evidence_for_run(&job).unwrap().is_none());
+}
+
+#[test]
+fn reverification_folder_observations_commit_atomically_with_evidence() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("reverify-folder-atomicity", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_verification_run(&project.id, &job, "reverify-atomic", "snapshot")
+        .unwrap();
+    let evidence = flag_evidence(VerificationOutcome::ExactMetadataMatch, None);
+    let duplicate = pass_folder(PassSide::Source, "INBOX", true);
+
+    assert!(
+        db.finish_verification_only_run(
+            &project.id,
+            &job,
+            "reverify-atomic",
+            VerificationOnlyRun {
+                evidence: &evidence,
+                mismatches: &[],
+                folders: &[duplicate.clone(), duplicate],
+                detail: "reverification",
+            },
+        )
+        .is_err()
+    );
+    assert_eq!(
+        db.run_status("reverify-atomic").unwrap().as_deref(),
+        Some("running")
+    );
+    assert!(db.latest_evidence_for_run(&job).unwrap().is_none());
+    let stored: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM verification_run_folders WHERE run_id='reverify-atomic'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, 0);
 }
 
 #[test]
@@ -5560,7 +5622,7 @@ fn transfer_pass_provenance_records_intent_completion_and_verification() {
 }
 
 #[test]
-fn schema_v31_adds_nullable_folder_scan_timestamps_without_rewriting_history() {
+fn schema_v31_to_v33_adds_folder_observation_storage_without_rewriting_history() {
     let db = StateStore::in_memory().unwrap();
     let project = db
         .create_project("folder scan migration", "source", "destination")
@@ -5600,6 +5662,9 @@ fn schema_v31_adds_nullable_folder_scan_timestamps_without_rewriting_history() {
         )
         .unwrap();
     db.connection
+        .execute("DROP TABLE verification_run_folders", [])
+        .unwrap();
+    db.connection
         .pragma_update(None, "user_version", 31_i64)
         .unwrap();
 
@@ -5614,6 +5679,15 @@ fn schema_v31_adds_nullable_folder_scan_timestamps_without_rewriting_history() {
     assert_eq!(folders[0].folders.len(), 1);
     assert_eq!(folders[0].folders[0].scan_started_at, None);
     assert_eq!(folders[0].folders[0].scan_completed_at, None);
+    let observations_table_exists: bool = db
+        .connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='verification_run_folders')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(observations_table_exists);
 }
 
 #[test]

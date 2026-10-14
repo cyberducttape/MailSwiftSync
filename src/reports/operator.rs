@@ -260,6 +260,7 @@ pub(crate) fn export_project_json(
             "transfer_attempt_count": report_run.transfer_attempt_count,
             "unfinished_transfer_attempt_count": report_run.unfinished_transfer_attempt_count,
             "transfer_passes": report_run.transfer_passes,
+            "verification_folders": report_run.verification_folders,
             "phase_at_start": run.phase_at_start,
             "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
             "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
@@ -683,6 +684,36 @@ mod project_json_tests {
                 )
                 .unwrap();
         }
+        let reverify_run_id = "reverify-run";
+        let reverify_job = first_job.as_deref().unwrap();
+        store
+            .begin_verification_run(&project.id, reverify_job, reverify_run_id, "snapshot")
+            .unwrap();
+        let observation = core::TransferPassFolder {
+            side: core::PassSide::Source,
+            folder_digest: core::folder_digest(&project.id, "INBOX"),
+            uidvalidity: 7,
+            uidnext: 120,
+            exists: 3,
+            verified_through_uid: 119,
+            staged_messages: 3,
+            complete: true,
+            scan_started_at: Some("2026-10-14T03:00:00.000Z".into()),
+            scan_completed_at: Some("2026-10-14T03:01:00.000Z".into()),
+        };
+        store
+            .finish_verification_only_run(
+                &project.id,
+                reverify_job,
+                reverify_run_id,
+                core::VerificationOnlyRun {
+                    evidence: &evidence,
+                    mismatches: &[],
+                    folders: &[observation],
+                    detail: "verification-only mode=metadata; folders=1",
+                },
+            )
+            .unwrap();
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("project-report.json");
         export_project_json(&store, &project.id, &path).unwrap();
@@ -692,7 +723,29 @@ mod project_json_tests {
         assert_eq!(report["format"], "mailswiftsync-project-report");
         assert_eq!(report["format_version"], 3);
         assert_eq!(report["mailboxes"].as_array().unwrap().len(), 21);
-        assert_eq!(report["runs"].as_array().unwrap().len(), 21);
+        assert_eq!(report["runs"].as_array().unwrap().len(), 22);
+        let reverification = report["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["id"] == reverify_run_id)
+            .unwrap();
+        assert_eq!(
+            reverification["verification_folders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            reverification["verification_folders"][0]["scan_completed_at"],
+            "2026-10-14T03:01:00.000Z"
+        );
+        assert!(
+            !reverification["verification_folders"]
+                .to_string()
+                .contains("INBOX")
+        );
         assert_eq!(
             report["mailboxes"][0]["evidence"]["verification_outcome"],
             "exact_metadata_match"

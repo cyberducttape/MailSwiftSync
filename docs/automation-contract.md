@@ -20,10 +20,12 @@ The three status commands emit the versioned status automation contract:
 | `mailswiftsync fleet-status <directory>` | `mailswiftsync-fleet-status` | `1` | [`fleet-status.v1.json`](../tests/fixtures/automation/fleet-status.v1.json) |
 
 The standalone `mailswiftsync reverify` command also emits a versioned JSON
-result (`mailswiftsync.reverify`, version `1`). Its `verification_status`,
-`verification_level`, `message_coverage`, and `flag_verification` fields must
-be consumed together; `verification_outcome` alone is not an unqualified
-assurance claim. This result is an evidence artifact rather than a status
+result (`mailswiftsync.reverify`, version `2`). Its `verification_status`,
+`verification_level`, `message_coverage`, `flag_verification`, and
+`folder_observations` fields must be consumed together; `verification_outcome`
+alone is not an unqualified assurance claim. Folder observations contain
+project-scoped folder digests, UID snapshots, and UTC scan intervals, not raw
+folder names. This result is an evidence artifact rather than a status
 projection and therefore is not included in the status golden-fixture set.
 
 `mailswiftsync reverify-batch` emits `mailswiftsync.reverify_batch`, version

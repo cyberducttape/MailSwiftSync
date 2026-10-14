@@ -1,4 +1,11 @@
 use super::*;
+
+pub(crate) struct VerificationOnlyRun<'a> {
+    pub(crate) evidence: &'a MailboxEvidence,
+    pub(crate) mismatches: &'a dyn MismatchSource,
+    pub(crate) folders: &'a [TransferPassFolder],
+    pub(crate) detail: &'a str,
+}
 use std::sync::Arc;
 
 pub(super) fn upsert_evidence_projection(
@@ -166,10 +173,9 @@ impl StateStore {
         project_id: &str,
         job_id: &str,
         run_id: &str,
-        value: &MailboxEvidence,
-        mismatches: &(impl super::MismatchSource + ?Sized),
-        detail: &str,
+        result: VerificationOnlyRun<'_>,
     ) -> rusqlite::Result<()> {
+        let value = result.evidence;
         let outcome = value.verification_outcome();
         if matches!(
             outcome,
@@ -180,14 +186,20 @@ impl StateStore {
                 "an exact verification label contradicts the evidence counters",
             ));
         }
+        super::transfer_passes::validate_verification_folder_observations(result.folders)?;
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
             "UPDATE runs SET status='completed',finished_at=CURRENT_TIMESTAMP,detail=?1 WHERE id=?2 AND project_id=?3 AND job_id=?4 AND status='running'",
-            params![bounded_event_detail(detail), run_id, project_id, job_id],
+            params![bounded_event_detail(result.detail), run_id, project_id, job_id],
         )?;
         if changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
+        super::transfer_passes::insert_verification_folder_observations(
+            &tx,
+            run_id,
+            result.folders,
+        )?;
         tx.execute(
             "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,rfc_message_id_matches,synthetic_identity_matches) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
@@ -235,7 +247,7 @@ impl StateStore {
             "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint,source_folder_digest,destination_folder_digest) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14,?15,?16)",
         )?;
         // Stream and validate each row; a rejection rolls back the commit.
-        mismatches.try_for_each_mismatch(&mut |mismatch| {
+        result.mismatches.try_for_each_mismatch(&mut |mismatch| {
             if mismatch.job_id.as_ref() != job_id
                 || mismatch.run_id.as_ref() != run_id
                 || mismatch.id.is_empty()
@@ -289,7 +301,7 @@ impl StateStore {
         drop(insert);
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'verification_finished',?3)",
-            params![project_id, run_id, bounded_event_detail(detail)],
+            params![project_id, run_id, bounded_event_detail(result.detail)],
         )?;
         tx.commit()
     }

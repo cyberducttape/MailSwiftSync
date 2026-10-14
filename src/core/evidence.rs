@@ -366,6 +366,9 @@ pub struct ReportRunSnapshot {
     /// Durable provenance of each transfer attempt of this run (schema v15
     /// and later; empty for earlier runs).
     pub transfer_passes: Vec<super::TransferPassRecord>,
+    /// Per-folder observations from standalone verification-only runs; these
+    /// are separate from transfer-pass attempt provenance.
+    pub verification_folders: Vec<super::TransferPassFolder>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

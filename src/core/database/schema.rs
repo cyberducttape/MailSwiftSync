@@ -296,6 +296,22 @@ impl StateStore {
                     ("scan_completed_at", "TEXT", false, 0),
                 ],
             ),
+            (
+                "verification_run_folders",
+                &[
+                    ("run_id", "TEXT", true, 1),
+                    ("side", "INTEGER", true, 2),
+                    ("folder_digest", "TEXT", true, 3),
+                    ("uidvalidity", "INTEGER", true, 0),
+                    ("uidnext", "INTEGER", true, 0),
+                    ("exists_count", "INTEGER", true, 0),
+                    ("verified_through_uid", "INTEGER", true, 0),
+                    ("staged_messages", "INTEGER", true, 0),
+                    ("complete", "INTEGER", true, 0),
+                    ("scan_started_at", "TEXT", false, 0),
+                    ("scan_completed_at", "TEXT", false, 0),
+                ],
+            ),
         ];
         for (table, expected) in TABLES {
             let object_type: String = connection.query_row(
@@ -617,6 +633,10 @@ impl StateStore {
                         "NONE",
                     ),
                 ],
+            ),
+            (
+                "verification_run_folders",
+                &[("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE")],
             ),
         ];
         // The facts table's state copy is kept current only by this trigger;
@@ -1204,6 +1224,18 @@ impl StateStore {
             ),
             (
                 "transfer_pass_folders",
+                &[
+                    "sidein(0,1)",
+                    "uidvalidity>=0",
+                    "uidnext>=0",
+                    "exists_count>=0",
+                    "verified_through_uid>=0",
+                    "staged_messages>=0",
+                    "completein(0,1)",
+                ],
+            ),
+            (
+                "verification_run_folders",
                 &[
                     "sidein(0,1)",
                     "uidvalidity>=0",
