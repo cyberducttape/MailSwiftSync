@@ -15,6 +15,7 @@ SCALE_WATCHDOG = (ROOT / "scripts" / "scale-docker-wait.sh").read_text(encoding=
 SCALE_CONTAINER_WAIT = (ROOT / "scripts" / "scale-container-wait.sh").read_text(encoding="utf-8")
 SCALE_COMPLETION_WAIT = (ROOT / "scripts" / "scale-container-completion-wait.sh").read_text(encoding="utf-8")
 STORAGE_FAULT_SCRIPT = (ROOT / "scripts" / "engine-storage-fault-smoke.sh").read_text(encoding="utf-8")
+CONTROLLER_CHAOS_SCRIPT = (ROOT / "scripts" / "controller-chaos-smoke.sh").read_text(encoding="utf-8")
 PROCESS_SUPERVISION_SCRIPT = (ROOT / "scripts" / "process-supervision-chaos-smoke.sh").read_text(encoding="utf-8")
 SCALE_WORKFLOW = (ROOT / ".github" / "workflows" / "scale-qualification.yml").read_text(encoding="utf-8")
 INTEGRATION_WORKFLOW = (ROOT / ".github" / "workflows" / "integration.yml").read_text(encoding="utf-8")
@@ -89,6 +90,10 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
     def test_smoke_timeouts_manage_engine_process_groups(self):
         self.assertIn('timeout --kill-after=15s 300 "$binary" "$@"', STORAGE_FAULT_SCRIPT)
         self.assertNotIn('timeout --foreground', STORAGE_FAULT_SCRIPT)
+
+    def test_file_size_fault_fixtures_disable_core_dump_persistence(self):
+        self.assertIn("ulimit -c 0\n  ulimit -f 40", CONTROLLER_CHAOS_SCRIPT)
+        self.assertIn("ulimit -c 0\nulimit -f $fsize_limit", STORAGE_FAULT_SCRIPT)
 
     def test_process_supervision_lab_requires_exact_release_handshake(self):
         self.assertIn("without durable release", PROCESS_SUPERVISION_SCRIPT)
