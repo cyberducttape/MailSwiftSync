@@ -287,6 +287,25 @@ class EvidenceGateTests(unittest.TestCase):
                 output,
             )
 
+            oversized = json.loads(json.dumps(evidence))
+            oversized["scenario_observations"]["large_mailbox_10gb"][
+                "direct_imapsync_comparison"
+            ]["baseline_metrics"]["messages"] = 10**4000
+            (evidence_dir / "synthetic.json").write_text(
+                json.dumps(oversized), encoding="utf-8"
+            )
+            oversized_result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            oversized_output = oversized_result.stdout + oversized_result.stderr
+            self.assertNotIn("Traceback", oversized_output)
+            self.assertIn("maximum", oversized_output)
+
             missing_baseline = json.loads(json.dumps(evidence))
             missing_baseline["scenario_observations"]["large_mailbox_10gb"].pop(
                 "direct_imapsync_comparison"
