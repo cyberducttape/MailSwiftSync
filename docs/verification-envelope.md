@@ -387,6 +387,13 @@ source-to-destination folder rules are currently modeled; the latter are
 captured in the plan and reused by reconciliation rather than rediscovered
 from provider heuristics.
 
+Typed imapsync folder mappings use the engine's `--f1f2` `source=destination`
+argument. A source folder name containing `=` cannot currently be represented
+unambiguously and is rejected during plan validation; destination names may
+contain `=`. This is a compatibility limitation, not a claim that the IMAP
+mailbox name itself is invalid. Use a different explicitly supported mapping
+or leave that folder unmapped until an alternate strategy has been qualified.
+
 The following imapsync transformations remain outside that model and are
 blocked from exact independent certification:
 
