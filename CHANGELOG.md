@@ -5,6 +5,9 @@
 - Make the paused-tenant scheduler regression assert that unrelated work starts
   before the actual cooldown deadline, rather than imposing an arbitrary
   half-cooldown latency cutoff that flakes under loaded CI runners.
+- Make the resolver-capacity test synchronize worker startup and cancel blocked
+  helpers after all slots are occupied, removing its two-second CI scheduling
+  assumption while retaining the slot-exhaustion and cleanup assertions.
 - Require a tracked CONDSTORE `HIGHESTMODSEQ` before collecting IMAP FLAGS for
   fidelity evidence. Without it, continue metadata reconciliation but leave
   flag/keyword coverage incomplete so an untracked mutable flag observation
