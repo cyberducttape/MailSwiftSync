@@ -31,7 +31,9 @@ live system provides:
 1. **Aggregate verification** from engine summaries and mailbox status
 2. **Bounded metadata-level message reconciliation** for supported TLS imapsync plans
 3. **Provider endpoint presets** for Gmail, Microsoft 365, Fastmail, and others
-4. **Safe recovery** from interrupted migrations with durable checkpoints
+4. **Operator-reviewed recovery** from interrupted migrations, using durable
+   run-level state and engine-specific resume behavior; successful resumption
+   still requires independent verification
 5. **Typed controller failure handling** and bounded retries
 6. **Operator documentation** for setup and troubleshooting
 
