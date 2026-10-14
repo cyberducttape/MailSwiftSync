@@ -94,7 +94,11 @@ pub(super) fn tokens(line: &str) -> Option<Vec<String>> {
                 match bytes[offset] {
                     b'\\' => {
                         offset += 1;
-                        value.push(*bytes.get(offset)?);
+                        let escaped = *bytes.get(offset)?;
+                        if escaped.is_ascii_control() {
+                            return None;
+                        }
+                        value.push(escaped);
                         offset += 1;
                     }
                     b'"' => {
@@ -103,6 +107,9 @@ pub(super) fn tokens(line: &str) -> Option<Vec<String>> {
                         break;
                     }
                     byte => {
+                        if byte.is_ascii_control() {
+                            return None;
+                        }
                         value.push(byte);
                         offset += 1;
                     }
@@ -118,6 +125,9 @@ pub(super) fn tokens(line: &str) -> Option<Vec<String>> {
                 .get(offset)
                 .is_some_and(|byte| !byte.is_ascii_whitespace())
             {
+                if bytes[offset].is_ascii_control() {
+                    return None;
+                }
                 offset += 1;
             }
             tokens.push(std::str::from_utf8(&bytes[start..offset]).ok()?.to_owned());

@@ -406,6 +406,24 @@ fn list_mailbox_parser_preserves_utf8_and_quoted_escapes() {
 }
 
 #[test]
+fn list_mailbox_parser_rejects_control_octets_in_quoted_and_atom_fields() {
+    for response in [
+        "* LIST (\\HasNoChildren) \"/\" \"INBOX\u{0001}\"",
+        "* LIST (\\HasNoChildren) \"/\" \"INBOX\\\u{0007}\"",
+        "* LIST (\\HasNoChildren) \"/\" INBOX\u{0000}",
+    ] {
+        assert_eq!(parse_list_mailbox_name(response), None, "{response:?}");
+        let framed = format!("{response}\r\na005 OK LIST completed\r\n");
+        let mut stream = Cursor::new(framed.as_bytes());
+        let mut buffer = [0_u8; 4096];
+        assert!(
+            read_imap_list_response(&mut stream, "a005", &mut buffer).is_err(),
+            "summary inventory accepted {response:?}"
+        );
+    }
+}
+
+#[test]
 fn list_parser_extracts_delimiter_after_attributes() {
     assert_eq!(
         parse_list_delimiter(r#"* LIST (\HasNoChildren \Sent) "/" "Sent Items""#),
