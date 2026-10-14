@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Reject ASCII control octets in quoted and atom fields while tokenizing IMAP
-  `LIST` records, so malformed folder names cannot pass endpoint readiness.
+- Reject ASCII control octets in IMAP `LIST` fields and after mailbox-name
+  literals, so malformed folder inventories cannot pass endpoint readiness.
 - Distinguish the fixed mailbox-name field from RFC 5258 trailing `LIST`
   extension fields; reject literal-valued extension fields explicitly instead
   of misclassifying their payload as a mailbox name.

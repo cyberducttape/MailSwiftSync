@@ -80,7 +80,7 @@ pub(super) fn tokens(line: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::new();
     let mut offset = 0;
     while offset < bytes.len() {
-        while bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
+        while bytes.get(offset) == Some(&b' ') {
             offset += 1;
         }
         if offset == bytes.len() {
@@ -121,10 +121,7 @@ pub(super) fn tokens(line: &str) -> Option<Vec<String>> {
             tokens.push(String::from_utf8(value).ok()?);
         } else {
             let start = offset;
-            while bytes
-                .get(offset)
-                .is_some_and(|byte| !byte.is_ascii_whitespace())
-            {
+            while bytes.get(offset).is_some_and(|byte| *byte != b' ') {
                 if bytes[offset].is_ascii_control() {
                     return None;
                 }
