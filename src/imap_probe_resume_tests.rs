@@ -32,7 +32,7 @@ pub(super) struct FolderServer {
     pub(super) flags: std::collections::HashMap<u64, String>,
     change_flags_after_metadata_fetch: Option<(u64, String)>,
     pub(super) condstore: bool,
-    unsolicited_flags: bool,
+    pub(super) unsolicited_flags: bool,
     modseq_unavailable: bool,
     modseq: u64,
     pub(super) permanent_flags: Option<String>,

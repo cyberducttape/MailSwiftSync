@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer, side: StagedMessageSide) {
+    let condstore_enabled = server.condstore;
     let cancelled = AtomicBool::new(false);
     let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
     let state_budget = MessageStateBudget::new();
@@ -25,7 +26,7 @@ fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer, side: Stage
         &budget,
         &state_budget,
         None,
-        true,
+        condstore_enabled,
         &mut sink,
     )
     .unwrap_or_else(|error| panic!("scan failed: {error:?}"));
@@ -54,6 +55,24 @@ fn verify(source: &mut FolderServer, destination: &mut FolderServer) -> FlagVeri
     scan(&mut stage, source, StagedMessageSide::Source);
     scan(&mut stage, destination, StagedMessageSide::Destination);
     MessageVerification::verify_staged_flags(&stage, &HashMap::new()).unwrap()
+}
+
+#[test]
+fn servers_without_modseq_leave_flag_coverage_uncompared() {
+    let mut source = mixed_state_server();
+    let mut destination = mixed_state_server();
+    source.condstore = false;
+    destination.condstore = false;
+    // Exercise unsolicited FETCH updates as well as the requested metadata
+    // response: neither may populate evidence without a tracked MODSEQ.
+    source.unsolicited_flags = true;
+    destination.unsolicited_flags = true;
+
+    let result = verify(&mut source, &mut destination);
+
+    assert_eq!(result.compared_messages, 0);
+    assert_eq!(result.mismatched_messages, 0);
+    assert_eq!(result.excepted_messages, 0);
 }
 
 #[test]
