@@ -70,10 +70,16 @@ fn oauth_refresh_docs_disclose_the_windows_callback_boundary() {
     let readme = fs::read_to_string("README.md").expect("README should exist");
     let release = fs::read_to_string("docs/release-readiness.md")
         .expect("release readiness guide should exist");
+    let alpha = fs::read_to_string("docs/release-0.1.0-alpha.md")
+        .expect("alpha release notes should exist");
     let service =
         fs::read_to_string("docs/distribution/SERVICE.md").expect("service guide should exist");
+    let bulk = fs::read_to_string("docs/wiki/Bulk-migrations.md")
+        .expect("bulk migration guide should exist");
+    let security = fs::read_to_string("docs/wiki/Security-and-profiles.md")
+        .expect("security guide should exist");
 
-    for document in [&readme, &release, &service] {
+    for document in [&readme, &release, &alpha, &service, &bulk, &security] {
         assert!(document.contains("Unix"), "platform boundary missing");
         assert!(
             document.contains("Windows") && document.contains("--oauthrefreshcmd1/2"),
