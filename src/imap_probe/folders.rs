@@ -188,14 +188,33 @@ fn read_imap_list_response_inner<S: Read>(
                     return Err("IMAP LIST literal exceeded 1 MiB".into());
                 }
                 if is_untagged_response(text, "LIST") {
-                    if literal_size == 0 {
-                        return Err(
-                            "IMAP LIST returned an empty mailbox-name literal; unsupported".into(),
-                        );
+                    let header = literal_framing::literal_header(text.as_bytes())
+                        .ok_or_else(|| "malformed IMAP LIST literal header".to_owned())?;
+                    let prefix = text
+                        .get(..header.start)
+                        .ok_or_else(|| "malformed IMAP LIST literal position".to_owned())?;
+                    match list_parser::literal_is_mailbox_name(prefix) {
+                        Some(true) => {
+                            if literal_size == 0 {
+                                return Err(
+                                    "IMAP LIST returned an empty mailbox-name literal; unsupported"
+                                        .into(),
+                                );
+                            }
+                            literal_header = Some(text.to_owned());
+                            literal_value.clear();
+                            literal_remaining = literal_size;
+                        }
+                        Some(false) => {
+                            return Err(
+                                "IMAP LIST literal in trailing extension data is unsupported"
+                                    .into(),
+                            );
+                        }
+                        None => {
+                            return Err("malformed IMAP LIST literal placement".into());
+                        }
                     }
-                    literal_header = Some(text.to_owned());
-                    literal_value.clear();
-                    literal_remaining = literal_size;
                 }
             }
             line.clear();
