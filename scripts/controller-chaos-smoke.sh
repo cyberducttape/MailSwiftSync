@@ -102,6 +102,9 @@ export XDG_CONFIG_HOME="$workspace/config"
 storage_fault_state="$workspace/storage-fault.db"
 set +e
 (
+  # The expected SIGXFSZ must not persist a core dump outside this private
+  # temporary workspace (for example through systemd-coredump on Linux).
+  ulimit -c 0
   ulimit -f 40
   mailswiftsync headless "$storage_fault_state" preflight \
     --source-secret-file "$workspace/source.secret" \
