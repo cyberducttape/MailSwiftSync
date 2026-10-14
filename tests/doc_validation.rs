@@ -84,6 +84,21 @@ fn readme_describes_hardened_engine_execution_as_the_default() {
 }
 
 #[test]
+fn production_status_discloses_plaintext_oauth_rotation_recovery_boundary() {
+    let status =
+        fs::read_to_string("PRODUCTION_STATUS.md").expect("production status should exist");
+    let security = fs::read_to_string("docs/wiki/Security-and-profiles.md")
+        .expect("security guide should exist");
+
+    assert!(status.contains("rotation-recovery records may contain plaintext credentials"));
+    assert!(status.contains("not encryption"));
+    assert!(status.contains("live-provider expiry/rotation qualification remains pending"));
+    assert!(security.contains(
+        "it contains credentials in plaintext protected only by owner-only filesystem permissions"
+    ));
+}
+
+#[test]
 fn live_provider_smoke_does_not_claim_mid_transfer_oauth_refresh_qualification() {
     let workflow = fs::read_to_string(".github/workflows/provider-smoke.yml")
         .expect("live provider smoke workflow should exist");

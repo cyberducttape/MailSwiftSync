@@ -4,6 +4,9 @@
 
 - Correct the README's engine-profile instructions: hardened execution is the
   default, while compatibility mode is an explicit opt-in.
+- Clarify that OAuth rotation-recovery files are plaintext protected by local
+  owner-only permissions, not encrypted, and that live expiry/rotation remains
+  unqualified.
 - Distinguish the fixed mailbox-name field from RFC 5258 trailing `LIST`
   extension fields; reject literal-valued extension fields explicitly instead
   of misclassifying their payload as a mailbox name.
