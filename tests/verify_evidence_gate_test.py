@@ -46,6 +46,35 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("each provider policy entry needs pair", result.stderr)
 
+    def test_policy_rejects_control_characters_in_tab_delimited_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = json.loads((SOURCE_EVIDENCE / "policy.json").read_text(encoding="utf-8"))
+            policy["providers"][0]["engine"] = "imapsync\nforged-policy-row"
+            policy_path = root / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            schema_path = root / "schema.json"
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", schema_path)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "MAILSWIFTSYNC_POLICY_FILE": str(policy_path),
+                    "MAILSWIFTSYNC_SCHEMA_FILE": str(schema_path),
+                    "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("TSV fields must be non-empty strings without control characters", result.stderr)
+
     def test_help_prints_usage_without_running_the_gate(self):
         result = subprocess.run(
             [str(GATE), "--help"],

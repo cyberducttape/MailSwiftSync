@@ -75,6 +75,13 @@ def load_json(path, maximum):
         raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
     return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
 
+def valid_tsv_field(value):
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and not any(ord(character) < 0x20 or ord(character) == 0x7f for character in value)
+    )
+
 try:
     policy = load_json(sys.argv[1], 1 * 1024 * 1024)
 except (OSError, ValueError) as error:
@@ -96,7 +103,11 @@ for entry in providers:
         value not in {"password", "oauth2"} for value in auth_methods
     ) or not all(isinstance(value, int) and value > 0 for value in thresholds):
         raise SystemExit("each provider policy entry needs pair, source_provider, destination_provider, engine, and engine_version")
-    if not isinstance(required, list) or not required or not all(isinstance(value, str) and value for value in required):
+    if not all(valid_tsv_field(value) for value in values):
+        raise SystemExit("provider policy TSV fields must be non-empty strings without control characters")
+    if not isinstance(required, list) or not required or not all(
+        valid_tsv_field(value) and "," not in value for value in required
+    ):
         raise SystemExit(f"{entry.get('pair', '<unknown>')}: required_phases must be non-empty strings")
     if not isinstance(scenario_requirements, dict):
         raise SystemExit(f"{entry.get('pair', '<unknown>')}: scenario_requirements must be an object")
