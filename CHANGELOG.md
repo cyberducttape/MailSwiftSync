@@ -56,6 +56,8 @@
 - Bound qualification policy/schema, evidence, and customer-proof JSON inputs
   before parsing, preventing oversized external evidence bundles from causing
   unbounded memory use in release tooling.
+- Align the provider-testing guide's release-route list with all seven routes
+  in the signed-evidence policy, and regression-test route and auth coverage.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

@@ -17,8 +17,21 @@ Each phase must be recorded in its own JSON evidence file with
 `results.overall_result: "pass"`. A single file cannot stand in for multiple
 phases. Required scenarios are phase-specific, so a dry preflight does not
 claim live-transfer totals. The release routes are Gmail/Workspace → Microsoft
-365 (OAuth/OAuth), Microsoft 365 → Gmail/Workspace (OAuth/OAuth), and Fastmail
-→ Microsoft 365 (app-specific password/OAuth).
+365 (OAuth/OAuth), Microsoft 365 → Gmail/Workspace (OAuth/OAuth),
+cPanel/Dovecot → Microsoft 365 (password/OAuth), cPanel/Dovecot →
+Gmail/Workspace (password/OAuth), cPanel/Dovecot → cPanel/Dovecot
+(password/password), and Fastmail → Gmail/Workspace or Microsoft 365
+(app-specific password/OAuth). All seven are release-required by the policy:
+
+| Source → destination | Source auth | Destination auth |
+|---|---|---|
+| Gmail / Google Workspace → Microsoft 365 | OAuth/XOAUTH2 | OAuth/XOAUTH2 |
+| Microsoft 365 → Gmail / Google Workspace | OAuth/XOAUTH2 | OAuth/XOAUTH2 |
+| cPanel/Dovecot → Microsoft 365 | Password/app password | OAuth/XOAUTH2 |
+| cPanel/Dovecot → Gmail / Google Workspace | Password/app password | OAuth/XOAUTH2 |
+| cPanel/Dovecot → cPanel/Dovecot | Password/app password | Password/app password |
+| Fastmail → Gmail / Google Workspace | App-specific password | OAuth/XOAUTH2 |
+| Fastmail → Microsoft 365 | App-specific password | OAuth/XOAUTH2 |
 
 The checked-in `provider-integration-test.sh` is a small-run smoke harness, not
 a provider qualification run: it exercises a basic mailbox and forced
