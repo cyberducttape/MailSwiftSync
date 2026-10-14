@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Correct the README's engine-profile instructions: hardened execution is the
+  default, while compatibility mode is an explicit opt-in.
 - Distinguish the fixed mailbox-name field from RFC 5258 trailing `LIST`
   extension fields; reject literal-valued extension fields explicitly instead
   of misclassifying their payload as a mailbox name.
