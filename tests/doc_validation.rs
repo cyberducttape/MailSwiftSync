@@ -66,6 +66,39 @@ fn systemd_service_example_uses_a_restricted_worker_sandbox() {
 }
 
 #[test]
+fn readme_describes_hardened_engine_execution_as_the_default() {
+    let readme = fs::read_to_string("README.md").expect("README should exist");
+    let profiles = fs::read_to_string("docs/execution-profiles.md")
+        .expect("execution profile guide should exist");
+    let implementation =
+        fs::read_to_string("src/process.rs").expect("process implementation should exist");
+    let cli = fs::read_to_string("src/cli.rs").expect("CLI implementation should exist");
+
+    assert!(readme.contains("Hardened engine execution is the default"));
+    assert!(readme.contains("--execution-profile compatibility"));
+    assert!(profiles.contains("defaults to the hardened execution profile"));
+    assert!(
+        implementation.contains("static ENGINE_EXECUTION_PROFILE: AtomicU8 = AtomicU8::new(1)")
+    );
+    assert!(cli.contains("Use hardened (default) or compatibility engine environment"));
+}
+
+#[test]
+fn production_status_discloses_plaintext_oauth_rotation_recovery_boundary() {
+    let status =
+        fs::read_to_string("PRODUCTION_STATUS.md").expect("production status should exist");
+    let security = fs::read_to_string("docs/wiki/Security-and-profiles.md")
+        .expect("security guide should exist");
+
+    assert!(status.contains("rotation-recovery records may contain plaintext credentials"));
+    assert!(status.contains("not encryption"));
+    assert!(status.contains("live-provider expiry/rotation qualification remains pending"));
+    assert!(security.contains(
+        "it contains credentials in plaintext protected only by owner-only filesystem permissions"
+    ));
+}
+
+#[test]
 fn oauth_refresh_docs_disclose_the_windows_callback_boundary() {
     let readme = fs::read_to_string("README.md").expect("README should exist");
     let release = fs::read_to_string("docs/release-readiness.md")
