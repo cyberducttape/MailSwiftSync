@@ -100,7 +100,9 @@ count agreement into an unqualified `mailboxes_exact` count. A status of
 `bounded_content_match` is limited to the explicitly covered body hashes.
 `mailboxes_with_durable_accepted_result` is a workflow-state count, not a
 message-fidelity guarantee. Consumers of customer-proof version `2` must
-update before accepting version `3`.
+update before accepting version `3`. The provider-evidence generator accepts
+only known customer-proof versions and requires `assurance_status:
+engine_confirmed` for version 3 qualification evidence.
 The `mailswiftsync-support-bundle` artifact uses format version `2`: project,
 mailbox-job, and run identifiers are type-separated pseudonyms derived with a
 fresh per-bundle salt, preserving joins inside one bundle without correlating

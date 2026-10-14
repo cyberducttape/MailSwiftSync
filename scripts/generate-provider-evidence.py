@@ -85,6 +85,9 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
     # Verify proof structure
     if proof.get("format") != "mailswiftsync-customer-proof":
         raise ValueError("Invalid customer-proof format")
+    proof_version = proof.get("format_version")
+    if type(proof_version) is not int or proof_version not in {1, 2, 3}:
+        raise ValueError(f"unsupported customer-proof format_version: {proof_version!r}")
 
     expected_digest = proof.get("proof_digest")
     actual_digest = canonical_proof_digest(proof)
@@ -188,8 +191,12 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         required = ("scope", "evidence_level", "source_messages", "destination_messages",
                     "source_bytes", "destination_bytes", "source_folders", "destination_folders",
                     "unmatched_messages", "failed_messages")
+        if proof_version >= 3:
+            required += ("assurance_status",)
         if not isinstance(evidence, dict) or any(field not in evidence for field in required):
             raise ValueError("customer-proof mailbox evidence is incomplete")
+        if proof_version >= 3 and evidence["assurance_status"] != "engine_confirmed":
+            raise ValueError("customer-proof mailbox evidence is not engine-confirmed")
         if evidence["scope"] != "engine-confirmed" or evidence["evidence_level"] not in {
             "Engine-confirmed exact match",
             "Engine-confirmed exact match — not message-body proof",
