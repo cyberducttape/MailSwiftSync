@@ -1651,7 +1651,9 @@ fn parse_select_modseq(
         if code.eq_ignore_ascii_case("HIGHESTMODSEQ") {
             let value = fields
                 .next()
-                .filter(|value| !value.is_empty())
+                .filter(|value| {
+                    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| *value > 0 && *value <= i64::MAX as u64)
                 .ok_or_else(|| {

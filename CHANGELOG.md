@@ -8,8 +8,9 @@
   cannot be represented as stable evidence; remove the ineffective extra FLAGS
   round trips, align both the capability manifest and verification envelope,
   and enforce the documented certification boundary with regression tests.
-  Parse MODSEQ only from a syntactically valid untagged OK response code,
-  so unrelated or malformed server text cannot establish flag-fidelity coverage.
+  Parse MODSEQ only from a syntactically valid untagged OK response code with a
+  digits-only value, so unrelated or malformed server text cannot establish
+  flag-fidelity coverage.
 - Correct the README's engine-profile instructions: hardened execution is the
   default, while compatibility mode is an explicit opt-in.
 - Clarify that OAuth rotation-recovery files are plaintext protected by local

@@ -714,6 +714,7 @@ fn condstore_select_snapshot_requires_one_valid_modseq_code() {
     for response in [
         "a001 OK selected\r\n",
         "* OK [HIGHESTMODSEQ 0] invalid\r\na001 OK selected\r\n",
+        "* OK [HIGHESTMODSEQ +42] invalid\r\na001 OK selected\r\n",
         "* OK HIGHESTMODSEQ 42\r\na001 OK selected\r\n",
         "* 1 FETCH (HIGHESTMODSEQ 42)\r\na001 OK selected\r\n",
         "a001 OK [HIGHESTMODSEQ 42] selected\r\n",
