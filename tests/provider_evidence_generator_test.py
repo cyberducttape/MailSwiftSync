@@ -56,7 +56,7 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
     identity_destination = destination_provider or "microsoft365"
     value = {
         "format": "mailswiftsync-customer-proof",
-        "format_version": 1,
+        "format_version": 3,
         "application_version": "0.1.0-alpha.1",
         "artifact_role": "customer_evidence",
         "completion_claim": {"status": claim_status},
@@ -76,6 +76,7 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
             "state": status,
             "evidence": {
                 "scope": "engine-confirmed",
+                "assurance_status": "engine_confirmed",
                 "evidence_level": "Engine-confirmed exact match — not message-body proof",
                 "source_messages": messages,
                 "destination_messages": messages,
@@ -133,6 +134,7 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
         value["project"] = {"project_id": "project", "name": "fixture", "phase": "Complete"}
         value["mailboxes"][0]["evidence"] = {
             "scope": "message-reconciliation",
+            "assurance_status": "metadata_match",
             "verification_method": "metadata_reconciliation",
             "verification_outcome": "exact_match",
             "verification_level": "Exact metadata match",
@@ -196,6 +198,29 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
         value["proof_digest"] = "0" * 64
         with self.assertRaises(ValueError):
             self.generate(value)
+
+    def test_customer_proof_version_is_required_and_unknown_versions_fail_closed(self):
+        for version in (None, 0, 4, True, "3"):
+            value = proof()
+            if version is None:
+                value.pop("format_version")
+            else:
+                value["format_version"] = version
+            value["proof_digest"] = MODULE.canonical_proof_digest(value)
+            with self.subTest(version=version), self.assertRaisesRegex(
+                ValueError, "unsupported customer-proof format_version"
+            ):
+                self.generate(value)
+
+    def test_known_legacy_versions_remain_supported_with_strict_engine_evidence(self):
+        for version in (1, 2):
+            value = proof()
+            value["format_version"] = version
+            value["mailboxes"][0]["evidence"].pop("assurance_status")
+            value["proof_digest"] = MODULE.canonical_proof_digest(value)
+            with self.subTest(version=version):
+                evidence = self.generate(value)
+                self.assertEqual(evidence["results"]["verification_confidence"], "aggregate_only")
 
     def test_wrong_run_id_and_unrecovered_interruption_are_rejected(self):
         with self.assertRaises(ValueError):
@@ -262,6 +287,11 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
         low_confidence["proof_digest"] = MODULE.canonical_proof_digest(low_confidence)
         with self.assertRaises(ValueError):
             self.generate(low_confidence)
+        aggregate_only = proof()
+        aggregate_only["mailboxes"][0]["evidence"]["assurance_status"] = "aggregate_match"
+        aggregate_only["proof_digest"] = MODULE.canonical_proof_digest(aggregate_only)
+        with self.assertRaisesRegex(ValueError, "not engine-confirmed"):
+            self.generate(aggregate_only)
 
     def test_zero_message_and_attention_fixtures_are_rejected(self):
         for value in (proof(messages=0), proof(status="attention")):
