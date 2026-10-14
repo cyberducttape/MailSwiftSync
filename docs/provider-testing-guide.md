@@ -46,8 +46,9 @@ submit its smoke proofs to the release evidence policy.
 3. **Mailbox test data**
    - Empty mailboxes (to test folder creation)
    - Small mailboxes (< 100 messages)
-   - Separate, mailbox-bound scenarios for at least 100,000 messages, 20 GiB,
-     50 GiB, and 100 GiB. The release policy requires evidence for all four; a
+   - Separate, mailbox-bound scenarios for at least 100,000 messages, 1 GiB,
+     10 GiB, 20 GiB, 50 GiB, and 100 GiB. The release policy requires evidence
+     for all six; a
      larger mailbox may satisfy multiple byte thresholds only when each
      scenario explicitly references its durable mailbox job and proof totals.
    - Special-use folders (if exposed by provider)

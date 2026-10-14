@@ -213,6 +213,10 @@ for filename in files:
                 continue
             if scenario == "large-mailbox-100k" and (observations.get("large_mailbox_100k", {}).get("messages", 0) < requirement.get("minimum_messages", 0) or (phase != "dry_pilot" and summary.get("messages_total", 0) < requirement.get("minimum_messages", 0))):
                 errors.append(f"{filename}: large-mailbox-100k does not contain 100,000 messages")
+            if scenario == "large-mailbox-1gb" and (observations.get("large_mailbox_1gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-1gb does not contain at least 1 GiB")
+            if scenario == "large-mailbox-10gb" and (observations.get("large_mailbox_10gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-10gb does not contain at least 10 GiB")
             if scenario == "large-mailbox-20gb" and (observations.get("large_mailbox_20gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
                 errors.append(f"{filename}: large-mailbox-20gb does not contain at least 20 GiB")
             if scenario == "large-mailbox-50gb" and (observations.get("large_mailbox_50gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
@@ -325,6 +329,8 @@ for filename in files:
                     errors.append(f"{filename}: {field} does not match customer proof")
         mailbox_observation_requirements = (
             ("large-mailbox-100k", "large_mailbox_100k", "messages", "source_messages", "minimum_messages"),
+            ("large-mailbox-1gb", "large_mailbox_1gb", "bytes", "source_bytes", "minimum_bytes"),
+            ("large-mailbox-10gb", "large_mailbox_10gb", "bytes", "source_bytes", "minimum_bytes"),
             ("large-mailbox-20gb", "large_mailbox_20gb", "bytes", "source_bytes", "minimum_bytes"),
             ("large-mailbox-50gb", "large_mailbox_50gb", "bytes", "source_bytes", "minimum_bytes"),
             ("large-mailbox-100gb", "large_mailbox_100gb", "bytes", "source_bytes", "minimum_bytes"),

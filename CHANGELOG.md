@@ -29,9 +29,9 @@
   v3 engine-confirmed assurance status for qualification claims.
 - Require signed provider-qualification evidence for every hosted-provider
   route in the compatibility plan, including cPanel/Dovecot pairs and
-  Fastmail-to-Google Workspace; require 50 GiB and 100 GiB live-pilot mailbox
-  evidence per route and align operator guidance with the 100k-message,
-  20-GiB, 50-GiB, and 100-GiB scenarios.
+  Fastmail-to-Google Workspace; require 1, 10, 20, 50, and 100 GiB live-pilot
+  mailbox evidence per route and align operator guidance with the complete
+  size and 100k-message scenarios.
 - Keep the compatibility matrix and signed-evidence policy aligned with a
   regression test so a documented route cannot be omitted from GA release gates.
 - Qualify the production-status recovery summary so durable run-level state is

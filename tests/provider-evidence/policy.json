@@ -17,6 +17,8 @@
       "minimum_bytes": 1024,
       "scenario_requirements": {
         "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-1gb": {"minimum_bytes": 1073741824},
+        "large-mailbox-10gb": {"minimum_bytes": 10737418240},
         "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-mailbox-50gb": {"minimum_bytes": 53687091200},
         "large-mailbox-100gb": {"minimum_bytes": 107374182400},
@@ -33,7 +35,7 @@
       },
       "required_scenarios_by_phase": {
         "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
-        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
         "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
       },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
@@ -53,6 +55,8 @@
       "minimum_bytes": 1024,
       "scenario_requirements": {
         "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-1gb": {"minimum_bytes": 1073741824},
+        "large-mailbox-10gb": {"minimum_bytes": 10737418240},
         "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-mailbox-50gb": {"minimum_bytes": 53687091200},
         "large-mailbox-100gb": {"minimum_bytes": 107374182400},
@@ -69,7 +73,7 @@
       },
       "required_scenarios_by_phase": {
         "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
-        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
         "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
       },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
@@ -89,6 +93,8 @@
       "minimum_bytes": 1024,
       "scenario_requirements": {
         "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-1gb": {"minimum_bytes": 1073741824},
+        "large-mailbox-10gb": {"minimum_bytes": 10737418240},
         "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-mailbox-50gb": {"minimum_bytes": 53687091200},
         "large-mailbox-100gb": {"minimum_bytes": 107374182400},
@@ -104,7 +110,7 @@
       },
       "required_scenarios_by_phase": {
         "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
-        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
         "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
       },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
@@ -124,6 +130,8 @@
       "minimum_bytes": 1024,
       "scenario_requirements": {
         "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-1gb": {"minimum_bytes": 1073741824},
+        "large-mailbox-10gb": {"minimum_bytes": 10737418240},
         "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-mailbox-50gb": {"minimum_bytes": 53687091200},
         "large-mailbox-100gb": {"minimum_bytes": 107374182400},
@@ -140,7 +148,7 @@
       },
       "required_scenarios_by_phase": {
         "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
-        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
         "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
       },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
@@ -160,6 +168,8 @@
       "minimum_bytes": 1024,
       "scenario_requirements": {
         "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-1gb": {"minimum_bytes": 1073741824},
+        "large-mailbox-10gb": {"minimum_bytes": 10737418240},
         "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-mailbox-50gb": {"minimum_bytes": 53687091200},
         "large-mailbox-100gb": {"minimum_bytes": 107374182400},
@@ -175,7 +185,7 @@
       },
       "required_scenarios_by_phase": {
         "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
-        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
         "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
       },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
@@ -195,6 +205,8 @@
       "minimum_bytes": 1024,
       "scenario_requirements": {
         "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-1gb": {"minimum_bytes": 1073741824},
+        "large-mailbox-10gb": {"minimum_bytes": 10737418240},
         "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-mailbox-50gb": {"minimum_bytes": 53687091200},
         "large-mailbox-100gb": {"minimum_bytes": 107374182400},
@@ -211,7 +223,7 @@
       },
       "required_scenarios_by_phase": {
         "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
-        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
         "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
       },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
@@ -231,6 +243,8 @@
       "minimum_bytes": 1024,
       "scenario_requirements": {
         "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-1gb": {"minimum_bytes": 1073741824},
+        "large-mailbox-10gb": {"minimum_bytes": 10737418240},
         "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-mailbox-50gb": {"minimum_bytes": 53687091200},
         "large-mailbox-100gb": {"minimum_bytes": 107374182400},
@@ -246,7 +260,7 @@
       },
       "required_scenarios_by_phase": {
         "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
-        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
         "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
       },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]

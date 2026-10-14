@@ -67,6 +67,16 @@ class EvidenceGateTests(unittest.TestCase):
             )
         for entry in policy["providers"]:
             self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-1gb"]["minimum_bytes"],
+                1024**3,
+            )
+            self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-10gb"]["minimum_bytes"],
+                10 * 1024**3,
+            )
+            for scenario in ["large-mailbox-1gb", "large-mailbox-10gb"]:
+                self.assertIn(scenario, entry["required_scenarios_by_phase"]["live_pilot"])
+            self.assertEqual(
                 entry["scenario_requirements"]["large-mailbox-50gb"]["minimum_bytes"],
                 50 * 1024**3,
             )
@@ -146,6 +156,8 @@ class EvidenceGateTests(unittest.TestCase):
                 "scenario_ids": entry["required_scenarios_by_phase"]["live_pilot"],
                 "scenario_observations": {
                     "large_mailbox_100k": {"mailbox_job_id": "job-a", "messages": 100000},
+                    "large_mailbox_1gb": {"mailbox_job_id": "job-a", "bytes": 10 * 1024**3},
+                    "large_mailbox_10gb": {"mailbox_job_id": "job-a", "bytes": 10 * 1024**3},
                     "large_mailbox_20gb": {"mailbox_job_id": "job-a", "bytes": 20 * 1024**3},
                     "large_mailbox_50gb": {"mailbox_job_id": "job-a", "bytes": 50 * 1024**3},
                     "large_mailbox_100gb": {"mailbox_job_id": "job-a", "bytes": 100 * 1024**3},
@@ -269,6 +281,8 @@ class EvidenceGateTests(unittest.TestCase):
             rerun_output = rerun.stdout + rerun.stderr
             self.assertNotIn("dry-pilot.json: dry_pilot must not report transfer totals", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-100k", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-1gb", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-10gb", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-20gb", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-50gb", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-100gb", rerun_output)

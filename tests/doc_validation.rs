@@ -828,7 +828,14 @@ fn provider_testing_guide_exists() {
         guide.contains("this guide does not assert a")
             && guide.contains("fixed commands-per-second rate")
     );
-    for mailbox_shape in ["100,000 messages", "20 GiB", "50 GiB", "100 GiB"] {
+    for mailbox_shape in [
+        "100,000 messages",
+        "1 GiB",
+        "10 GiB",
+        "20 GiB",
+        "50 GiB",
+        "100 GiB",
+    ] {
         assert!(
             guide.contains(mailbox_shape),
             "Provider testing guide must disclose the {mailbox_shape} qualification scenario"
