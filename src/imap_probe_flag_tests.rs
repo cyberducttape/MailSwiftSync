@@ -25,7 +25,7 @@ fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer, side: Stage
         &budget,
         &state_budget,
         None,
-        false,
+        true,
         &mut sink,
     )
     .unwrap_or_else(|error| panic!("scan failed: {error:?}"));
@@ -35,6 +35,7 @@ fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer, side: Stage
 /// custom-keyword messages.
 fn mixed_state_server() -> FolderServer {
     let mut server = FolderServer::new(&[1, 2, 3, 4, 5, 6], 7, 7);
+    server.condstore = true;
     for (uid, flags) in [
         (1, "\\Seen"),
         (2, ""),

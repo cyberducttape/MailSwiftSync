@@ -263,7 +263,7 @@ state a client cannot store.
 | Compared messages | Singleton pairs are compared when exactly one source and one destination message share the Message-ID, expected destination folder, INTERNALDATE, and RFC822.SIZE. Equal-sized duplicate groups with FLAGS on every message are compared as multisets of canonical flag sets; mismatched group sizes, probable pairings, unmatched messages, and messages whose FETCH carried no FLAGS are not compared. Duplicate flag frequencies are aggregated in SQLite and consumed as ordered rows, avoiding per-message flag-string collections in Rust; SQLite temporary aggregation cost remains workload-dependent. The compared count against all source messages is reported as flag coverage. |
 | Documented exception | The destination lost flags, gained none, and every lost flag is one the destination folder's SELECT `PERMANENTFLAGS` cannot store (a keyword is storable when `\*` is listed; a system flag only when listed by name). This is counted as excepted, not as a failure. Without `PERMANENTFLAGS` every flag is assumed storable, as RFC 9051 requires. |
 | Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
-| Point in time | Each side is inventoried independently, not as one cross-server instant. Within each folder, a bounded second FLAGS-only pass is compared page-by-page with the initial metadata pass; a mutation causes the folder to be discarded and retried. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. A resumed durable scan never reuses an earlier folder page. |
+| Point in time | Each side is inventoried independently, not as one cross-server instant. FLAGS contribute to fidelity evidence only when the folder has a tracked CONDSTORE `HIGHESTMODSEQ`, which is checked at scan completion. Without that snapshot, FLAGS are not fetched into evidence and flag coverage is incomplete; a second read alone cannot prove stability. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. A resumed durable scan never reuses an earlier folder page. |
 
 ## Snapshot and cutover semantics
 
@@ -276,14 +276,18 @@ until that folder is reached, but they are inert: the folder's scan-start
 transaction clears its old rows and capabilities before staging current
 data. This avoids an additional account-wide deletion journal while ensuring
 deleted or renamed folders cannot enter reconciliation.
-Each selected folder is checked for internal stability using its
-`UIDVALIDITY`, `UIDNEXT`, and `EXISTS` values and a second bounded FLAGS pass.
-The latter catches flag changes between the initial FETCH and the flag check;
-servers without a usable CONDSTORE snapshot are not assumed stable merely
-because the UID snapshot is unchanged. The two endpoints are still observed
-at different times. Delivery, user actions, server-side rules, and flag changes
-between those observations can therefore appear as missing,
-extra, changed, or flag differences even when the transfer itself was correct.
+Each selected folder is checked for message-inventory stability using its
+`UIDVALIDITY`, `UIDNEXT`, and `EXISTS` values. When the server provides a
+tracked CONDSTORE `HIGHESTMODSEQ`, FLAGS are fetched with message metadata and
+the mod-sequence is checked again at completion; a change discards and retries
+the folder. Without a tracked mod-sequence (including `NOMODSEQ`), FLAGS are
+omitted from staged evidence. This leaves flag coverage incomplete and prevents
+an all-dimensions exact certification; repeating a FLAGS read without a
+mutation watermark would only narrow, not close, the race window. The two
+endpoints are still observed at different times. Delivery, user actions,
+server-side rules, and flag changes between those observations can therefore
+appear as missing, extra, changed, or flag differences even when the transfer
+itself was correct.
 Transfer-pass and standalone CLI reverification provenance record each
 folder's UTC scan-start and scan-completion times, UID snapshot, and
 verification run identity. Legacy ledger rows have no folder timestamps and
@@ -330,14 +334,14 @@ interruption during verification does not require the transfer engine to start
 over, but the verifier refetches the folder from its first page.
 
 The scanner negotiates `CONDSTORE` when advertised and requests
-`SELECT (CONDSTORE)` for each folder. A tracked `HIGHESTMODSEQ` is compared at
-the end of the scan; a change discards and retries the folder without a
-second per-message FLAGS pass. The mod-sequence is not persisted as a durable
-resume cursor. If CONDSTORE is not advertised, or the selected folder returns
-`NOMODSEQ`, the scanner instead issues bounded FLAGS-only UID FETCH requests
-for the UIDs already staged in SQLite. This avoids a second sequence
-enumeration, while fallback provider round trips scale with the extant message
-count. Missing or malformed CONDSTORE response codes fail closed.
+`SELECT (CONDSTORE)` for each folder. FLAGS are requested only when SELECT
+returns a tracked `HIGHESTMODSEQ`; that value is compared at the end of the
+scan, and a change discards and retries the folder. The mod-sequence is not
+persisted as a durable resume cursor. If CONDSTORE is not advertised, or the
+selected folder returns `NOMODSEQ`, the scanner omits FLAGS from staged
+records. Message metadata reconciliation continues, but flag/keyword coverage
+is incomplete and cannot satisfy the all-dimensions exactness gate. Missing or
+malformed CONDSTORE response codes fail closed.
 
 The current product does not retain completed message metadata indefinitely.
 The `reverify` command provides an operator-invokable mailbox-level

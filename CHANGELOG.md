@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Require a tracked CONDSTORE `HIGHESTMODSEQ` before collecting IMAP FLAGS for
+  fidelity evidence. Without it, continue metadata reconciliation but leave
+  flag/keyword coverage incomplete so an untracked mutable flag observation
+  cannot be represented as stable evidence; remove the ineffective extra FLAGS
+  round trips and document the certification boundary.
 - Distinguish the fixed mailbox-name field from RFC 5258 trailing `LIST`
   extension fields; reject literal-valued extension fields explicitly instead
   of misclassifying their payload as a mailbox name.
