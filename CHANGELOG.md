@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Record the packaged engine-side destination write-fault CI run with its exact
+  commit, run ID, Dovecot/imapsync versions, and successful assertions; label
+  `RLIMIT_FSIZE` as a bounded write-failure simulation rather than a real full-
+  filesystem qualification.
 - Bump customer-proof artifacts to format v3 and replace ambiguous `exact`/
   `verified` certificate fields with evidence-level-specific assurance statuses
   and summary counts. Aggregate agreement no longer appears as message-level

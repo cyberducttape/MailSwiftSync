@@ -218,6 +218,24 @@ fn crash_recovery_docs_match_the_restored_ledger_integration_drill() {
 }
 
 #[test]
+fn crash_recovery_docs_bound_engine_storage_fault_claim_to_ci_fixture() {
+    let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation matrix should exist");
+    let workflow = fs::read_to_string(".github/workflows/integration.yml")
+        .expect("integration workflow should exist");
+
+    assert!(
+        recovery.contains("Destination write failure during APPEND (`RLIMIT_FSIZE` simulation)")
+            && recovery.contains("not an actually full filesystem")
+            && recovery.contains("38515348245")
+            && recovery.contains("imapsync 2.314 and Dovecot 2.3.19.1")
+            && recovery.contains("a real filesystem-full campaign remains unqualified")
+            && workflow.contains("engine-storage-fault-smoke.sh"),
+        "engine storage-fault evidence must identify the simulated limit, exact CI run/versions, and unqualified real-filesystem scope"
+    );
+}
+
+#[test]
 fn capability_manifest_does_not_overstate_verification_resume() {
     let manifest =
         fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
