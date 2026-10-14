@@ -434,6 +434,15 @@ fn list_literal_parser_rejects_control_octets_after_mailbox_name() {
 }
 
 #[test]
+fn list_inventory_rejects_invalid_utf8_in_mailbox_fields() {
+    let response = b"* LIST (\\HasNoChildren) \"/\" \"INBOX\xff\"\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("not valid UTF-8"));
+}
+
+#[test]
 fn list_parser_extracts_delimiter_after_attributes() {
     assert_eq!(
         parse_list_delimiter(r#"* LIST (\HasNoChildren \Sent) "/" "Sent Items""#),

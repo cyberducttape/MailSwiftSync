@@ -7,7 +7,8 @@ desktop application's dependency graph.
 Targets cover:
 
 - `list_response`: LIST tokenization, quoted mailbox names, delimiters, and
-  rejection of control octets in protocol fields and literal continuations;
+  rejection of invalid UTF-8 and control octets in protocol fields and literal
+  continuations;
 - `fetch_response`: metadata FETCH records, Message-ID literals, and bounded
   body-literal fingerprints;
 - `literal_framing`: tagged completion detection with arbitrary and
