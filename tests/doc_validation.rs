@@ -342,6 +342,24 @@ fn verification_envelope_records_current_head_adversarial_scale_observations() {
 }
 
 #[test]
+fn verification_envelope_discloses_typed_mapping_equals_limit() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope should exist");
+    let validation = fs::read_to_string("src/migration_plan/validation.rs")
+        .expect("typed mapping validation should exist");
+    assert!(
+        envelope.contains("A source folder name containing `=` cannot currently be represented")
+            && envelope.contains("destination names may\ncontain `=`"),
+        "verification envelope must disclose the source-side equals limitation and destination-side support"
+    );
+    assert!(
+        validation.contains("if source.contains('=')")
+            && validation.contains("Source folder names cannot contain '='"),
+        "the documented compatibility limit must remain enforced by plan validation"
+    );
+}
+
+#[test]
 fn verification_envelope_records_current_head_maximum_stress_observations() {
     let envelope = fs::read_to_string("docs/verification-envelope.md")
         .expect("verification envelope measurements should exist");
