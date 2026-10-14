@@ -284,9 +284,11 @@ because the UID snapshot is unchanged. The two endpoints are still observed
 at different times. Delivery, user actions, server-side rules, and flag changes
 between those observations can therefore appear as missing,
 extra, changed, or flag differences even when the transfer itself was correct.
-The evidence records each folder's UTC scan-start and scan-completion times,
-UID snapshot, and verification run identity. Legacy ledger rows have no folder
-timestamps and are represented as unknown, not backfilled. These timestamps
+Transfer-pass provenance records each folder's UTC scan-start and
+scan-completion times, UID snapshot, and verification run identity. Legacy
+ledger rows have no folder timestamps and are represented as unknown, not
+backfilled. Standalone CLI reverification currently records only its run-level
+interval; it does not yet persist per-folder timestamps. Folder timestamps
 make the observation window auditable; they are not a global cross-provider
 timestamp or a claim that mail flow was quiescent.
 
