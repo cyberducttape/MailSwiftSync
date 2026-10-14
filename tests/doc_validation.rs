@@ -149,6 +149,13 @@ fn production_readiness_surfaces_have_one_conservative_source() {
         "active status must retain the technical-preview boundary"
     );
     assert!(
+        status.contains("Operator-reviewed recovery")
+            && status.contains("engine-specific resume behavior")
+            && status.contains("still requires independent verification")
+            && !status.contains("**Safe recovery** from interrupted migrations"),
+        "active status must not imply a universal recovery guarantee"
+    );
+    assert!(
         !status.contains("dormant prototype")
             && status.contains(
                 "observed-signal classification wired; live provider qualification pending"

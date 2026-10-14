@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Qualify the production-status recovery summary so durable run-level state is
+  not mistaken for a universal or per-message recovery guarantee.
 - Require a balanced parenthesized IMAP FETCH data list with exactly one
   top-level UID before sequence inventory records can count as exact coverage;
   reject truncated lists, missing delimiters, and duplicate UID items.
