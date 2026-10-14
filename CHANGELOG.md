@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bump customer-proof artifacts to format v3 and replace ambiguous `exact`/
+  `verified` certificate fields with evidence-level-specific assurance statuses
+  and summary counts. Aggregate agreement no longer appears as message-level
+  exactness; label aggregate evidence explicitly in customer exports.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

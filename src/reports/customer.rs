@@ -123,8 +123,12 @@ pub(crate) fn export_from_store_with_options_and_identity(
     }
     let durably_complete = summary.is_durably_complete(&reader);
     let total_mailboxes = summary.total_mailboxes;
-    let exact_mailboxes = summary.exact_mailboxes;
-    let mailbox_exceptions = total_mailboxes.saturating_sub(exact_mailboxes);
+    let mailboxes_not_exact = total_mailboxes.saturating_sub(
+        summary.assurance.aggregate_match
+            + summary.assurance.metadata_match
+            + summary.assurance.bounded_content_match
+            + summary.assurance.engine_confirmed,
+    );
     let mut message_counts = serde_json::json!({
         "source": summary.messages.source,
         "destination": summary.messages.destination,
@@ -144,7 +148,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
     let verification_level = (summary.verification_levels.len() == 1)
         .then(|| summary.verification_levels.into_iter().next().unwrap());
     let mailboxes_transferred = summary.mailboxes_transferred;
-    let mailboxes_verified = summary.mailboxes_verified;
+    let mailboxes_with_durable_accepted_result = summary.mailboxes_with_durable_accepted_result;
     let project = reader.project().clone();
     // Each mailbox and run entry is generated on demand and serialized
     // immediately; the proof is never materialized as one JSON tree.
@@ -165,7 +169,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "verification_method": value.verification_method().as_str(),
                         "verification_outcome": value.verification_outcome().as_str(),
                         "verification_outcome_label": value.verification_outcome_label(),
-                        "verification_status": value.verification_status(),
+                        "assurance_status": assurance_status(value),
                         "verification_level": value.verification_level(),
                         "evidence_level": value.evidence_level(),
                         "reason": value.verification_reason(),
@@ -187,12 +191,13 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "missing_messages": value.missing_messages,
                         "extra_messages": value.extra_messages,
                         "modified_messages": value.modified_messages,
-                        "certificate_status": if value.is_exact_match() { "exact" } else { "exception" },
                     });
-                    evidence
-                        .as_object_mut()
-                        .expect("evidence is a JSON object")
-                        .extend(evidence_coverage_fields(value));
+                    let coverage = evidence_coverage_fields(value);
+                    let fields = evidence.as_object_mut().expect("evidence is a JSON object");
+                    fields.extend(coverage);
+                    // Version 3 uses the scope-qualified `assurance_status`;
+                    // the generic workflow label is ambiguous in this artifact.
+                    fields.remove("verification_status");
                     Some(evidence)
                 }
                 None => None,
@@ -232,7 +237,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-customer-proof",
-        "format_version": 2,
+        "format_version": 3,
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
         "migration_id": project.id.clone(),
@@ -246,13 +251,13 @@ pub(crate) fn export_from_store_with_options_and_identity(
         "certificate_summary": {
             "mailboxes_planned": total_mailboxes,
             "mailboxes_transferred": mailboxes_transferred,
-            "mailboxes_verified": mailboxes_verified,
+            "mailboxes_with_durable_accepted_result": mailboxes_with_durable_accepted_result,
             "source_messages": message_counts["source"],
             "destination_messages": message_counts["destination"],
             "missing": message_counts["missing"],
             "extra": message_counts["extra"],
             "modified": message_counts["modified"],
-            "exceptions": mailbox_exceptions,
+            "mailboxes_not_exact": mailboxes_not_exact,
             "verification_level": verification_level,
         },
         "completion_claim": {
@@ -267,8 +272,16 @@ pub(crate) fn export_from_store_with_options_and_identity(
         },
         "verification_summary": {
             "mailboxes_total": total_mailboxes,
-            "mailboxes_exact": exact_mailboxes,
-            "mailboxes_with_exceptions": mailbox_exceptions,
+            "mailboxes_by_assurance": {
+                "aggregate_match": summary.assurance.aggregate_match,
+                "metadata_match": summary.assurance.metadata_match,
+                "bounded_content_match": summary.assurance.bounded_content_match,
+                "engine_confirmed": summary.assurance.engine_confirmed,
+                "with_exceptions": summary.assurance.with_exceptions,
+                "incomplete": summary.assurance.incomplete,
+                "not_checked": summary.assurance.not_checked,
+            },
+            "mailboxes_not_exact": mailboxes_not_exact,
             "messages": message_counts,
         },
         "project": {
@@ -325,9 +338,9 @@ struct MessageTotals {
 #[derive(Default)]
 struct ExportSummary {
     total_mailboxes: usize,
-    exact_mailboxes: usize,
     mailboxes_transferred: usize,
-    mailboxes_verified: usize,
+    mailboxes_with_durable_accepted_result: usize,
+    assurance: AssuranceCounts,
     messages: MessageTotals,
     unmatched_count_unknown: bool,
     plan_hashes: BTreeSet<String>,
@@ -336,6 +349,82 @@ struct ExportSummary {
     verification_levels: BTreeSet<&'static str>,
     /// The first mailbox that blocks a completion claim, with the reason.
     first_blocker: Option<(String, &'static str)>,
+}
+
+#[derive(Default)]
+struct AssuranceCounts {
+    aggregate_match: usize,
+    metadata_match: usize,
+    bounded_content_match: usize,
+    engine_confirmed: usize,
+    with_exceptions: usize,
+    incomplete: usize,
+    not_checked: usize,
+}
+
+impl AssuranceCounts {
+    fn record(&mut self, evidence: Option<&core::MailboxEvidence>) {
+        let Some(evidence) = evidence else {
+            self.not_checked += 1;
+            return;
+        };
+        if !evidence.is_exact_match() {
+            match evidence.verification_outcome() {
+                core::VerificationOutcome::ExactBodyMatch
+                | core::VerificationOutcome::ExactMetadataMatch
+                | core::VerificationOutcome::Missing
+                | core::VerificationOutcome::Changed
+                | core::VerificationOutcome::Unexpected
+                | core::VerificationOutcome::FlagsChanged => self.with_exceptions += 1,
+                core::VerificationOutcome::ProbableMatch
+                | core::VerificationOutcome::Ambiguous
+                | core::VerificationOutcome::Incomplete
+                | core::VerificationOutcome::Failed => self.incomplete += 1,
+            }
+            return;
+        }
+        match evidence.verification_method() {
+            core::VerificationMethod::MetadataReconciliation => self.metadata_match += 1,
+            core::VerificationMethod::BodyHash => self.bounded_content_match += 1,
+            core::VerificationMethod::AggregateEngine | core::VerificationMethod::NativeDovecot
+                if evidence.authoritative =>
+            {
+                self.engine_confirmed += 1
+            }
+            core::VerificationMethod::AggregateEngine | core::VerificationMethod::NativeDovecot => {
+                self.aggregate_match += 1
+            }
+        }
+    }
+}
+
+fn assurance_status(evidence: &core::MailboxEvidence) -> &'static str {
+    if !evidence.is_exact_match() {
+        return match evidence.verification_outcome() {
+            core::VerificationOutcome::ExactBodyMatch
+            | core::VerificationOutcome::ExactMetadataMatch
+            | core::VerificationOutcome::Missing
+            | core::VerificationOutcome::Changed
+            | core::VerificationOutcome::Unexpected
+            | core::VerificationOutcome::FlagsChanged => "with_exceptions",
+            core::VerificationOutcome::ProbableMatch
+            | core::VerificationOutcome::Ambiguous
+            | core::VerificationOutcome::Incomplete
+            | core::VerificationOutcome::Failed => "incomplete",
+        };
+    }
+    match evidence.verification_method() {
+        core::VerificationMethod::MetadataReconciliation => "metadata_match",
+        core::VerificationMethod::BodyHash => "bounded_content_match",
+        core::VerificationMethod::AggregateEngine | core::VerificationMethod::NativeDovecot
+            if evidence.authoritative =>
+        {
+            "engine_confirmed"
+        }
+        core::VerificationMethod::AggregateEngine | core::VerificationMethod::NativeDovecot => {
+            "aggregate_match"
+        }
+    }
 }
 
 impl ExportSummary {
@@ -377,7 +466,7 @@ impl ExportSummary {
         let accepted_exception =
             state == "verified_with_exceptions" && mailbox.acceptance.is_some();
         if state == "verified" || accepted_exception {
-            self.mailboxes_verified += 1;
+            self.mailboxes_with_durable_accepted_result += 1;
         }
         if self.first_blocker.is_none() {
             if state == "verified_with_exceptions" && mailbox.acceptance.is_none() {
@@ -395,11 +484,10 @@ impl ExportSummary {
             }
         }
         let Some((_, value, plan)) = &mailbox.evidence else {
+            self.assurance.record(None);
             return;
         };
-        if value.is_exact_match() {
-            self.exact_mailboxes += 1;
-        }
+        self.assurance.record(Some(value));
         match value.unresolved_count() {
             Some(count) => self.messages.unmatched = self.messages.unmatched.saturating_add(count),
             None => self.unmatched_count_unknown = true,
@@ -478,6 +566,50 @@ fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), Strin
 mod tests {
     use super::*;
     use ring::signature::KeyPair;
+
+    #[test]
+    fn customer_assurance_status_names_the_evidence_level() {
+        let mut evidence = core::MailboxEvidence {
+            verification_method: core::VerificationMethod::AggregateEngine,
+            verification_outcome: None,
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 100,
+            destination_bytes: 100,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
+            flag_verification: None,
+        };
+        assert_eq!(assurance_status(&evidence), "aggregate_match");
+
+        evidence.authoritative = true;
+        assert_eq!(assurance_status(&evidence), "engine_confirmed");
+
+        evidence.authoritative = false;
+        evidence.verification_method = core::VerificationMethod::MetadataReconciliation;
+        evidence.flag_verification = Some(core::FlagVerification {
+            compared_messages: 1,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        });
+        assert_eq!(assurance_status(&evidence), "metadata_match");
+
+        evidence.verification_method = core::VerificationMethod::BodyHash;
+        assert_eq!(assurance_status(&evidence), "bounded_content_match");
+
+        evidence.missing_messages = 1;
+        evidence.verification_outcome = Some(core::VerificationOutcome::Missing);
+        assert_eq!(assurance_status(&evidence), "with_exceptions");
+    }
 
     fn test_directory(prefix: &str) -> std::path::PathBuf {
         let directory =
@@ -632,7 +764,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
         assert_eq!(certificate["engine"], "imapsync 2.314");
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
-        assert_eq!(certificate["format_version"], 2);
+        assert_eq!(certificate["format_version"], 3);
         assert_eq!(certificate["proof_signature"]["algorithm"], "Ed25519");
         let evidence = &certificate["mailboxes"][0]["evidence"];
         assert_eq!(
@@ -659,12 +791,41 @@ mod tests {
             evidence["verification_outcome_label"],
             "Aggregate totals match — individual messages not compared"
         );
+        assert_eq!(evidence["assurance_status"], "engine_confirmed");
+        assert!(evidence.get("certificate_status").is_none());
+        assert!(evidence.get("verification_status").is_none());
         assert_eq!(
             evidence["evidence_level"],
             "Engine-confirmed exact match — not message-body proof"
         );
         assert_eq!(evidence["message_coverage"]["checked_messages"], 0);
         assert_eq!(evidence["message_coverage"]["complete"], false);
+        assert_eq!(
+            certificate["verification_summary"]["mailboxes_by_assurance"]["engine_confirmed"],
+            1
+        );
+        assert_eq!(
+            certificate["verification_summary"]["mailboxes_by_assurance"]["metadata_match"],
+            0
+        );
+        assert!(
+            certificate["verification_summary"]
+                .get("mailboxes_exact")
+                .is_none()
+        );
+        assert_eq!(
+            certificate["verification_summary"]["mailboxes_not_exact"],
+            0
+        );
+        assert_eq!(
+            certificate["certificate_summary"]["mailboxes_with_durable_accepted_result"],
+            1
+        );
+        assert!(
+            certificate["certificate_summary"]
+                .get("mailboxes_verified")
+                .is_none()
+        );
         assert_eq!(
             evidence["identity_match_counts"]["rfc_message_id_matches"],
             0
