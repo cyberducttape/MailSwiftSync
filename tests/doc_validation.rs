@@ -706,6 +706,17 @@ fn imap_fuzz_workflow_runs_targets_with_nightly() {
 }
 
 #[test]
+fn imap_list_control_octet_restriction_is_documented_as_a_compatibility_limit() {
+    let guide = std::fs::read_to_string("docs/imap-fuzzing.md")
+        .expect("IMAP parser behavior and fuzzing limits should be documented");
+    let guide = guide.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(guide.contains("intentionally rejects ASCII control octets"));
+    assert!(guide.contains("compatibility boundary"));
+    assert!(guide.contains("must fail closed"));
+    assert!(guide.contains("RFC 3501"));
+}
+
+#[test]
 fn capability_manifest_is_current() {
     let capabilities = fs::read_to_string("capabilities.toml")
         .expect("machine-readable capability status should exist");

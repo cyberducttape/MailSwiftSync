@@ -6,7 +6,9 @@ desktop application's dependency graph.
 
 Targets cover:
 
-- `list_response`: LIST tokenization, quoted mailbox names, and delimiters;
+- `list_response`: LIST tokenization, quoted mailbox names, delimiters, and
+  rejection of undefined quoted escapes, invalid UTF-8, and control octets in
+  protocol fields and literals;
 - `fetch_response`: metadata FETCH records, Message-ID literals, and bounded
   body-literal fingerprints;
 - `literal_framing`: tagged completion detection with arbitrary and
@@ -22,6 +24,14 @@ Targets cover:
   policy, including arbitrary wire values and terminal-state edge attempts.
 - `migration_plan`: production profile TOML deserialization and canonical
   serialization round trips used by durable plan identity.
+
+The LIST inventory parser intentionally rejects ASCII control octets in
+mailbox-name fields and literals. RFC 3501's quoted-string grammar permits
+some non-CR/LF control characters, so this is a deliberate compatibility
+boundary rather than a claim that such names are invalid under every IMAP
+server. A mailbox using one of these names is unsupported by this scanner;
+inventory and verification must fail closed instead of silently omitting it.
+See [RFC 3501, formal syntax](https://www.rfc-editor.org/rfc/rfc3501.html#section-9).
 
 The checked-in corpora contain representative valid and malformed seeds.
 GitHub Actions runs short campaigns on pull requests, longer campaigns on
