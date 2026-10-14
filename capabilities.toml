@@ -1,6 +1,6 @@
 # Authoritative capability status for documentation and release review.
 schema_version = 1
-last_reviewed = "2026-10-12"
+last_reviewed = "2026-10-14"
 
 [release]
 status = "Technical Preview"

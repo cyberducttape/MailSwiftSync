@@ -4,6 +4,9 @@
 
 - Skip the post-run test-inventory rebuild when CI is canceled by a newer
   commit, while retaining inventory publication after ordinary failures.
+- Clarify that Debian/RPM packages are already shipped with signed checksums,
+  while signed package-repository metadata and a stable-release support
+  lifecycle remain outstanding; refresh the generated capability review date.
 - Update Rustls to 0.23.46 to remediate four newly reported TLS advisories;
   enforce the dependency advisory gate against the refreshed lockfile.
 - Make the paused-tenant scheduler regression assert that unrelated work starts
