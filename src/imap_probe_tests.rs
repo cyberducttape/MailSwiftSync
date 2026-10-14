@@ -225,6 +225,47 @@ fn immediate_would_block_retries_back_off_until_the_original_deadline() {
 }
 
 #[test]
+fn budgeted_imap_response_readers_back_off_until_their_deadline() {
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::new(Duration::from_millis(40), &cancel);
+    let mut buffer = [0_u8; 4096];
+    let mut text_stream = AlwaysWouldBlock { calls: 0 };
+    let mut response = String::new();
+    let error = super::protocol::read_imap_tagged_with_budget(
+        &mut text_stream,
+        "v001",
+        &mut response,
+        &mut buffer,
+        1024,
+        &budget,
+    )
+    .unwrap_err();
+    assert!(error.contains("deadline"));
+    assert!(
+        text_stream.calls < 100,
+        "budgeted string reader spun {} times",
+        text_stream.calls
+    );
+
+    let budget = MessageFetchBudget::new(Duration::from_millis(40), &cancel);
+    let mut bytes_stream = AlwaysWouldBlock { calls: 0 };
+    let error = super::protocol::read_imap_tagged_bytes_with_budget(
+        &mut bytes_stream,
+        "v002",
+        &mut buffer,
+        1024,
+        &budget,
+    )
+    .unwrap_err();
+    assert!(error.contains("deadline"));
+    assert!(
+        bytes_stream.calls < 100,
+        "budgeted byte reader spun {} times",
+        bytes_stream.calls
+    );
+}
+
+#[test]
 fn list_response_streaming_parser_does_not_retain_a_megabyte_string() {
     let mut response = String::new();
     for index in 0..20_000 {

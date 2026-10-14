@@ -106,7 +106,10 @@ pub(super) fn read_imap_tagged_with_budget<S: Read>(
                     std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                continue;
+                super::wait_for_io_retry(
+                    no_progress_deadline.min(budget.deadline),
+                    Some(budget.cancel),
+                );
             }
             Err(error) => return Err(error.to_string()),
         }
@@ -166,7 +169,10 @@ pub(super) fn read_imap_tagged_bytes_with_budget<S: Read>(
                     std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                continue;
+                super::wait_for_io_retry(
+                    no_progress_deadline.min(budget.deadline),
+                    Some(budget.cancel),
+                );
             }
             Err(error) => return Err(error.to_string()),
         }
