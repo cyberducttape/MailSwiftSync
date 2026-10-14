@@ -444,6 +444,19 @@ fn list_literal_parsing_consumes_crlf_before_trailing_extension_fields() {
 }
 
 #[test]
+fn list_parser_does_not_treat_extension_literal_as_mailbox_name() {
+    let response = b"* LIST (\\HasChildren) \"/\" \"Projects\" X-TEST {3}\r\nxyz\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    let error =
+        read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+            .unwrap_err();
+    assert!(error.contains("literal in trailing extension data"));
+    assert!(mailboxes.is_empty());
+}
+
+#[test]
 fn list_literal_parser_rejects_non_whitespace_trailing_framing() {
     let response =
         b"* LIST (\\HasNoChildren) \"/\" {8}\r\nProjectxBAD\r\na005 OK LIST completed\r\n";

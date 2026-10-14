@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Distinguish the fixed mailbox-name field from RFC 5258 trailing `LIST`
+  extension fields; reject literal-valued extension fields explicitly instead
+  of misclassifying their payload as a mailbox name.
 - Record the packaged engine-side destination write-fault CI run with its exact
   commit, run ID, Dovecot/imapsync versions, and successful assertions; label
   `RLIMIT_FSIZE` as a bounded write-failure simulation rather than a real full-

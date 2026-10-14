@@ -11,6 +11,16 @@ pub(super) fn mailbox_name(line: &str) -> Option<String> {
         .cloned()
 }
 
+/// Determine whether a literal header is in the fixed mailbox-name field or
+/// later extension data. `prefix` ends immediately before the literal header.
+/// `Some(true)` means the mailbox field is next, `Some(false)` means it was
+/// already present, and `None` means the fixed LIST prefix was malformed or
+/// incomplete.
+pub(super) fn literal_is_mailbox_name(prefix: &str) -> Option<bool> {
+    let (tokens, mailbox_index) = list_field_layout(prefix)?;
+    (tokens.len() >= mailbox_index).then_some(tokens.len() == mailbox_index)
+}
+
 pub(super) fn delimiter(line: &str) -> Option<String> {
     let (tokens, mailbox_index) = list_fields(line)?;
     let delimiter = tokens.get(mailbox_index - 1)?;
@@ -21,6 +31,11 @@ pub(super) fn delimiter(line: &str) -> Option<String> {
 /// mailbox [extended-data]`. Only the fixed LIST prefix determines the
 /// mailbox name; RFC 5258 extension fields are deliberately ignored.
 fn list_fields(line: &str) -> Option<(Vec<String>, usize)> {
+    let (tokens, mailbox_index) = list_field_layout(line)?;
+    (tokens.len() > mailbox_index).then_some((tokens, mailbox_index))
+}
+
+fn list_field_layout(line: &str) -> Option<(Vec<String>, usize)> {
     let tokens = tokens(line)?;
     if tokens.first()?.as_str() != "*" || !tokens.get(1)?.eq_ignore_ascii_case("LIST") {
         return None;
@@ -34,7 +49,7 @@ fn list_fields(line: &str) -> Option<(Vec<String>, usize)> {
     }
     // The delimiter and mailbox name are the next two fields. The LIST
     // grammar requires an attribute list, so the mailbox cannot precede it.
-    if index < 3 || tokens.len() <= index + 1 {
+    if index < 3 {
         return None;
     }
     Some((tokens, index + 1))
