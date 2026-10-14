@@ -1618,30 +1618,68 @@ fn parse_select_modseq(
     let mut highest = None;
     let mut no_modseq = false;
     for line in response.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        if let Some(index) = fields.iter().position(|field| {
-            field
-                .trim_matches(['[', ']'])
-                .eq_ignore_ascii_case("HIGHESTMODSEQ")
-        }) {
+        let Some(response_text) = untagged_ok_response_text(line) else {
+            continue;
+        };
+        let Some(code_text) = response_text.strip_prefix('[') else {
+            continue;
+        };
+        let Some((code_text, trailing)) = code_text.split_once(']') else {
+            if code_text
+                .split_ascii_whitespace()
+                .next()
+                .is_some_and(|code| {
+                    code.eq_ignore_ascii_case("HIGHESTMODSEQ")
+                        || code.eq_ignore_ascii_case("NOMODSEQ")
+                })
+            {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned a malformed MODSEQ response code"
+                ));
+            }
+            continue;
+        };
+        if !trailing.is_empty() && !trailing.starts_with(' ') {
+            return Err(format!(
+                "{host}: SELECT {mailbox} returned malformed data after a response code"
+            ));
+        }
+        let mut fields = code_text.split(' ');
+        let Some(code) = fields.next() else {
+            continue;
+        };
+        if code.eq_ignore_ascii_case("HIGHESTMODSEQ") {
             let value = fields
-                .get(index + 1)
-                .and_then(|value| value.trim_matches(['[', ']']).parse::<u64>().ok())
+                .next()
+                .filter(|value| !value.is_empty())
+                .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| *value > 0 && *value <= i64::MAX as u64)
                 .ok_or_else(|| {
                     format!("{host}: SELECT {mailbox} returned invalid HIGHESTMODSEQ")
                 })?;
+            if fields.next().is_some() {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned malformed HIGHESTMODSEQ response code"
+                ));
+            }
             if highest.replace(value).is_some() {
                 return Err(format!(
                     "{host}: SELECT {mailbox} returned duplicate HIGHESTMODSEQ codes"
                 ));
             }
+        } else if code.eq_ignore_ascii_case("NOMODSEQ") {
+            if fields.next().is_some() {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned malformed NOMODSEQ response code"
+                ));
+            }
+            if no_modseq {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned duplicate NOMODSEQ codes"
+                ));
+            }
+            no_modseq = true;
         }
-        no_modseq |= fields.iter().any(|field| {
-            field
-                .trim_matches(['[', ']'])
-                .eq_ignore_ascii_case("NOMODSEQ")
-        });
     }
     match (highest, no_modseq) {
         (Some(value), false) => Ok(ModseqSnapshot::Tracked(value)),
@@ -1650,6 +1688,12 @@ fn parse_select_modseq(
             "{host}: SELECT {mailbox} did not return exactly one HIGHESTMODSEQ or NOMODSEQ response code"
         )),
     }
+}
+
+fn untagged_ok_response_text(line: &str) -> Option<&str> {
+    let response = line.strip_prefix("* ")?;
+    let (status, text) = response.split_once(' ')?;
+    status.eq_ignore_ascii_case("OK").then_some(text)
 }
 
 /// LIST parsing is shared with preflight discovery, so its inventory bounds

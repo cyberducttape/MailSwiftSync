@@ -714,8 +714,14 @@ fn condstore_select_snapshot_requires_one_valid_modseq_code() {
     for response in [
         "a001 OK selected\r\n",
         "* OK [HIGHESTMODSEQ 0] invalid\r\na001 OK selected\r\n",
+        "* OK HIGHESTMODSEQ 42\r\na001 OK selected\r\n",
+        "* 1 FETCH (HIGHESTMODSEQ 42)\r\na001 OK selected\r\n",
+        "a001 OK [HIGHESTMODSEQ 42] selected\r\n",
+        "* OK [HIGHESTMODSEQ 42 extra] invalid\r\na001 OK selected\r\n",
+        "* OK [HIGHESTMODSEQ 42]text\r\na001 OK selected\r\n",
         "* OK [HIGHESTMODSEQ 42] current\r\n* OK [NOMODSEQ] conflicting\r\n",
         "* OK [HIGHESTMODSEQ 42] current\r\n* OK [HIGHESTMODSEQ 43] duplicate\r\n",
+        "* OK [NOMODSEQ] unavailable\r\n* OK [NOMODSEQ] duplicate\r\n",
     ] {
         assert!(
             parse_select_modseq(response, "imap.example.test", "INBOX").is_err(),
