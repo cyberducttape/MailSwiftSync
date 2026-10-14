@@ -5,6 +5,9 @@
 - Reject malformed quoted escapes, ASCII control octets, and invalid UTF-8 in
   IMAP `LIST` fields, mailbox-name literals, and literal continuations, so
   malformed folder inventories cannot pass endpoint readiness.
+- Document the LIST scanner's intentional ASCII-control-octet mailbox-name
+  restriction as an interoperability boundary; RFC 3501 permits some such
+  quoted characters, so affected mailboxes fail closed as unsupported.
 - Correct the README's engine-profile instructions: hardened execution is the
   default, while compatibility mode is an explicit opt-in.
 - Clarify that OAuth rotation-recovery files are plaintext protected by local
