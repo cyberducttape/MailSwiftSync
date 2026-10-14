@@ -240,6 +240,13 @@ class ProviderQualificationPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate JSON key: provider"):
             self.build()
 
+    def test_pack_builder_bounds_json_evidence_input(self):
+        path = self.evidence_dir / "live_pilot.json"
+        with path.open("wb") as handle:
+            handle.truncate(MODULE.MAX_JSON_FILE_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "validation limit"):
+            self.build()
+
     def test_exceptions_and_aggregate_only_evidence_cannot_be_called_qualified(self):
         for result, confidence in (
             ("pass_with_exceptions", "high"),

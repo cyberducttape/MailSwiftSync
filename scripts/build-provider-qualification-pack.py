@@ -26,6 +26,7 @@ from pathlib import Path
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_JSON_FILE_BYTES = 16 * 1024 * 1024
 MAX_METRIC_VALUE = (1 << 64) - 1
 REQUIRED_PHASES = {"dry_pilot", "live_pilot", "recovery_test"}
 AB_SCENARIOS = {
@@ -123,10 +124,12 @@ def sha256_file(path: Path) -> str:
 
 def load_json(path: Path) -> dict:
     try:
-        value = json.loads(
-            path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
-        )
-    except (OSError, ValueError) as error:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_JSON_FILE_BYTES + 1)
+        if len(raw) > MAX_JSON_FILE_BYTES:
+            fail(f"{path}: JSON exceeds the {MAX_JSON_FILE_BYTES}-byte validation limit")
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (OSError, UnicodeError, ValueError) as error:
         fail(f"{path}: invalid JSON: {error}")
     if not isinstance(value, dict):
         fail(f"{path}: root must be an object")

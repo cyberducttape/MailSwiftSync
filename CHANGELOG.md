@@ -53,6 +53,9 @@
 - Reject duplicate JSON object keys in provider policies, evidence, and
   customer proofs so parser differences cannot change signed qualification
   semantics.
+- Bound qualification policy/schema, evidence, and customer-proof JSON inputs
+  before parsing, preventing oversized external evidence bundles from causing
+  unbounded memory use in release tooling.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

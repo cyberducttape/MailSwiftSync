@@ -68,9 +68,15 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def load_json(path, maximum):
+    with open(path, "rb") as handle:
+        raw = handle.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+
 try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        policy = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+    policy = load_json(sys.argv[1], 1 * 1024 * 1024)
 except (OSError, ValueError) as error:
     raise SystemExit(f"invalid provider evidence policy: {error}") from None
 
@@ -151,10 +157,16 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def load_json(path, maximum):
+    with open(path, "rb") as handle:
+        raw = handle.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+
 try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        evidence = json.load(handle, object_pairs_hook=reject_duplicate_keys)
-        value = f"{evidence.get('source_provider', '')}->{evidence.get('destination_provider', '')}"
+    evidence = load_json(sys.argv[1], 16 * 1024 * 1024)
+    value = f"{evidence.get('source_provider', '')}->{evidence.get('destination_provider', '')}"
 except (OSError, ValueError) as error:
     print(f"{sys.argv[1]}: invalid JSON ({error})", file=sys.stderr)
     value = ""
@@ -188,6 +200,13 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def load_json(path, maximum):
+    with open(path, "rb") as handle:
+        raw = handle.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -212,15 +231,13 @@ errors = []
 schema = None
 if has_jsonschema:
     try:
-        with open(schema_file, encoding="utf-8") as handle:
-            schema = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+        schema = load_json(schema_file, 1 * 1024 * 1024)
     except (OSError, ValueError) as error:
         errors.append(f"Warning: Could not load schema for validation: {error}")
 
 for filename in files:
     try:
-        with open(filename, encoding="utf-8") as handle:
-            evidence = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+        evidence = load_json(filename, 16 * 1024 * 1024)
     except (OSError, ValueError) as error:
         errors.append(f"{filename}: invalid JSON ({error})")
         continue
@@ -416,8 +433,7 @@ for filename in files:
         errors.append(f"{filename}: referenced customer proof is missing: {proof_file}")
     else:
         try:
-            with proof_path.open(encoding="utf-8") as handle:
-                proof = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+            proof = load_json(proof_path, 32 * 1024 * 1024)
             unsigned = dict(proof)
             expected_proof_digest = unsigned.pop("proof_digest", None)
             unsigned.pop("proof_signature", None)
@@ -546,8 +562,7 @@ if missing:
 phase_metadata = {}
 for filename in files:
     try:
-        with open(filename, encoding="utf-8") as handle:
-            evidence = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+        evidence = load_json(filename, 16 * 1024 * 1024)
     except (OSError, ValueError):
         continue
     phase = evidence.get("testing_phase")

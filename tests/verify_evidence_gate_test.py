@@ -62,6 +62,24 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("Traceback", result.stdout + result.stderr)
             self.assertIn("duplicate JSON key: source_provider", result.stderr)
 
+    def test_oversized_evidence_json_is_rejected_before_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_dir = Path(directory)
+            shutil.copy(SOURCE_EVIDENCE / "policy.json", evidence_dir / "policy.json")
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", evidence_dir / "schema.json")
+            with (evidence_dir / "oversized.json").open("wb") as handle:
+                handle.truncate(16 * 1024 * 1024 + 1)
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertIn("exceeds the 16777216-byte validation limit", result.stderr)
+
     def test_release_mode_requires_pinned_provider_proof_signer(self):
         environment = os.environ.copy()
         environment.pop("MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY", None)
