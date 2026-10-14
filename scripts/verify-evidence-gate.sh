@@ -56,7 +56,7 @@ echo "=================================================="
 
 # Use Python only for JSON parsing so the gate does not depend on jq being
 # installed on CI runners.
-mapfile -t POLICY_ROWS < <(python3 - "$POLICY_FILE" <<'PY'
+POLICY_OUTPUT="$(python3 - "$POLICY_FILE" <<'PY'
 import json
 import sys
 
@@ -126,7 +126,11 @@ for entry in providers:
         ",".join(required),
     ]))
 PY
-)
+)"
+POLICY_ROWS=()
+if [[ -n "$POLICY_OUTPUT" ]]; then
+  mapfile -t POLICY_ROWS <<< "$POLICY_OUTPUT"
+fi
 
 if [[ ${#POLICY_ROWS[@]} -eq 0 ]]; then
   echo "FAIL: provider evidence policy contains no providers" >&2

@@ -17,6 +17,35 @@ SOURCE_EVIDENCE = ROOT / "tests" / "provider-evidence"
 
 
 class EvidenceGateTests(unittest.TestCase):
+    def test_malformed_later_policy_row_fails_instead_of_accepting_partial_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = json.loads((SOURCE_EVIDENCE / "policy.json").read_text(encoding="utf-8"))
+            policy["providers"].append({"pair": "malformed-late-entry"})
+            policy_path = root / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            schema_path = root / "schema.json"
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", schema_path)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "MAILSWIFTSYNC_POLICY_FILE": str(policy_path),
+                    "MAILSWIFTSYNC_SCHEMA_FILE": str(schema_path),
+                    "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("each provider policy entry needs pair", result.stderr)
+
     def test_help_prints_usage_without_running_the_gate(self):
         result = subprocess.run(
             [str(GATE), "--help"],
