@@ -66,6 +66,23 @@ fn systemd_service_example_uses_a_restricted_worker_sandbox() {
 }
 
 #[test]
+fn oauth_refresh_docs_disclose_the_windows_callback_boundary() {
+    let readme = fs::read_to_string("README.md").expect("README should exist");
+    let release = fs::read_to_string("docs/release-readiness.md")
+        .expect("release readiness guide should exist");
+    let service =
+        fs::read_to_string("docs/distribution/SERVICE.md").expect("service guide should exist");
+
+    for document in [&readme, &release, &service] {
+        assert!(document.contains("Unix"), "platform boundary missing");
+        assert!(
+            document.contains("Windows") && document.contains("--oauthrefreshcmd1/2"),
+            "Windows refresh-callback limitation missing"
+        );
+    }
+}
+
+#[test]
 fn live_provider_smoke_does_not_claim_mid_transfer_oauth_refresh_qualification() {
     let workflow = fs::read_to_string(".github/workflows/provider-smoke.yml")
         .expect("live provider smoke workflow should exist");
