@@ -95,7 +95,7 @@ pub(super) fn tokens(line: &str) -> Option<Vec<String>> {
                     b'\\' => {
                         offset += 1;
                         let escaped = *bytes.get(offset)?;
-                        if escaped.is_ascii_control() {
+                        if escaped.is_ascii_control() || !matches!(escaped, b'\\' | b'"') {
                             return None;
                         }
                         value.push(escaped);

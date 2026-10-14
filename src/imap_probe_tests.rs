@@ -425,6 +425,23 @@ fn list_mailbox_parser_rejects_control_octets_in_quoted_and_atom_fields() {
 }
 
 #[test]
+fn list_mailbox_parser_rejects_undefined_quoted_escapes() {
+    for response in [
+        r#"* LIST (\HasNoChildren) "/" "IN\qBOX""#,
+        r#"* LIST (\HasNoChildren) "/" "IN\ BOX""#,
+    ] {
+        assert_eq!(parse_list_mailbox_name(response), None, "{response:?}");
+        let framed = format!("{response}\r\na005 OK LIST completed\r\n");
+        let mut stream = Cursor::new(framed.as_bytes());
+        let mut buffer = [0_u8; 4096];
+        assert!(
+            read_imap_list_response(&mut stream, "a005", &mut buffer).is_err(),
+            "summary inventory accepted {response:?}"
+        );
+    }
+}
+
+#[test]
 fn list_literal_parser_rejects_control_octets_after_mailbox_name() {
     let response = b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects\t(CHILDINFO (\"SUBSCRIBED\"))\r\na005 OK LIST completed\r\n";
     let mut stream = Cursor::new(response);
