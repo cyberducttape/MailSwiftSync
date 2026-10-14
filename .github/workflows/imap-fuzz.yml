@@ -53,6 +53,7 @@ jobs:
       matrix:
         target:
           - fetch_response
+          - uid_fetch_response
           - list_response
           - literal_framing
           - namespace_response

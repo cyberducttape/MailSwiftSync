@@ -26,6 +26,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "uid_fetch_response"
+path = "fuzz_targets/uid_fetch_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "list_response"
 path = "fuzz_targets/list_response.rs"
 test = false
