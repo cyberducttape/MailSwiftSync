@@ -204,13 +204,19 @@ fn packaging_claims_match_the_release_workflow() {
 fn cancelled_ci_runs_skip_the_test_inventory_rebuild() {
     let workflow =
         fs::read_to_string(".github/workflows/ci.yml").expect("Could not read CI workflow");
-    let inventory_step = workflow
+    let inventory_and_upload_steps = workflow
         .split("- name: Publish runnable test inventory")
         .nth(1)
-        .expect("CI workflow must publish its runnable test inventory");
+        .expect("CI workflow must publish its runnable test inventory")
+        .split("  critical-coverage:")
+        .next()
+        .expect("CI workflow must retain its coverage job");
     assert!(
-        inventory_step.contains("if: ${{ always() && !cancelled() }}"),
-        "test inventory should still publish after failures, but must not rebuild tests after cancellation"
+        inventory_and_upload_steps
+            .matches("if: ${{ always() && !cancelled() }}")
+            .count()
+            == 2,
+        "test inventory and upload should run after ordinary failures, but neither should run after cancellation"
     );
 }
 

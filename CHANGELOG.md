@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Skip the post-run test-inventory rebuild when CI is canceled by a newer
+- Skip test-inventory generation and upload when CI is canceled by a newer
   commit, while retaining inventory publication after ordinary failures.
 - Clarify that Debian/RPM packages are already shipped with signed checksums,
   while signed package-repository metadata and a stable-release support
