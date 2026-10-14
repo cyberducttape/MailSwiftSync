@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Correct the README's engine-profile instructions: hardened execution is the
+  default, while compatibility mode is an explicit opt-in.
+- Clarify that OAuth rotation-recovery files are plaintext protected by local
+  owner-only permissions, not encrypted, and that live expiry/rotation remains
+  unqualified.
 - Clarify that imapsync automatic OAuth callback refresh is currently Unix-only;
   Windows refuses callback plans until native command-shell quoting is qualified.
   Align the alpha notes and operator wiki with this platform boundary, and
