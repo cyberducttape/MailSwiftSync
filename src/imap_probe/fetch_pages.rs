@@ -153,18 +153,16 @@ pub(super) fn parse_uid_fetch_response(
                 "{host}: FETCH {mailbox} returned duplicate sequence number {sequence}"
             ));
         }
-        let mut uid = None;
-        while let Some(token) = tokens.next() {
-            if token.trim_start_matches('(').eq_ignore_ascii_case("UID") {
-                uid = tokens
-                    .next()
-                    .and_then(|value| value.trim_end_matches([')', ',']).parse::<u64>().ok());
-                break;
-            }
-        }
-        let uid = uid.ok_or_else(|| {
-            format!("{host}: FETCH {mailbox} sequence {sequence} did not return a valid UID")
-        })?;
+        let data_start = line
+            .find(response_type)
+            .map(|index| index + response_type.len());
+        let uid = data_start
+            .and_then(|offset| parse_parenthesized_fetch_uid(&line[offset..]))
+            .ok_or_else(|| {
+                format!(
+                    "{host}: FETCH {mailbox} sequence {sequence} returned a malformed or missing UID data item"
+                )
+            })?;
         sequence_uids.push((sequence, validate_imap_uid(uid, host, mailbox)?));
     }
     if sequence_start == 0 || sequence_end < sequence_start {
@@ -194,6 +192,129 @@ pub(super) fn parse_uid_fetch_response(
         .map(|(_, uid)| uid)
         .collect::<Vec<_>>();
     Ok(uids)
+}
+
+/// Parse one UID from the parenthesized FETCH data list, rejecting malformed
+/// framing and duplicate UID items instead of allowing a partial record to
+/// contribute to exact sequence coverage.
+fn parse_parenthesized_fetch_uid(data: &str) -> Option<u64> {
+    let data = data.trim();
+    let bytes = data.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return None;
+    }
+
+    let mut offset = 1usize;
+    let mut field: Option<&[u8]> = None;
+    let mut uid = None;
+    let mut closed = false;
+    while offset < bytes.len() {
+        skip_fetch_whitespace(bytes, &mut offset);
+        if bytes.get(offset) == Some(&b')') {
+            offset += 1;
+            if field.is_some() {
+                return None;
+            }
+            closed = true;
+            break;
+        }
+        let component = parse_fetch_data_component(bytes, &mut offset)?;
+        if let Some(name) = field.take() {
+            if name.eq_ignore_ascii_case(b"UID") {
+                let FetchDataComponent::Atom(value) = component else {
+                    return None;
+                };
+                if uid.is_some() || !value.iter().all(u8::is_ascii_digit) {
+                    return None;
+                }
+                uid = Some(std::str::from_utf8(value).ok()?.parse::<u64>().ok()?);
+            }
+        } else {
+            let FetchDataComponent::Atom(name) = component else {
+                return None;
+            };
+            field = Some(name);
+        }
+    }
+    if !closed || !bytes[offset..].iter().all(u8::is_ascii_whitespace) {
+        return None;
+    }
+    uid
+}
+
+enum FetchDataComponent<'a> {
+    Atom(&'a [u8]),
+    Quoted,
+    List,
+}
+
+fn parse_fetch_data_component<'a>(
+    bytes: &'a [u8],
+    offset: &mut usize,
+) -> Option<FetchDataComponent<'a>> {
+    match *bytes.get(*offset)? {
+        b'(' => {
+            let mut depth = 0usize;
+            let mut quoted = false;
+            let mut escaped = false;
+            while let Some(&byte) = bytes.get(*offset) {
+                *offset += 1;
+                if quoted {
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'"' {
+                        quoted = false;
+                    }
+                    continue;
+                }
+                match byte {
+                    b'"' => quoted = true,
+                    b'(' => depth = depth.checked_add(1)?,
+                    b')' => {
+                        depth = depth.checked_sub(1)?;
+                        if depth == 0 {
+                            return Some(FetchDataComponent::List);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        b'"' => {
+            *offset += 1;
+            let mut escaped = false;
+            while let Some(&byte) = bytes.get(*offset) {
+                *offset += 1;
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    return Some(FetchDataComponent::Quoted);
+                }
+            }
+            None
+        }
+        b')' => None,
+        _ => {
+            let start = *offset;
+            while bytes.get(*offset).is_some_and(|byte| {
+                !byte.is_ascii_whitespace() && !matches!(byte, b'(' | b')' | b'"')
+            }) {
+                *offset += 1;
+            }
+            (*offset > start).then_some(FetchDataComponent::Atom(&bytes[start..*offset]))
+        }
+    }
+}
+
+fn skip_fetch_whitespace(bytes: &[u8], offset: &mut usize) {
+    while bytes.get(*offset).is_some_and(u8::is_ascii_whitespace) {
+        *offset += 1;
+    }
 }
 
 pub(super) fn validate_fetch_page_coverage(

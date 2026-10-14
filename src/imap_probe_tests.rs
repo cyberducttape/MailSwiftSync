@@ -616,8 +616,11 @@ fn uid_search_parser_uses_actual_sparse_uids_not_exists_count() {
 
 #[test]
 fn uid_fetch_enumeration_parser_validates_sequence_pages() {
-    let response =
-        "* 1 FETCH (UID 4000000000)\r\n* 2 FETCH (UID 4294967295)\r\nv002 OK FETCH completed\r\n";
+    let response = concat!(
+        "* 1 FETCH (UID 4000000000 FLAGS (\\Seen))\r\n",
+        "* 2 FETCH (UID 4294967295)\r\n",
+        "v002 OK FETCH completed\r\n"
+    );
     assert_eq!(
         super::fetch_pages::parse_uid_fetch_response(response, "imap.example", "INBOX", 1, 2)
             .unwrap(),
@@ -633,6 +636,18 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
         )
         .is_err()
     );
+    for response in [
+        "* 1 FETCH UID 10\r\nv002 OK FETCH completed\r\n",
+        "* 1 FETCH (UID 10\r\nv002 OK FETCH completed\r\n",
+        "* 1 FETCH (UID 10 UID 11)\r\nv002 OK FETCH completed\r\n",
+        "* 1 FETCH (RFC822.SIZE UID 10)\r\nv002 OK FETCH completed\r\n",
+    ] {
+        assert!(
+            super::fetch_pages::parse_uid_fetch_response(response, "imap.example", "INBOX", 1, 1)
+                .is_err(),
+            "malformed FETCH data list was accepted: {response:?}"
+        );
+    }
     for response in [
         "* 1 FETCH (UID 10)\r\n* 1 FETCH (UID 11)\r\nv002 OK FETCH completed\r\n",
         "* 1 FETCH (UID 10)\r\nv002 OK FETCH completed\r\n",
