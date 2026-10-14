@@ -45,6 +45,8 @@
 - Bound provider A/B metric values to the unsigned 64-bit evidence domain and
   reject oversized JSON integers consistently in the pack builder, release
   gate, schemas, and regression tests.
+- Make the provider evidence gate's `--help` and mode parsing explicit so a
+  misspelled or conflicting mode cannot silently run a preview validation.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

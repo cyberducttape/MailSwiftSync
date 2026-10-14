@@ -13,8 +13,27 @@ EVIDENCE_DIR="${MAILSWIFTSYNC_EVIDENCE_DIR:-$REPOSITORY_ROOT/tests/provider-evid
 POLICY_FILE="${MAILSWIFTSYNC_POLICY_FILE:-$REPOSITORY_ROOT/tests/provider-evidence/policy.json}"
 SCHEMA_FILE="${MAILSWIFTSYNC_SCHEMA_FILE:-$REPOSITORY_ROOT/tests/provider-evidence/schema.json}"
 MODE="preview"
-if [[ "${1:-}" == "--release" ]]; then
-  MODE="release"
+case "${1:-}" in
+  ""|--preview)
+    MODE="preview"
+    ;;
+  --release)
+    MODE="release"
+    ;;
+  -h|--help)
+    printf 'Usage: %s [--preview|--release]\n' "${0##*/}"
+    printf '  --preview  Validate evidence without blocking (default)\n'
+    printf '  --release  Enforce signed evidence and require the pinned signer key\n'
+    exit 0
+    ;;
+  *)
+    printf 'Unknown argument: %s\nUsage: %s [--preview|--release]\n' "$1" "${0##*/}" >&2
+    exit 2
+    ;;
+esac
+if (( $# > 1 )); then
+  printf 'Only one mode may be specified. Usage: %s [--preview|--release]\n' "${0##*/}" >&2
+  exit 2
 fi
 export MAILSWIFTSYNC_GATE_MODE="$MODE"
 

@@ -17,6 +17,31 @@ SOURCE_EVIDENCE = ROOT / "tests" / "provider-evidence"
 
 
 class EvidenceGateTests(unittest.TestCase):
+    def test_help_prints_usage_without_running_the_gate(self):
+        result = subprocess.run(
+            [str(GATE), "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Usage:", result.stdout)
+        self.assertNotIn("Provider Compatibility Evidence Gate", result.stdout)
+
+    def test_unknown_and_conflicting_modes_are_rejected(self):
+        for arguments in (["--typo"], ["--preview", "--release"]):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [str(GATE), *arguments],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Usage:", result.stderr)
+
     def test_release_mode_requires_pinned_provider_proof_signer(self):
         environment = os.environ.copy()
         environment.pop("MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY", None)
