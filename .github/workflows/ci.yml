@@ -107,7 +107,7 @@ jobs:
               test ! -e /usr/bin/mailswiftsync
             '
       - name: Publish runnable test inventory
-        if: always()
+        if: ${{ always() && !cancelled() }}
         shell: bash
         run: |
           mkdir -p dist

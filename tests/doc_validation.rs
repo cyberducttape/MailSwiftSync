@@ -196,6 +196,20 @@ fn packaging_claims_match_the_release_workflow() {
 }
 
 #[test]
+fn cancelled_ci_runs_skip_the_test_inventory_rebuild() {
+    let workflow =
+        fs::read_to_string(".github/workflows/ci.yml").expect("Could not read CI workflow");
+    let inventory_step = workflow
+        .split("- name: Publish runnable test inventory")
+        .nth(1)
+        .expect("CI workflow must publish its runnable test inventory");
+    assert!(
+        inventory_step.contains("if: ${{ always() && !cancelled() }}"),
+        "test inventory should still publish after failures, but must not rebuild tests after cancellation"
+    );
+}
+
+#[test]
 fn production_readiness_surfaces_have_one_conservative_source() {
     assert!(
         !Path::new("docs/PRODUCTION_READINESS_REPORT_2026_09_25.md").exists(),
