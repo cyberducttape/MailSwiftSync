@@ -78,8 +78,12 @@ fn oauth_refresh_docs_disclose_the_windows_callback_boundary() {
         .expect("bulk migration guide should exist");
     let security = fs::read_to_string("docs/wiki/Security-and-profiles.md")
         .expect("security guide should exist");
+    let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
+        .expect("production runbook should exist");
 
-    for document in [&readme, &release, &alpha, &service, &bulk, &security] {
+    for document in [
+        &readme, &release, &alpha, &service, &bulk, &security, &runbook,
+    ] {
         assert!(document.contains("Unix"), "platform boundary missing");
         assert!(
             document.contains("Windows") && document.contains("--oauthrefreshcmd1/2"),
