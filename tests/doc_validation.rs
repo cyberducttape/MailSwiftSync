@@ -348,12 +348,14 @@ fn verification_envelope_discloses_typed_mapping_equals_limit() {
     let validation = fs::read_to_string("src/migration_plan/validation.rs")
         .expect("typed mapping validation should exist");
     assert!(
-        envelope.contains("A source folder name containing `=` cannot currently be represented")
-            && envelope.contains("destination names may\ncontain `=`"),
-        "verification envelope must disclose the source-side equals limitation and destination-side support"
+        envelope.contains("A source folder name containing `=` cannot\ncurrently be represented")
+            && envelope.contains(
+                "destination names may contain `=`, and typed exclusions can include `=`"
+            ),
+        "verification envelope must distinguish source mapping limits from destination and exclusion support"
     );
     assert!(
-        validation.contains("if source.contains('=')")
+        validation.contains("if !rule.exclude && source.contains('=')")
             && validation.contains("Source folder names cannot contain '='"),
         "the documented compatibility limit must remain enforced by plan validation"
     );
