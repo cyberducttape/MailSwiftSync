@@ -135,6 +135,9 @@ EOF
     # not the master/auth/login services other connections depend on.
     cat > "$root/imap-fsize-wrapper" <<WRAP
 #!/usr/bin/env bash
+# The expected SIGXFSZ must not persist the Dovecot worker's memory image
+# outside the temporary fixture (for example through systemd-coredump).
+ulimit -c 0
 ulimit -f $fsize_limit
 exec $imap_binary "\$@"
 WRAP
