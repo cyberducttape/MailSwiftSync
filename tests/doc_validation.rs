@@ -297,6 +297,11 @@ fn capability_manifest_discloses_the_modseq_requirement_for_flag_evidence() {
             "flag-evidence documentation must disclose the no-MODSEQ coverage limit"
         );
     }
+    assert!(
+        !envelope.contains("The live FETCH already requests `FLAGS`")
+            && envelope.contains("selected folder returns a tracked CONDSTORE"),
+        "verification envelope must not imply FLAGS are always collected"
+    );
 }
 
 #[test]

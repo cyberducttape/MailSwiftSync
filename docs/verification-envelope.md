@@ -251,12 +251,14 @@ exact-message outcome as complete mailbox fidelity:
 | Subscriptions, ACLs, quotas, SPECIAL-USE, Gmail labels | NOT VERIFIED | NOT VERIFIED |
 
 Flag verification is a separate fidelity pass over the private stage after
-message reconciliation; it never forms or changes message pairings. The live
-FETCH already requests `FLAGS` (custom keywords are FLAGS atoms; IMAP has no
-portable `KEYWORDS` item), and the production parser stores a canonical flag
+message reconciliation; it never forms or changes message pairings. When the
+selected folder returns a tracked CONDSTORE `HIGHESTMODSEQ`, the live FETCH
+requests `FLAGS` (custom keywords are FLAGS atoms; IMAP has no portable
+`KEYWORDS` item), and the production parser stores a canonical flag
 set per message: system flags in canonical case, keywords lowercased because
 IMAP flags are case-insensitive, and `\Recent` dropped because it is session
-state a client cannot store.
+state a client cannot store. Without tracked MODSEQ, FLAGS are omitted from
+evidence.
 
 | Rule | Behavior |
 | --- | --- |

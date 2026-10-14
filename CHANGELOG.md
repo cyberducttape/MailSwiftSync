@@ -6,8 +6,8 @@
   fidelity evidence. Without it, continue metadata reconciliation but leave
   flag/keyword coverage incomplete so an untracked mutable flag observation
   cannot be represented as stable evidence; remove the ineffective extra FLAGS
-  round trips, update the capability manifest, and enforce the documented
-  certification boundary with a regression test.
+  round trips, align both the capability manifest and verification envelope,
+  and enforce the documented certification boundary with regression tests.
 - Clarify that imapsync automatic OAuth callback refresh is currently Unix-only;
   Windows refuses callback plans until native command-shell quoting is qualified.
   Align the alpha notes and operator wiki with this platform boundary, and
