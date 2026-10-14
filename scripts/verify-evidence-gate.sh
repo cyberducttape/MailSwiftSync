@@ -278,7 +278,7 @@ for filename in files:
                             continue
                         for name in ("wall_seconds", "messages", "bytes", "peak_rss_bytes", "cpu_seconds", "disk_growth_bytes", "retries", "throttled_seconds"):
                             amount = metrics.get(name)
-                            if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0 or (name == "wall_seconds" and amount <= 0):
+                            if type(amount) not in (int, float) or amount < 0 or amount > (1 << 64) - 1 or (type(amount) is float and not math.isfinite(amount)) or (name == "wall_seconds" and amount <= 0):
                                 errors.append(f"{filename}: {scenario} A/B {label} metric {name} is invalid")
                     if isinstance(baseline, dict) and isinstance(managed, dict):
                         if baseline.get("messages") != managed.get("messages") or baseline.get("bytes") != managed.get("bytes"):

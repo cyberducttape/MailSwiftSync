@@ -42,6 +42,9 @@
   binary, dataset and source/destination baselines; verify retained snapshot
   and run-artifact files against their declared digests; carry measurements
   and artifact references into the qualification-pack digest.
+- Bound provider A/B metric values to the unsigned 64-bit evidence domain and
+  reject oversized JSON integers consistently in the pack builder, release
+  gate, schemas, and regression tests.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

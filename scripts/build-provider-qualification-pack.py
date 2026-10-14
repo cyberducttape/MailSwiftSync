@@ -26,6 +26,7 @@ from pathlib import Path
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_METRIC_VALUE = (1 << 64) - 1
 REQUIRED_PHASES = {"dry_pilot", "live_pilot", "recovery_test"}
 AB_SCENARIOS = {
     "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb",
@@ -219,10 +220,10 @@ def validate_evidence(value: dict, path: Path, pair: str, policy: dict) -> None:
             managed = comparison.get("managed_metrics")
             for label, metrics in (("baseline", baseline), ("managed", managed)):
                 if not isinstance(metrics, dict) or any(
-                    isinstance(metrics.get(field), bool)
-                    or not isinstance(metrics.get(field), (int, float))
-                    or not math.isfinite(metrics[field])
+                    type(metrics.get(field)) not in (int, float)
                     or metrics[field] < 0
+                    or metrics[field] > MAX_METRIC_VALUE
+                    or (type(metrics[field]) is float and not math.isfinite(metrics[field]))
                     or (field == "wall_seconds" and metrics[field] == 0)
                     for field in AB_METRIC_FIELDS
                 ):

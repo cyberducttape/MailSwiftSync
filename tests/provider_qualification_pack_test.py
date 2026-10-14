@@ -223,6 +223,15 @@ class ProviderQualificationPackTests(unittest.TestCase):
             )
             jsonschema.validate(pack, json.loads(schema_path.read_text(encoding="utf-8")))
 
+    def test_pack_rejects_unbounded_integer_metrics_without_traceback(self):
+        path, value = self.read_phase("live_pilot")
+        observation = next(iter(value["scenario_observations"].values()))
+        comparison = observation["direct_imapsync_comparison"]
+        comparison["baseline_metrics"]["messages"] = 10**4000
+        self.write_phase("live_pilot", value)
+        with self.assertRaisesRegex(ValueError, "metrics are incomplete or invalid"):
+            self.build()
+
     def test_exceptions_and_aggregate_only_evidence_cannot_be_called_qualified(self):
         for result, confidence in (
             ("pass_with_exceptions", "high"),

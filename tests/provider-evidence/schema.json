@@ -398,14 +398,14 @@
       "additionalProperties": false,
       "required": ["wall_seconds", "messages", "bytes", "peak_rss_bytes", "cpu_seconds", "disk_growth_bytes", "retries", "throttled_seconds"],
       "properties": {
-        "wall_seconds": {"type": "number", "exclusiveMinimum": 0},
-        "messages": {"type": "integer", "minimum": 0},
-        "bytes": {"type": "integer", "minimum": 0},
-        "peak_rss_bytes": {"type": "integer", "minimum": 0},
-        "cpu_seconds": {"type": "number", "minimum": 0},
-        "disk_growth_bytes": {"type": "integer", "minimum": 0},
-        "retries": {"type": "integer", "minimum": 0},
-        "throttled_seconds": {"type": "number", "minimum": 0}
+        "wall_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 18446744073709551615},
+        "messages": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "bytes": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "peak_rss_bytes": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "cpu_seconds": {"type": "number", "minimum": 0, "maximum": 18446744073709551615},
+        "disk_growth_bytes": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "retries": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "throttled_seconds": {"type": "number", "minimum": 0, "maximum": 18446744073709551615}
       }
     }
   }
