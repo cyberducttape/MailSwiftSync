@@ -293,6 +293,38 @@ fn list_response_streaming_parser_skips_bounded_literals() {
 }
 
 #[test]
+fn summary_only_list_probe_rejects_records_missing_mailbox_name() {
+    let mut stream = Cursor::new(b"* LIST (\\HasNoChildren) \"/\"\r\na005 OK LIST completed\r\n");
+    let mut buffer = [0_u8; 4096];
+
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+
+    assert!(error.contains("mailbox name was missing or malformed"));
+}
+
+#[test]
+fn summary_only_list_probe_accepts_nil_hierarchy_delimiter() {
+    let mut stream =
+        Cursor::new(b"* LIST (\\HasNoChildren) NIL \"INBOX\"\r\na005 OK LIST completed\r\n");
+    let mut buffer = [0_u8; 4096];
+
+    let summary = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap();
+
+    assert_eq!(summary.mailbox_count, 1);
+}
+
+#[test]
+fn summary_only_list_probe_rejects_multibyte_hierarchy_delimiter() {
+    let mut stream =
+        Cursor::new(b"* LIST (\\HasNoChildren) \"/x\" \"INBOX\"\r\na005 OK LIST completed\r\n");
+    let mut buffer = [0_u8; 4096];
+
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+
+    assert!(error.contains("delimiter or mailbox field was missing or malformed"));
+}
+
+#[test]
 fn list_response_streaming_parser_rejects_oversized_records_and_literals() {
     let oversized_line = format!("* LIST ({})\r\na005 OK\r\n", "x".repeat(65 * 1024));
     let mut line_stream = Cursor::new(oversized_line.into_bytes());

@@ -11,6 +11,19 @@ pub(super) fn mailbox_name(line: &str) -> Option<String> {
         .cloned()
 }
 
+/// Check that the fixed LIST prefix contains both delimiter and mailbox
+/// fields. The delimiter may legally be NIL, so its parsed value alone cannot
+/// distinguish a valid field from a missing one.
+pub(super) fn has_fixed_fields(line: &str) -> bool {
+    let Some((tokens, mailbox_index)) = list_fields(line) else {
+        return false;
+    };
+    let Some(delimiter) = tokens.get(mailbox_index - 1) else {
+        return false;
+    };
+    delimiter.eq_ignore_ascii_case("NIL") || is_hierarchy_delimiter(delimiter)
+}
+
 /// Determine whether a literal header is in the fixed mailbox-name field or
 /// later extension data. `prefix` ends immediately before the literal header.
 /// `Some(true)` means the mailbox field is next, `Some(false)` means it was
@@ -24,7 +37,12 @@ pub(super) fn literal_is_mailbox_name(prefix: &str) -> Option<bool> {
 pub(super) fn delimiter(line: &str) -> Option<String> {
     let (tokens, mailbox_index) = list_fields(line)?;
     let delimiter = tokens.get(mailbox_index - 1)?;
-    (!delimiter.is_empty() && !delimiter.eq_ignore_ascii_case("NIL")).then(|| delimiter.to_owned())
+    is_hierarchy_delimiter(delimiter).then(|| delimiter.to_owned())
+}
+
+fn is_hierarchy_delimiter(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 1 && bytes[0].is_ascii() && bytes[0] != 0
 }
 
 /// Return tokens and the mailbox-name index for `* LIST (attrs) delimiter
