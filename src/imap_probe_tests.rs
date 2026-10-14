@@ -622,7 +622,9 @@ fn metadata_fetch_parser_rejects_malformed_fetch_candidates() {
                        v002 OK FETCH completed\r\n";
     let error =
         parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap_err();
-    assert!(error.contains("malformed IMAP FETCH"), "{error}");
+    // Do not echo parser details derived from untrusted server responses in
+    // assertion output; the stable predicate is sufficient for this test.
+    assert!(error.contains("malformed IMAP FETCH"));
 }
 
 #[test]

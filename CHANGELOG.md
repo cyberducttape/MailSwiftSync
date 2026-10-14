@@ -5,6 +5,8 @@
 - Reject malformed quoted escapes, ASCII control octets, and invalid UTF-8 in
   IMAP `LIST` fields, mailbox-name literals, and literal continuations, so
   malformed folder inventories cannot pass endpoint readiness.
+- Keep server-derived FETCH parser details out of test assertion output while
+  retaining the malformed-record regression predicate.
 - Document the LIST scanner's intentional ASCII-control-octet mailbox-name
   restriction as an interoperability boundary; RFC 3501 permits some such
   quoted characters, so affected mailboxes fail closed as unsupported.
