@@ -243,7 +243,7 @@
     "scenario_observations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["large_mailbox_100k", "large_mailbox_20gb", "large_mailbox_50gb", "large_messages", "unicode_folders", "special_use_folders", "gmail_labels", "duplicate_message_id", "source_changed_during_seed", "destination_active_final_delta", "throttling_recovery", "quota_folder_edge_cases", "mismatch_detection"],
+      "required": ["large_mailbox_100k", "large_mailbox_1gb", "large_mailbox_10gb", "large_mailbox_20gb", "large_mailbox_50gb", "large_mailbox_100gb", "large_messages", "unicode_folders", "special_use_folders", "gmail_labels", "duplicate_message_id", "source_changed_during_seed", "destination_active_final_delta", "throttling_recovery", "quota_folder_edge_cases", "mismatch_detection"],
       "properties": {
         "large_mailbox_100k": {
           "type": "object", "additionalProperties": false,
@@ -251,6 +251,22 @@
           "properties": {
             "mailbox_job_id": {"type": "string", "minLength": 1},
             "messages": {"type": "integer", "minimum": 0}
+          }
+        },
+        "large_mailbox_1gb": {
+          "type": "object", "additionalProperties": false,
+          "required": ["mailbox_job_id", "bytes"],
+          "properties": {
+            "mailbox_job_id": {"type": "string", "minLength": 1},
+            "bytes": {"type": "integer", "minimum": 0}
+          }
+        },
+        "large_mailbox_10gb": {
+          "type": "object", "additionalProperties": false,
+          "required": ["mailbox_job_id", "bytes"],
+          "properties": {
+            "mailbox_job_id": {"type": "string", "minLength": 1},
+            "bytes": {"type": "integer", "minimum": 0}
           }
         },
         "large_mailbox_20gb": {
@@ -262,6 +278,14 @@
           }
         },
         "large_mailbox_50gb": {
+          "type": "object", "additionalProperties": false,
+          "required": ["mailbox_job_id", "bytes"],
+          "properties": {
+            "mailbox_job_id": {"type": "string", "minLength": 1},
+            "bytes": {"type": "integer", "minimum": 0}
+          }
+        },
+        "large_mailbox_100gb": {
           "type": "object", "additionalProperties": false,
           "required": ["mailbox_job_id", "bytes"],
           "properties": {

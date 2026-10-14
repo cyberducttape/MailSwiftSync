@@ -34,6 +34,9 @@
   size and 100k-message scenarios.
 - Keep the compatibility matrix and signed-evidence policy aligned with a
   regression test so a documented route cannot be omitted from GA release gates.
+- Extend provider-evidence schema and generation tests for the required
+  1/10/20/50/100 GiB mailbox observations, preventing the evidence exporter
+  from producing records that the strict schema would reject.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an
