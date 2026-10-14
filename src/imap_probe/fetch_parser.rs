@@ -185,8 +185,11 @@ fn fetch_records(response: &[u8]) -> impl Iterator<Item = Result<FetchRecord<'_>
             Err(error) => return Some(Err(error)),
         };
         let first = String::from_utf8_lossy(frame.protocol.first()?);
-        if !is_fetch_record_line(&first) {
+        if !is_fetch_record_candidate(&first) {
             return None;
+        }
+        if !is_fetch_record_line(&first) {
+            return Some(Err("malformed IMAP FETCH response record".to_owned()));
         }
         let protocol_text = frame
             .protocol
@@ -199,6 +202,15 @@ fn fetch_records(response: &[u8]) -> impl Iterator<Item = Result<FetchRecord<'_>
             protocol_text,
         }))
     })
+}
+
+fn is_fetch_record_candidate(line: &str) -> bool {
+    let mut fields = line.split_whitespace();
+    fields.next() == Some("*")
+        && fields.next().is_some()
+        && fields
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("FETCH"))
 }
 
 fn is_fetch_record_line(line: &str) -> bool {

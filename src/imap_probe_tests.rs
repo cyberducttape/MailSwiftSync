@@ -615,6 +615,17 @@ fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
 }
 
 #[test]
+fn metadata_fetch_parser_rejects_malformed_fetch_candidates() {
+    let response = b"* 1 FETCH (UID 5 RFC822.SIZE 100)\r\n\
+                       * 2 FETCH\r\n\
+                       * 3 FETCH (UID 9 RFC822.SIZE 200)\r\n\
+                       v002 OK FETCH completed\r\n";
+    let error =
+        parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap_err();
+    assert!(error.contains("malformed IMAP FETCH"), "{error}");
+}
+
+#[test]
 fn metadata_fetch_parser_extracts_canonical_flags_and_keywords() {
     let response = b"* 1 FETCH (UID 5 FLAGS (\\seen \\Answered $Forwarded Team-Blue \\Recent) RFC822.SIZE 10)\r\n* 2 FETCH (UID 9 FLAGS () RFC822.SIZE 11)\r\n* 3 FETCH (UID 12 RFC822.SIZE 12)\r\nv002 OK FETCH completed\r\n";
     let messages =

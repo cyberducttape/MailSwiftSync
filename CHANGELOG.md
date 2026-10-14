@@ -44,6 +44,8 @@
 - Require a balanced parenthesized IMAP FETCH data list with exactly one
   top-level UID before sequence inventory records can count as exact coverage;
   reject truncated lists, missing delimiters, and duplicate UID items.
+- Reject malformed numeric-sequence FETCH records instead of silently
+  dropping them before metadata, flags, or body evidence is parsed.
 - Document that typed imapsync source-to-destination mappings reject `=` in
   source names while destination names and typed exclusions may contain it.
 - Clarify that verification cursors retained after interruption are recovery
