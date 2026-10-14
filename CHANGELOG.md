@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update Rustls to 0.23.46 to remediate four newly reported TLS advisories;
+  enforce the dependency advisory gate against the refreshed lockfile.
 - Make the paused-tenant scheduler regression assert that unrelated work starts
   before the actual cooldown deadline, rather than imposing an arbitrary
   half-cooldown latency cutoff that flakes under loaded CI runners.
@@ -50,6 +52,42 @@
   exactness; label aggregate evidence explicitly in customer exports. Make the
   provider-evidence generator reject unknown proof versions and require the
   v3 engine-confirmed assurance status for qualification claims.
+- Require signed provider-qualification evidence for every hosted-provider
+  route in the compatibility plan, including cPanel/Dovecot pairs and
+  Fastmail-to-Google Workspace; require 1, 10, 20, 50, and 100 GiB live-pilot
+  mailbox evidence per route and align operator guidance with the complete
+  size and 100k-message scenarios.
+- Keep the compatibility matrix and signed-evidence policy aligned with a
+  regression test so a documented route cannot be omitted from GA release gates.
+- Fail closed when provider-policy strings contain tab or control characters,
+  preventing malformed TSV serialization from changing the release gate's
+  interpreted policy; require typed release gates and integer thresholds so
+  malformed values cannot silently demote required provider routes. Regress
+  partial-policy parsing, delimiter injection, and policy type confusion.
+- Extend provider-evidence schema and generation tests for the required
+  1/10/20/50/100 GiB mailbox observations, preventing the evidence exporter
+  from producing records that the strict schema would reject.
+- Require the live provider qualification gate to include a direct-imapsync
+  comparison for each required large-mailbox case, bound to the tested engine
+  binary, dataset and source/destination baselines; verify retained snapshot
+  and run-artifact files against their declared digests; carry measurements
+  and artifact references into the qualification-pack digest.
+- Bound provider A/B metric values to the unsigned 64-bit evidence domain and
+  reject oversized JSON integers consistently in the pack builder, release
+  gate, schemas, and regression tests.
+- Make the provider evidence gate's `--help` and mode parsing explicit so a
+  misspelled or conflicting mode cannot silently run a preview validation.
+- Stream SHA-256 hashing of provider qualification artifacts in fixed-size
+  chunks so large retained logs and mailbox snapshots do not require a
+  same-sized temporary memory allocation.
+- Reject duplicate JSON object keys in provider policies, evidence, and
+  customer proofs so parser differences cannot change signed qualification
+  semantics.
+- Bound qualification policy/schema, evidence, and customer-proof JSON inputs
+  before parsing, preventing oversized external evidence bundles from causing
+  unbounded memory use in release tooling.
+- Align the provider-testing guide's release-route list with all seven routes
+  in the signed-evidence policy, and regression-test route and auth coverage.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

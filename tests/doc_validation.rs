@@ -853,6 +853,57 @@ fn compatibility_matrix_references_tested_providers() {
 fn provider_testing_guide_exists() {
     let guide = fs::read_to_string("docs/provider-testing-guide.md")
         .expect("Provider testing guide should exist");
+    let guide = guide.split_whitespace().collect::<Vec<_>>().join(" ");
+    let policy: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string("tests/provider-evidence/policy.json")
+            .expect("Provider qualification policy should exist"),
+    )
+    .expect("Provider qualification policy should be valid JSON");
+    let route_labels = [
+        ("gmail", "Gmail / Google Workspace"),
+        ("microsoft365", "Microsoft 365"),
+        ("cpanel_dovecot", "cPanel/Dovecot"),
+        ("fastmail", "Fastmail"),
+    ];
+    let auth_labels = [
+        ("password", "Password/app password"),
+        ("oauth2", "OAuth/XOAUTH2"),
+    ];
+    let routes = policy["providers"]
+        .as_array()
+        .expect("Provider policy must contain routes");
+    assert_eq!(
+        routes.len(),
+        7,
+        "Update this guide when release routes change"
+    );
+    for route in routes {
+        let label = |field: &str, labels: &[(&str, &str)]| -> String {
+            let value = route[field]
+                .as_str()
+                .expect("Provider route fields must be strings");
+            labels
+                .iter()
+                .find_map(|(key, label)| (*key == value).then(|| (*label).to_owned()))
+                .unwrap_or_else(|| panic!("Missing human-readable label for {value}"))
+        };
+        let source_auth = if route["source_provider"] == "fastmail" {
+            "App-specific password".to_owned()
+        } else {
+            label("source_auth_method", &auth_labels)
+        };
+        let expected = format!(
+            "| {} → {} | {} | {} |",
+            label("source_provider", &route_labels),
+            label("destination_provider", &route_labels),
+            source_auth,
+            label("destination_auth_method", &auth_labels),
+        );
+        assert!(
+            guide.contains(&expected),
+            "Provider guide is missing policy route: {expected}"
+        );
+    }
 
     assert!(guide.contains("OAuth/XOAUTH2 preferred"));
     assert!(guide.contains("do not restore the removed Basic Authentication"));
@@ -860,6 +911,20 @@ fn provider_testing_guide_exists() {
         guide.contains("this guide does not assert a")
             && guide.contains("fixed commands-per-second rate")
     );
+    for mailbox_shape in [
+        "100,000 messages",
+        "1 GiB",
+        "10 GiB",
+        "20 GiB",
+        "50 GiB",
+        "100 GiB",
+    ] {
+        assert!(
+            guide.contains(mailbox_shape),
+            "Provider testing guide must disclose the {mailbox_shape} qualification scenario"
+        );
+    }
+    assert!(guide.contains("each scenario explicitly references"));
 }
 
 #[test]

@@ -13,8 +13,27 @@ EVIDENCE_DIR="${MAILSWIFTSYNC_EVIDENCE_DIR:-$REPOSITORY_ROOT/tests/provider-evid
 POLICY_FILE="${MAILSWIFTSYNC_POLICY_FILE:-$REPOSITORY_ROOT/tests/provider-evidence/policy.json}"
 SCHEMA_FILE="${MAILSWIFTSYNC_SCHEMA_FILE:-$REPOSITORY_ROOT/tests/provider-evidence/schema.json}"
 MODE="preview"
-if [[ "${1:-}" == "--release" ]]; then
-  MODE="release"
+case "${1:-}" in
+  ""|--preview)
+    MODE="preview"
+    ;;
+  --release)
+    MODE="release"
+    ;;
+  -h|--help)
+    printf 'Usage: %s [--preview|--release]\n' "${0##*/}"
+    printf '  --preview  Validate evidence without blocking (default)\n'
+    printf '  --release  Enforce signed evidence and require the pinned signer key\n'
+    exit 0
+    ;;
+  *)
+    printf 'Unknown argument: %s\nUsage: %s [--preview|--release]\n' "$1" "${0##*/}" >&2
+    exit 2
+    ;;
+esac
+if (( $# > 1 )); then
+  printf 'Only one mode may be specified. Usage: %s [--preview|--release]\n' "${0##*/}" >&2
+  exit 2
 fi
 export MAILSWIFTSYNC_GATE_MODE="$MODE"
 
@@ -37,12 +56,36 @@ echo "=================================================="
 
 # Use Python only for JSON parsing so the gate does not depend on jq being
 # installed on CI runners.
-mapfile -t POLICY_ROWS < <(python3 - "$POLICY_FILE" <<'PY'
+POLICY_OUTPUT="$(python3 - "$POLICY_FILE" <<'PY'
 import json
 import sys
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    policy = json.load(handle)
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+def load_json(path, maximum):
+    with open(path, "rb") as handle:
+        raw = handle.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+
+def valid_tsv_field(value):
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and not any(ord(character) < 0x20 or ord(character) == 0x7f for character in value)
+    )
+
+try:
+    policy = load_json(sys.argv[1], 1 * 1024 * 1024)
+except (OSError, ValueError) as error:
+    raise SystemExit(f"invalid provider evidence policy: {error}") from None
 
 providers = policy.get("providers")
 if not isinstance(providers, list) or not providers:
@@ -56,11 +99,19 @@ for entry in providers:
     values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version")]
     auth_methods = [entry.get("source_auth_method"), entry.get("destination_auth_method")]
     thresholds = [entry.get("minimum_mailboxes"), entry.get("minimum_messages"), entry.get("minimum_folders"), entry.get("minimum_bytes")]
-    if not all(isinstance(value, str) and value for value in values) or any(
-        value not in {"password", "oauth2"} for value in auth_methods
-    ) or not all(isinstance(value, int) and value > 0 for value in thresholds):
+    if not all(isinstance(value, str) and value for value in values):
         raise SystemExit("each provider policy entry needs pair, source_provider, destination_provider, engine, and engine_version")
-    if not isinstance(required, list) or not required or not all(isinstance(value, str) and value for value in required):
+    if any(value not in {"password", "oauth2"} for value in auth_methods):
+        raise SystemExit(f"{entry['pair']}: auth methods must be password or oauth2")
+    if not all(type(value) is int and value > 0 for value in thresholds):
+        raise SystemExit(f"{entry['pair']}: minimum thresholds must be positive integers")
+    if not isinstance(entry.get("release_required"), bool):
+        raise SystemExit(f"{entry['pair']}: release_required must be a boolean")
+    if not all(valid_tsv_field(value) for value in values):
+        raise SystemExit("provider policy TSV fields must be non-empty strings without control characters")
+    if not isinstance(required, list) or not required or not all(
+        valid_tsv_field(value) and "," not in value for value in required
+    ):
         raise SystemExit(f"{entry.get('pair', '<unknown>')}: required_phases must be non-empty strings")
     if not isinstance(scenario_requirements, dict):
         raise SystemExit(f"{entry.get('pair', '<unknown>')}: scenario_requirements must be an object")
@@ -90,7 +141,11 @@ for entry in providers:
         ",".join(required),
     ]))
 PY
-)
+)"
+POLICY_ROWS=()
+if [[ -n "$POLICY_OUTPUT" ]]; then
+  mapfile -t POLICY_ROWS <<< "$POLICY_OUTPUT"
+fi
 
 if [[ ${#POLICY_ROWS[@]} -eq 0 ]]; then
   echo "FAIL: provider evidence policy contains no providers" >&2
@@ -112,12 +167,28 @@ for row in "${POLICY_ROWS[@]}"; do
 file_provider=$(python3 - "$evidence_file" <<'PY'
 import json
 import sys
+
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+def load_json(path, maximum):
+    with open(path, "rb") as handle:
+        raw = handle.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+
 try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        evidence = json.load(handle)
-        value = f"{evidence.get('source_provider', '')}->{evidence.get('destination_provider', '')}"
-except (OSError, json.JSONDecodeError):
-        value = ""
+    evidence = load_json(sys.argv[1], 16 * 1024 * 1024)
+    value = f"{evidence.get('source_provider', '')}->{evidence.get('destination_provider', '')}"
+except (OSError, ValueError) as error:
+    print(f"{sys.argv[1]}: invalid JSON ({error})", file=sys.stderr)
+    value = ""
 print(value)
 PY
 )
@@ -134,10 +205,33 @@ PY
 policy_result=$(PYTHONPATH="$REPOSITORY_ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$expected_source_auth" "$expected_destination_auth" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios_by_phase_json" "$scenario_requirements_json" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
 import hashlib
+import math
 import os
 import re
 import sys
 from pathlib import Path
+
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+def load_json(path, maximum):
+    with open(path, "rb") as handle:
+        raw = handle.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 try:
     import jsonschema
@@ -156,16 +250,14 @@ errors = []
 schema = None
 if has_jsonschema:
     try:
-        with open(schema_file, encoding="utf-8") as handle:
-            schema = json.load(handle)
-    except (OSError, json.JSONDecodeError) as error:
+        schema = load_json(schema_file, 1 * 1024 * 1024)
+    except (OSError, ValueError) as error:
         errors.append(f"Warning: Could not load schema for validation: {error}")
 
 for filename in files:
     try:
-        with open(filename, encoding="utf-8") as handle:
-            evidence = json.load(handle)
-    except (OSError, json.JSONDecodeError) as error:
+        evidence = load_json(filename, 16 * 1024 * 1024)
+    except (OSError, ValueError) as error:
         errors.append(f"{filename}: invalid JSON ({error})")
         continue
 
@@ -213,8 +305,78 @@ for filename in files:
                 continue
             if scenario == "large-mailbox-100k" and (observations.get("large_mailbox_100k", {}).get("messages", 0) < requirement.get("minimum_messages", 0) or (phase != "dry_pilot" and summary.get("messages_total", 0) < requirement.get("minimum_messages", 0))):
                 errors.append(f"{filename}: large-mailbox-100k does not contain 100,000 messages")
+            if scenario == "large-mailbox-1gb" and (observations.get("large_mailbox_1gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-1gb does not contain at least 1 GiB")
+            if scenario == "large-mailbox-10gb" and (observations.get("large_mailbox_10gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-10gb does not contain at least 10 GiB")
             if scenario == "large-mailbox-20gb" and (observations.get("large_mailbox_20gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
                 errors.append(f"{filename}: large-mailbox-20gb does not contain at least 20 GiB")
+            if scenario == "large-mailbox-50gb" and (observations.get("large_mailbox_50gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-50gb does not contain at least 50 GiB")
+            if scenario == "large-mailbox-100gb" and (observations.get("large_mailbox_100gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-100gb does not contain at least 100 GiB")
+            if phase == "live_pilot" and scenario in {
+                "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb",
+                "large-mailbox-50gb", "large-mailbox-100gb",
+            }:
+                key = scenario.replace("-", "_")
+                comparison = observations.get(key, {}).get("direct_imapsync_comparison")
+                if not isinstance(comparison, dict):
+                    errors.append(f"{filename}: {scenario} lacks a direct-imapsync A/B comparison")
+                else:
+                    for field in (
+                        "dataset_digest", "engine_binary_sha256",
+                        "engine_settings_sha256", "source_snapshot_sha256",
+                        "destination_baseline_sha256", "baseline_artifact_sha256", "managed_artifact_sha256",
+                    ):
+                        value = comparison.get(field)
+                        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                            errors.append(f"{filename}: {scenario} A/B {field} must be a SHA-256 digest")
+                    baseline_run_id = comparison.get("baseline_run_id")
+                    if not isinstance(baseline_run_id, str) or not baseline_run_id:
+                        errors.append(f"{filename}: {scenario} A/B baseline_run_id is missing")
+                    for file_field, digest_field in (
+                        ("source_snapshot_file", "source_snapshot_sha256"),
+                        ("destination_baseline_file", "destination_baseline_sha256"),
+                        ("baseline_artifact_file", "baseline_artifact_sha256"),
+                        ("managed_artifact_file", "managed_artifact_sha256"),
+                    ):
+                        artifact_name = comparison.get(file_field)
+                        if not isinstance(artifact_name, str) or not artifact_name or Path(artifact_name).name != artifact_name:
+                            errors.append(f"{filename}: {scenario} A/B {file_field} must be a basename")
+                            continue
+                        artifact_path = Path(filename).parent / artifact_name
+                        try:
+                            if artifact_path.is_symlink() or not artifact_path.is_file():
+                                raise OSError("missing or unsafe artifact")
+                            actual_digest = sha256_file(artifact_path)
+                        except OSError:
+                            errors.append(f"{filename}: {scenario} A/B artifact {artifact_name!r} is missing or unsafe")
+                            continue
+                        if actual_digest != comparison.get(digest_field):
+                            errors.append(f"{filename}: {scenario} A/B artifact digest mismatch for {artifact_name!r}")
+                    if isinstance(comparison.get("baseline_run_id"), str) and comparison["baseline_run_id"] == evidence.get("selected_run_id"):
+                        errors.append(f"{filename}: {scenario} direct baseline must be a separate run")
+                    if comparison.get("dataset_digest") != evidence.get("test_dataset_digest"):
+                        errors.append(f"{filename}: {scenario} A/B dataset digest differs from the qualified dataset")
+                    if comparison.get("engine_binary_sha256") != evidence.get("imapsync_binary_sha256"):
+                        errors.append(f"{filename}: {scenario} A/B baseline does not use the qualified imapsync binary")
+                    baseline = comparison.get("baseline_metrics")
+                    managed = comparison.get("managed_metrics")
+                    for label, metrics in (("baseline", baseline), ("managed", managed)):
+                        if not isinstance(metrics, dict):
+                            errors.append(f"{filename}: {scenario} A/B {label} metrics are missing")
+                            continue
+                        for name in ("wall_seconds", "messages", "bytes", "peak_rss_bytes", "cpu_seconds", "disk_growth_bytes", "retries", "throttled_seconds"):
+                            amount = metrics.get(name)
+                            if type(amount) not in (int, float) or amount < 0 or amount > (1 << 64) - 1 or (type(amount) is float and not math.isfinite(amount)) or (name == "wall_seconds" and amount <= 0):
+                                errors.append(f"{filename}: {scenario} A/B {label} metric {name} is invalid")
+                    if isinstance(baseline, dict) and isinstance(managed, dict):
+                        if baseline.get("messages") != managed.get("messages") or baseline.get("bytes") != managed.get("bytes"):
+                            errors.append(f"{filename}: {scenario} A/B runs do not cover the same message and byte totals")
+                        observed_bytes = observations.get(key, {}).get("bytes")
+                        if managed.get("bytes") != observed_bytes:
+                            errors.append(f"{filename}: {scenario} managed A/B bytes do not match the qualified mailbox observation")
             if scenario == "large-messages" and (observations.get("large_messages", {}).get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0) or (phase != "dry_pilot" and summary.get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0))):
                 errors.append(f"{filename}: large-messages does not contain a message at least 10 MiB")
             if scenario == "unicode-folders" and (observations.get("unicode_folders", {}).get("observed") is not True or summary.get("unicode_folders_observed") is not True):
@@ -290,8 +452,7 @@ for filename in files:
         errors.append(f"{filename}: referenced customer proof is missing: {proof_file}")
     else:
         try:
-            with proof_path.open(encoding="utf-8") as handle:
-                proof = json.load(handle)
+            proof = load_json(proof_path, 32 * 1024 * 1024)
             unsigned = dict(proof)
             expected_proof_digest = unsigned.pop("proof_digest", None)
             unsigned.pop("proof_signature", None)
@@ -309,7 +470,7 @@ for filename in files:
                         verify_proof_signature(proof, os.environ["MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY"])
                     except (ImportError, KeyError, TypeError, ValueError) as error:
                         errors.append(f"{filename}: customer proof Ed25519 signature verification failed ({error})")
-        except (OSError, json.JSONDecodeError, TypeError) as error:
+        except (OSError, ValueError, TypeError) as error:
             errors.append(f"{filename}: referenced customer proof is invalid ({error})")
     if isinstance(proof, dict):
         identity = proof.get("provider_identity")
@@ -321,7 +482,11 @@ for filename in files:
                     errors.append(f"{filename}: {field} does not match customer proof")
         mailbox_observation_requirements = (
             ("large-mailbox-100k", "large_mailbox_100k", "messages", "source_messages", "minimum_messages"),
+            ("large-mailbox-1gb", "large_mailbox_1gb", "bytes", "source_bytes", "minimum_bytes"),
+            ("large-mailbox-10gb", "large_mailbox_10gb", "bytes", "source_bytes", "minimum_bytes"),
             ("large-mailbox-20gb", "large_mailbox_20gb", "bytes", "source_bytes", "minimum_bytes"),
+            ("large-mailbox-50gb", "large_mailbox_50gb", "bytes", "source_bytes", "minimum_bytes"),
+            ("large-mailbox-100gb", "large_mailbox_100gb", "bytes", "source_bytes", "minimum_bytes"),
         )
         proof_mailboxes = proof.get("mailboxes")
         if not isinstance(proof_mailboxes, list):
@@ -416,9 +581,8 @@ if missing:
 phase_metadata = {}
 for filename in files:
     try:
-        with open(filename, encoding="utf-8") as handle:
-            evidence = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+        evidence = load_json(filename, 16 * 1024 * 1024)
+    except (OSError, ValueError):
         continue
     phase = evidence.get("testing_phase")
     if phase not in required_phases:

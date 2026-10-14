@@ -156,9 +156,20 @@ effective transfer throughput, retries and retry time, rediscovery work,
 verification duration, peak RSS by controller/engine/container, CPU, disk
 growth, provider throttling/cooldown duration, process count, and recovery
 time. Compare each case with the exact same imapsync version and equivalent
-engine settings run directly. Report MailSwiftSync overhead separately from
-engine and verification work; an overhead increase is acceptable only when
-the evidence/recovery benefit is stated and reviewed.
+engine settings run directly. Retain and hash the source snapshot, destination
+baseline, and raw artifacts from both runs. Report MailSwiftSync overhead
+separately from engine and verification work; an overhead increase is
+acceptable only when the evidence/recovery benefit is stated and reviewed.
+
+The live-pilot evidence gate now requires an A/B record for each 1, 10, 20, 50,
+and 100 GiB mailbox scenario. Each record binds both runs to the same dataset,
+source snapshot, destination baseline, imapsync binary, and engine-settings
+digest; it records comparable resource/retry measurements and verifies the
+retained snapshot and raw run-artifact files against their declared digests.
+The qualification-pack digest includes these records. This
+is an evidence-format and admission requirement, not a claim that any provider
+pair has already completed the comparisons; actual signed artifacts remain a
+release prerequisite.
 
 ## Release acceptance
 

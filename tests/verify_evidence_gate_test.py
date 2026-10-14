@@ -17,6 +17,160 @@ SOURCE_EVIDENCE = ROOT / "tests" / "provider-evidence"
 
 
 class EvidenceGateTests(unittest.TestCase):
+    def test_malformed_later_policy_row_fails_instead_of_accepting_partial_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = json.loads((SOURCE_EVIDENCE / "policy.json").read_text(encoding="utf-8"))
+            policy["providers"].append({"pair": "malformed-late-entry"})
+            policy_path = root / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            schema_path = root / "schema.json"
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", schema_path)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "MAILSWIFTSYNC_POLICY_FILE": str(policy_path),
+                    "MAILSWIFTSYNC_SCHEMA_FILE": str(schema_path),
+                    "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("each provider policy entry needs pair", result.stderr)
+
+    def test_policy_rejects_control_characters_in_tab_delimited_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = json.loads((SOURCE_EVIDENCE / "policy.json").read_text(encoding="utf-8"))
+            policy["providers"][0]["engine"] = "imapsync\nforged-policy-row"
+            policy_path = root / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            schema_path = root / "schema.json"
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", schema_path)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "MAILSWIFTSYNC_POLICY_FILE": str(policy_path),
+                    "MAILSWIFTSYNC_SCHEMA_FILE": str(schema_path),
+                    "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("TSV fields must be non-empty strings without control characters", result.stderr)
+
+    def test_policy_requires_boolean_release_gate_and_integer_thresholds(self):
+        for field, value, expected_error in (
+            ("release_required", "true", "release_required must be a boolean"),
+            ("minimum_messages", True, "minimum thresholds must be positive integers"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                policy = json.loads((SOURCE_EVIDENCE / "policy.json").read_text(encoding="utf-8"))
+                policy["providers"][0][field] = value
+                policy_path = root / "policy.json"
+                policy_path.write_text(json.dumps(policy), encoding="utf-8")
+                schema_path = root / "schema.json"
+                shutil.copy(SOURCE_EVIDENCE / "schema.json", schema_path)
+                evidence_dir = root / "evidence"
+                evidence_dir.mkdir()
+
+                result = subprocess.run(
+                    [str(GATE)],
+                    cwd=ROOT,
+                    env={
+                        **os.environ,
+                        "MAILSWIFTSYNC_POLICY_FILE": str(policy_path),
+                        "MAILSWIFTSYNC_SCHEMA_FILE": str(schema_path),
+                        "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir),
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_help_prints_usage_without_running_the_gate(self):
+        result = subprocess.run(
+            [str(GATE), "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Usage:", result.stdout)
+        self.assertNotIn("Provider Compatibility Evidence Gate", result.stdout)
+
+    def test_unknown_and_conflicting_modes_are_rejected(self):
+        for arguments in (["--typo"], ["--preview", "--release"]):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [str(GATE), *arguments],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Usage:", result.stderr)
+
+    def test_duplicate_keys_in_evidence_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_dir = Path(directory)
+            shutil.copy(SOURCE_EVIDENCE / "policy.json", evidence_dir / "policy.json")
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", evidence_dir / "schema.json")
+            (evidence_dir / "duplicate.json").write_text(
+                '{"source_provider":"gmail","source_provider":"fastmail"}',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertIn("duplicate JSON key: source_provider", result.stderr)
+
+    def test_oversized_evidence_json_is_rejected_before_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_dir = Path(directory)
+            shutil.copy(SOURCE_EVIDENCE / "policy.json", evidence_dir / "policy.json")
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", evidence_dir / "schema.json")
+            with (evidence_dir / "oversized.json").open("wb") as handle:
+                handle.truncate(16 * 1024 * 1024 + 1)
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertIn("exceeds the 16777216-byte validation limit", result.stderr)
+
     def test_release_mode_requires_pinned_provider_proof_signer(self):
         environment = os.environ.copy()
         environment.pop("MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY", None)
@@ -42,10 +196,56 @@ class EvidenceGateTests(unittest.TestCase):
             {
                 "gmail->microsoft365": ("oauth2", "oauth2"),
                 "microsoft365->gmail": ("oauth2", "oauth2"),
+                "cpanel_dovecot->microsoft365": ("password", "oauth2"),
+                "cpanel_dovecot->gmail": ("password", "oauth2"),
+                "cpanel_dovecot->cpanel_dovecot": ("password", "password"),
+                "fastmail->gmail": ("password", "oauth2"),
                 "fastmail->microsoft365": ("password", "oauth2"),
             },
         )
+        qualification_plan = (ROOT / "docs" / "compatibility-matrix.md").read_text(
+            encoding="utf-8"
+        )
+        for planned_route in [
+            "Google Workspace → Microsoft 365",
+            "Microsoft 365 → Google Workspace",
+            "cPanel/Dovecot → Microsoft 365",
+            "cPanel/Dovecot → Google Workspace",
+            "cPanel/Dovecot → cPanel/Dovecot",
+            "Fastmail → Google Workspace or Microsoft 365",
+        ]:
+            self.assertIn(
+                f"| {planned_route} |",
+                qualification_plan,
+                f"qualification plan is missing policy route {planned_route}",
+            )
         for entry in policy["providers"]:
+            self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-1gb"]["minimum_bytes"],
+                1024**3,
+            )
+            self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-10gb"]["minimum_bytes"],
+                10 * 1024**3,
+            )
+            for scenario in ["large-mailbox-1gb", "large-mailbox-10gb"]:
+                self.assertIn(scenario, entry["required_scenarios_by_phase"]["live_pilot"])
+            self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-50gb"]["minimum_bytes"],
+                50 * 1024**3,
+            )
+            self.assertIn(
+                "large-mailbox-50gb",
+                entry["required_scenarios_by_phase"]["live_pilot"],
+            )
+            self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-100gb"]["minimum_bytes"],
+                100 * 1024**3,
+            )
+            self.assertIn(
+                "large-mailbox-100gb",
+                entry["required_scenarios_by_phase"]["live_pilot"],
+            )
             self.assertEqual(
                 set(entry["required_scenarios_by_phase"]),
                 set(entry["required_phases"]),
@@ -110,7 +310,11 @@ class EvidenceGateTests(unittest.TestCase):
                 "scenario_ids": entry["required_scenarios_by_phase"]["live_pilot"],
                 "scenario_observations": {
                     "large_mailbox_100k": {"mailbox_job_id": "job-a", "messages": 100000},
+                    "large_mailbox_1gb": {"mailbox_job_id": "job-a", "bytes": 10 * 1024**3},
+                    "large_mailbox_10gb": {"mailbox_job_id": "job-a", "bytes": 10 * 1024**3},
                     "large_mailbox_20gb": {"mailbox_job_id": "job-a", "bytes": 20 * 1024**3},
+                    "large_mailbox_50gb": {"mailbox_job_id": "job-a", "bytes": 50 * 1024**3},
+                    "large_mailbox_100gb": {"mailbox_job_id": "job-a", "bytes": 100 * 1024**3},
                     "large_messages": {"maximum_message_bytes": 10485760},
                     "unicode_folders": {"observed": True},
                     "special_use_folders": {"observed": True},
@@ -129,6 +333,41 @@ class EvidenceGateTests(unittest.TestCase):
                 "mailswiftsync_binary_sha256": "a" * 64,
                 "imapsync_binary_sha256": "b" * 64,
             }
+            for key in (
+                "large_mailbox_1gb", "large_mailbox_10gb", "large_mailbox_20gb",
+                "large_mailbox_50gb", "large_mailbox_100gb",
+            ):
+                observed_bytes = evidence["scenario_observations"][key]["bytes"]
+                metrics = {
+                    "wall_seconds": 60,
+                    "messages": 100000,
+                    "bytes": observed_bytes,
+                    "peak_rss_bytes": 1024**3,
+                    "cpu_seconds": 45,
+                    "disk_growth_bytes": observed_bytes,
+                    "retries": 0,
+                    "throttled_seconds": 0,
+                }
+                evidence["scenario_observations"][key]["direct_imapsync_comparison"] = {
+                    "baseline_run_id": f"direct-{key}",
+                    "dataset_digest": "d" * 64,
+                    "engine_binary_sha256": "b" * 64,
+                    "engine_settings_sha256": "c" * 64,
+                    "source_snapshot_file": f"{key}-source.json",
+                    "source_snapshot_sha256": hashlib.sha256(b"source snapshot").hexdigest(),
+                    "destination_baseline_file": f"{key}-destination.json",
+                    "destination_baseline_sha256": hashlib.sha256(b"destination baseline").hexdigest(),
+                    "baseline_artifact_file": f"{key}-direct.txt",
+                    "baseline_artifact_sha256": hashlib.sha256(b"direct baseline").hexdigest(),
+                    "managed_artifact_file": f"{key}-managed.txt",
+                    "managed_artifact_sha256": hashlib.sha256(b"managed run").hexdigest(),
+                    "baseline_metrics": metrics,
+                    "managed_metrics": dict(metrics),
+                }
+                (evidence_dir / f"{key}-source.json").write_bytes(b"source snapshot")
+                (evidence_dir / f"{key}-destination.json").write_bytes(b"destination baseline")
+                (evidence_dir / f"{key}-direct.txt").write_bytes(b"direct baseline")
+                (evidence_dir / f"{key}-managed.txt").write_bytes(b"managed run")
             proof = {
                 "format": "mailswiftsync-customer-proof",
                 "project": {"project_id": "project", "dataset_digest": "d" * 64},
@@ -176,6 +415,7 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("Traceback", output)
             self.assertNotIn("source_auth_method must be", output)
             self.assertNotIn("destination_auth_method must be", output)
+            self.assertNotIn("A/B baseline_run_id must be a SHA-256 digest", output)
             self.assertIn(
                 "large-mailbox-100k per-mailbox observation does not match verified customer-proof evidence",
                 output,
@@ -183,6 +423,82 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertIn(
                 "large-mailbox-20gb per-mailbox observation does not match verified customer-proof evidence",
                 output,
+            )
+            self.assertIn(
+                "large-mailbox-50gb per-mailbox observation does not match verified customer-proof evidence",
+                output,
+            )
+            self.assertIn(
+                "large-mailbox-100gb per-mailbox observation does not match verified customer-proof evidence",
+                output,
+            )
+            self.assertIn(
+                "large-mailbox-100gb does not contain at least 100 GiB",
+                output,
+            )
+            self.assertIn(
+                "large-mailbox-50gb does not contain at least 50 GiB",
+                output,
+            )
+
+            valid_proof = json.dumps(proof)
+            duplicate_proof = valid_proof.replace(
+                '"format": "mailswiftsync-customer-proof"',
+                '"format": "mailswiftsync-customer-proof", '
+                '"format": "mailswiftsync-customer-proof"',
+                1,
+            )
+            (evidence_dir / "proof.json").write_text(duplicate_proof, encoding="utf-8")
+            duplicate_proof_result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            duplicate_proof_output = duplicate_proof_result.stdout + duplicate_proof_result.stderr
+            self.assertNotIn("Traceback", duplicate_proof_output)
+            self.assertIn("duplicate JSON key: format", duplicate_proof_output)
+            (evidence_dir / "proof.json").write_text(valid_proof, encoding="utf-8")
+
+            oversized = json.loads(json.dumps(evidence))
+            oversized["scenario_observations"]["large_mailbox_10gb"][
+                "direct_imapsync_comparison"
+            ]["baseline_metrics"]["messages"] = 10**4000
+            (evidence_dir / "synthetic.json").write_text(
+                json.dumps(oversized), encoding="utf-8"
+            )
+            oversized_result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            oversized_output = oversized_result.stdout + oversized_result.stderr
+            self.assertNotIn("Traceback", oversized_output)
+            self.assertIn("maximum", oversized_output)
+
+            missing_baseline = json.loads(json.dumps(evidence))
+            missing_baseline["scenario_observations"]["large_mailbox_10gb"].pop(
+                "direct_imapsync_comparison"
+            )
+            (evidence_dir / "synthetic.json").write_text(
+                json.dumps(missing_baseline), encoding="utf-8"
+            )
+            missing_result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertIn(
+                "large-mailbox-10gb lacks a direct-imapsync A/B comparison",
+                missing_result.stdout + missing_result.stderr,
             )
 
             # Dry preflight evidence describes a no-transfer phase. It must
@@ -215,7 +531,11 @@ class EvidenceGateTests(unittest.TestCase):
             rerun_output = rerun.stdout + rerun.stderr
             self.assertNotIn("dry-pilot.json: dry_pilot must not report transfer totals", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-100k", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-1gb", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-10gb", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-20gb", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-50gb", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-100gb", rerun_output)
 
             # A basename check alone does not keep a qualification bundle
             # self-contained: a symlink can still resolve outside the bundle.

@@ -35,7 +35,11 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
         "dataset_digest": "d" * 64,
         "scenario_observations": {
             "large_mailbox_100k": {"mailbox_job_id": "job", "messages": 100000},
+            "large_mailbox_1gb": {"mailbox_job_id": "job", "bytes": 1024**3},
+            "large_mailbox_10gb": {"mailbox_job_id": "job", "bytes": 10 * 1024**3},
             "large_mailbox_20gb": {"mailbox_job_id": "job", "bytes": 20 * 1024**3},
+            "large_mailbox_50gb": {"mailbox_job_id": "job", "bytes": 50 * 1024**3},
+            "large_mailbox_100gb": {"mailbox_job_id": "job", "bytes": 100 * 1024**3},
             "large_messages": {"maximum_message_bytes": 10 * 1024 * 1024},
             "unicode_folders": {"observed": True},
             "special_use_folders": {"observed": True},
@@ -120,8 +124,19 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
             path = Path(directory) / "proof.json"
             path.write_text(json.dumps(proof()), encoding="utf-8")
             evidence = self.generate(proof())
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema is installed by provider-evidence CI")
+        schema_path = Path(__file__).parent / "provider-evidence" / "schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        jsonschema.validate(evidence, schema)
         self.assertEqual(evidence["results"]["overall_result"], "pass_with_exceptions")
         self.assertEqual(evidence["test_summary"]["messages_total"], 2)
+        self.assertEqual(
+            evidence["scenario_observations"]["large_mailbox_100gb"]["bytes"],
+            100 * 1024**3,
+        )
         self.assertEqual(evidence["results"]["messages_covered_by_aggregate_evidence"], 2)
         self.assertNotIn("messages_verified", evidence["results"])
         self.assertEqual(evidence["results"]["verification_confidence"], "aggregate_only")

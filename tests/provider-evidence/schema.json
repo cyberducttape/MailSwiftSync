@@ -44,11 +44,11 @@
     },
     "source_provider": {
       "type": "string",
-      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"]
+      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap", "cpanel_dovecot"]
     },
     "destination_provider": {
       "type": "string",
-      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"]
+      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap", "cpanel_dovecot"]
     },
     "tested_at": {
       "type": "string",
@@ -243,7 +243,7 @@
     "scenario_observations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["large_mailbox_100k", "large_mailbox_20gb", "large_messages", "unicode_folders", "special_use_folders", "gmail_labels", "duplicate_message_id", "source_changed_during_seed", "destination_active_final_delta", "throttling_recovery", "quota_folder_edge_cases", "mismatch_detection"],
+      "required": ["large_mailbox_100k", "large_mailbox_1gb", "large_mailbox_10gb", "large_mailbox_20gb", "large_mailbox_50gb", "large_mailbox_100gb", "large_messages", "unicode_folders", "special_use_folders", "gmail_labels", "duplicate_message_id", "source_changed_during_seed", "destination_active_final_delta", "throttling_recovery", "quota_folder_edge_cases", "mismatch_detection"],
       "properties": {
         "large_mailbox_100k": {
           "type": "object", "additionalProperties": false,
@@ -253,12 +253,49 @@
             "messages": {"type": "integer", "minimum": 0}
           }
         },
-        "large_mailbox_20gb": {
+        "large_mailbox_1gb": {
           "type": "object", "additionalProperties": false,
-          "required": ["mailbox_job_id", "bytes"],
+            "required": ["mailbox_job_id", "bytes"],
           "properties": {
             "mailbox_job_id": {"type": "string", "minLength": 1},
-            "bytes": {"type": "integer", "minimum": 0}
+              "bytes": {"type": "integer", "minimum": 0},
+              "direct_imapsync_comparison": {"$ref": "#/$defs/direct_imapsync_comparison"}
+          }
+        },
+        "large_mailbox_10gb": {
+          "type": "object", "additionalProperties": false,
+            "required": ["mailbox_job_id", "bytes"],
+          "properties": {
+            "mailbox_job_id": {"type": "string", "minLength": 1},
+              "bytes": {"type": "integer", "minimum": 0},
+              "direct_imapsync_comparison": {"$ref": "#/$defs/direct_imapsync_comparison"}
+          }
+        },
+        "large_mailbox_20gb": {
+          "type": "object", "additionalProperties": false,
+            "required": ["mailbox_job_id", "bytes"],
+          "properties": {
+            "mailbox_job_id": {"type": "string", "minLength": 1},
+              "bytes": {"type": "integer", "minimum": 0},
+              "direct_imapsync_comparison": {"$ref": "#/$defs/direct_imapsync_comparison"}
+          }
+        },
+        "large_mailbox_50gb": {
+          "type": "object", "additionalProperties": false,
+            "required": ["mailbox_job_id", "bytes"],
+          "properties": {
+            "mailbox_job_id": {"type": "string", "minLength": 1},
+              "bytes": {"type": "integer", "minimum": 0},
+              "direct_imapsync_comparison": {"$ref": "#/$defs/direct_imapsync_comparison"}
+          }
+        },
+        "large_mailbox_100gb": {
+          "type": "object", "additionalProperties": false,
+            "required": ["mailbox_job_id", "bytes"],
+          "properties": {
+            "mailbox_job_id": {"type": "string", "minLength": 1},
+              "bytes": {"type": "integer", "minimum": 0},
+              "direct_imapsync_comparison": {"$ref": "#/$defs/direct_imapsync_comparison"}
           }
         },
         "large_messages": {
@@ -332,6 +369,44 @@
     "proof_verification": {
       "type": "string",
       "const": "canonical_digest_verified"
+    }
+  },
+  "$defs": {
+    "direct_imapsync_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline_run_id", "dataset_digest", "engine_binary_sha256", "engine_settings_sha256", "source_snapshot_file", "source_snapshot_sha256", "destination_baseline_file", "destination_baseline_sha256", "baseline_artifact_file", "baseline_artifact_sha256", "managed_artifact_file", "managed_artifact_sha256", "baseline_metrics", "managed_metrics"],
+      "properties": {
+        "baseline_run_id": {"type": "string", "minLength": 1},
+        "dataset_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "engine_binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "engine_settings_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_snapshot_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
+        "source_snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "destination_baseline_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
+        "destination_baseline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "baseline_artifact_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
+        "baseline_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "managed_artifact_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
+        "managed_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "baseline_metrics": {"$ref": "#/$defs/ab_metrics"},
+        "managed_metrics": {"$ref": "#/$defs/ab_metrics"}
+      }
+    },
+    "ab_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_seconds", "messages", "bytes", "peak_rss_bytes", "cpu_seconds", "disk_growth_bytes", "retries", "throttled_seconds"],
+      "properties": {
+        "wall_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 18446744073709551615},
+        "messages": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "bytes": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "peak_rss_bytes": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "cpu_seconds": {"type": "number", "minimum": 0, "maximum": 18446744073709551615},
+        "disk_growth_bytes": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "retries": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "throttled_seconds": {"type": "number", "minimum": 0, "maximum": 18446744073709551615}
+      }
     }
   }
 }
