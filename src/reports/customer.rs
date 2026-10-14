@@ -123,12 +123,6 @@ pub(crate) fn export_from_store_with_options_and_identity(
     }
     let durably_complete = summary.is_durably_complete(&reader);
     let total_mailboxes = summary.total_mailboxes;
-    let mailboxes_not_exact = total_mailboxes.saturating_sub(
-        summary.assurance.aggregate_match
-            + summary.assurance.metadata_match
-            + summary.assurance.bounded_content_match
-            + summary.assurance.engine_confirmed,
-    );
     let mut message_counts = serde_json::json!({
         "source": summary.messages.source,
         "destination": summary.messages.destination,
@@ -257,7 +251,6 @@ pub(crate) fn export_from_store_with_options_and_identity(
             "missing": message_counts["missing"],
             "extra": message_counts["extra"],
             "modified": message_counts["modified"],
-            "mailboxes_not_exact": mailboxes_not_exact,
             "verification_level": verification_level,
         },
         "completion_claim": {
@@ -281,7 +274,6 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "incomplete": summary.assurance.incomplete,
                 "not_checked": summary.assurance.not_checked,
             },
-            "mailboxes_not_exact": mailboxes_not_exact,
             "messages": message_counts,
         },
         "project": {
@@ -814,16 +806,22 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            certificate["verification_summary"]["mailboxes_not_exact"],
-            0
-        );
-        assert_eq!(
             certificate["certificate_summary"]["mailboxes_with_durable_accepted_result"],
             1
         );
         assert!(
             certificate["certificate_summary"]
                 .get("mailboxes_verified")
+                .is_none()
+        );
+        assert!(
+            certificate["verification_summary"]
+                .get("mailboxes_not_exact")
+                .is_none()
+        );
+        assert!(
+            certificate["certificate_summary"]
+                .get("mailboxes_not_exact")
                 .is_none()
         );
         assert_eq!(
