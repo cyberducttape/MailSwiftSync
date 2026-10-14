@@ -344,7 +344,8 @@ fn verification_envelope_records_current_head_adversarial_scale_observations() {
 #[test]
 fn verification_envelope_discloses_typed_mapping_equals_limit() {
     let envelope = fs::read_to_string("docs/verification-envelope.md")
-        .expect("verification envelope should exist");
+        .expect("verification envelope should exist")
+        .replace("\r\n", "\n");
     let validation = fs::read_to_string("src/migration_plan/validation.rs")
         .expect("typed mapping validation should exist");
     assert!(
