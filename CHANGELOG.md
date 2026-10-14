@@ -36,8 +36,9 @@
   regression test so a documented route cannot be omitted from GA release gates.
 - Fail closed when provider-policy strings contain tab or control characters,
   preventing malformed TSV serialization from changing the release gate's
-  interpreted policy; cover both partial-policy parse failures and delimiter
-  injection with regressions.
+  interpreted policy; require typed release gates and integer thresholds so
+  malformed values cannot silently demote required provider routes. Regress
+  partial-policy parsing, delimiter injection, and policy type confusion.
 - Extend provider-evidence schema and generation tests for the required
   1/10/20/50/100 GiB mailbox observations, preventing the evidence exporter
   from producing records that the strict schema would reject.

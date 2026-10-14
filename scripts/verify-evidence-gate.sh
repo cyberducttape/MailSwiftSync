@@ -99,10 +99,14 @@ for entry in providers:
     values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version")]
     auth_methods = [entry.get("source_auth_method"), entry.get("destination_auth_method")]
     thresholds = [entry.get("minimum_mailboxes"), entry.get("minimum_messages"), entry.get("minimum_folders"), entry.get("minimum_bytes")]
-    if not all(isinstance(value, str) and value for value in values) or any(
-        value not in {"password", "oauth2"} for value in auth_methods
-    ) or not all(isinstance(value, int) and value > 0 for value in thresholds):
+    if not all(isinstance(value, str) and value for value in values):
         raise SystemExit("each provider policy entry needs pair, source_provider, destination_provider, engine, and engine_version")
+    if any(value not in {"password", "oauth2"} for value in auth_methods):
+        raise SystemExit(f"{entry['pair']}: auth methods must be password or oauth2")
+    if not all(type(value) is int and value > 0 for value in thresholds):
+        raise SystemExit(f"{entry['pair']}: minimum thresholds must be positive integers")
+    if not isinstance(entry.get("release_required"), bool):
+        raise SystemExit(f"{entry['pair']}: release_required must be a boolean")
     if not all(valid_tsv_field(value) for value in values):
         raise SystemExit("provider policy TSV fields must be non-empty strings without control characters")
     if not isinstance(required, list) or not required or not all(
