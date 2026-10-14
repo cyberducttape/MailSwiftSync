@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 try:
     import jsonschema
@@ -307,6 +308,11 @@ class ProviderQualificationPackTests(unittest.TestCase):
         (self.evidence_dir / comparison["baseline_artifact_file"]).write_bytes(b"tampered")
         with self.assertRaisesRegex(ValueError, "artifact digest mismatch"):
             self.build()
+
+    def test_artifact_hashing_does_not_read_whole_files_into_memory(self):
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("unbounded read")):
+            pack = self.build()
+        self.assertEqual(pack["status"], "qualification_candidate")
 
     def test_evidence_symlinks_are_rejected(self):
         source = self.evidence_dir / "live_pilot.json"

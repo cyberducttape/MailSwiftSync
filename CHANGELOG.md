@@ -47,6 +47,9 @@
   gate, schemas, and regression tests.
 - Make the provider evidence gate's `--help` and mode parsing explicit so a
   misspelled or conflicting mode cannot silently run a preview validation.
+- Stream SHA-256 hashing of provider qualification artifacts in fixed-size
+  chunks so large retained logs and mailbox snapshots do not require a
+  same-sized temporary memory allocation.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

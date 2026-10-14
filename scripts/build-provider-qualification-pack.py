@@ -104,6 +104,14 @@ def sha256(value: object) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def load_json(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -205,7 +213,7 @@ def validate_evidence(value: dict, path: Path, pair: str, policy: dict) -> None:
                 if artifact_path.is_symlink() or not artifact_path.is_file():
                     fail(f"{path}: {scenario} A/B artifact {artifact_name!r} is missing or unsafe")
                 try:
-                    artifact_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+                    artifact_digest = sha256_file(artifact_path)
                 except OSError as error:
                     fail(f"{path}: cannot read {scenario} A/B artifact {artifact_name!r}: {error}")
                 if artifact_digest != comparison.get(digest_field):

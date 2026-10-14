@@ -159,6 +159,13 @@ import re
 import sys
 from pathlib import Path
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 try:
     import jsonschema
     has_jsonschema = True
@@ -277,7 +284,7 @@ for filename in files:
                         try:
                             if artifact_path.is_symlink() or not artifact_path.is_file():
                                 raise OSError("missing or unsafe artifact")
-                            actual_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+                            actual_digest = sha256_file(artifact_path)
                         except OSError:
                             errors.append(f"{filename}: {scenario} A/B artifact {artifact_name!r} is missing or unsafe")
                             continue
