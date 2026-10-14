@@ -272,7 +272,7 @@ pub(crate) fn export_project_json(
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-project-report",
-        "format_version": 2,
+        "format_version": 3,
         "application_version": env!("CARGO_PKG_VERSION"),
         "run_manifest_complete": true,
         "project": {
@@ -690,6 +690,7 @@ mod project_json_tests {
         let report: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(report["format"], "mailswiftsync-project-report");
+        assert_eq!(report["format_version"], 3);
         assert_eq!(report["mailboxes"].as_array().unwrap().len(), 21);
         assert_eq!(report["runs"].as_array().unwrap().len(), 21);
         assert_eq!(

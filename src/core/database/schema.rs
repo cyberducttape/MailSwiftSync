@@ -292,6 +292,8 @@ impl StateStore {
                     ("verified_through_uid", "INTEGER", true, 0),
                     ("staged_messages", "INTEGER", true, 0),
                     ("complete", "INTEGER", true, 0),
+                    ("scan_started_at", "TEXT", false, 0),
+                    ("scan_completed_at", "TEXT", false, 0),
                 ],
             ),
         ];

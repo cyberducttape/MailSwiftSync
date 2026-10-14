@@ -90,7 +90,7 @@ pub use transfer_passes::{
 };
 pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 31;
+pub const CURRENT_SCHEMA_VERSION: i64 = 32;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

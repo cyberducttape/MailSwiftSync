@@ -153,6 +153,10 @@ pub(crate) struct FolderCursor {
     pub(crate) last_uid: u64,
     pub(crate) completed: bool,
     pub(crate) staged: u64,
+    /// UTC timestamps for the interval in which this folder was inspected.
+    /// A missing value is possible only for a legacy or incomplete stage.
+    pub(crate) scan_started_at: Option<String>,
+    pub(crate) scan_completed_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -420,7 +424,7 @@ impl MessageMetadataStage {
              CREATE INDEX IF NOT EXISTS staged_messages_exact_destination ON staged_messages(message_id,mailbox,date_key,size_bytes,uidvalidity,uid) WHERE side=1 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
-             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));
+             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, PRIMARY KEY(side,mailbox));
              CREATE TABLE IF NOT EXISTS stage_permanent_flags(side INTEGER NOT NULL, mailbox TEXT NOT NULL, flags TEXT, PRIMARY KEY(side,mailbox));",
         )?;
         let staged_identity_provenance: bool = self.connection_ref()?.query_row(
@@ -467,6 +471,18 @@ impl MessageMetadataStage {
                  DELETE FROM stage_fingerprints;
                  CREATE TABLE stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));",
             )?;
+        }
+        for column in ["scan_started_at", "scan_completed_at"] {
+            let present: bool = self.connection_ref()?.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('stage_cursors') WHERE name=?1)",
+                [column],
+                |row| row.get(0),
+            )?;
+            if !present {
+                self.connection_ref()?.execute_batch(&format!(
+                    "ALTER TABLE stage_cursors ADD COLUMN {column} TEXT;"
+                ))?;
+            }
         }
         if !durable {
             // Ephemeral stages are disposable and may use an in-memory temp
@@ -671,7 +687,7 @@ impl MessageMetadataStage {
             .map_err(|e| e.to_string())?;
         }
         tx.execute(
-            "INSERT INTO stage_cursors(side,mailbox,uidvalidity,uidnext,exists_count,last_uid,completed) VALUES(?1,?2,?3,?4,?5,0,0)",
+            "INSERT INTO stage_cursors(side,mailbox,uidvalidity,uidnext,exists_count,last_uid,completed,scan_started_at) VALUES(?1,?2,?3,?4,?5,0,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
             params![side.as_i64(), mailbox, uidvalidity, uidnext, exists],
         )
         .map_err(|e| e.to_string())?;
@@ -700,7 +716,7 @@ impl MessageMetadataStage {
     /// names stay in process; callers persist only digests of them.
     pub(crate) fn folder_cursors(&self) -> rusqlite::Result<Vec<FolderCursor>> {
         let mut statement = self.connection_ref()?.prepare(
-            "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity) FROM stage_cursors c ORDER BY c.side,c.mailbox",
+            "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),c.scan_started_at,c.scan_completed_at FROM stage_cursors c ORDER BY c.side,c.mailbox",
         )?;
         statement
             .query_map([], |row| {
@@ -725,6 +741,8 @@ impl MessageMetadataStage {
                     last_uid: unsigned(5)?,
                     completed: row.get(6)?,
                     staged: unsigned(7)?,
+                    scan_started_at: row.get(8)?,
+                    scan_completed_at: row.get(9)?,
                 })
             })?
             .collect()
@@ -761,7 +779,7 @@ impl MessageMetadataStage {
         let updated = self
             .connection()?
             .execute(
-                "UPDATE stage_cursors SET last_uid=?6,completed=?7 WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uidnext=?4 AND exists_count=?5",
+                "UPDATE stage_cursors SET last_uid=?6,completed=?7,scan_completed_at=CASE WHEN ?7=1 THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE scan_completed_at END WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uidnext=?4 AND exists_count=?5",
                 params![
                     side.as_i64(),
                     mailbox,
@@ -1502,27 +1520,35 @@ mod tests {
             .unwrap();
 
         let cursors = stage.folder_cursors().unwrap();
+        assert_eq!(cursors.len(), 2);
         assert_eq!(
-            cursors,
-            [
-                FolderCursor {
-                    side: source,
-                    mailbox: "INBOX".into(),
-                    snapshot: inbox,
-                    last_uid: 8,
-                    completed: true,
-                    staged: 2,
-                },
-                FolderCursor {
-                    side: destination,
-                    mailbox: "Archive".into(),
-                    snapshot: archive,
-                    last_uid: 10,
-                    completed: false,
-                    staged: 1,
-                },
-            ]
+            (
+                cursors[0].side,
+                cursors[0].mailbox.as_str(),
+                cursors[0].snapshot,
+                cursors[0].last_uid,
+                cursors[0].completed,
+                cursors[0].staged,
+            ),
+            (source, "INBOX", inbox, 8, true, 2)
         );
+        let started = cursors[0].scan_started_at.as_deref().unwrap();
+        let completed = cursors[0].scan_completed_at.as_deref().unwrap();
+        assert!(started.ends_with('Z') && started.contains('T'));
+        assert!(completed.ends_with('Z') && completed.contains('T'));
+        assert_eq!(
+            (
+                cursors[1].side,
+                cursors[1].mailbox.as_str(),
+                cursors[1].snapshot,
+                cursors[1].last_uid,
+                cursors[1].completed,
+                cursors[1].staged,
+            ),
+            (destination, "Archive", archive, 10, false, 1)
+        );
+        assert!(cursors[1].scan_started_at.is_some());
+        assert_eq!(cursors[1].scan_completed_at, None);
     }
 
     #[test]

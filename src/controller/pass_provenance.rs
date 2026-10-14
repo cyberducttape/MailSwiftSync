@@ -157,6 +157,8 @@ pub(crate) fn verified_folders(
             verified_through_uid: cursor.last_uid,
             staged_messages: cursor.staged,
             complete: cursor.completed,
+            scan_started_at: cursor.scan_started_at.clone(),
+            scan_completed_at: cursor.scan_completed_at.clone(),
         })
         .collect()
 }
