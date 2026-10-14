@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update Rustls to 0.23.46 to remediate four newly reported TLS advisories;
+  enforce the dependency advisory gate against the refreshed lockfile.
 - Make the paused-tenant scheduler regression assert that unrelated work starts
   before the actual cooldown deadline, rather than imposing an arbitrary
   half-cooldown latency cutoff that flakes under loaded CI runners.
