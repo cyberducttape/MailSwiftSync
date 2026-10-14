@@ -3,8 +3,8 @@
 ## Unreleased
 
 - Reject ASCII control octets and invalid UTF-8 in IMAP `LIST` fields and
-  literal continuations, so malformed folder inventories cannot pass endpoint
-  readiness.
+  mailbox-name literals and continuations, so malformed folder inventories
+  cannot pass endpoint readiness.
 - Distinguish the fixed mailbox-name field from RFC 5258 trailing `LIST`
   extension fields; reject literal-valued extension fields explicitly instead
   of misclassifying their payload as a mailbox name.

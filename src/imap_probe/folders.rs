@@ -257,6 +257,9 @@ pub(super) fn record_list_entry(
         Some(bytes) => {
             std::str::from_utf8(bytes)
                 .map_err(|_| "IMAP LIST mailbox literal was not valid UTF-8".to_owned())?;
+            if bytes.iter().any(u8::is_ascii_control) {
+                return Err("IMAP LIST mailbox literal contained a control octet".to_owned());
+            }
         }
         None => {
             list_parser::mailbox_name(line)

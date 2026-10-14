@@ -443,6 +443,30 @@ fn list_inventory_rejects_invalid_utf8_in_mailbox_fields() {
 }
 
 #[test]
+fn list_inventory_rejects_control_octets_in_mailbox_name_literals() {
+    let response = b"* LIST (\\HasNoChildren) \"/\" {6}\r\nIN\x01BOX\r\na005 OK LIST completed\r\n";
+
+    let mut summary_stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let summary_error =
+        read_imap_list_response(&mut summary_stream, "a005", &mut buffer).unwrap_err();
+    assert!(summary_error.contains("mailbox literal contained a control octet"));
+
+    let mut detail_stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    let detail_error = read_imap_list_response_with_mailboxes(
+        &mut detail_stream,
+        "a005",
+        &mut buffer,
+        &mut mailboxes,
+    )
+    .unwrap_err();
+    assert!(detail_error.contains("mailbox literal contained a control octet"));
+    assert!(mailboxes.is_empty());
+}
+
+#[test]
 fn list_literal_parser_rejects_invalid_utf8_in_extension_continuation() {
     let response =
         b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects \xff\r\na005 OK LIST completed\r\n";
