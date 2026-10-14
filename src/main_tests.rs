@@ -708,6 +708,17 @@ fn typed_folder_mapping_rejects_ambiguous_or_unsafe_names() {
     form.profile.folder_mapping_rules.truncate(1);
     form.profile.folder_mapping_rules[0] = FolderMappingRule {
         source: "bad=folder".into(),
+        destination: "Archive".into(),
+        exclude: false,
+    };
+    let error = form.validate_for_import().unwrap_err();
+    assert!(
+        error.contains("Source folder names cannot contain '='"),
+        "{error}"
+    );
+
+    form.profile.folder_mapping_rules[0] = FolderMappingRule {
+        source: "bad=folder".into(),
         destination: String::new(),
         exclude: true,
     };
