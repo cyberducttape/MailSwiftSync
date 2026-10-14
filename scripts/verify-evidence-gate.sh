@@ -215,6 +215,8 @@ for filename in files:
                 errors.append(f"{filename}: large-mailbox-100k does not contain 100,000 messages")
             if scenario == "large-mailbox-20gb" and (observations.get("large_mailbox_20gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
                 errors.append(f"{filename}: large-mailbox-20gb does not contain at least 20 GiB")
+            if scenario == "large-mailbox-50gb" and (observations.get("large_mailbox_50gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-50gb does not contain at least 50 GiB")
             if scenario == "large-messages" and (observations.get("large_messages", {}).get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0) or (phase != "dry_pilot" and summary.get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0))):
                 errors.append(f"{filename}: large-messages does not contain a message at least 10 MiB")
             if scenario == "unicode-folders" and (observations.get("unicode_folders", {}).get("observed") is not True or summary.get("unicode_folders_observed") is not True):
@@ -322,6 +324,7 @@ for filename in files:
         mailbox_observation_requirements = (
             ("large-mailbox-100k", "large_mailbox_100k", "messages", "source_messages", "minimum_messages"),
             ("large-mailbox-20gb", "large_mailbox_20gb", "bytes", "source_bytes", "minimum_bytes"),
+            ("large-mailbox-50gb", "large_mailbox_50gb", "bytes", "source_bytes", "minimum_bytes"),
         )
         proof_mailboxes = proof.get("mailboxes")
         if not isinstance(proof_mailboxes, list):

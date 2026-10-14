@@ -139,6 +139,7 @@ class EvidenceGateTests(unittest.TestCase):
                 "scenario_observations": {
                     "large_mailbox_100k": {"mailbox_job_id": "job-a", "messages": 100000},
                     "large_mailbox_20gb": {"mailbox_job_id": "job-a", "bytes": 20 * 1024**3},
+                    "large_mailbox_50gb": {"mailbox_job_id": "job-a", "bytes": 50 * 1024**3},
                     "large_messages": {"maximum_message_bytes": 10485760},
                     "unicode_folders": {"observed": True},
                     "special_use_folders": {"observed": True},
@@ -212,6 +213,14 @@ class EvidenceGateTests(unittest.TestCase):
                 "large-mailbox-20gb per-mailbox observation does not match verified customer-proof evidence",
                 output,
             )
+            self.assertIn(
+                "large-mailbox-50gb per-mailbox observation does not match verified customer-proof evidence",
+                output,
+            )
+            self.assertIn(
+                "large-mailbox-50gb does not contain at least 50 GiB",
+                output,
+            )
 
             # Dry preflight evidence describes a no-transfer phase. It must
             # not be rejected for lacking live transfer totals, while the
@@ -244,6 +253,7 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("dry-pilot.json: dry_pilot must not report transfer totals", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-100k", rerun_output)
             self.assertNotIn("dry-pilot.json: large-mailbox-20gb", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-50gb", rerun_output)
 
             # A basename check alone does not keep a qualification bundle
             # self-contained: a symlink can still resolve outside the bundle.

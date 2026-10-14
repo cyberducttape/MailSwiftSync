@@ -36,6 +36,7 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
         "scenario_observations": {
             "large_mailbox_100k": {"mailbox_job_id": "job", "messages": 100000},
             "large_mailbox_20gb": {"mailbox_job_id": "job", "bytes": 20 * 1024**3},
+            "large_mailbox_50gb": {"mailbox_job_id": "job", "bytes": 50 * 1024**3},
             "large_messages": {"maximum_message_bytes": 10 * 1024 * 1024},
             "unicode_folders": {"observed": True},
             "special_use_folders": {"observed": True},
