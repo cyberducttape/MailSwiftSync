@@ -269,8 +269,9 @@ impl Form {
             }
             // imapsync 2.314 parses --f1f2 with a split limit of two, so '='
             // is valid in the destination but cannot be represented in the
-            // source-side key. Keep this restriction local to the source.
-            if source.contains('=') {
+            // source-side key. Exclusions use separately escaped regexes and
+            // do not have this limitation.
+            if !rule.exclude && source.contains('=') {
                 return Err(
                     "Source folder names cannot contain '=' in typed mappings because imapsync --f1f2 uses it as the source/destination separator.".into(),
                 );

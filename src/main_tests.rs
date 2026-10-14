@@ -711,11 +711,7 @@ fn typed_folder_mapping_rejects_ambiguous_or_unsafe_names() {
         destination: String::new(),
         exclude: true,
     };
-    let error = form.validate_for_import().unwrap_err();
-    assert!(
-        error.contains("Source folder names cannot contain '='"),
-        "{error}"
-    );
+    assert!(form.validate_for_import().is_ok());
 
     form.profile.folder_mapping_rules = vec![
         FolderMappingRule {
@@ -748,6 +744,19 @@ fn typed_folder_exclusion_is_anchored_in_engine_arguments() {
         .find(|window| window[0] == "--exclude")
         .expect("typed exclusion argument");
     assert_eq!(exclusion[1], r"^(?:\[Gmail\]/Spam\.\*)$");
+
+    form.profile.folder_mapping_rules[0] = FolderMappingRule {
+        source: "Archive=2026".into(),
+        destination: String::new(),
+        exclude: true,
+    };
+    assert!(form.validate_for_import().is_ok());
+    let args = form.args(true);
+    let exclusion = args
+        .windows(2)
+        .find(|window| window[0] == "--exclude")
+        .expect("equals-containing exclusion argument");
+    assert_eq!(exclusion[1], r"^(?:Archive=2026)$");
 }
 
 #[test]

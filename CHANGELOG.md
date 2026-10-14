@@ -2,9 +2,8 @@
 
 ## Unreleased
 
-- Document that typed imapsync folder mappings reject `=` in source names,
-  while destination names may contain it; keep this syntax limitation visible
-  until an alternate mapping strategy is qualified.
+- Document that typed imapsync source-to-destination mappings reject `=` in
+  source names while destination names and typed exclusions may contain it.
 - Refresh the locked `libc`, `skrifa`, `uuid`, and `zeroize` dependencies and
   pin workflow artifact uploads to `actions/upload-artifact` v7.0.2; validate
   the combined update against the current ZIP 9 / Calamine ZIP 8 lock graph.
