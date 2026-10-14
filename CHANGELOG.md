@@ -39,9 +39,9 @@
   from producing records that the strict schema would reject.
 - Require the live provider qualification gate to include a direct-imapsync
   comparison for each required large-mailbox case, bound to the tested engine
-  binary, dataset and source/destination baselines; carry the measurement and
-  artifact digests into the qualification pack so its digest covers the A/B
-  claim.
+  binary, dataset and source/destination baselines; verify retained snapshot
+  and run-artifact files against their declared digests; carry measurements
+  and artifact references into the qualification-pack digest.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an
