@@ -5,7 +5,7 @@
 |---|---|
 | Status | Technical Preview |
 | Package version | `0.1.0-alpha.1` |
-| SQLite schema version | `31` |
+| SQLite schema version | `33` |
 | Last reviewed | 2026-10-12 |
 | Qualified engine | `imapsync 2.314` |
 <!-- release-metadata:end -->
@@ -102,7 +102,7 @@ not become live qualification without reviewed evidence.
 | Multi-factor matching | ✅ Wired for TLS imapsync | Message-ID plus metadata fallback runs against independently fetched source/destination records |
 | Source/destination message extraction | ✅ Wired for TLS imapsync | Bounded authenticated IMAP LIST/SELECT/UID FETCH path; plain IMAP fails closed |
 | Missing/extra/changed detection | ✅ Wired | Durable mismatch rows commit with terminal evidence and render in the operator verification report; GUI pagination remains limited |
-| Durable aggregate evidence storage | ✅ Wired | SQLite schema version is generated above; aggregate and supplied message counters and per-attempt transfer-pass provenance survive reports |
+| Durable aggregate evidence storage | ✅ Wired | SQLite schema version is generated above; aggregate and supplied message counters, per-attempt transfer-pass provenance, and standalone reverification folder observations survive reports |
 | Plan-aware verification modes | ⚠️ Fail-closed | `automap`, `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse independent exact message evidence; bounded body proof is available only for stable metadata-preserving plans |
 | Bounded body-content proof | ⚠️ Wired, not provider-qualified | Explicit encrypted-imapsync mode hashes bounded RFC822 bodies on both sides, persists only the proof classification/mismatches, and fails closed on coverage or byte-budget violations |
 

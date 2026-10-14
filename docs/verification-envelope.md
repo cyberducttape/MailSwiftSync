@@ -284,9 +284,12 @@ because the UID snapshot is unchanged. The two endpoints are still observed
 at different times. Delivery, user actions, server-side rules, and flag changes
 between those observations can therefore appear as missing,
 extra, changed, or flag differences even when the transfer itself was correct.
-The evidence records the per-folder UID snapshot and verification run identity;
-it is not a global cross-provider timestamp or a claim that mail flow was
-quiescent.
+Transfer-pass and standalone CLI reverification provenance record each
+folder's UTC scan-start and scan-completion times, UID snapshot, and
+verification run identity. Legacy ledger rows have no folder timestamps and
+are represented as unknown, not backfilled. Folder timestamps make the
+observation window auditable; they are not a global cross-provider timestamp
+or a claim that mail flow was quiescent.
 
 For a cutover, operators must either pause inbound delivery and mailbox edits
 for the verification window or use an explicit final-delta protocol: complete

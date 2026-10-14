@@ -69,7 +69,7 @@ pub enum PassSide {
 }
 
 impl PassSide {
-    fn as_i64(self) -> i64 {
+    pub(super) fn as_i64(self) -> i64 {
         match self {
             Self::Source => 0,
             Self::Destination => 1,
@@ -85,6 +85,68 @@ impl PassSide {
     }
 }
 
+pub(super) fn validate_verification_folder_observations(
+    folders: &[TransferPassFolder],
+) -> rusqlite::Result<()> {
+    if folders.iter().any(|folder| {
+        !valid_digest(&folder.folder_digest)
+            || !folder
+                .scan_started_at
+                .as_deref()
+                .is_some_and(valid_utc_scan_timestamp)
+            || folder.complete != folder.scan_completed_at.is_some()
+            || folder
+                .scan_completed_at
+                .as_deref()
+                .is_some_and(|timestamp| !valid_utc_scan_timestamp(timestamp))
+    }) {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(())
+}
+
+pub(super) fn insert_verification_folder_observations(
+    tx: &rusqlite::Transaction<'_>,
+    run_id: &str,
+    folders: &[TransferPassFolder],
+) -> rusqlite::Result<()> {
+    validate_verification_folder_observations(folders)?;
+    let mut insert = tx.prepare_cached(
+        "INSERT INTO verification_run_folders(run_id,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete,scan_started_at,scan_completed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+    )?;
+    for folder in folders {
+        insert.execute(params![
+            run_id,
+            folder.side.as_i64(),
+            folder.folder_digest,
+            sql_u64(folder.uidvalidity)?,
+            sql_u64(folder.uidnext)?,
+            sql_u64(folder.exists)?,
+            sql_u64(folder.verified_through_uid)?,
+            sql_u64(folder.staged_messages)?,
+            folder.complete,
+            folder.scan_started_at,
+            folder.scan_completed_at,
+        ])?;
+    }
+    Ok(())
+}
+
+fn valid_utc_scan_timestamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 24
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && bytes[19] == b'.'
+        && bytes[23] == b'Z'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7 | 10 | 13 | 16 | 19 | 23) || byte.is_ascii_digit()
+        })
+}
+
 /// One verified folder on one side, as the verifier observed it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TransferPassFolder {
@@ -96,6 +158,10 @@ pub struct TransferPassFolder {
     pub verified_through_uid: u64,
     pub staged_messages: u64,
     pub complete: bool,
+    /// UTC interval for this folder's independent scan; NULL for pre-v32
+    /// ledger rows or folders that did not finish scanning.
+    pub scan_started_at: Option<String>,
+    pub scan_completed_at: Option<String>,
 }
 
 /// One recorded attempt with everything the ledger knows about it.
@@ -294,9 +360,18 @@ impl StateStore {
     ) -> rusqlite::Result<()> {
         if method.is_empty()
             || outcome.is_empty()
-            || folders
-                .iter()
-                .any(|folder| !valid_digest(&folder.folder_digest))
+            || folders.iter().any(|folder| {
+                !valid_digest(&folder.folder_digest)
+                    || !folder
+                        .scan_started_at
+                        .as_deref()
+                        .is_some_and(valid_utc_scan_timestamp)
+                    || folder.complete != folder.scan_completed_at.is_some()
+                    || folder
+                        .scan_completed_at
+                        .as_deref()
+                        .is_some_and(|timestamp| !valid_utc_scan_timestamp(timestamp))
+            })
         {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -310,7 +385,7 @@ impl StateStore {
         }
         {
             let mut insert = tx.prepare_cached(
-                "INSERT INTO transfer_pass_folders(run_id,attempt,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                "INSERT INTO transfer_pass_folders(run_id,attempt,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete,scan_started_at,scan_completed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             )?;
             for folder in folders {
                 insert.execute(params![
@@ -324,6 +399,8 @@ impl StateStore {
                     sql_u64(folder.verified_through_uid)?,
                     sql_u64(folder.staged_messages)?,
                     folder.complete,
+                    folder.scan_started_at,
+                    folder.scan_completed_at,
                 ])?;
             }
         }
@@ -380,7 +457,7 @@ impl StateStore {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut folders = self.connection.prepare_cached(
-            "SELECT side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete FROM transfer_pass_folders WHERE run_id=?1 AND attempt=?2 ORDER BY side,folder_digest",
+            "SELECT side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete,scan_started_at,scan_completed_at FROM transfer_pass_folders WHERE run_id=?1 AND attempt=?2 ORDER BY side,folder_digest",
         )?;
         for record in &mut records {
             let progress_json: Option<String> = self.connection.query_row(
@@ -426,6 +503,8 @@ impl StateStore {
                         verified_through_uid: row.get::<_, i64>(5)? as u64,
                         staged_messages: row.get::<_, i64>(6)? as u64,
                         complete: row.get(7)?,
+                        scan_started_at: row.get(8)?,
+                        scan_completed_at: row.get(9)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -442,6 +521,50 @@ impl StateStore {
     ) -> rusqlite::Result<std::collections::HashMap<String, Vec<TransferPassRecord>>> {
         transfer_passes_for_runs_connection(&self.connection, run_ids)
     }
+
+    /// Load standalone verification folder observations in bounded batches.
+    pub fn verification_folders_for_runs(
+        &self,
+        run_ids: &[String],
+    ) -> rusqlite::Result<std::collections::HashMap<String, Vec<TransferPassFolder>>> {
+        verification_folders_for_runs_connection(&self.connection, run_ids)
+    }
+}
+
+pub(super) fn verification_folders_for_runs_connection(
+    connection: &rusqlite::Connection,
+    run_ids: &[String],
+) -> rusqlite::Result<std::collections::HashMap<String, Vec<TransferPassFolder>>> {
+    const RUN_ID_BATCH: usize = 400;
+    let mut result = std::collections::HashMap::new();
+    for chunk in run_ids.chunks(RUN_ID_BATCH) {
+        let placeholders = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT run_id,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete,scan_started_at,scan_completed_at FROM verification_run_folders WHERE run_id IN ({placeholders}) ORDER BY run_id,side,folder_digest"
+        );
+        let mut statement = connection.prepare(&query)?;
+        for row in statement.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                TransferPassFolder {
+                    side: PassSide::from_i64(row.get(1)?)?,
+                    folder_digest: row.get(2)?,
+                    uidvalidity: super::sqlite_u64(row.get(3)?)?,
+                    uidnext: super::sqlite_u64(row.get(4)?)?,
+                    exists: super::sqlite_u64(row.get(5)?)?,
+                    verified_through_uid: super::sqlite_u64(row.get(6)?)?,
+                    staged_messages: super::sqlite_u64(row.get(7)?)?,
+                    complete: row.get(8)?,
+                    scan_started_at: row.get(9)?,
+                    scan_completed_at: row.get(10)?,
+                },
+            ))
+        })? {
+            let (run_id, folder) = row?;
+            result.entry(run_id).or_insert_with(Vec::new).push(folder);
+        }
+    }
+    Ok(result)
 }
 
 pub(super) fn transfer_passes_for_runs_connection(
@@ -508,7 +631,7 @@ pub(super) fn transfer_passes_for_runs_connection(
         }
 
         let folder_query = format!(
-            "SELECT run_id,attempt,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete FROM transfer_pass_folders WHERE run_id IN ({placeholders}) ORDER BY run_id,attempt,side,folder_digest"
+            "SELECT run_id,attempt,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete,scan_started_at,scan_completed_at FROM transfer_pass_folders WHERE run_id IN ({placeholders}) ORDER BY run_id,attempt,side,folder_digest"
         );
         let mut folders = connection.prepare(&folder_query)?;
         for row in folders.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
@@ -524,6 +647,8 @@ pub(super) fn transfer_passes_for_runs_connection(
                     verified_through_uid: row.get::<_, i64>(7)? as u64,
                     staged_messages: row.get::<_, i64>(8)? as u64,
                     complete: row.get(9)?,
+                    scan_started_at: row.get(10)?,
+                    scan_completed_at: row.get(11)?,
                 },
             ))
         })? {

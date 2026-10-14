@@ -276,9 +276,7 @@ impl App {
                                                         evidence.verification_outcome(),
                                                     )),
                                                     self.language.text(
-                                                        evidence
-                                                            .verification_outcome()
-                                                            .display_label()
+                                                        evidence.verification_outcome_label()
                                                     ),
                                                     self.language
                                                         .message(verification_status_key(evidence))
@@ -534,7 +532,7 @@ impl App {
                             (
                                 self.language.message("ui.verification-outcome"),
                                 self.language
-                                    .text(evidence.verification_outcome().display_label())
+                                    .text(evidence.verification_outcome_label())
                                     .to_owned(),
                             ),
                             (self.language.message("ui.message-coverage"), {

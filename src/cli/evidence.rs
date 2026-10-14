@@ -359,12 +359,12 @@ fn run_reverify_one(
         &cancel,
         Some(&stage_path),
     );
-    let (evidence, mismatches, folder_count) = match result {
+    let (evidence, mismatches, folder_cursors) = match result {
         Ok(crate::runner::MessageVerificationResult {
             evidence,
             mismatches,
             folders,
-        }) => (evidence, mismatches, folders.len()),
+        }) => (evidence, mismatches, folders),
         Err(error) => {
             return match store.finish_run(&run_id, "verification_failed", &error) {
                 Ok(()) => Err(format!("Reverification failed: {error}")),
@@ -374,14 +374,20 @@ fn run_reverify_one(
             };
         }
     };
+    let folder_observations =
+        crate::controller::pass_provenance::verified_folders(project_id, &folder_cursors);
+    let folder_count = folder_observations.len();
     let detail = format!("verification-only mode={mode}; folders={folder_count}");
     if let Err(error) = store.finish_verification_only_run(
         project_id,
         job_id,
         &run_id,
-        &evidence,
-        &mismatches,
-        &detail,
+        core::VerificationOnlyRun {
+            evidence: &evidence,
+            mismatches: &mismatches,
+            folders: &folder_observations,
+            detail: &detail,
+        },
     ) {
         let failure_detail = format!("verification-only evidence persistence failed: {error}");
         return Err(
@@ -415,7 +421,7 @@ fn run_reverify_one(
         &evidence,
         &run_id,
         mode,
-        folder_count,
+        &folder_observations,
         &mismatches,
     ))
 }
@@ -656,12 +662,12 @@ fn reverify_result_json(
     evidence: &core::MailboxEvidence,
     run_id: &str,
     mode: &str,
-    folder_count: usize,
+    folder_observations: &[core::TransferPassFolder],
     mismatches: &core::MismatchSet,
 ) -> serde_json::Value {
     serde_json::json!({
         "format": "mailswiftsync.reverify",
-        "format_version": 1,
+        "format_version": 2,
         "run_id": run_id,
         "mode": mode,
         "verification_outcome": evidence.verification_outcome().as_str(),
@@ -686,7 +692,8 @@ fn reverify_result_json(
         "rfc_message_id_matches": evidence.rfc_message_id_matches,
         "synthetic_identity_matches": evidence.synthetic_identity_matches,
         "mismatch_rows": core::MismatchSource::mismatch_count(mismatches),
-        "folders": folder_count,
+        "folders": folder_observations.len(),
+        "folder_observations": folder_observations,
         "note": "Verification-only observation; the original migration result is unchanged and differences may reflect legitimate post-migration activity."
     })
 }
@@ -1299,13 +1306,31 @@ mod tests {
             excepted_messages: 0,
         });
         let mismatches = crate::core::MismatchSet::default();
-        let output = super::reverify_result_json(&evidence, "run-1", "metadata", 3, &mismatches);
+        let folder = crate::core::TransferPassFolder {
+            side: crate::core::PassSide::Source,
+            folder_digest: "a".repeat(64),
+            uidvalidity: 7,
+            uidnext: 9,
+            exists: 4,
+            verified_through_uid: 8,
+            staged_messages: 4,
+            complete: true,
+            scan_started_at: Some("2026-10-14T03:00:00.000Z".into()),
+            scan_completed_at: Some("2026-10-14T03:01:00.000Z".into()),
+        };
+        let output =
+            super::reverify_result_json(&evidence, "run-1", "metadata", &[folder], &mismatches);
         assert_eq!(output["format"], "mailswiftsync.reverify");
-        assert_eq!(output["format_version"], 1);
+        assert_eq!(output["format_version"], 2);
         assert_eq!(output["verification_status"], "verified_with_exceptions");
         assert_eq!(output["message_coverage"]["checked"], 4);
         assert_eq!(output["flag_verification"]["compared"], 2);
         assert_eq!(output["flag_verification"]["total"], 4);
+        assert_eq!(output["folders"], 1);
+        assert_eq!(
+            output["folder_observations"][0]["scan_started_at"],
+            "2026-10-14T03:00:00.000Z"
+        );
     }
 
     #[test]

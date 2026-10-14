@@ -187,8 +187,15 @@ impl ProjectExportReader<'_> {
             .store
             .transfer_passes_for_runs(&run_ids)
             .map_err(|error| error.to_string())?;
+        let mut verification_folders = self
+            .store
+            .verification_folders_for_runs(&run_ids)
+            .map_err(|error| error.to_string())?;
         for mut report_run in batch.drain(..) {
             report_run.transfer_passes = passes.remove(&report_run.run.id).unwrap_or_default();
+            report_run.verification_folders = verification_folders
+                .remove(&report_run.run.id)
+                .unwrap_or_default();
             visit(report_run)?;
         }
         Ok(())
@@ -217,6 +224,7 @@ pub(super) fn report_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<R
         },
         unfinished_transfer_attempt_count: row.get::<_, i64>(13)? as u64,
         transfer_passes: Vec::new(),
+        verification_folders: Vec::new(),
     })
 }
 

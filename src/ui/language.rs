@@ -587,7 +587,7 @@ mod tests {
             "body_hash",
             "native_dovecot",
             "Exact body match — bounded RFC822 SHA-256 fingerprints compared",
-            "Exact metadata match — message bodies not compared",
+            "Aggregate totals match — individual messages not compared",
             "Probable metadata match — message bodies not compared",
             "Ambiguous metadata result — message bodies not compared",
             "Message flags or keywords differ",

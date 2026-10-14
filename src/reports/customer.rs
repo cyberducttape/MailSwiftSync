@@ -164,7 +164,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "scope": value.evidence_scope().label(),
                         "verification_method": value.verification_method().as_str(),
                         "verification_outcome": value.verification_outcome().as_str(),
-                        "verification_outcome_label": value.verification_outcome().display_label(),
+                        "verification_outcome_label": value.verification_outcome_label(),
                         "verification_status": value.verification_status(),
                         "verification_level": value.verification_level(),
                         "evidence_level": value.evidence_level(),
@@ -657,7 +657,7 @@ mod tests {
         );
         assert_eq!(
             evidence["verification_outcome_label"],
-            "Exact metadata match — message bodies not compared"
+            "Aggregate totals match — individual messages not compared"
         );
         assert_eq!(
             evidence["evidence_level"],
