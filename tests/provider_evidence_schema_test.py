@@ -5,6 +5,7 @@ from pathlib import Path
 
 SCHEMA_PATH = Path(__file__).parent / "provider-evidence" / "schema.json"
 PACK_SCHEMA_PATH = Path(__file__).parent / "provider-evidence" / "pack-schema.json"
+POLICY_PATH = Path(__file__).parent / "provider-evidence" / "policy.json"
 
 
 def reject_duplicate_keys(pairs):
@@ -27,6 +28,17 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
             PACK_SCHEMA_PATH.read_text(encoding="utf-8"),
             object_pairs_hook=reject_duplicate_keys,
         )
+        cls.policy = json.loads(
+            POLICY_PATH.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+
+    def test_provider_policy_identities_are_accepted_by_the_evidence_schema(self):
+        for field in ("source_provider", "destination_provider"):
+            with self.subTest(field=field):
+                allowed = set(self.schema["properties"][field]["enum"])
+                for entry in self.policy["providers"]:
+                    self.assertIn(entry[field], allowed, f"{entry['pair']} uses unsupported {field}")
 
     def test_schema_has_no_duplicate_keys_or_open_boundaries(self):
         self.assertFalse(self.schema.get("additionalProperties"))
