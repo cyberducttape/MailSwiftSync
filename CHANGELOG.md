@@ -7,6 +7,11 @@
 - Clarify that OAuth rotation-recovery files are plaintext protected by local
   owner-only permissions, not encrypted, and that live expiry/rotation remains
   unqualified.
+- Clarify that imapsync automatic OAuth callback refresh is currently Unix-only;
+  Windows refuses callback plans until native command-shell quoting is qualified.
+  Align the alpha notes and operator wiki with this platform boundary, and
+  align operator runbook wording, and regression-test active OAuth-refresh
+  documentation surfaces.
 - Distinguish the fixed mailbox-name field from RFC 5258 trailing `LIST`
   extension fields; reject literal-valued extension fields explicitly instead
   of misclassifying their payload as a mailbox name.

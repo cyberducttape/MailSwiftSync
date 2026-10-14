@@ -336,6 +336,11 @@ reconciliation as successful.
   process memory for keyring persistence recovery, without attempting another
   provider exchange.
 
+  Automatic refresh callbacks are currently supported only on the Unix shell
+  path. Windows refuses plans requesting `--oauthrefreshcmd1/2` until native
+  command-shell quoting is qualified; on Windows, use a manually refreshed
+  access token or a qualified Unix host.
+
 ## Available in 0.1
 
 - Explicit Dovecot-native and imapsync engine paths.
@@ -606,7 +611,9 @@ reconciliation as successful.
   token is stored) automatic access-token refresh before each live launch,
   during qualified imapsync reconnects, and before independent verification.
   Rotated refresh tokens are persisted to the configured keyring or the run
-  fails closed.
+  fails closed. Automatic callback refresh is currently Unix-only; Windows
+  refuses `--oauthrefreshcmd1/2` until native command-shell quoting is
+  qualified.
   Remote Dovecot execution is deliberately disabled until the application has
   a delivery mechanism that cannot expose credentials through
   destination-host process inspection.
