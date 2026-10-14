@@ -186,6 +186,11 @@ fn packaging_claims_match_the_release_workflow() {
         "README must describe both Linux package formats produced by release CI"
     );
     assert!(
+        readme.contains("signed APT/RPM repository metadata")
+            && !readme.contains("packaged installers, and unattended production operation"),
+        "README must distinguish shipped packages from repository/support work that remains outstanding"
+    );
+    assert!(
         readiness.contains("deterministic signed Debian and RPM packages"),
         "release-readiness must describe both Linux package formats"
     );
