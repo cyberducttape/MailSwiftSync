@@ -534,7 +534,7 @@ impl App {
                             (
                                 self.language.message("ui.verification-outcome"),
                                 self.language
-                                    .text(evidence.verification_outcome().display_label())
+                                    .text(evidence.verification_outcome_label())
                                     .to_owned(),
                             ),
                             (self.language.message("ui.message-coverage"), {

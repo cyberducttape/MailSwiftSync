@@ -645,6 +645,24 @@ impl VerificationEvidence {
         }
     }
 
+    /// Presentation label for the outcome, qualified by the method that
+    /// produced it. An aggregate count match is not a per-message metadata
+    /// reconciliation, even though both share the durable exact-metadata
+    /// outcome code for compatibility with existing ledgers.
+    pub fn verification_outcome_label(&self) -> &'static str {
+        let outcome = self.verification_outcome();
+        if outcome == VerificationOutcome::ExactMetadataMatch
+            && matches!(
+                self.verification_method,
+                VerificationMethod::AggregateEngine | VerificationMethod::NativeDovecot
+            )
+        {
+            "Aggregate totals match — individual messages not compared"
+        } else {
+            outcome.display_label()
+        }
+    }
+
     pub fn unresolved_count(&self) -> Option<u64> {
         self.unmatched_messages
     }
@@ -962,6 +980,33 @@ mod tests {
             synthetic_identity_matches: 0,
             flag_verification: None,
         }
+    }
+
+    #[test]
+    fn outcome_label_distinguishes_aggregate_from_per_message_metadata() {
+        let mut evidence = missing_evidence();
+        evidence.destination_messages = evidence.source_messages;
+        evidence.destination_bytes = evidence.source_bytes;
+        evidence.unmatched_messages = Some(0);
+        evidence.missing_messages = 0;
+        evidence.verification_outcome = Some(VerificationOutcome::ExactMetadataMatch);
+        evidence.verification_method = VerificationMethod::NativeDovecot;
+        assert_eq!(
+            evidence.verification_outcome_label(),
+            "Aggregate totals match — individual messages not compared"
+        );
+
+        evidence.verification_method = VerificationMethod::AggregateEngine;
+        assert_eq!(
+            evidence.verification_outcome_label(),
+            "Aggregate totals match — individual messages not compared"
+        );
+
+        evidence.verification_method = VerificationMethod::MetadataReconciliation;
+        assert_eq!(
+            evidence.verification_outcome_label(),
+            "Exact metadata match — message bodies not compared"
+        );
     }
 
     #[test]

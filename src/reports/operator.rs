@@ -71,7 +71,7 @@ pub(crate) fn build_project_report(
                 markdown_escape(recommended_action),
                 markdown_escape(&acceptance_summary),
                 markdown_escape(&evidence_run_id),
-                evidence.verification_outcome().display_label(),
+                evidence.verification_outcome_label(),
                 evidence.verification_status(),
                 markdown_escape(&evidence_digest(
                     &evidence_run_id,
@@ -206,7 +206,7 @@ pub(crate) fn export_project_json(
                             "scope": evidence.evidence_scope().label(),
                             "verification_method": evidence.verification_method().as_str(),
                             "verification_outcome": evidence.verification_outcome().as_str(),
-                            "verification_outcome_label": evidence.verification_outcome().display_label(),
+                            "verification_outcome_label": evidence.verification_outcome_label(),
                             "verification_level": evidence.verification_level(),
                             "evidence_level": evidence.evidence_level(),
                             "reason": evidence.verification_reason(),
@@ -421,7 +421,7 @@ pub(crate) fn build_verification_report(
         markdown_escape(run.finished_at.as_deref().unwrap_or("in progress")),
         markdown_escape(&mailbox.job.state),
         evidence.verification_status(),
-        evidence.verification_outcome().display_label(),
+        evidence.verification_outcome_label(),
         match evidence.evidence_scope() {
             core::EvidenceScope::EngineConfirmed => "engine-confirmed summary",
             core::EvidenceScope::AggregateReconciled => "aggregate mailbox totals",

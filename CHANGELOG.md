@@ -4,6 +4,9 @@
 
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
+- Label exact aggregate-engine totals as an aggregate match rather than an
+  exact metadata match; reserve the latter wording for per-message metadata
+  reconciliation while keeping the persisted outcome code compatible.
 - Persist UTC scan-start and scan-completion timestamps per verified folder in
   transfer and standalone reverification provenance, export them in the
   project report and reverify response, and version the project-report JSON
