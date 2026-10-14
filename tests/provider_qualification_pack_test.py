@@ -233,6 +233,13 @@ class ProviderQualificationPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "metrics are incomplete or invalid"):
             self.build()
 
+    def test_pack_builder_rejects_duplicate_json_keys(self):
+        (self.evidence_dir / "live_pilot.json").write_text(
+            '{"provider":"first","provider":"second"}', encoding="utf-8"
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate JSON key: provider"):
+            self.build()
+
     def test_exceptions_and_aggregate_only_evidence_cannot_be_called_qualified(self):
         for result, confidence in (
             ("pass_with_exceptions", "high"),

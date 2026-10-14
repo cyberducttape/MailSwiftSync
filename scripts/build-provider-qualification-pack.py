@@ -100,6 +100,15 @@ def canonical_json(value: object) -> bytes:
     )
 
 
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
 def sha256(value: object) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()
 
@@ -114,8 +123,10 @@ def sha256_file(path: Path) -> str:
 
 def load_json(path: Path) -> dict:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        value = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
+        )
+    except (OSError, ValueError) as error:
         fail(f"{path}: invalid JSON: {error}")
     if not isinstance(value, dict):
         fail(f"{path}: root must be an object")

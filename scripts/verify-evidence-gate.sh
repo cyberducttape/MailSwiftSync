@@ -60,8 +60,19 @@ mapfile -t POLICY_ROWS < <(python3 - "$POLICY_FILE" <<'PY'
 import json
 import sys
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    policy = json.load(handle)
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        policy = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError) as error:
+    raise SystemExit(f"invalid provider evidence policy: {error}") from None
 
 providers = policy.get("providers")
 if not isinstance(providers, list) or not providers:
@@ -131,12 +142,22 @@ for row in "${POLICY_ROWS[@]}"; do
 file_provider=$(python3 - "$evidence_file" <<'PY'
 import json
 import sys
+
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
 try:
     with open(sys.argv[1], encoding="utf-8") as handle:
-        evidence = json.load(handle)
+        evidence = json.load(handle, object_pairs_hook=reject_duplicate_keys)
         value = f"{evidence.get('source_provider', '')}->{evidence.get('destination_provider', '')}"
-except (OSError, json.JSONDecodeError):
-        value = ""
+except (OSError, ValueError) as error:
+    print(f"{sys.argv[1]}: invalid JSON ({error})", file=sys.stderr)
+    value = ""
 print(value)
 PY
 )
@@ -158,6 +179,14 @@ import os
 import re
 import sys
 from pathlib import Path
+
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -184,15 +213,15 @@ schema = None
 if has_jsonschema:
     try:
         with open(schema_file, encoding="utf-8") as handle:
-            schema = json.load(handle)
-    except (OSError, json.JSONDecodeError) as error:
+            schema = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+    except (OSError, ValueError) as error:
         errors.append(f"Warning: Could not load schema for validation: {error}")
 
 for filename in files:
     try:
         with open(filename, encoding="utf-8") as handle:
-            evidence = json.load(handle)
-    except (OSError, json.JSONDecodeError) as error:
+            evidence = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+    except (OSError, ValueError) as error:
         errors.append(f"{filename}: invalid JSON ({error})")
         continue
 
@@ -388,7 +417,7 @@ for filename in files:
     else:
         try:
             with proof_path.open(encoding="utf-8") as handle:
-                proof = json.load(handle)
+                proof = json.load(handle, object_pairs_hook=reject_duplicate_keys)
             unsigned = dict(proof)
             expected_proof_digest = unsigned.pop("proof_digest", None)
             unsigned.pop("proof_signature", None)
@@ -406,7 +435,7 @@ for filename in files:
                         verify_proof_signature(proof, os.environ["MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY"])
                     except (ImportError, KeyError, TypeError, ValueError) as error:
                         errors.append(f"{filename}: customer proof Ed25519 signature verification failed ({error})")
-        except (OSError, json.JSONDecodeError, TypeError) as error:
+        except (OSError, ValueError, TypeError) as error:
             errors.append(f"{filename}: referenced customer proof is invalid ({error})")
     if isinstance(proof, dict):
         identity = proof.get("provider_identity")
@@ -518,8 +547,8 @@ phase_metadata = {}
 for filename in files:
     try:
         with open(filename, encoding="utf-8") as handle:
-            evidence = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+            evidence = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+    except (OSError, ValueError):
         continue
     phase = evidence.get("testing_phase")
     if phase not in required_phases:

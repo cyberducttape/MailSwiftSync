@@ -50,6 +50,9 @@
 - Stream SHA-256 hashing of provider qualification artifacts in fixed-size
   chunks so large retained logs and mailbox snapshots do not require a
   same-sized temporary memory allocation.
+- Reject duplicate JSON object keys in provider policies, evidence, and
+  customer proofs so parser differences cannot change signed qualification
+  semantics.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an

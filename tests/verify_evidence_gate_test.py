@@ -42,6 +42,26 @@ class EvidenceGateTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("Usage:", result.stderr)
 
+    def test_duplicate_keys_in_evidence_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_dir = Path(directory)
+            shutil.copy(SOURCE_EVIDENCE / "policy.json", evidence_dir / "policy.json")
+            shutil.copy(SOURCE_EVIDENCE / "schema.json", evidence_dir / "schema.json")
+            (evidence_dir / "duplicate.json").write_text(
+                '{"source_provider":"gmail","source_provider":"fastmail"}',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertIn("duplicate JSON key: source_provider", result.stderr)
+
     def test_release_mode_requires_pinned_provider_proof_signer(self):
         environment = os.environ.copy()
         environment.pop("MAILSWIFTSYNC_PROVIDER_EVIDENCE_PUBLIC_KEY", None)
@@ -311,6 +331,27 @@ class EvidenceGateTests(unittest.TestCase):
                 "large-mailbox-50gb does not contain at least 50 GiB",
                 output,
             )
+
+            valid_proof = json.dumps(proof)
+            duplicate_proof = valid_proof.replace(
+                '"format": "mailswiftsync-customer-proof"',
+                '"format": "mailswiftsync-customer-proof", '
+                '"format": "mailswiftsync-customer-proof"',
+                1,
+            )
+            (evidence_dir / "proof.json").write_text(duplicate_proof, encoding="utf-8")
+            duplicate_proof_result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            duplicate_proof_output = duplicate_proof_result.stdout + duplicate_proof_result.stderr
+            self.assertNotIn("Traceback", duplicate_proof_output)
+            self.assertIn("duplicate JSON key: format", duplicate_proof_output)
+            (evidence_dir / "proof.json").write_text(valid_proof, encoding="utf-8")
 
             oversized = json.loads(json.dumps(evidence))
             oversized["scenario_observations"]["large_mailbox_10gb"][
