@@ -198,7 +198,10 @@ new metadata verifier against real accounts.
 
 ### Credential Handling ✅ VERIFIED
 - ✅ Passwords stored in OS keyring, not in files
-- ✅ OAuth tokens refreshed automatically, stored securely
+- ✅ OAuth refresh uses OS-keyring/config references and short-lived private
+  token files; rotation-recovery records may contain plaintext credentials
+  protected only by owner-only filesystem permissions (not encryption), and
+  live-provider expiry/rotation qualification remains pending
 - ✅ Support bundle sanitizes credentials before export
 - ✅ No passwords in logs, events, or reports
 - ⚠️ Provider-specific authentication guidance is documented; live validation remains pending
