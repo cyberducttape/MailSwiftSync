@@ -73,42 +73,6 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
     Ok(messages)
 }
 
-/// Parse a bounded UID/FLAGS-only FETCH page used to detect flag mutations
-/// during a metadata scan. Other metadata is intentionally not inferred.
-pub(super) fn parse_message_fetch_flags_response_bytes(
-    response: &[u8],
-    mailbox: Arc<str>,
-    uidvalidity: Option<u64>,
-) -> Result<crate::core::ExtractedMessages, String> {
-    let mut messages = HashMap::new();
-    for record in fetch_records(response) {
-        let record = record?;
-        let uid = parsed_fetch_uid(&record.protocol_text, &mailbox, "IMAP FLAGS FETCH")?;
-        let flags = fetch_flags(&record.protocol_text);
-        let key = crate::core::MailboxMessageKey::with_shared_mailbox(
-            Arc::clone(&mailbox),
-            uidvalidity,
-            uid.to_string(),
-        );
-        if messages
-            .insert(
-                key,
-                crate::core::ExtractedMessage {
-                    message_id: None,
-                    uid: None,
-                    size_bytes: None,
-                    internal_date: None,
-                    flags,
-                },
-            )
-            .is_some()
-        {
-            return Err(format!("duplicate FLAGS FETCH UID {uid}"));
-        }
-    }
-    Ok(messages)
-}
-
 /// Extract bounded SHA-256 fingerprints from a FETCH response containing
 /// `BODY[]` literals. This is deliberately separate from the default metadata
 /// parser: callers must explicitly opt into downloading message bodies and
@@ -185,8 +149,11 @@ fn fetch_records(response: &[u8]) -> impl Iterator<Item = Result<FetchRecord<'_>
             Err(error) => return Some(Err(error)),
         };
         let first = String::from_utf8_lossy(frame.protocol.first()?);
-        if !is_fetch_record_line(&first) {
+        if !is_fetch_record_candidate(&first) {
             return None;
+        }
+        if !is_fetch_record_line(&first) {
+            return Some(Err("malformed IMAP FETCH response record".to_owned()));
         }
         let protocol_text = frame
             .protocol
@@ -199,6 +166,15 @@ fn fetch_records(response: &[u8]) -> impl Iterator<Item = Result<FetchRecord<'_>
             protocol_text,
         }))
     })
+}
+
+fn is_fetch_record_candidate(line: &str) -> bool {
+    let mut fields = line.split_whitespace();
+    fields.next() == Some("*")
+        && fields.next().is_some()
+        && fields
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("FETCH"))
 }
 
 fn is_fetch_record_line(line: &str) -> bool {

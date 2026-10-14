@@ -406,6 +406,94 @@ fn list_mailbox_parser_preserves_utf8_and_quoted_escapes() {
 }
 
 #[test]
+fn list_mailbox_parser_rejects_control_octets_in_quoted_and_atom_fields() {
+    for response in [
+        "* LIST (\\HasNoChildren) \"/\" \"INBOX\u{0001}\"",
+        "* LIST (\\HasNoChildren) \"/\" \"INBOX\\\u{0007}\"",
+        "* LIST (\\HasNoChildren) \"/\" INBOX\u{0000}",
+        "* LIST (\\HasNoChildren) \"/\"\t\"INBOX\"",
+    ] {
+        assert_eq!(parse_list_mailbox_name(response), None, "{response:?}");
+        let framed = format!("{response}\r\na005 OK LIST completed\r\n");
+        let mut stream = Cursor::new(framed.as_bytes());
+        let mut buffer = [0_u8; 4096];
+        assert!(
+            read_imap_list_response(&mut stream, "a005", &mut buffer).is_err(),
+            "summary inventory accepted {response:?}"
+        );
+    }
+}
+
+#[test]
+fn list_mailbox_parser_rejects_undefined_quoted_escapes() {
+    for response in [
+        r#"* LIST (\HasNoChildren) "/" "IN\qBOX""#,
+        r#"* LIST (\HasNoChildren) "/" "IN\ BOX""#,
+    ] {
+        assert_eq!(parse_list_mailbox_name(response), None, "{response:?}");
+        let framed = format!("{response}\r\na005 OK LIST completed\r\n");
+        let mut stream = Cursor::new(framed.as_bytes());
+        let mut buffer = [0_u8; 4096];
+        assert!(
+            read_imap_list_response(&mut stream, "a005", &mut buffer).is_err(),
+            "summary inventory accepted {response:?}"
+        );
+    }
+}
+
+#[test]
+fn list_literal_parser_rejects_control_octets_after_mailbox_name() {
+    let response = b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects\t(CHILDINFO (\"SUBSCRIBED\"))\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("control octet"));
+}
+
+#[test]
+fn list_inventory_rejects_invalid_utf8_in_mailbox_fields() {
+    let response = b"* LIST (\\HasNoChildren) \"/\" \"INBOX\xff\"\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("not valid UTF-8"));
+}
+
+#[test]
+fn list_inventory_rejects_control_octets_in_mailbox_name_literals() {
+    let response = b"* LIST (\\HasNoChildren) \"/\" {6}\r\nIN\x01BOX\r\na005 OK LIST completed\r\n";
+
+    let mut summary_stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let summary_error =
+        read_imap_list_response(&mut summary_stream, "a005", &mut buffer).unwrap_err();
+    assert!(summary_error.contains("mailbox literal contained a control octet"));
+
+    let mut detail_stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    let detail_error = read_imap_list_response_with_mailboxes(
+        &mut detail_stream,
+        "a005",
+        &mut buffer,
+        &mut mailboxes,
+    )
+    .unwrap_err();
+    assert!(detail_error.contains("mailbox literal contained a control octet"));
+    assert!(mailboxes.is_empty());
+}
+
+#[test]
+fn list_literal_parser_rejects_invalid_utf8_in_extension_continuation() {
+    let response =
+        b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects \xff\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("not valid UTF-8"));
+}
+
+#[test]
 fn list_parser_extracts_delimiter_after_attributes() {
     assert_eq!(
         parse_list_delimiter(r#"* LIST (\HasNoChildren \Sent) "/" "Sent Items""#),
@@ -524,6 +612,19 @@ fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
     );
     let second = &messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "9")];
     assert_eq!(second.message_id, None);
+}
+
+#[test]
+fn metadata_fetch_parser_rejects_malformed_fetch_candidates() {
+    let response = b"* 1 FETCH (UID 5 RFC822.SIZE 100)\r\n\
+                       * 2 FETCH\r\n\
+                       * 3 FETCH (UID 9 RFC822.SIZE 200)\r\n\
+                       v002 OK FETCH completed\r\n";
+    let error =
+        parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap_err();
+    // Do not echo parser details derived from untrusted server responses in
+    // assertion output; the stable predicate is sufficient for this test.
+    assert!(error.contains("malformed IMAP FETCH"));
 }
 
 #[test]
@@ -1081,26 +1182,16 @@ fn metadata_fetch_parser_rejects_duplicate_uids() {
 }
 
 #[test]
-fn all_fetch_parsers_enforce_the_imap_uid_domain() {
+fn metadata_and_body_fetch_parsers_enforce_the_imap_uid_domain() {
     let invalid_uids = ["0", "4294967296", "18446744073709551615"];
     for uid in invalid_uids {
-        let metadata =
-            format!("* 1 FETCH (UID {uid} RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n");
+        let metadata = format!(
+            "* 1 FETCH (UID {uid} FLAGS (\\Seen) RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n"
+        );
         assert!(
             super::parse_message_fetch_metadata_response_bytes(
                 metadata.as_bytes(),
                 "INBOX",
-                Some(77)
-            )
-            .unwrap_err()
-            .contains("outside the IMAP")
-        );
-
-        let flags = format!("* 1 FETCH (UID {uid} FLAGS (\\Seen))\r\nv002 OK FETCH completed\r\n");
-        assert!(
-            super::fetch_parser::parse_message_fetch_flags_response_bytes(
-                flags.as_bytes(),
-                std::sync::Arc::from("INBOX"),
                 Some(77)
             )
             .unwrap_err()

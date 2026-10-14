@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Make the paused-tenant scheduler regression assert that unrelated work starts
+  before the actual cooldown deadline, rather than imposing an arbitrary
+  half-cooldown latency cutoff that flakes under loaded CI runners.
+- Make the resolver-capacity test synchronize worker startup and cancel blocked
+  helpers after all slots are occupied, removing its two-second CI scheduling
+  assumption while retaining the slot-exhaustion and cleanup assertions.
+- Require a tracked CONDSTORE `HIGHESTMODSEQ` before collecting IMAP FLAGS for
+  fidelity evidence. Without it, continue metadata reconciliation but leave
+  flag/keyword coverage incomplete so an untracked mutable flag observation
+  cannot be represented as stable evidence; remove the ineffective extra FLAGS
+  round trips, align both the capability manifest and verification envelope,
+  and enforce the documented certification boundary with regression tests.
+  Parse MODSEQ only from a syntactically valid untagged OK response code with a
+  digits-only value, so unrelated or malformed server text cannot establish
+  flag-fidelity coverage.
+- Reject malformed quoted escapes, ASCII control octets, and invalid UTF-8 in
+  IMAP `LIST` fields, mailbox-name literals, and literal continuations, so
+  malformed folder inventories cannot pass endpoint readiness.
+- Keep server-derived FETCH parser details out of test assertion output while
+  retaining the malformed-record regression predicate.
+- Document the LIST scanner's intentional ASCII-control-octet mailbox-name
+  restriction as an interoperability boundary; RFC 3501 permits some such
+  quoted characters, so affected mailboxes fail closed as unsupported.
 - Correct the README's engine-profile instructions: hardened execution is the
   default, while compatibility mode is an explicit opt-in.
 - Clarify that OAuth rotation-recovery files are plaintext protected by local
@@ -77,6 +100,8 @@
 - Require a balanced parenthesized IMAP FETCH data list with exactly one
   top-level UID before sequence inventory records can count as exact coverage;
   reject truncated lists, missing delimiters, and duplicate UID items.
+- Reject malformed numeric-sequence FETCH records instead of silently
+  dropping them before metadata, flags, or body evidence is parsed.
 - Document that typed imapsync source-to-destination mappings reject `=` in
   source names while destination names and typed exclusions may contain it.
 - Clarify that verification cursors retained after interruption are recovery

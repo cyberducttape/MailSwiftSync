@@ -4,6 +4,7 @@ use super::{MAX_IMAP_LIST_INVENTORY_BYTES, MessageFetchBudget, read_with_deadlin
 use crate::imap_probe::{list_parser, literal_framing};
 use crate::imap_protocol::{atom_eq, is_tagged_response, is_untagged_response};
 use std::{
+    borrow::Cow,
     io::Read,
     time::{Duration, Instant},
 };
@@ -129,7 +130,13 @@ fn read_imap_list_response_inner<S: Read>(
             if line.len() < 2 || line[line.len() - 2] != b'\r' {
                 return Err("IMAP LIST response record did not end with CRLF".into());
             }
-            let text = String::from_utf8_lossy(&line);
+            let text = match std::str::from_utf8(&line) {
+                Ok(text) => Cow::Borrowed(text),
+                Err(_) if literal_header.is_some() || is_list_response_bytes(&line) => {
+                    return Err("IMAP LIST response record was not valid UTF-8".into());
+                }
+                Err(_) => String::from_utf8_lossy(&line),
+            };
             let text = text.trim_end_matches(['\r', '\n']);
 
             // A literal is one field inside a LIST response, not the end of
@@ -139,6 +146,11 @@ fn read_imap_list_response_inner<S: Read>(
                 if list_literal_size(text).is_some() {
                     return Err(
                         "IMAP LIST literal in trailing extension data is unsupported".into(),
+                    );
+                }
+                if text.bytes().any(|byte| byte.is_ascii_control()) {
+                    return Err(
+                        "IMAP LIST data after mailbox literal contained a control octet".into(),
                     );
                 }
                 if !text.is_empty() && !text.chars().next().is_some_and(char::is_whitespace) {
@@ -222,6 +234,12 @@ fn read_imap_list_response_inner<S: Read>(
     }
 }
 
+fn is_list_response_bytes(line: &[u8]) -> bool {
+    line.get(..7).is_some_and(|prefix| {
+        prefix.starts_with(b"* ") && prefix[2..6].eq_ignore_ascii_case(b"LIST") && prefix[6] == b' '
+    })
+}
+
 pub(super) fn record_list_entry(
     line: &str,
     literal_name: Option<&[u8]>,
@@ -239,6 +257,9 @@ pub(super) fn record_list_entry(
         Some(bytes) => {
             std::str::from_utf8(bytes)
                 .map_err(|_| "IMAP LIST mailbox literal was not valid UTF-8".to_owned())?;
+            if bytes.iter().any(u8::is_ascii_control) {
+                return Err("IMAP LIST mailbox literal contained a control octet".to_owned());
+            }
         }
         None => {
             list_parser::mailbox_name(line)

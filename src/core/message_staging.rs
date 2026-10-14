@@ -417,11 +417,11 @@ impl MessageMetadataStage {
                  PRIMARY KEY(side,mailbox,uidvalidity,uid)
              );
              CREATE INDEX IF NOT EXISTS staged_messages_id ON staged_messages(side,message_id,mailbox,uidvalidity,uid);
-             CREATE INDEX IF NOT EXISTS staged_messages_uid_numeric ON staged_messages(side,mailbox,uidvalidity,length(uid),uid);
              CREATE INDEX IF NOT EXISTS staged_messages_metadata ON staged_messages(side,date_key,size_bytes,mailbox,uidvalidity,uid);
              CREATE INDEX IF NOT EXISTS staged_messages_match_metadata ON staged_messages(side,match_mailbox,date_key,size_bytes,uidvalidity,uid);
              CREATE INDEX IF NOT EXISTS staged_messages_exact_source ON staged_messages(message_id,match_mailbox,date_key,size_bytes) WHERE side=0 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
              CREATE INDEX IF NOT EXISTS staged_messages_exact_destination ON staged_messages(message_id,mailbox,date_key,size_bytes,uidvalidity,uid) WHERE side=1 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
+             DROP INDEX IF EXISTS staged_messages_uid_numeric;
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
              CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, PRIMARY KEY(side,mailbox));
@@ -930,65 +930,6 @@ impl MessageMetadataStage {
         )
     }
 
-    /// Read a bounded UID-ordered page from the freshly staged mailbox. UIDs
-    /// are stored as text for compatibility, so order numerically in SQLite.
-    pub(crate) fn uid_page(
-        &self,
-        side: StagedMessageSide,
-        mailbox: &str,
-        uidvalidity: u64,
-        after_uid: u64,
-        limit: usize,
-    ) -> rusqlite::Result<Vec<u64>> {
-        let limit = i64::try_from(limit).map_err(|_| rusqlite::Error::InvalidQuery)?;
-        let connection = self.connection_ref()?;
-        let mut statement = connection.prepare_cached(
-            "SELECT uid FROM staged_messages WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND (length(uid),uid)>(length(?4),?4) ORDER BY length(uid),uid LIMIT ?5",
-        )?;
-        let rows = statement.query_map(
-            params![
-                side.as_i64(),
-                mailbox,
-                sqlite_i64(uidvalidity)?,
-                after_uid.to_string(),
-                limit
-            ],
-            |row| row.get::<_, String>(0),
-        )?;
-        rows.map(|row| {
-            row?.parse::<u64>()
-                .map_err(|_| rusqlite::Error::InvalidQuery)
-        })
-        .collect()
-    }
-
-    /// Check that a bounded refetch of mutable FLAGS still matches the
-    /// metadata page staged earlier in this scan. This is the fallback for
-    /// servers that cannot provide CONDSTORE mod-sequence stability.
-    pub(crate) fn flags_match_page(
-        &self,
-        side: StagedMessageSide,
-        messages: &ExtractedMessages,
-    ) -> rusqlite::Result<bool> {
-        let connection = self.connection_ref()?;
-        let mut statement = connection.prepare_cached(
-            "SELECT flags FROM staged_messages WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uid=?4",
-        )?;
-        for (key, message) in messages {
-            let uidvalidity = key.uidvalidity.map(sqlite_i64).transpose()?.unwrap_or(-1);
-            let staged: Option<Option<String>> = statement
-                .query_row(
-                    params![side.as_i64(), key.mailbox.as_ref(), uidvalidity, key.uid],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if staged != Some(message.flags.clone()) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
     pub(crate) fn sum_bytes(&self, side: StagedMessageSide) -> rusqlite::Result<u64> {
         self.connection_ref()?.query_row(
             "SELECT COALESCE(SUM(size_bytes), 0) FROM staged_messages WHERE side=?1",
@@ -1287,38 +1228,6 @@ mod tests {
                 )
             })
             .collect()
-    }
-
-    #[test]
-    fn uid_page_is_bounded_and_numerically_ordered() {
-        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
-        let side = StagedMessageSide::Source;
-        stage
-            .insert_messages(side, &page(42, [u32::MAX as u64, 10, 2]))
-            .unwrap();
-
-        assert_eq!(stage.uid_page(side, "INBOX", 42, 0, 2).unwrap(), [2, 10]);
-        assert_eq!(
-            stage.uid_page(side, "INBOX", 42, 10, 2).unwrap(),
-            [u32::MAX as u64]
-        );
-        assert!(
-            stage
-                .uid_page(side, "INBOX", 42, u32::MAX as u64, 2)
-                .unwrap()
-                .is_empty()
-        );
-        let plan: String = stage
-            .connection_ref()
-            .unwrap()
-            .query_row(
-                "EXPLAIN QUERY PLAN SELECT uid FROM staged_messages WHERE side=1 AND mailbox='INBOX' AND uidvalidity=42 AND (length(uid),uid)>(length('10'),'10') ORDER BY length(uid),uid LIMIT 2",
-                [],
-                |row| row.get(3),
-            )
-            .unwrap();
-        assert!(plan.contains("staged_messages_uid_numeric"), "{plan}");
-        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     }
 
     #[test]

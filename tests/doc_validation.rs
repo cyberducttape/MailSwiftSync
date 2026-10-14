@@ -316,6 +316,28 @@ fn capability_manifest_does_not_overstate_verification_resume() {
 }
 
 #[test]
+fn capability_manifest_discloses_the_modseq_requirement_for_flag_evidence() {
+    let manifest =
+        fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope should exist");
+
+    for document in [&manifest, &envelope] {
+        assert!(
+            document.contains("tracked CONDSTORE")
+                && document.contains("flag coverage")
+                && document.contains("incomplete"),
+            "flag-evidence documentation must disclose the no-MODSEQ coverage limit"
+        );
+    }
+    assert!(
+        !envelope.contains("The live FETCH already requests `FLAGS`")
+            && envelope.contains("selected folder returns a tracked CONDSTORE"),
+        "verification envelope must not imply FLAGS are always collected"
+    );
+}
+
+#[test]
 fn integration_harness_contains_a_throttled_mid_append_interruption_case() {
     let harness = fs::read_to_string("scripts/imap-integration-smoke.sh")
         .expect("IMAP integration harness should exist");
@@ -681,6 +703,17 @@ fn imap_fuzz_workflow_runs_targets_with_nightly() {
         !workflow.contains("run: cargo fuzz run"),
         "a plain cargo fuzz command inherits the stable repository toolchain"
     );
+}
+
+#[test]
+fn imap_list_control_octet_restriction_is_documented_as_a_compatibility_limit() {
+    let guide = std::fs::read_to_string("docs/imap-fuzzing.md")
+        .expect("IMAP parser behavior and fuzzing limits should be documented");
+    let guide = guide.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(guide.contains("intentionally rejects ASCII control octets"));
+    assert!(guide.contains("compatibility boundary"));
+    assert!(guide.contains("must fail closed"));
+    assert!(guide.contains("RFC 3501"));
 }
 
 #[test]
