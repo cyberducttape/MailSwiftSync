@@ -211,6 +211,26 @@ fn crash_recovery_docs_match_the_restored_ledger_integration_drill() {
 }
 
 #[test]
+fn capability_manifest_does_not_overstate_verification_resume() {
+    let manifest =
+        fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
+    let architecture =
+        fs::read_to_string("docs/architecture.md").expect("architecture guide should exist");
+
+    assert!(
+        manifest.contains(
+            "verification cursors are recovery context only and interrupted scans are refetched before evidence is reused"
+        ) && !manifest.contains("verification staging resumes from snapshot-bound cursors"),
+        "capability claims must not imply that staged verification pages are reused after interruption"
+    );
+    assert!(
+        architecture.contains("Cursors retained after an interruption are recovery context only")
+            && architecture.contains("they never authorize reuse of fetched pages"),
+        "the capability claim must remain aligned with the enforced architecture contract"
+    );
+}
+
+#[test]
 fn integration_harness_contains_a_throttled_mid_append_interruption_case() {
     let harness = fs::read_to_string("scripts/imap-integration-smoke.sh")
         .expect("IMAP integration harness should exist");
