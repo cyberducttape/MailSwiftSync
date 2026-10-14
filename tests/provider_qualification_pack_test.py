@@ -247,6 +247,12 @@ class ProviderQualificationPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "validation limit"):
             self.build()
 
+    def test_pack_builder_applies_smaller_policy_json_limit(self):
+        with self.policy_path.open("wb") as handle:
+            handle.truncate(MODULE.MAX_POLICY_JSON_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "exceeds the 1048576-byte validation limit"):
+            self.build()
+
     def test_exceptions_and_aggregate_only_evidence_cannot_be_called_qualified(self):
         for result, confidence in (
             ("pass_with_exceptions", "high"),

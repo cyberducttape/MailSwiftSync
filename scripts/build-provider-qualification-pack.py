@@ -26,6 +26,7 @@ from pathlib import Path
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_POLICY_JSON_BYTES = 1 * 1024 * 1024
 MAX_JSON_FILE_BYTES = 16 * 1024 * 1024
 MAX_METRIC_VALUE = (1 << 64) - 1
 REQUIRED_PHASES = {"dry_pilot", "live_pilot", "recovery_test"}
@@ -122,12 +123,12 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_json(path: Path) -> dict:
+def load_json(path: Path, maximum_bytes: int = MAX_JSON_FILE_BYTES) -> dict:
     try:
         with path.open("rb") as handle:
-            raw = handle.read(MAX_JSON_FILE_BYTES + 1)
-        if len(raw) > MAX_JSON_FILE_BYTES:
-            fail(f"{path}: JSON exceeds the {MAX_JSON_FILE_BYTES}-byte validation limit")
+            raw = handle.read(maximum_bytes + 1)
+        if len(raw) > maximum_bytes:
+            fail(f"{path}: JSON exceeds the {maximum_bytes}-byte validation limit")
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
     except (OSError, UnicodeError, ValueError) as error:
         fail(f"{path}: invalid JSON: {error}")
@@ -137,7 +138,7 @@ def load_json(path: Path) -> dict:
 
 
 def policy_row(policy_path: Path, pair: str) -> dict:
-    policy = load_json(policy_path)
+    policy = load_json(policy_path, MAX_POLICY_JSON_BYTES)
     rows = policy.get("providers")
     if not isinstance(rows, list):
         fail("provider policy must contain a providers array")
