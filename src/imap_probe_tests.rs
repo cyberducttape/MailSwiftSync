@@ -1182,26 +1182,16 @@ fn metadata_fetch_parser_rejects_duplicate_uids() {
 }
 
 #[test]
-fn all_fetch_parsers_enforce_the_imap_uid_domain() {
+fn metadata_and_body_fetch_parsers_enforce_the_imap_uid_domain() {
     let invalid_uids = ["0", "4294967296", "18446744073709551615"];
     for uid in invalid_uids {
-        let metadata =
-            format!("* 1 FETCH (UID {uid} RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n");
+        let metadata = format!(
+            "* 1 FETCH (UID {uid} FLAGS (\\Seen) RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n"
+        );
         assert!(
             super::parse_message_fetch_metadata_response_bytes(
                 metadata.as_bytes(),
                 "INBOX",
-                Some(77)
-            )
-            .unwrap_err()
-            .contains("outside the IMAP")
-        );
-
-        let flags = format!("* 1 FETCH (UID {uid} FLAGS (\\Seen))\r\nv002 OK FETCH completed\r\n");
-        assert!(
-            super::fetch_parser::parse_message_fetch_flags_response_bytes(
-                flags.as_bytes(),
-                std::sync::Arc::from("INBOX"),
                 Some(77)
             )
             .unwrap_err()

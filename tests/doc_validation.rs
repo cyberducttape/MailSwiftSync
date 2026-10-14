@@ -316,6 +316,28 @@ fn capability_manifest_does_not_overstate_verification_resume() {
 }
 
 #[test]
+fn capability_manifest_discloses_the_modseq_requirement_for_flag_evidence() {
+    let manifest =
+        fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope should exist");
+
+    for document in [&manifest, &envelope] {
+        assert!(
+            document.contains("tracked CONDSTORE")
+                && document.contains("flag coverage")
+                && document.contains("incomplete"),
+            "flag-evidence documentation must disclose the no-MODSEQ coverage limit"
+        );
+    }
+    assert!(
+        !envelope.contains("The live FETCH already requests `FLAGS`")
+            && envelope.contains("selected folder returns a tracked CONDSTORE"),
+        "verification envelope must not imply FLAGS are always collected"
+    );
+}
+
+#[test]
 fn integration_harness_contains_a_throttled_mid_append_interruption_case() {
     let harness = fs::read_to_string("scripts/imap-integration-smoke.sh")
         .expect("IMAP integration harness should exist");

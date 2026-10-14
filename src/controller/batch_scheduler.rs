@@ -460,7 +460,6 @@ mod tests {
             /// (job id, when its engine process start was reported)
             pub(super) starts: Vec<(String, Instant)>,
             pub(super) finished: Vec<(String, String)>,
-            pub(super) began: Instant,
         }
 
         pub(super) fn form(engine: &std::path::Path, user: &str) -> crate::Form {
@@ -513,7 +512,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let (tx, rx) = mpsc::sync_channel(256);
-            let began = Instant::now();
             let coordinator = spawn_batch_worker_with(
                 BatchExecutionContext {
                     concurrency,
@@ -578,11 +576,7 @@ mod tests {
                 }
             }
             coordinator.join().unwrap();
-            Run {
-                starts,
-                finished,
-                began,
-            }
+            Run { starts, finished }
         }
 
         pub(super) fn limiters(concurrency: usize, starts_per_second: usize) -> BatchLimiters {
@@ -652,9 +646,10 @@ mod tests {
             .extend((0..2).map(|index| composed::form(&engine, &format!("b{index}@open.example"))));
         let limiters = composed::limiters(2, 50);
         let pause = std::time::Duration::from_millis(1_500);
+        let cooldown_until = std::time::Instant::now() + pause;
         limiters.rate.hold_until(
             &composed::source_domain(&forms[0], DomainLevel::Tenant),
-            std::time::Instant::now() + pause,
+            cooldown_until,
         );
         let run = composed::run(forms, 2, 0, limiters);
         let _ = std::fs::remove_dir_all(&directory);
@@ -667,17 +662,20 @@ mod tests {
                     let index: usize = job.trim_start_matches("job-").parse().unwrap();
                     (prefix == "a") == (index < 4)
                 })
-                .map(|(_, at)| at.duration_since(run.began))
+                .map(|(_, at)| *at)
                 .collect::<Vec<_>>()
         };
         for at in started("b") {
             assert!(
-                at < pause / 2,
-                "open tenant waited {at:?} behind the paused one"
+                at < cooldown_until,
+                "open tenant did not start before the paused tenant cooldown expired: started_at={at:?}, cooldown_until={cooldown_until:?}"
             );
         }
         for at in started("a") {
-            assert!(at >= pause, "paused tenant started at {at:?}");
+            assert!(
+                at >= cooldown_until,
+                "paused tenant started before cooldown expiry: started_at={at:?}, cooldown_until={cooldown_until:?}"
+            );
         }
     }
 

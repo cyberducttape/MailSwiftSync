@@ -29,7 +29,6 @@ use fetch_pages::{
 };
 use fetch_parser::canonical_flag_set;
 use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
-use fetch_parser::parse_message_fetch_flags_response_bytes;
 use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 #[cfg(test)]
 use fetch_parser::{parse_message_fetch_metadata_response_bytes, parse_message_id_header};
@@ -295,18 +294,6 @@ trait MessageSink {
     /// server's EXISTS after a scan to require complete coverage of the
     /// current SELECT snapshot.
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String>;
-    fn uid_page(
-        &self,
-        _mailbox: &str,
-        _uidvalidity: u64,
-        _after_uid: u64,
-        _limit: usize,
-    ) -> Result<Vec<u64>, String> {
-        Err("message sink does not support bounded UID paging".to_owned())
-    }
-    fn flags_match_page(&self, _messages: &crate::core::ExtractedMessages) -> Result<bool, String> {
-        Ok(true)
-    }
     fn begin_mailbox_scan(
         &mut self,
         _mailbox: &str,
@@ -395,24 +382,6 @@ impl MessageSink for StageMessageSink<'_> {
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String> {
         self.stage
             .count_mailbox(self.side, mailbox, uidvalidity)
-            .map_err(|error| error.to_string())
-    }
-
-    fn uid_page(
-        &self,
-        mailbox: &str,
-        uidvalidity: u64,
-        after_uid: u64,
-        limit: usize,
-    ) -> Result<Vec<u64>, String> {
-        self.stage
-            .uid_page(self.side, mailbox, uidvalidity, after_uid, limit)
-            .map_err(|error| error.to_string())
-    }
-
-    fn flags_match_page(&self, messages: &crate::core::ExtractedMessages) -> Result<bool, String> {
-        self.stage
-            .flags_match_page(self.side, messages)
             .map_err(|error| error.to_string())
     }
 
@@ -915,13 +884,20 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             let tag = format!("v{:03}", page_number + 3);
             page_number = page_number.saturating_add(1);
             let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
+            // A flag observation is suitable for fidelity evidence only when
+            // the selected mailbox supplies a tracked MODSEQ that can detect
+            // concurrent flag changes through the end-of-scan snapshot.
+            // Re-reading FLAGS without MODSEQ only narrows the race window; it
+            // cannot establish that the observation remained stable.
+            let flags_field = if matches!(start_modseq, Some(ModseqSnapshot::Tracked(_))) {
+                " FLAGS"
+            } else {
+                ""
+            };
             let command = format!(
                 // RFC 3501 exposes system flags and custom keyword atoms
                 // through FLAGS; KEYWORDS is not a portable FETCH data item.
-                // The parser therefore compares observed keyword state, while
-                // the evidence model remains conservative about proving that
-                // every provider can store or preserve those keywords.
-                "{tag} UID FETCH {uid_set} (UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO CC SUBJECT DATE CONTENT-TYPE)]{body_field})\r\n"
+                "{tag} UID FETCH {uid_set} (UID{flags_field} RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO CC SUBJECT DATE CONTENT-TYPE)]{body_field})\r\n"
             );
             write_imap_command(
                 stream,
@@ -947,12 +923,20 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                     host,
                 ));
             }
-            let page_messages = parse_message_fetch_metadata_response_bytes_with_mailbox(
+            let mut page_messages = parse_message_fetch_metadata_response_bytes_with_mailbox(
                 &raw_response,
                 std::sync::Arc::clone(&mailbox_context),
                 Some(start_uidvalidity),
             )?;
             validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
+            if !matches!(start_modseq, Some(ModseqSnapshot::Tracked(_))) {
+                // Servers may send unsolicited FETCH updates. Never let an
+                // untracked FLAGS item leak into the evidence merely because
+                // it appeared alongside a requested metadata response.
+                page_messages
+                    .values_mut()
+                    .for_each(|message| message.flags = None);
+            }
             let body_page = body_hash
                 .map(|options| {
                     parse_message_fetch_body_hashes_response_bytes(
@@ -1031,68 +1015,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     if staged != start_exists {
         return Err(MailboxFetchError::Changed(format!(
             "{host}: folder {mailbox}: staged rows ({staged}) differ from EXISTS {start_exists}; rescan required"
-        )));
-    }
-
-    // FLAGS can change without changing UIDVALIDITY, UIDNEXT, or EXISTS.
-    // Re-read only this bounded page's mutable state and compare it to the
-    // metadata pass when the mailbox has no persistent CONDSTORE mod-sequence.
-    // With CONDSTORE, SELECT (CONDSTORE) enables race-free mod-sequence
-    // reporting and the end snapshot below detects mutations at lower cost.
-    let mut flags_changed = false;
-    let mut last_flags_uid = 0_u64;
-    let mut flags_page_number = 0usize;
-    while start_modseq == Some(ModseqSnapshot::Unsupported) || start_modseq.is_none() {
-        budget.check()?;
-        let staged_uid_page = sink.uid_page(
-            mailbox,
-            start_uidvalidity,
-            last_flags_uid,
-            MESSAGE_FETCH_PAGE_SIZE as usize,
-        )?;
-        if staged_uid_page.is_empty() {
-            break;
-        }
-        let (count, uid_set) = encode_uid_page(&staged_uid_page, staged_uid_page.len());
-        if count == 0 {
-            return Err(MailboxFetchError::Folder(format!(
-                "{host}: folder {mailbox}: could not encode staged UID page for FLAGS refetch"
-            )));
-        }
-        let uid_page = &staged_uid_page[..count];
-        let tag = format!("f{:03}", page_number + flags_page_number + 3);
-        flags_page_number = flags_page_number.saturating_add(1);
-        let command = format!("{tag} UID FETCH {uid_set} (UID FLAGS)\r\n");
-        write_imap_command(
-            stream,
-            command.as_bytes(),
-            Some(budget),
-            &format!("{host}: could not refetch mailbox flags"),
-        )?;
-        let raw = read_imap_tagged_bytes_with_budget(
-            stream,
-            &tag,
-            &mut buffer,
-            MAX_MESSAGE_FETCH_RESPONSE_BYTES,
-            budget,
-        )?;
-        if !imap_command_succeeded(&raw, &tag) {
-            return Err(imap_command_failure(&raw, &tag, "FETCH mailbox flags", host).into());
-        }
-        let flags = parse_message_fetch_flags_response_bytes(
-            &raw,
-            std::sync::Arc::clone(&mailbox_context),
-            Some(start_uidvalidity),
-        )?;
-        validate_fetch_page_coverage(&flags, uid_page, host, mailbox)?;
-        if !sink.flags_match_page(&flags)? {
-            flags_changed = true;
-        }
-        last_flags_uid = uid_page.last().copied().unwrap_or(last_flags_uid);
-    }
-    if flags_changed {
-        return Err(MailboxFetchError::Changed(format!(
-            "{host}: folder {mailbox} FLAGS changed during verification; retry required"
         )));
     }
 
@@ -1696,30 +1618,70 @@ fn parse_select_modseq(
     let mut highest = None;
     let mut no_modseq = false;
     for line in response.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        if let Some(index) = fields.iter().position(|field| {
-            field
-                .trim_matches(['[', ']'])
-                .eq_ignore_ascii_case("HIGHESTMODSEQ")
-        }) {
+        let Some(response_text) = untagged_ok_response_text(line) else {
+            continue;
+        };
+        let Some(code_text) = response_text.strip_prefix('[') else {
+            continue;
+        };
+        let Some((code_text, trailing)) = code_text.split_once(']') else {
+            if code_text
+                .split_ascii_whitespace()
+                .next()
+                .is_some_and(|code| {
+                    code.eq_ignore_ascii_case("HIGHESTMODSEQ")
+                        || code.eq_ignore_ascii_case("NOMODSEQ")
+                })
+            {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned a malformed MODSEQ response code"
+                ));
+            }
+            continue;
+        };
+        if !trailing.is_empty() && !trailing.starts_with(' ') {
+            return Err(format!(
+                "{host}: SELECT {mailbox} returned malformed data after a response code"
+            ));
+        }
+        let mut fields = code_text.split(' ');
+        let Some(code) = fields.next() else {
+            continue;
+        };
+        if code.eq_ignore_ascii_case("HIGHESTMODSEQ") {
             let value = fields
-                .get(index + 1)
-                .and_then(|value| value.trim_matches(['[', ']']).parse::<u64>().ok())
+                .next()
+                .filter(|value| {
+                    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| *value > 0 && *value <= i64::MAX as u64)
                 .ok_or_else(|| {
                     format!("{host}: SELECT {mailbox} returned invalid HIGHESTMODSEQ")
                 })?;
+            if fields.next().is_some() {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned malformed HIGHESTMODSEQ response code"
+                ));
+            }
             if highest.replace(value).is_some() {
                 return Err(format!(
                     "{host}: SELECT {mailbox} returned duplicate HIGHESTMODSEQ codes"
                 ));
             }
+        } else if code.eq_ignore_ascii_case("NOMODSEQ") {
+            if fields.next().is_some() {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned malformed NOMODSEQ response code"
+                ));
+            }
+            if no_modseq {
+                return Err(format!(
+                    "{host}: SELECT {mailbox} returned duplicate NOMODSEQ codes"
+                ));
+            }
+            no_modseq = true;
         }
-        no_modseq |= fields.iter().any(|field| {
-            field
-                .trim_matches(['[', ']'])
-                .eq_ignore_ascii_case("NOMODSEQ")
-        });
     }
     match (highest, no_modseq) {
         (Some(value), false) => Ok(ModseqSnapshot::Tracked(value)),
@@ -1728,6 +1690,12 @@ fn parse_select_modseq(
             "{host}: SELECT {mailbox} did not return exactly one HIGHESTMODSEQ or NOMODSEQ response code"
         )),
     }
+}
+
+fn untagged_ok_response_text(line: &str) -> Option<&str> {
+    let response = line.strip_prefix("* ")?;
+    let (status, text) = response.split_once(' ')?;
+    status.eq_ignore_ascii_case("OK").then_some(text)
 }
 
 /// LIST parsing is shared with preflight discovery, so its inventory bounds

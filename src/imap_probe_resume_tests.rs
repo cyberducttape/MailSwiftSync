@@ -30,9 +30,9 @@ pub(super) struct FolderServer {
     flags_only_fetch_commands: usize,
     uid_enumeration_commands: usize,
     pub(super) flags: std::collections::HashMap<u64, String>,
-    change_flags_on_refetch: Option<(u64, String)>,
     change_flags_after_metadata_fetch: Option<(u64, String)>,
     pub(super) condstore: bool,
+    pub(super) unsolicited_flags: bool,
     modseq_unavailable: bool,
     modseq: u64,
     pub(super) permanent_flags: Option<String>,
@@ -51,9 +51,9 @@ impl FolderServer {
             flags_only_fetch_commands: 0,
             uid_enumeration_commands: 0,
             flags: std::collections::HashMap::new(),
-            change_flags_on_refetch: None,
             change_flags_after_metadata_fetch: None,
             condstore: false,
+            unsolicited_flags: false,
             modseq_unavailable: false,
             modseq: 1,
             permanent_flags: None,
@@ -112,11 +112,9 @@ impl FolderServer {
             let set = rest.split_whitespace().next().unwrap();
             let with_body = rest.contains("BODY.PEEK[]");
             let flags_only = rest.ends_with("(UID FLAGS)");
+            let requests_flags = rest.contains("FLAGS");
             if flags_only {
                 self.flags_only_fetch_commands += 1;
-            }
-            if flags_only && let Some((uid, flags)) = self.change_flags_on_refetch.take() {
-                self.flags.insert(uid, flags);
             }
             if !flags_only {
                 self.fetch_commands += 1;
@@ -138,11 +136,14 @@ impl FolderServer {
                 } else {
                     String::new()
                 };
-                let flags = self
-                    .flags
-                    .get(&uid)
-                    .map(|flags| format!("FLAGS ({flags}) "))
-                    .unwrap_or_default();
+                let flags = if requests_flags || self.unsolicited_flags {
+                    self.flags
+                        .get(&uid)
+                        .map(|flags| format!("FLAGS ({flags}) "))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 if flags_only {
                     reply.push_str(&format!("* {sequence} FETCH (UID {uid} {flags})\r\n"));
                     continue;
@@ -492,7 +493,7 @@ fn sparse_historical_uid_space_does_not_create_empty_search_windows() {
 }
 
 #[test]
-fn unchanged_resume_rescans_pages_to_refresh_mutable_flags() {
+fn unchanged_resume_rescans_pages_but_does_not_claim_untracked_flags() {
     let uids = folder(PAGE * 2 + 5);
     let before = FolderServer::new(&uids, 9, PAGE * 2 + 6);
     let mut stage = interrupted(&before, 1..=PAGE, Some(PAGE));
@@ -517,7 +518,7 @@ fn unchanged_resume_rescans_pages_to_refresh_mutable_flags() {
         .find(|(key, _)| key.uid == "1")
         .unwrap()
         .1;
-    assert_eq!(message.flags.as_deref(), Some("\\Seen"));
+    assert_eq!(message.flags, None);
 }
 
 #[test]
@@ -596,7 +597,7 @@ fn completed_folder_restart_rescans_an_unchanged_stage_for_flags() {
 }
 
 #[test]
-fn flags_only_change_between_checkpoint_and_resume_is_refetched() {
+fn flags_are_not_certified_without_condstore_after_resume() {
     let uids = vec![1, 2, 3];
     let mut first = FolderServer::new(&uids, 9, 4);
     first.flags.insert(1, "".into());
@@ -606,28 +607,29 @@ fn flags_only_change_between_checkpoint_and_resume_is_refetched() {
     // UIDVALIDITY, UIDNEXT, and EXISTS are unchanged; only FLAGS changed.
     let mut resumed = FolderServer::new(&uids, 9, 4);
     resumed.flags.insert(1, "\\Seen $ClientTag".into());
+    resumed.unsolicited_flags = true;
     scan(&mut stage, &mut resumed);
 
     assert_eq!(resumed.fetched, uids);
+    assert_eq!(resumed.flags_only_fetch_commands, 0);
     let messages = stage.all_messages(SIDE).unwrap();
     let message = messages
         .iter()
         .find(|(key, _)| key.uid == "1")
         .map(|(_, message)| message)
         .unwrap();
-    let flags = message.flags.as_deref().unwrap();
-    assert!(flags.contains("\\Seen"));
-    assert!(flags.contains("$clienttag"));
+    assert_eq!(message.flags, None);
 }
 
 #[test]
 fn flags_mutation_during_scan_discards_pass_and_retries_with_fresh_flags() {
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     let mut server = FolderServer::new(&[1], 7, 2);
+    server.condstore = true;
     server.flags.insert(1, "".into());
-    server.change_flags_on_refetch = Some((1, "\\Seen $ClientTag".into()));
+    server.change_flags_after_metadata_fetch = Some((1, "\\Seen $ClientTag".into()));
 
-    scan(&mut stage, &mut server);
+    scan_with(&mut stage, &mut server, false, true);
 
     let messages = stage.all_messages(SIDE).unwrap();
     let message = messages
@@ -638,7 +640,11 @@ fn flags_mutation_during_scan_discards_pass_and_retries_with_fresh_flags() {
     let flags = message.flags.as_deref().unwrap();
     assert!(flags.contains("\\Seen"));
     assert!(flags.contains("$clienttag"));
-    assert_eq!(server.fetch_commands, 2, "changed pass is retried");
+    assert_eq!(
+        server.fetch_commands, 2,
+        "changed MODSEQ retries the folder"
+    );
+    assert_eq!(server.flags_only_fetch_commands, 0);
 }
 
 #[test]
@@ -666,14 +672,12 @@ fn condstore_modseq_detects_flag_mutation_without_refetching_every_uid() {
 }
 
 #[test]
-fn condstore_nomodseq_falls_back_to_flags_refetch() {
+fn condstore_nomodseq_does_not_claim_flag_fidelity() {
     let mut stage = MessageMetadataStage::open_in_memory().unwrap();
     let mut server = FolderServer::new(&[1], 7, 2);
     server.condstore = true;
     server.modseq_unavailable = true;
     server.flags.insert(1, "".into());
-    server.change_flags_on_refetch = Some((1, "\\Seen $ClientTag".into()));
-
     scan_with(&mut stage, &mut server, false, true);
 
     let message = stage
@@ -683,10 +687,8 @@ fn condstore_nomodseq_falls_back_to_flags_refetch() {
         .find(|(key, _)| key.uid == "1")
         .map(|(_, message)| message)
         .unwrap();
-    let flags = message.flags.as_deref().unwrap();
-    assert!(flags.contains("\\Seen"));
-    assert!(flags.contains("$clienttag"));
-    assert!(server.flags_only_fetch_commands > 0);
+    assert_eq!(message.flags, None);
+    assert_eq!(server.flags_only_fetch_commands, 0);
 }
 
 #[test]
@@ -712,8 +714,15 @@ fn condstore_select_snapshot_requires_one_valid_modseq_code() {
     for response in [
         "a001 OK selected\r\n",
         "* OK [HIGHESTMODSEQ 0] invalid\r\na001 OK selected\r\n",
+        "* OK [HIGHESTMODSEQ +42] invalid\r\na001 OK selected\r\n",
+        "* OK HIGHESTMODSEQ 42\r\na001 OK selected\r\n",
+        "* 1 FETCH (HIGHESTMODSEQ 42)\r\na001 OK selected\r\n",
+        "a001 OK [HIGHESTMODSEQ 42] selected\r\n",
+        "* OK [HIGHESTMODSEQ 42 extra] invalid\r\na001 OK selected\r\n",
+        "* OK [HIGHESTMODSEQ 42]text\r\na001 OK selected\r\n",
         "* OK [HIGHESTMODSEQ 42] current\r\n* OK [NOMODSEQ] conflicting\r\n",
         "* OK [HIGHESTMODSEQ 42] current\r\n* OK [HIGHESTMODSEQ 43] duplicate\r\n",
+        "* OK [NOMODSEQ] unavailable\r\n* OK [NOMODSEQ] duplicate\r\n",
     ] {
         assert!(
             parse_select_modseq(response, "imap.example.test", "INBOX").is_err(),

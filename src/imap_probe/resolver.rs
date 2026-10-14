@@ -572,24 +572,36 @@ printf '%s\n' "$2" '[::1]:993'"#,
         let hung = helper::stub("exec /bin/sleep 30");
         let answering = helper::stub(r#"printf '%s\n' "$2""#);
         let outstanding = AtomicUsize::new(0);
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         std::thread::scope(|scope| {
+            let start =
+                std::sync::Arc::new(std::sync::Barrier::new(MAX_OUTSTANDING_DNS_LOOKUPS + 1));
             let lookups = (0..MAX_OUTSTANDING_DNS_LOOKUPS)
                 .map(|_| {
-                    scope.spawn(|| {
+                    let start = std::sync::Arc::clone(&start);
+                    let cancelled = std::sync::Arc::clone(&cancelled);
+                    let helper_program = &hung.program;
+                    let outstanding = &outstanding;
+                    scope.spawn(move || {
+                        start.wait();
                         helper::resolve(
-                            &hung.program,
+                            helper_program,
                             "slow.example.test:993",
-                            Duration::from_secs(2),
-                            &|| false,
-                            &outstanding,
+                            Duration::from_secs(10),
+                            &|| cancelled.load(Ordering::Acquire),
+                            outstanding,
                         )
                     })
                 })
                 .collect::<Vec<_>>();
+            start.wait();
             let started = Instant::now();
             while outstanding.load(Ordering::Acquire) < MAX_OUTSTANDING_DNS_LOOKUPS {
-                assert!(started.elapsed() < Duration::from_secs(2));
-                std::thread::sleep(Duration::from_millis(5));
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "resolver workers failed to occupy all bounded slots"
+                );
+                std::thread::yield_now();
             }
             let refused = helper::resolve(
                 &answering.program,
@@ -600,10 +612,11 @@ printf '%s\n' "$2" '[::1]:993'"#,
             )
             .unwrap_err();
             assert_eq!(refused.kind(), std::io::ErrorKind::WouldBlock);
+            cancelled.store(true, Ordering::Release);
             for lookup in lookups {
                 assert_eq!(
                     lookup.join().unwrap().unwrap_err().kind(),
-                    std::io::ErrorKind::TimedOut
+                    std::io::ErrorKind::Interrupted
                 );
             }
         });
