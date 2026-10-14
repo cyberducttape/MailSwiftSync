@@ -42,10 +42,38 @@ class EvidenceGateTests(unittest.TestCase):
             {
                 "gmail->microsoft365": ("oauth2", "oauth2"),
                 "microsoft365->gmail": ("oauth2", "oauth2"),
+                "cpanel_dovecot->microsoft365": ("password", "oauth2"),
+                "cpanel_dovecot->gmail": ("password", "oauth2"),
+                "cpanel_dovecot->cpanel_dovecot": ("password", "password"),
+                "fastmail->gmail": ("password", "oauth2"),
                 "fastmail->microsoft365": ("password", "oauth2"),
             },
         )
+        qualification_plan = (ROOT / "docs" / "compatibility-matrix.md").read_text(
+            encoding="utf-8"
+        )
+        for planned_route in [
+            "Google Workspace → Microsoft 365",
+            "Microsoft 365 → Google Workspace",
+            "cPanel/Dovecot → Microsoft 365",
+            "cPanel/Dovecot → Google Workspace",
+            "cPanel/Dovecot → cPanel/Dovecot",
+            "Fastmail → Google Workspace or Microsoft 365",
+        ]:
+            self.assertIn(
+                f"| {planned_route} |",
+                qualification_plan,
+                f"qualification plan is missing policy route {planned_route}",
+            )
         for entry in policy["providers"]:
+            self.assertEqual(
+                entry["scenario_requirements"]["large-mailbox-50gb"]["minimum_bytes"],
+                50 * 1024**3,
+            )
+            self.assertIn(
+                "large-mailbox-50gb",
+                entry["required_scenarios_by_phase"]["live_pilot"],
+            )
             self.assertEqual(
                 set(entry["required_scenarios_by_phase"]),
                 set(entry["required_phases"]),

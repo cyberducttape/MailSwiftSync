@@ -44,11 +44,11 @@
     },
     "source_provider": {
       "type": "string",
-      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"]
+      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap", "cpanel_dovecot"]
     },
     "destination_provider": {
       "type": "string",
-      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"]
+      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap", "cpanel_dovecot"]
     },
     "tested_at": {
       "type": "string",

@@ -67,6 +67,9 @@ an endpoint probe, an OAuth refresh test, or the generic IMAP fixture does not
 advance a row to qualified. Each row needs a signed evidence bundle covering
 dry pilot, live pilot, recovery, and verification for the exact release and
 engine, plus the mailbox-shape cases listed below.
+Every hosted-provider route in this matrix is also required by the machine-
+readable signed-evidence policy; Generic Dovecot remains a lab-only route and
+does not substitute for a hosted-provider qualification.
 
 | Provider pair | Current status | Required live evidence |
 |---|---|---|

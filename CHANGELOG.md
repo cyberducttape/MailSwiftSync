@@ -22,6 +22,11 @@
   exactness; label aggregate evidence explicitly in customer exports. Make the
   provider-evidence generator reject unknown proof versions and require the
   v3 engine-confirmed assurance status for qualification claims.
+- Require signed provider-qualification evidence for every hosted-provider
+  route in the compatibility plan, including cPanel/Dovecot pairs and
+  Fastmail-to-Google Workspace; require a 50 GiB live-pilot mailbox per route.
+- Keep the compatibility matrix and signed-evidence policy aligned with a
+  regression test so a documented route cannot be omitted from GA release gates.
 - Qualify the production-status recovery summary so durable run-level state is
   not mistaken for a universal or per-message recovery guarantee.
 - Label exact aggregate-engine totals as an aggregate match rather than an
