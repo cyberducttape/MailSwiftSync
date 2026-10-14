@@ -179,6 +179,37 @@ class EvidenceGateTests(unittest.TestCase):
                 "mailswiftsync_binary_sha256": "a" * 64,
                 "imapsync_binary_sha256": "b" * 64,
             }
+            for key in (
+                "large_mailbox_1gb", "large_mailbox_10gb", "large_mailbox_20gb",
+                "large_mailbox_50gb", "large_mailbox_100gb",
+            ):
+                observed_bytes = evidence["scenario_observations"][key]["bytes"]
+                metrics = {
+                    "wall_seconds": 60,
+                    "messages": 100000,
+                    "bytes": observed_bytes,
+                    "peak_rss_bytes": 1024**3,
+                    "cpu_seconds": 45,
+                    "disk_growth_bytes": observed_bytes,
+                    "retries": 0,
+                    "throttled_seconds": 0,
+                }
+                evidence["scenario_observations"][key]["direct_imapsync_comparison"] = {
+                    "baseline_run_id": f"direct-{key}",
+                    "dataset_digest": "d" * 64,
+                    "engine_binary_sha256": "b" * 64,
+                    "engine_settings_sha256": "c" * 64,
+                    "source_snapshot_sha256": "e" * 64,
+                    "destination_baseline_sha256": "f" * 64,
+                    "baseline_artifact_file": f"{key}-direct.txt",
+                    "baseline_artifact_sha256": hashlib.sha256(b"direct baseline").hexdigest(),
+                    "managed_artifact_file": f"{key}-managed.txt",
+                    "managed_artifact_sha256": hashlib.sha256(b"managed run").hexdigest(),
+                    "baseline_metrics": metrics,
+                    "managed_metrics": dict(metrics),
+                }
+                (evidence_dir / f"{key}-direct.txt").write_bytes(b"direct baseline")
+                (evidence_dir / f"{key}-managed.txt").write_bytes(b"managed run")
             proof = {
                 "format": "mailswiftsync-customer-proof",
                 "project": {"project_id": "project", "dataset_digest": "d" * 64},
@@ -226,6 +257,7 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("Traceback", output)
             self.assertNotIn("source_auth_method must be", output)
             self.assertNotIn("destination_auth_method must be", output)
+            self.assertNotIn("A/B baseline_run_id must be a SHA-256 digest", output)
             self.assertIn(
                 "large-mailbox-100k per-mailbox observation does not match verified customer-proof evidence",
                 output,
@@ -249,6 +281,26 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertIn(
                 "large-mailbox-50gb does not contain at least 50 GiB",
                 output,
+            )
+
+            missing_baseline = json.loads(json.dumps(evidence))
+            missing_baseline["scenario_observations"]["large_mailbox_10gb"].pop(
+                "direct_imapsync_comparison"
+            )
+            (evidence_dir / "synthetic.json").write_text(
+                json.dumps(missing_baseline), encoding="utf-8"
+            )
+            missing_result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertIn(
+                "large-mailbox-10gb lacks a direct-imapsync A/B comparison",
+                missing_result.stdout + missing_result.stderr,
             )
 
             # Dry preflight evidence describes a no-transfer phase. It must

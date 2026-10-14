@@ -134,6 +134,7 @@ PY
 policy_result=$(PYTHONPATH="$REPOSITORY_ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$expected_source_auth" "$expected_destination_auth" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios_by_phase_json" "$scenario_requirements_json" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
 import hashlib
+import math
 import os
 import re
 import sys
@@ -223,6 +224,66 @@ for filename in files:
                 errors.append(f"{filename}: large-mailbox-50gb does not contain at least 50 GiB")
             if scenario == "large-mailbox-100gb" and (observations.get("large_mailbox_100gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
                 errors.append(f"{filename}: large-mailbox-100gb does not contain at least 100 GiB")
+            if phase == "live_pilot" and scenario in {
+                "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb",
+                "large-mailbox-50gb", "large-mailbox-100gb",
+            }:
+                key = scenario.replace("-", "_")
+                comparison = observations.get(key, {}).get("direct_imapsync_comparison")
+                if not isinstance(comparison, dict):
+                    errors.append(f"{filename}: {scenario} lacks a direct-imapsync A/B comparison")
+                else:
+                    for field in (
+                        "dataset_digest", "engine_binary_sha256",
+                        "engine_settings_sha256", "source_snapshot_sha256",
+                        "destination_baseline_sha256", "baseline_artifact_sha256", "managed_artifact_sha256",
+                    ):
+                        value = comparison.get(field)
+                        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                            errors.append(f"{filename}: {scenario} A/B {field} must be a SHA-256 digest")
+                    baseline_run_id = comparison.get("baseline_run_id")
+                    if not isinstance(baseline_run_id, str) or not baseline_run_id:
+                        errors.append(f"{filename}: {scenario} A/B baseline_run_id is missing")
+                    for file_field, digest_field in (
+                        ("baseline_artifact_file", "baseline_artifact_sha256"),
+                        ("managed_artifact_file", "managed_artifact_sha256"),
+                    ):
+                        artifact_name = comparison.get(file_field)
+                        if not isinstance(artifact_name, str) or not artifact_name or Path(artifact_name).name != artifact_name:
+                            errors.append(f"{filename}: {scenario} A/B {file_field} must be a basename")
+                            continue
+                        artifact_path = Path(filename).parent / artifact_name
+                        try:
+                            if artifact_path.is_symlink() or not artifact_path.is_file():
+                                raise OSError("missing or unsafe artifact")
+                            actual_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+                        except OSError:
+                            errors.append(f"{filename}: {scenario} A/B artifact {artifact_name!r} is missing or unsafe")
+                            continue
+                        if actual_digest != comparison.get(digest_field):
+                            errors.append(f"{filename}: {scenario} A/B artifact digest mismatch for {artifact_name!r}")
+                    if isinstance(comparison.get("baseline_run_id"), str) and comparison["baseline_run_id"] == evidence.get("selected_run_id"):
+                        errors.append(f"{filename}: {scenario} direct baseline must be a separate run")
+                    if comparison.get("dataset_digest") != evidence.get("test_dataset_digest"):
+                        errors.append(f"{filename}: {scenario} A/B dataset digest differs from the qualified dataset")
+                    if comparison.get("engine_binary_sha256") != evidence.get("imapsync_binary_sha256"):
+                        errors.append(f"{filename}: {scenario} A/B baseline does not use the qualified imapsync binary")
+                    baseline = comparison.get("baseline_metrics")
+                    managed = comparison.get("managed_metrics")
+                    for label, metrics in (("baseline", baseline), ("managed", managed)):
+                        if not isinstance(metrics, dict):
+                            errors.append(f"{filename}: {scenario} A/B {label} metrics are missing")
+                            continue
+                        for name in ("wall_seconds", "messages", "bytes", "peak_rss_bytes", "cpu_seconds", "disk_growth_bytes", "retries", "throttled_seconds"):
+                            amount = metrics.get(name)
+                            if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0 or (name == "wall_seconds" and amount <= 0):
+                                errors.append(f"{filename}: {scenario} A/B {label} metric {name} is invalid")
+                    if isinstance(baseline, dict) and isinstance(managed, dict):
+                        if baseline.get("messages") != managed.get("messages") or baseline.get("bytes") != managed.get("bytes"):
+                            errors.append(f"{filename}: {scenario} A/B runs do not cover the same message and byte totals")
+                        observed_bytes = observations.get(key, {}).get("bytes")
+                        if managed.get("bytes") != observed_bytes:
+                            errors.append(f"{filename}: {scenario} managed A/B bytes do not match the qualified mailbox observation")
             if scenario == "large-messages" and (observations.get("large_messages", {}).get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0) or (phase != "dry_pilot" and summary.get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0))):
                 errors.append(f"{filename}: large-messages does not contain a message at least 10 MiB")
             if scenario == "unicode-folders" and (observations.get("unicode_folders", {}).get("observed") is not True or summary.get("unicode_folders_observed") is not True):

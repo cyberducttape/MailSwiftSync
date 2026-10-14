@@ -82,6 +82,19 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
                 self.assertIn("mailbox_job_id", observations[scenario]["properties"])
                 self.assertIn(metric, observations[scenario]["properties"])
 
+    def test_large_mailbox_observations_can_carry_strict_direct_engine_comparisons(self):
+        scenario_properties = self.schema["properties"]["scenario_observations"]["properties"]
+        comparison = self.schema["$defs"]["direct_imapsync_comparison"]
+        self.assertTrue(comparison["additionalProperties"] is False)
+        self.assertIn("baseline_artifact_sha256", comparison["required"])
+        self.assertIn("managed_artifact_sha256", comparison["required"])
+        for key in ("large_mailbox_1gb", "large_mailbox_10gb", "large_mailbox_20gb", "large_mailbox_50gb", "large_mailbox_100gb"):
+            with self.subTest(scenario=key):
+                self.assertEqual(
+                    scenario_properties[key]["properties"]["direct_imapsync_comparison"],
+                    {"$ref": "#/$defs/direct_imapsync_comparison"},
+                )
+
     def test_every_policy_size_scenario_has_a_schema_observation(self):
         observations = self.schema["properties"]["scenario_observations"]
         for entry in self.policy["providers"]:

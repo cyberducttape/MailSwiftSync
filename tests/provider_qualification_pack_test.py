@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import subprocess
 import sys
@@ -30,13 +31,13 @@ VERIFY_SPEC.loader.exec_module(VERIFY_MODULE)
 
 PHASES = {
     "dry_pilot": ["dry"],
-    "live_pilot": ["live"],
+    "live_pilot": ["live", "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb", "large-mailbox-50gb", "large-mailbox-100gb"],
     "recovery_test": ["recovery"],
 }
 
 
 def policy():
-    return {
+    result = {
         "providers": [
             {
                 "pair": "source->destination",
@@ -53,6 +54,7 @@ def policy():
             }
         ]
     }
+    return result
 
 
 def evidence(phase):
@@ -68,7 +70,7 @@ def evidence(phase):
         "maximum_message_bytes": 0 if dry else 50,
         "unicode_folders_observed": True,
     }
-    return {
+    result = {
         "source_provider": "source",
         "destination_provider": "destination",
         "testing_phase": phase,
@@ -91,6 +93,7 @@ def evidence(phase):
         "destination_version": "provider-destination-1",
         "fixture_id": "fixture-1",
         "scenario_ids": PHASES[phase],
+        "scenario_observations": {},
         "test_summary": summary,
         "results": {
             "overall_result": "pass",
@@ -100,6 +103,45 @@ def evidence(phase):
             "known_issues": [{"issue": "private-mailbox@example.test"}],
         },
     }
+    if not dry:
+        for scenario in PHASES[phase]:
+            if not scenario.startswith("large-mailbox-"):
+                continue
+            size = scenario.removeprefix("large-mailbox-")
+            byte_count = {
+                "1gb": 1024**3, "10gb": 10 * 1024**3, "20gb": 20 * 1024**3,
+                "50gb": 50 * 1024**3, "100gb": 100 * 1024**3,
+            }[size]
+            metrics = {
+                "wall_seconds": 1,
+                "messages": 2,
+                "bytes": byte_count,
+                "peak_rss_bytes": 10,
+                "cpu_seconds": 1,
+                "disk_growth_bytes": byte_count,
+                "retries": 0,
+                "throttled_seconds": 0,
+            }
+            comparison = {
+                "baseline_run_id": f"direct-{scenario}",
+                "dataset_digest": "b" * 64,
+                "engine_binary_sha256": "e" * 64,
+                "engine_settings_sha256": "f" * 64,
+                "source_snapshot_sha256": "1" * 64,
+                "destination_baseline_sha256": "2" * 64,
+                "baseline_artifact_file": "pending-baseline.txt",
+                "baseline_artifact_sha256": "0" * 64,
+                "managed_artifact_file": "pending-managed.txt",
+                "managed_artifact_sha256": "0" * 64,
+                "baseline_metrics": metrics,
+                "managed_metrics": dict(metrics),
+            }
+            result["scenario_observations"][scenario.replace("-", "_")] = {
+                "mailbox_job_id": "mailbox-1",
+                "bytes": byte_count,
+                "direct_imapsync_comparison": comparison,
+            }
+    return result
 
 
 class ProviderQualificationPackTests(unittest.TestCase):
@@ -117,9 +159,17 @@ class ProviderQualificationPackTests(unittest.TestCase):
 
     def write_phases(self):
         for phase in PHASES:
-            (self.evidence_dir / f"{phase}.json").write_text(
-                json.dumps(evidence(phase)), encoding="utf-8"
-            )
+            value = evidence(phase)
+            for index, observation in enumerate(value["scenario_observations"].values()):
+                comparison = observation.get("direct_imapsync_comparison")
+                if not comparison:
+                    continue
+                for suffix, contents in (("baseline", b"direct baseline log"), ("managed", b"managed run log")):
+                    name = f"{phase}-{index}-{suffix}.txt"
+                    (self.evidence_dir / name).write_bytes(contents)
+                    comparison[f"{suffix}_artifact_file"] = name
+                    comparison[f"{suffix}_artifact_sha256"] = hashlib.sha256(contents).hexdigest()
+            (self.evidence_dir / f"{phase}.json").write_text(json.dumps(value), encoding="utf-8")
 
     def read_phase(self, phase):
         path = self.evidence_dir / f"{phase}.json"
@@ -211,6 +261,33 @@ class ProviderQualificationPackTests(unittest.TestCase):
         value["test_summary"]["destination_messages_total"] = 1
         self.write_phase("live_pilot", value)
         with self.assertRaisesRegex(ValueError, "totals do not match"):
+            self.build()
+
+    def test_live_pack_requires_direct_engine_comparison_for_each_large_mailbox_case(self):
+        _, value = self.read_phase("live_pilot")
+        value["scenario_observations"]["large_mailbox_50gb"].pop(
+            "direct_imapsync_comparison"
+        )
+        self.write_phase("live_pilot", value)
+        with self.assertRaisesRegex(ValueError, "large-mailbox-50gb lacks"):
+            self.build()
+
+    def test_direct_baseline_must_match_qualified_engine_identity(self):
+        _, value = self.read_phase("live_pilot")
+        value["scenario_observations"]["large_mailbox_10gb"][
+            "direct_imapsync_comparison"
+        ]["engine_binary_sha256"] = "9" * 64
+        self.write_phase("live_pilot", value)
+        with self.assertRaisesRegex(ValueError, "does not use the qualified imapsync binary"):
+            self.build()
+
+    def test_direct_run_artifact_bytes_must_match_declared_digest(self):
+        _, value = self.read_phase("live_pilot")
+        comparison = value["scenario_observations"]["large_mailbox_1gb"][
+            "direct_imapsync_comparison"
+        ]
+        (self.evidence_dir / comparison["baseline_artifact_file"]).write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "artifact digest mismatch"):
             self.build()
 
     def test_evidence_symlinks_are_rejected(self):

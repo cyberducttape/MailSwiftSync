@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -26,6 +27,23 @@ from pathlib import Path
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REQUIRED_PHASES = {"dry_pilot", "live_pilot", "recovery_test"}
+AB_SCENARIOS = {
+    "large-mailbox-1gb", "large-mailbox-10gb", "large-mailbox-20gb",
+    "large-mailbox-50gb", "large-mailbox-100gb",
+}
+AB_DIGEST_FIELDS = (
+    "dataset_digest", "engine_binary_sha256", "engine_settings_sha256",
+    "source_snapshot_sha256", "destination_baseline_sha256",
+    "baseline_artifact_sha256", "managed_artifact_sha256",
+)
+AB_ARTIFACTS = (
+    ("baseline_artifact_file", "baseline_artifact_sha256"),
+    ("managed_artifact_file", "managed_artifact_sha256"),
+)
+AB_METRIC_FIELDS = (
+    "wall_seconds", "messages", "bytes", "peak_rss_bytes", "cpu_seconds",
+    "disk_growth_bytes", "retries", "throttled_seconds",
+)
 SUMMARY_COUNTERS = (
     "mailboxes_tested",
     "messages_total",
@@ -159,6 +177,58 @@ def validate_evidence(value: dict, path: Path, pair: str, policy: dict) -> None:
         or not set(required_by_phase).issubset(scenarios)
     ):
         fail(f"{path}: required scenarios for {phase} are missing")
+    if phase == "live_pilot":
+        observations = value.get("scenario_observations")
+        if not isinstance(observations, dict):
+            fail(f"{path}: direct-imapsync comparisons require scenario observations")
+        for scenario in sorted(AB_SCENARIOS & set(required_by_phase)):
+            key = scenario.replace("-", "_")
+            scenario_observation = observations.get(key)
+            comparison = (
+                scenario_observation.get("direct_imapsync_comparison")
+                if isinstance(scenario_observation, dict)
+                else None
+            )
+            if not isinstance(comparison, dict):
+                fail(f"{path}: {scenario} lacks a direct-imapsync A/B comparison")
+            for field in AB_DIGEST_FIELDS:
+                if not isinstance(comparison.get(field), str) or not SHA256_RE.fullmatch(comparison[field]):
+                    fail(f"{path}: {scenario} A/B {field} must be a lowercase SHA-256 digest")
+            for filename_field, digest_field in AB_ARTIFACTS:
+                artifact_name = comparison.get(filename_field)
+                if not isinstance(artifact_name, str) or not artifact_name or Path(artifact_name).name != artifact_name:
+                    fail(f"{path}: {scenario} A/B {filename_field} must be a basename")
+                artifact_path = path.parent / artifact_name
+                if artifact_path.is_symlink() or not artifact_path.is_file():
+                    fail(f"{path}: {scenario} A/B artifact {artifact_name!r} is missing or unsafe")
+                try:
+                    artifact_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+                except OSError as error:
+                    fail(f"{path}: cannot read {scenario} A/B artifact {artifact_name!r}: {error}")
+                if artifact_digest != comparison.get(digest_field):
+                    fail(f"{path}: {scenario} A/B artifact digest mismatch for {artifact_name!r}")
+            if comparison["dataset_digest"] != value["test_dataset_digest"]:
+                fail(f"{path}: {scenario} A/B dataset digest differs from the qualified dataset")
+            if comparison["engine_binary_sha256"] != value["imapsync_binary_sha256"]:
+                fail(f"{path}: {scenario} A/B baseline does not use the qualified imapsync binary")
+            if not isinstance(comparison.get("baseline_run_id"), str) or not comparison["baseline_run_id"] or comparison["baseline_run_id"] == value["selected_run_id"]:
+                fail(f"{path}: {scenario} A/B baseline must identify a separate direct-engine run")
+            baseline = comparison.get("baseline_metrics")
+            managed = comparison.get("managed_metrics")
+            for label, metrics in (("baseline", baseline), ("managed", managed)):
+                if not isinstance(metrics, dict) or any(
+                    isinstance(metrics.get(field), bool)
+                    or not isinstance(metrics.get(field), (int, float))
+                    or not math.isfinite(metrics[field])
+                    or metrics[field] < 0
+                    or (field == "wall_seconds" and metrics[field] == 0)
+                    for field in AB_METRIC_FIELDS
+                ):
+                    fail(f"{path}: {scenario} A/B {label} metrics are incomplete or invalid")
+            if baseline["messages"] != managed["messages"] or baseline["bytes"] != managed["bytes"]:
+                fail(f"{path}: {scenario} A/B runs do not cover the same message and byte totals")
+            if managed["bytes"] != scenario_observation.get("bytes"):
+                fail(f"{path}: {scenario} managed A/B bytes do not match the qualified mailbox observation")
     summary = value.get("test_summary")
     if not isinstance(summary, dict) or not all(
         type(summary.get(field)) is int and summary[field] >= 0
@@ -273,6 +343,13 @@ def build_pack(evidence_dir: Path, source: str, destination: str, policy_path: P
                 "source_version": value["source_version"],
                 "destination_version": value["destination_version"],
                 "scenario_ids": sorted(value["scenario_ids"]),
+                "direct_imapsync_comparisons": [
+                    {
+                        "scenario_id": scenario,
+                        "comparison": value["scenario_observations"][scenario.replace("-", "_")]["direct_imapsync_comparison"],
+                    }
+                    for scenario in sorted(AB_SCENARIOS & set(value["scenario_ids"]))
+                ],
                 "test_summary": {
                     key: item
                     for key, item in value["test_summary"].items()
