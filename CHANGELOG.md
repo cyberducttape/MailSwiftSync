@@ -34,6 +34,10 @@
   size and 100k-message scenarios.
 - Keep the compatibility matrix and signed-evidence policy aligned with a
   regression test so a documented route cannot be omitted from GA release gates.
+- Fail closed when provider-policy strings contain tab or control characters,
+  preventing malformed TSV serialization from changing the release gate's
+  interpreted policy; cover both partial-policy parse failures and delimiter
+  injection with regressions.
 - Extend provider-evidence schema and generation tests for the required
   1/10/20/50/100 GiB mailbox observations, preventing the evidence exporter
   from producing records that the strict schema would reject.
