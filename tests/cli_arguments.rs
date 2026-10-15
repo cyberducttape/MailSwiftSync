@@ -125,6 +125,30 @@ fn reverify_refuses_a_ledger_owned_by_another_process_before_opening_inputs() {
 }
 
 #[test]
+fn reverify_baseline_option_requires_a_run_id_before_opening_the_ledger() {
+    let state = missing_ledger("missing-reverify-baseline");
+    let output = run(&[
+        "reverify",
+        state.to_str().unwrap(),
+        "project",
+        "mailbox",
+        "source-secret",
+        "destination-secret",
+        "--baseline-run",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--baseline-run requires a non-empty run ID"),
+        "{stderr}"
+    );
+    assert!(
+        !state.parent().unwrap().exists(),
+        "argument refusal must happen before creating ledger state"
+    );
+}
+
+#[test]
 fn cutover_and_wave_writes_refuse_a_ledger_owned_by_another_process() {
     use fs2::FileExt;
     use std::fs::OpenOptions;
