@@ -7,6 +7,13 @@ provider, mailbox shape, or host has been qualified at that size.
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
 | Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Mismatch rows are staged on disk and streamed into the ledger for durable runs; ephemeral and body-hash runs keep an estimated 64 MiB in-memory mismatch cap. Before scanning and before every staged page, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
+
+The free-space check runs before network scanning and before each fetched-page
+commit. It does not bound disk growth inside a SQLite reconciliation/materialized
+table operation, terminal evidence persistence, WAL/journal activity, or report
+export. Keep monitoring the entire filesystem and leave capacity for those
+phases; the guard reduces one failure mode but cannot guarantee that the disk
+will not fill.
 | Body fingerprint proof | Up to 100,000 messages per endpoint are admitted before requesting the next body page and loaded into the forensic reconciler. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The 100,000-message guard is a message-count ceiling, not evidence that 100,000 large bodies fit within the byte budget or a memory guarantee. |
 
 The latest release-mode durable-stage benchmark on a local real-disk
