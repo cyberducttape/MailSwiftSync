@@ -69,8 +69,10 @@ fn parse_stage(value: &str) -> rusqlite::Result<CutoverStage> {
 /// text cannot forge additional-looking event records in terminals or logs.
 fn validate_cutover_text(value: &str, max_bytes: usize) -> Option<String> {
     let value = value.trim();
-    (!value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control))
-        .then(|| value.to_owned())
+    let has_line_break = value
+        .chars()
+        .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'));
+    (!value.is_empty() && value.len() <= max_bytes && !has_line_break).then(|| value.to_owned())
 }
 
 impl StateStore {
@@ -286,6 +288,15 @@ mod tests {
                 .create_cutover_workflow(
                     &project.id,
                     "2026-10-03T22:00:00Z\ncutover_approved",
+                    None
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .create_cutover_workflow(
+                    &project.id,
+                    "2026-10-03T22:00:00Z\u{2028}cutover_approved",
                     None
                 )
                 .is_err()
