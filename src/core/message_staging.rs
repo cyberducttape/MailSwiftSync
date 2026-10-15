@@ -194,10 +194,6 @@ pub(crate) struct MessageMetadataStage {
     path: Option<PathBuf>,
     retain_on_drop: bool,
     remove_parent_on_cleanup: bool,
-    /// Body fingerprints are retained only for the explicitly enabled
-    /// forensic verification path. Metadata-only verification remains fully
-    /// staged in SQLite and does not retain content hashes in memory.
-    content_fingerprints: HashMap<(StagedMessageSide, MailboxMessageKey), String>,
 }
 
 impl MessageMetadataStage {
@@ -240,7 +236,6 @@ impl MessageMetadataStage {
             path: Some(path),
             retain_on_drop: false,
             remove_parent_on_cleanup: true,
-            content_fingerprints: HashMap::new(),
         };
         if let Err(error) = stage.initialize(false) {
             let path = stage.path.take();
@@ -265,7 +260,6 @@ impl MessageMetadataStage {
             path: None,
             retain_on_drop: false,
             remove_parent_on_cleanup: false,
-            content_fingerprints: HashMap::new(),
         };
         stage.initialize(false)?;
         Ok(stage)
@@ -332,7 +326,6 @@ impl MessageMetadataStage {
             path: Some(path),
             retain_on_drop: true,
             remove_parent_on_cleanup: false,
-            content_fingerprints: HashMap::new(),
         };
         if let Err(error) = stage
             .initialize(true)
@@ -446,6 +439,7 @@ impl MessageMetadataStage {
              DROP INDEX IF EXISTS staged_messages_uid_numeric;
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
+             CREATE INDEX IF NOT EXISTS stage_fingerprints_content ON stage_fingerprints(side,fingerprint);
              CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, destination_revalidated_at TEXT, PRIMARY KEY(side,mailbox));
              CREATE TABLE IF NOT EXISTS stage_permanent_flags(side INTEGER NOT NULL, mailbox TEXT NOT NULL, flags TEXT, PRIMARY KEY(side,mailbox));",
         )?;
@@ -657,10 +651,6 @@ impl MessageMetadataStage {
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
-        for (key, fingerprint) in fingerprints {
-            self.content_fingerprints
-                .insert((side, key.clone()), fingerprint.clone());
-        }
         Ok(())
     }
 
@@ -717,10 +707,6 @@ impl MessageMetadataStage {
             .map_err(|error| error.to_string())?;
         }
         tx.commit().map_err(|error| error.to_string())?;
-        self.content_fingerprints
-            .retain(|(fingerprint_side, key), _| {
-                *fingerprint_side != side || key.mailbox.as_ref() != mailbox
-            });
         Ok(())
     }
 
@@ -762,10 +748,6 @@ impl MessageMetadataStage {
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
-        self.content_fingerprints
-            .retain(|(fingerprint_side, key), _| {
-                *fingerprint_side != side || key.mailbox.as_ref() != mailbox
-            });
         Ok(())
     }
 
@@ -985,12 +967,14 @@ impl MessageMetadataStage {
     }
 
     /// Start a new verification attempt. Reconciliation artifacts and
-    /// in-memory body proofs never cross attempt boundaries. Persisted folder
+    /// persisted body proofs never cross attempt boundaries. Persisted folder
     /// rows are pruned against each endpoint's fresh LIST and then invalidated
     /// folder-by-folder before refetch, avoiding a mailbox-wide delete journal.
     pub(crate) fn begin_verification_attempt(&mut self) -> Result<(), String> {
         self.reset_reconciliation()?;
-        self.content_fingerprints.clear();
+        self.connection()?
+            .execute("DELETE FROM stage_fingerprints", [])
+            .map_err(|error| format!("could not invalidate prior body fingerprints: {error}"))?;
         Ok(())
     }
 
@@ -1041,9 +1025,6 @@ impl MessageMetadataStage {
         }
         tx.commit()
             .map_err(|error| format!("could not commit verification folder inventory: {error}"))?;
-        self.content_fingerprints.retain(|(stored_side, key), _| {
-            *stored_side != side || current_mailboxes.contains(key.mailbox.as_ref())
-        });
         Ok(())
     }
 
@@ -1135,15 +1116,58 @@ impl MessageMetadataStage {
         self.connection_ref().map_err(|error| error.to_string())
     }
 
+    pub(crate) fn is_durable(&self) -> bool {
+        self.retain_on_drop
+    }
+
+    pub(crate) fn try_content_fingerprints(
+        &self,
+        side: StagedMessageSide,
+    ) -> Result<HashMap<MailboxMessageKey, String>, String> {
+        let mut statement = self
+            .connection_ref()
+            .map_err(|error| error.to_string())?
+            .prepare(
+                "SELECT mailbox,uidvalidity,uid,fingerprint FROM stage_fingerprints WHERE side=?1 ORDER BY rowid",
+            )
+            .map_err(|error| format!("could not query staged content fingerprints: {error}"))?;
+        let mut fingerprints = HashMap::new();
+        let rows = statement
+            .query_map([side.as_i64()], |row| {
+                let uidvalidity: i64 = row.get(1)?;
+                let uidvalidity =
+                    if uidvalidity >= 0 {
+                        Some(u64::try_from(uidvalidity).map_err(|_| {
+                            rusqlite::Error::IntegralValueOutOfRange(1, uidvalidity)
+                        })?)
+                    } else {
+                        None
+                    };
+                Ok((
+                    MailboxMessageKey::with_shared_mailbox(
+                        std::sync::Arc::from(row.get::<_, String>(0)?),
+                        uidvalidity,
+                        row.get::<_, String>(2)?,
+                    ),
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|error| format!("could not read staged content fingerprints: {error}"))?;
+        for row in rows {
+            let (key, fingerprint) = row
+                .map_err(|error| format!("could not decode staged content fingerprint: {error}"))?;
+            fingerprints.insert(key, fingerprint);
+        }
+        Ok(fingerprints)
+    }
+
+    #[cfg(test)]
     pub(crate) fn content_fingerprints(
         &self,
         side: StagedMessageSide,
     ) -> HashMap<MailboxMessageKey, String> {
-        self.content_fingerprints
-            .iter()
-            .filter(|((fingerprint_side, _), _)| *fingerprint_side == side)
-            .map(|((_, key), fingerprint)| (key.clone(), fingerprint.clone()))
-            .collect()
+        self.try_content_fingerprints(side)
+            .expect("test stage query")
     }
 
     pub(crate) fn all_messages(
@@ -1511,7 +1535,7 @@ mod tests {
 
         let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
         assert_eq!(stage.count(side).unwrap(), 1);
-        assert!(stage.content_fingerprints(side).is_empty());
+        assert_eq!(stage.content_fingerprints(side).len(), 1);
         // Opening a retry retains disk-backed metadata only as inert state:
         // body fingerprints are not reloaded and no old cursor is used to
         // skip a page. The fresh inventory/scan performs invalidation.

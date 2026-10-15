@@ -290,6 +290,12 @@ trait MessageSink {
     }
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
+    /// A durable SQLite stage can reconcile body hashes without constructing
+    /// mailbox-sized in-memory indexes. Ephemeral sinks retain the stricter
+    /// forensic cap because their downstream reconciler is memory-backed.
+    fn has_durable_stage(&self) -> bool {
+        false
+    }
     /// Rows currently staged for one folder generation. Compared against the
     /// server's EXISTS after a scan to require complete coverage of the
     /// current SELECT snapshot.
@@ -377,6 +383,10 @@ impl MessageSink for StageMessageSink<'_> {
 
     fn len(&self) -> usize {
         self.count
+    }
+
+    fn has_durable_stage(&self) -> bool {
+        self.stage.is_durable()
     }
 
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String> {
@@ -905,9 +915,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         },
         |stream, buffer, uid_page, uid_set| {
             budget.check()?;
-            if body_hash.is_some() && body_hash_message_limit_exceeded(sink.len(), uid_page.len()) {
+            if body_hash.is_some()
+                && !sink.has_durable_stage()
+                && body_hash_message_limit_exceeded(sink.len(), uid_page.len())
+            {
                 return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
-                    "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
+                    "{host}: ephemeral body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use a durable SQLite-backed verification run or metadata-only verification"
                 )));
             }
             let tag = format!("v{:03}", page_number + 3);

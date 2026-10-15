@@ -226,43 +226,65 @@ pub(crate) fn run_imap_message_verification(
         form.profile.delete2,
     )?;
     let (mismatches, summary) = if form.profile.body_hash_verification {
-        for side in [
-            core::StagedMessageSide::Source,
-            core::StagedMessageSide::Destination,
-        ] {
-            let count = stage.count(side).map_err(|error| error.to_string())?;
-            if count > crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT as u64 {
-                return Err(core::VerificationLimit::BodyHashMessageCount.tag(format!(
-                    "body-hash verification refuses to load more than {} messages per endpoint into the forensic reconciler (requested {count})",
-                    crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
-                )));
+        if let Some(stage_path) = durable_stage_path {
+            stage.reset_reconciliation()?;
+            let (count, summary) =
+                core::MessageVerification::reconcile_stage_with_content_fingerprints(
+                    job_id,
+                    run_id,
+                    &stage,
+                    &folder_mapping,
+                )?;
+            let folders = stage.staged_mismatch_folders()?;
+            (
+                core::MismatchSet::Staged {
+                    stage_path: stage_path.to_path_buf(),
+                    job_id: Arc::from(job_id),
+                    run_id: Arc::from(run_id),
+                    count,
+                    folders,
+                },
+                summary,
+            )
+        } else {
+            for side in [
+                core::StagedMessageSide::Source,
+                core::StagedMessageSide::Destination,
+            ] {
+                let count = stage.count(side).map_err(|error| error.to_string())?;
+                if count > crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT as u64 {
+                    return Err(core::VerificationLimit::BodyHashMessageCount.tag(format!(
+                        "body-hash verification refuses to load more than {} messages per endpoint into the ephemeral forensic reconciler (requested {count})",
+                        crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
+                    )));
+                }
             }
+            let source_messages = stage
+                .all_messages(core::StagedMessageSide::Source)
+                .map_err(|error| {
+                    format!("could not load source messages for body verification: {error}")
+                })?;
+            let destination_messages = stage
+                .all_messages(core::StagedMessageSide::Destination)
+                .map_err(|error| {
+                    format!("could not load destination messages for body verification: {error}")
+                })?;
+            let source_fingerprints =
+                stage.try_content_fingerprints(core::StagedMessageSide::Source)?;
+            let destination_fingerprints =
+                stage.try_content_fingerprints(core::StagedMessageSide::Destination)?;
+            let (mismatches, summary) =
+                core::MessageVerification::detect_mismatches_with_content_fingerprints(
+                    job_id,
+                    run_id,
+                    &source_messages,
+                    &destination_messages,
+                    &source_fingerprints,
+                    &destination_fingerprints,
+                    &folder_mapping,
+                )?;
+            (core::MismatchSet::InMemory(mismatches), summary)
         }
-        let source_messages = stage
-            .all_messages(core::StagedMessageSide::Source)
-            .map_err(|error| {
-                format!("could not load source messages for body verification: {error}")
-            })?;
-        let destination_messages = stage
-            .all_messages(core::StagedMessageSide::Destination)
-            .map_err(|error| {
-                format!("could not load destination messages for body verification: {error}")
-            })?;
-        let source_fingerprints = stage.content_fingerprints(core::StagedMessageSide::Source);
-        let destination_fingerprints =
-            stage.content_fingerprints(core::StagedMessageSide::Destination);
-        // The reconciler refuses incomplete or orphaned fingerprint coverage.
-        let (mismatches, summary) =
-            core::MessageVerification::detect_mismatches_with_content_fingerprints(
-                job_id,
-                run_id,
-                &source_messages,
-                &destination_messages,
-                &source_fingerprints,
-                &destination_fingerprints,
-                &folder_mapping,
-            )?;
-        (core::MismatchSet::InMemory(mismatches), summary)
     } else {
         stage.reset_reconciliation()?;
         if let Some(stage_path) = durable_stage_path {
