@@ -116,12 +116,17 @@ pub(super) fn maybe_emit_cutover_ready(
     if total == 0 || total != clean_verified + accepted_exceptions {
         return Ok(());
     }
-    let already_published: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND kind='cutover_ready')",
-        [project_id],
-        |row| row.get(0),
-    )?;
-    if already_published {
+    let latest_ready_detail: Option<String> = tx
+        .query_row(
+            "SELECT detail FROM events WHERE project_id=?1 AND kind='cutover_ready' ORDER BY id DESC LIMIT 1",
+            [project_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if latest_ready_detail
+        .as_deref()
+        .is_some_and(cutover_ready_event_is_current)
+    {
         return Ok(());
     }
     let Some(attested_at) = source_quiescence_at else {
@@ -139,6 +144,19 @@ pub(super) fn maybe_emit_cutover_ready(
         params![project_id, detail],
     )?;
     Ok(())
+}
+
+fn cutover_ready_event_is_current(detail: &str) -> bool {
+    let Some(expiry) = detail
+        .split_once("source-quiescence attestation valid until ")
+        .and_then(|(_, suffix)| suffix.split_whitespace().next())
+        .and_then(|value| {
+            chrono::DateTime::parse_from_rfc3339(value.trim_end_matches([';', ','])).ok()
+        })
+    else {
+        return false;
+    };
+    expiry > chrono::Utc::now()
 }
 
 /// Publish the final-verification lifecycle event only after the operator has
@@ -966,6 +984,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cutover_ready_after_final_verification, 1);
+        let repeated_ready_tx = store.connection.unchecked_transaction().unwrap();
+        super::maybe_emit_cutover_ready(&repeated_ready_tx, &project.id).unwrap();
+        repeated_ready_tx.commit().unwrap();
+        let deduplicated_ready_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            deduplicated_ready_count, 1,
+            "a still-valid event is deduplicated"
+        );
         let event_payload: String = store
             .connection
             .query_row(
@@ -1015,6 +1048,13 @@ mod tests {
                 .to_string()
                 .contains("older than 15 minutes")
         );
+        store
+            .connection
+            .execute(
+                "UPDATE events SET detail='final verification complete; source-quiescence attestation valid until 2000-01-01T00:00:00+00:00; external cutover approval pending' WHERE project_id=?1 AND kind='cutover_ready'",
+                [&project.id],
+            )
+            .unwrap();
         store
             .attest_cutover_source_quiescence(
                 &project.id,
@@ -1068,7 +1108,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(cutover_ready, 1);
+        assert_eq!(
+            cutover_ready, 2,
+            "a new readiness window must have a new durable event after the prior one expires"
+        );
     }
 
     #[test]

@@ -77,7 +77,10 @@ The event is published only while that attestation is fresh (15 minutes); if
 verification finishes after expiry, refreshing the attestation during
 Verification can publish readiness without rescanning. Receivers must treat
 readiness as time-bounded and keep the source paused until external cutover
-approval. Entering Final Delta emits
+approval. If a previously published readiness window expires, a later fresh
+attestation emits a new `migration.cutover_ready` event with a new event ID;
+receivers should use the latest event and its expiry rather than treating an
+older event as current. Entering Final Delta emits
 `migration.final_delta_started`. Transitioning from Final Delta to the
 Verification stage clears the prior attestation; no verification worker can
 be admitted until the operator records a new, fresh attestation. Only then is

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Re-emit managed cutover readiness with a new event identity when its prior
+  source-quiescence validity window has expired and the operator reconfirms;
+  active readiness windows remain deduplicated.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.
