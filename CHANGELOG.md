@@ -9,6 +9,10 @@
   barrier is implemented and qualified. This makes consistency boundaries
   machine-readable without claiming a synchronized snapshot. Preserve
   fail-closed behavior for unsupported migration transformations.
+- Check available space on the verification-stage filesystem before scanning
+  and before each SQLite page write; stop verification below a 512 MiB free
+  reserve and report an explicit verification limit. This is a best-effort
+  high-watermark, not a universal stage-size estimate or reservation.
 - Add the missing cPanel/Dovecot-to-Google Workspace and Fastmail-to-Google
   Workspace routes to the generated qualification summaries, and test that every
   release-required signed-evidence route appears in the capability manifest.

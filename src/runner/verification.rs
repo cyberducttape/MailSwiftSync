@@ -61,6 +61,7 @@ pub(crate) fn run_imap_message_verification(
     } else {
         core::MessageMetadataStage::open_ephemeral()?
     };
+    stage.ensure_free_space()?;
     // Folder-level invalidation cannot remove rows for a folder deleted or
     // renamed since an interrupted attempt. Begin from empty endpoint
     // inventories so no prior-run row or body fingerprint can enter evidence.

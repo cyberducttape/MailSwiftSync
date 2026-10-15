@@ -12,6 +12,19 @@ use uuid::Uuid;
 use super::{ExtractedMessage, ExtractedMessages, MailboxMessageKey, sqlite_i64};
 
 pub(crate) const STAGE_BATCH_SIZE: i64 = 512;
+/// Keep a free-space reserve on the filesystem receiving SQLite stage pages.
+/// This is a safety floor, not a claim that the remaining space is enough for
+/// the full verification workload.
+pub(crate) const STAGE_FREE_SPACE_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
+
+fn validate_stage_free_space(available: u64) -> Result<(), String> {
+    if available < STAGE_FREE_SPACE_RESERVE_BYTES {
+        return Err(crate::core::VerificationLimit::StagingDiskSpace.tag(format!(
+            "verification staging stopped with {available} bytes available; it preserves a minimum free-space reserve of {STAGE_FREE_SPACE_RESERVE_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
 
 pub(crate) fn durable_stage_path(state_path: &std::path::Path, job_id: &str) -> PathBuf {
     let safe_id = job_id
@@ -536,6 +549,7 @@ impl MessageMetadataStage {
         messages: &ExtractedMessages,
         fingerprints: &HashMap<MailboxMessageKey, String>,
     ) -> Result<(), String> {
+        self.ensure_free_space()?;
         if fingerprints.keys().any(|key| !messages.contains_key(key)) {
             return Err("body fingerprint did not have a matching staged message".to_owned());
         }
@@ -609,6 +623,22 @@ impl MessageMetadataStage {
                 .insert((side, key.clone()), fingerprint.clone());
         }
         Ok(())
+    }
+
+    /// Check the filesystem receiving staged rows before each page write.
+    /// This high-watermark guard reduces the chance that verification exhausts
+    /// the filesystem; it cannot reserve space against concurrent writers.
+    pub(crate) fn ensure_free_space(&self) -> Result<(), String> {
+        let Some(path) = self.path.as_deref() else {
+            return Ok(());
+        };
+        let directory = path.parent().unwrap_or_else(|| Path::new("."));
+        let available = fs2::available_space(directory).map_err(|error| {
+            crate::core::VerificationLimit::StagingDiskSpace.tag(format!(
+                "could not determine free space for the verification stage: {error}"
+            ))
+        })?;
+        validate_stage_free_space(available)
     }
 
     pub(crate) fn record_permanent_flags(
@@ -1141,6 +1171,16 @@ fn cleanup_stage_files(path: &Path, remove_parent: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_free_space_guard_preserves_the_configured_floor() {
+        assert!(validate_stage_free_space(STAGE_FREE_SPACE_RESERVE_BYTES).is_ok());
+        let error = validate_stage_free_space(STAGE_FREE_SPACE_RESERVE_BYTES - 1).unwrap_err();
+        assert_eq!(
+            crate::core::VerificationLimit::from_detail(&error),
+            Some(crate::core::VerificationLimit::StagingDiskSpace)
+        );
+    }
 
     #[test]
     fn stage_file_replaced_after_validation_is_detected() {
