@@ -3,6 +3,8 @@
 use super::*;
 use crate::core::sqlite_i64;
 
+const STAGE_SPACE_RECHECK_MISMATCH_INTERVAL: u64 = 256;
+
 fn stage_table_count(connection: &rusqlite::Connection, table: &str) -> Result<u64, String> {
     // `table` is selected only from private, static reconciliation table
     // names at call sites; it is not derived from mailbox or operator input.
@@ -68,11 +70,15 @@ pub(super) fn mark_stage_matched(
 /// Stage one mismatch row; reconciliation keeps no mismatch detail in memory.
 pub(super) fn append_stage_mismatch(
     connection: &rusqlite::Connection,
+    stage: &MessageMetadataStage,
     mismatch: MessageMismatch,
     staged: &mut u64,
 ) -> Result<(), String> {
     insert_staged_mismatch(connection, &mismatch)?;
     *staged = staged.saturating_add(1);
+    if staged.is_multiple_of(STAGE_SPACE_RECHECK_MISMATCH_INTERVAL) {
+        stage.ensure_free_space()?;
+    }
     Ok(())
 }
 
@@ -142,6 +148,7 @@ impl MessageVerification {
     ) -> Result<(u64, VerificationSummary), String> {
         let (mut mismatch_count, mut summary) =
             Self::reconcile_stage(job_id, run_id, stage, folder_mapping)?;
+        stage.ensure_free_space()?;
         let connection = stage.connection()?;
         Self::validate_fingerprint_coverage(connection)?;
         let transaction = connection
@@ -254,6 +261,7 @@ impl MessageVerification {
                   AND sf.fingerprint<>df.fingerprint;",
         )
         .map_err(|error| format!("could not classify staged content fingerprints: {error}"))?;
+        stage.ensure_free_space()?;
 
         let fallback_count = stage_table_count(connection, "staged_content_fallback_pairs")?;
         mismatch_count = mismatch_count.saturating_sub(fallback_count.saturating_mul(2));
@@ -301,6 +309,7 @@ impl MessageVerification {
             if pairs.is_empty() {
                 break;
             }
+            stage.ensure_free_space()?;
             for ((source, destination), source_fingerprint, destination_fingerprint) in pairs {
                 after_rowid = source.rowid;
                 let mut mismatch = make_mismatch(
@@ -333,6 +342,7 @@ impl MessageVerification {
                 summary.metadata_matches = summary.metadata_matches.saturating_sub(1);
                 summary.changed_count = summary.changed_count.saturating_add(1);
             }
+            stage.ensure_free_space()?;
         }
 
         crate::core::stage_sql::execute_batch(
@@ -349,6 +359,7 @@ impl MessageVerification {
         .map_err(|error| {
             format!("could not release staged content reconciliation tables: {error}")
         })?;
+        stage.ensure_free_space()?;
         let total_source = stage
             .count(StagedMessageSide::Source)
             .map_err(|error| error.to_string())?;
@@ -437,6 +448,7 @@ impl MessageVerification {
         stage: &MessageMetadataStage,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(u64, VerificationSummary), String> {
+        stage.ensure_free_space()?;
         let connection = stage.connection()?;
         // One transaction for the whole pass. A durable stage runs with FULL
         // synchronization, so autocommitting each matched-row insert costs a
@@ -529,6 +541,7 @@ impl MessageVerification {
                  DROP TABLE staged_exact_destination_ranked;",
             )
             .map_err(|error| format!("could not reconcile exact staged metadata: {error}"))?;
+        stage.ensure_free_space()?;
         let metadata_matches = connection
             .query_row(
                 "SELECT COUNT(*) FROM staged_matched WHERE side=0",
@@ -598,6 +611,7 @@ impl MessageVerification {
                     JOIN staged_messages m ON m.rowid=p.destination_rowid;",
         )
         .map_err(|error| format!("could not reconcile changed staged IDs: {error}"))?;
+        stage.ensure_free_space()?;
         {
             let mut statement = crate::core::stage_sql::prepare(connection,
                     "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes,
@@ -616,6 +630,7 @@ impl MessageVerification {
                     pair.map_err(|error| format!("could not decode changed staged pair: {error}"))?;
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -692,6 +707,7 @@ impl MessageVerification {
                 mark_stage_matched(connection, StagedMessageSide::Destination, &destination)?;
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -758,6 +774,7 @@ impl MessageVerification {
                 SELECT 1,destination_mailbox,destination_uidvalidity,destination_uid FROM staged_probable_pairs;",
         )
         .map_err(|error| format!("could not reconcile unique staged fingerprints: {error}"))?;
+        stage.ensure_free_space()?;
         let probable_matches = connection
             .query_row("SELECT COUNT(*) FROM staged_probable_pairs", [], |row| {
                 row.get::<_, i64>(0)
@@ -788,6 +805,7 @@ impl MessageVerification {
              DROP TABLE staged_probable_destination;",
         )
         .map_err(|error| format!("could not release probable reconciliation rows: {error}"))?;
+        stage.ensure_free_space()?;
 
         // Remaining rows become bounded mismatch evidence.
         after_rowid = 0;
@@ -802,6 +820,7 @@ impl MessageVerification {
             for source in batch {
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -817,6 +836,7 @@ impl MessageVerification {
             }
         }
         crate::core::stage_sql::execute_batch(connection, "CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.identity_provenance='rfc_message_id' GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id AND s.identity_provenance='rfc_message_id') AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id AND s.identity_provenance='rfc_message_id') > 0; CREATE INDEX staged_duplicate_ids_message_id ON staged_duplicate_ids(message_id);").map_err(|error| error.to_string())?;
+        stage.ensure_free_space()?;
         after_rowid = 0;
         loop {
             let batch = stage
@@ -847,6 +867,7 @@ impl MessageVerification {
                 };
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -889,6 +910,7 @@ impl MessageVerification {
                     .into(),
             );
         }
+        stage.ensure_free_space()?;
         transaction
             .commit()
             .map_err(|error| format!("could not finish staged reconciliation: {error}"))?;

@@ -6,15 +6,16 @@ provider, mailbox shape, or host has been qualified at that size.
 
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
-| Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning and before every staged page, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
-
-The free-space check runs before network scanning and before each fetched-page
-commit. It does not bound disk growth inside a SQLite reconciliation/materialized
-table operation, terminal evidence persistence, WAL/journal activity, or report
-export. Keep monitoring the entire filesystem and leave capacity for those
-phases; the guard reduces one failure mode but cannot guarantee that the disk
-will not fill.
+| Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
 | Body fingerprint proof | Durable SQLite-backed verification supports the general 1,000,000-message-per-endpoint limit; ephemeral in-memory verification retains a 100,000-message-per-endpoint ceiling. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. Durable reconciliation uses staged indexes and bounded Rust batches, but its disk amplification and large-scale latency have not yet been qualified. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The configured body-byte budget is independent of message count and does not establish a memory or disk-capacity guarantee. |
+
+The free-space check runs before network scanning, each fetched-page commit,
+major SQLite materialization phases, and every 256 persisted mismatch rows.
+It runs between operations: an individual SQLite operation may consume space
+before the next check. It does not reserve space or bound aggregate stage growth,
+terminal evidence persistence, WAL/journal activity, or report export. Keep
+monitoring the entire filesystem and leave capacity for those phases; the guard
+reduces one failure mode but cannot guarantee that the disk will not fill.
 
 The latest release-mode durable-stage benchmark on a local real-disk
 workspace (100,000 synthetic messages per endpoint, typical distribution)

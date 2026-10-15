@@ -11,6 +11,11 @@
   out of Final Delta and before cutover completion. Allow audited refreshes
   during Verification so a long final scan does not force use of stale
   operator confirmation.
+- Recheck verification-stage filesystem headroom before materialized SQLite
+  reconciliation phases and every 256 persisted mismatch rows, so detected
+  low-space conditions stop further stage work while preserving the durable
+  stage for recovery. This is still a high-watermark, not a disk reservation
+  or an aggregate stage-size bound.
 - Serialize cutover approval/attestation/advancement and migration-wave approval
   with the exclusive ledger owner lock. Make cutover/wave status reads use a
   read-only connection, and revalidate the approved cutover stage after the
