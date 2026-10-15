@@ -9,6 +9,9 @@
 - Keep exact UIDVALIDITY, UIDNEXT, message-count, and MODSEQ values out of
   verification revalidation errors; retain the names of changed fields for
   useful diagnosis without logging raw mailbox cursor state.
+- Redact structured mailbox and folder values from opt-in diagnostic
+  transcripts, alongside credentials, email addresses, and message IDs; retain
+  the documented warning that arbitrary engine prose can still expose metadata.
 - Return actionable cutover refusal reasons (including missing or stale source-
   quiescence attestations and missing operator confirmation) instead of
   presenting safety-gate refusals as generic SQLite errors.

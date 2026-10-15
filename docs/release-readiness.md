@@ -145,7 +145,10 @@ reconciliation as successful.
   secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB per
   file / 128 MiB per directory, with
   retention capped at 20 completed files. These plaintext logs can still
-  contain provider, mailbox, folder, and message metadata; transcript contents
+  contain provider, mailbox, folder, and message metadata in free-form engine
+  prose; email/Message-ID values and structured mailbox/folder key-value
+  fields are pseudonymized or redacted, but this is not complete semantic
+  anonymization. Transcript contents
   are not account-pseudonymized, encrypted, or compressed, and support bundles
   do not collect them. Operators must select and handle logs explicitly.
   Logging is disabled by default. Newly created directories are restricted;
