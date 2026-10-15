@@ -110,7 +110,11 @@ engine_confirmed` for version 3 and later qualification evidence. Version 4
 adds per-run endpoint scan intervals and explicitly states that the source is
 not revalidated after destination scanning; separate endpoint scans are not a
 synchronized account-wide snapshot. Consumers of version 3 must update before
-accepting version 4.
+accepting version 4. Each evidence row also carries `proof_tier` (`aggregate`,
+`metadata`, or bounded `content`) separately from `proof_result`; none implies
+cutover readiness. `cutover_readiness.status` remains `not_established` until
+the final synchronization barrier and source revalidation are implemented and
+qualified.
 The `mailswiftsync-support-bundle` artifact uses format version `2`: project,
 mailbox-job, and run identifiers are type-separated pseudonyms derived with a
 fresh per-bundle salt, preserving joins inside one bundle without correlating

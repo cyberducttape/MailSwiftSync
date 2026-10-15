@@ -43,6 +43,16 @@ fn verification_consistency(folders: &[core::TransferPassFolder]) -> serde_json:
     })
 }
 
+fn proof_tier(evidence: &core::MailboxEvidence) -> &'static str {
+    match evidence.verification_method() {
+        core::VerificationMethod::AggregateEngine | core::VerificationMethod::NativeDovecot => {
+            "aggregate"
+        }
+        core::VerificationMethod::MetadataReconciliation => "metadata",
+        core::VerificationMethod::BodyHash => "content_within_configured_bounds",
+    }
+}
+
 fn execution_executable_sha256(plan_snapshot: &str) -> Option<String> {
     let snapshot: toml::Value = toml::from_str(plan_snapshot).ok()?;
     let identity = snapshot
@@ -201,6 +211,10 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "verification_outcome": value.verification_outcome().as_str(),
                         "verification_outcome_label": value.verification_outcome_label(),
                         "assurance_status": assurance_status(value),
+                        "proof_tier": proof_tier(value),
+                        "proof_result": assurance_status(value),
+                        "cutover_readiness": "not_established",
+                        "cutover_readiness_reason": "source_cursor_not_revalidated_after_destination_scan",
                         "verification_level": value.verification_level(),
                         "evidence_level": value.evidence_level(),
                         "reason": value.verification_reason(),
@@ -300,6 +314,11 @@ pub(crate) fn export_from_store_with_options_and_identity(
             } else {
                 "This is an explicitly requested incomplete progress artifact. It is not a completion certificate; digest or signature validation proves artifact integrity or signer authenticity only."
             }
+        },
+        "cutover_readiness": {
+            "status": "not_established",
+            "reason": "Independent verification scans the endpoints separately and does not revalidate the source cursor after destination scanning.",
+            "requirement": "A final synchronization barrier, source revalidation, and post-delta verification are required before making a cutover-ready claim."
         },
         "verification_summary": {
             "mailboxes_total": total_mailboxes,
@@ -660,6 +679,42 @@ mod tests {
     }
 
     #[test]
+    fn proof_tiers_separate_metadata_content_and_cutover_readiness() {
+        let evidence = core::MailboxEvidence {
+            verification_method: core::VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(core::VerificationOutcome::ExactMetadataMatch),
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 100,
+            destination_bytes: 100,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            rfc_message_id_matches: 1,
+            synthetic_identity_matches: 0,
+            flag_verification: Some(core::FlagVerification {
+                compared_messages: 1,
+                mismatched_messages: 0,
+                excepted_messages: 0,
+            }),
+        };
+        assert_eq!(proof_tier(&evidence), "metadata");
+        let mut content = evidence.clone();
+        content.verification_method = core::VerificationMethod::BodyHash;
+        content.verification_outcome = Some(core::VerificationOutcome::ExactBodyMatch);
+        assert_eq!(proof_tier(&content), "content_within_configured_bounds");
+        content.verification_outcome = Some(core::VerificationOutcome::Incomplete);
+        assert_eq!(proof_tier(&content), "content_within_configured_bounds");
+        assert_eq!(assurance_status(&content), "incomplete");
+    }
+
+    #[test]
     fn customer_assurance_status_names_the_evidence_level() {
         let mut evidence = core::MailboxEvidence {
             verification_method: core::VerificationMethod::AggregateEngine,
@@ -857,8 +912,21 @@ mod tests {
         assert_eq!(certificate["engine"], "imapsync 2.314");
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
         assert_eq!(certificate["format_version"], 4);
+        assert_eq!(
+            certificate["cutover_readiness"]["status"],
+            "not_established"
+        );
+        assert!(
+            certificate["cutover_readiness"]["requirement"]
+                .as_str()
+                .unwrap()
+                .contains("final synchronization barrier")
+        );
         assert_eq!(certificate["proof_signature"]["algorithm"], "Ed25519");
         let evidence = &certificate["mailboxes"][0]["evidence"];
+        assert_eq!(evidence["proof_tier"], "aggregate");
+        assert_eq!(evidence["proof_result"], "engine_confirmed");
+        assert_eq!(evidence["cutover_readiness"], "not_established");
         assert_eq!(
             evidence["migration_plan_sha256"],
             crate::plan_identity::snapshot_sha256(&plan_snapshot)
