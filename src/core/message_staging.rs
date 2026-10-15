@@ -1377,6 +1377,42 @@ mod tests {
     }
 
     #[test]
+    fn final_source_revalidation_replaces_the_earlier_observation_time() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        let empty_snapshot = snapshot(42, 1, 0);
+        stage
+            .begin_mailbox_scan(StagedMessageSide::Source, "INBOX", empty_snapshot)
+            .unwrap();
+        stage
+            .complete_mailbox(StagedMessageSide::Source, "INBOX", empty_snapshot, 0)
+            .unwrap();
+
+        stage
+            .record_source_revalidation(&HashMap::from([(
+                "INBOX".to_owned(),
+                "2026-10-14T10:05:00.000Z".to_owned(),
+            )]))
+            .unwrap();
+        stage
+            .record_source_revalidation(&HashMap::from([(
+                "INBOX".to_owned(),
+                "2026-10-14T10:06:00.000Z".to_owned(),
+            )]))
+            .unwrap();
+
+        let source = stage
+            .folder_cursors()
+            .unwrap()
+            .into_iter()
+            .find(|cursor| cursor.side == StagedMessageSide::Source)
+            .unwrap();
+        assert_eq!(
+            source.source_revalidated_at.as_deref(),
+            Some("2026-10-14T10:06:00.000Z")
+        );
+    }
+
+    #[test]
     fn stage_file_replaced_after_validation_is_detected() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("verification.sqlite");
