@@ -6,6 +6,9 @@
   requests. Upgrade webhook HMAC to version 2, authenticating event identity,
   idempotency key, per-attempt timestamp, and exact body bytes; document
   receiver replay-window and durable-deduplication requirements.
+- Add the missing cPanel/Dovecot-to-Google Workspace and Fastmail-to-Google
+  Workspace routes to the generated qualification summaries, and test that every
+  release-required signed-evidence route appears in the capability manifest.
 - Add a method-qualified verification outcome breakdown to automation status,
   distinguishing aggregate totals from metadata and bounded-content evidence.
 - Skip test-inventory generation and upload when CI is canceled by a newer
