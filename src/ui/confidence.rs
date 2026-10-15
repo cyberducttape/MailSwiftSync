@@ -224,7 +224,7 @@ pub(crate) fn migration_confidence(input: ConfidenceInputs<'_>) -> Vec<Confidenc
     let envelope_evidence = if input.proof_ready {
         "The selected verification path completed within its configured safety envelope.".to_owned()
     } else if body_mode {
-        "No mailbox size or message-count estimate is available from current preflight. Body verification admits at most 100,000 messages per endpoint, with configured per-message and total-byte limits.".to_owned()
+        "No mailbox size or message-count estimate is available from current preflight. Durable SQLite-backed body verification admits up to 1,000,000 messages per endpoint; ephemeral verification is limited to 100,000, with configured per-message and total-byte limits.".to_owned()
     } else {
         "No mailbox size or message-count estimate is available from current preflight. Metadata verification admits at most 1,000,000 messages per endpoint, with bounded folder inventory and staging state.".to_owned()
     };
@@ -386,6 +386,22 @@ mod tests {
             .expect("verification capacity finding");
         assert_eq!(capacity.state, ConfidenceState::Unknown);
         assert!(capacity.evidence.contains("1,000,000"));
+    }
+
+    #[test]
+    fn body_hash_capacity_distinguishes_durable_and_ephemeral_envelopes() {
+        let mut data = inputs();
+        data.verification_level = "Level 3 — Bounded body-hash verification";
+        let findings = migration_confidence(data);
+        let capacity = findings
+            .iter()
+            .find(|item| item.label == "Verification capacity")
+            .expect("verification capacity finding");
+        assert_eq!(capacity.state, ConfidenceState::Unknown);
+        assert!(capacity.evidence.contains("Durable SQLite-backed"));
+        assert!(capacity.evidence.contains("1,000,000 messages"));
+        assert!(capacity.evidence.contains("ephemeral verification"));
+        assert!(capacity.evidence.contains("100,000"));
     }
 
     #[test]

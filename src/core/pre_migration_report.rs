@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
-const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 100_000;
+const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
 pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 3;
@@ -138,7 +138,7 @@ impl PreMigrationRisk {
                 severity: WarningSeverity::Warning,
                 category: "verification".to_string(),
                 message: format!(
-                    "Bounded body proof exceeds the documented {}-message-per-endpoint envelope",
+                    "Bounded body proof exceeds the durable SQLite-backed {}-message-per-endpoint envelope",
                     BODY_VERIFICATION_MESSAGE_LIMIT
                 ),
             });
@@ -292,6 +292,11 @@ mod tests {
         assert!(
             messages
                 .iter()
+                .any(|message| { message.contains("1000000-message-per-endpoint") })
+        );
+        assert!(
+            messages
+                .iter()
                 .any(|message| message.contains("Equal-size source/destination projection"))
         );
         assert_eq!(
@@ -300,6 +305,26 @@ mod tests {
         );
         assert_eq!(risk.readiness_score, 85);
         assert_eq!(risk.scale_assessment, ScaleAssessment::ReviewRequired);
+    }
+
+    #[test]
+    fn body_hash_scale_warning_uses_durable_stage_limit_not_ephemeral_limit() {
+        let below_durable_limit =
+            PreMigrationRisk::assess(BODY_VERIFICATION_MESSAGE_LIMIT, 5, 1, "");
+        assert!(
+            !below_durable_limit
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("Bounded body proof exceeds") })
+        );
+
+        let above_durable_limit =
+            PreMigrationRisk::assess(BODY_VERIFICATION_MESSAGE_LIMIT + 1, 5, 1, "");
+        assert!(above_durable_limit.warnings.iter().any(|warning| {
+            warning.message.contains(
+                "Bounded body proof exceeds the durable SQLite-backed 1000000-message-per-endpoint envelope",
+            )
+        }));
     }
 
     #[test]

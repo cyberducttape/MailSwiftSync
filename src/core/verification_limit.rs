@@ -111,7 +111,7 @@ impl VerificationLimit {
                 "An endpoint holds more than the 1,000,000 messages metadata verification admits. Split the account into smaller folder scopes, or obtain evidence another way and accept the difference explicitly."
             }
             Self::BodyHashMessageCount => {
-                "Body-hash verification admits at most 100,000 messages per endpoint. Disable body-hash verification to obtain metadata evidence for this mailbox, then rerun."
+                "Ephemeral body-hash verification is limited to 100,000 messages per endpoint; use a durable SQLite-backed run for body proof up to the general 1,000,000-message limit, or use metadata-only verification."
             }
             Self::BodyHashMessageSize => {
                 "A message exceeded the body-hash per-message bound. Raise the bound (up to 64 MiB) or disable body-hash verification, then rerun."
@@ -189,6 +189,15 @@ mod tests {
         let detail = VerificationLimit::StagingDiskSpace.guidance();
         assert!(detail.contains("512 MiB reserve"));
         assert!(detail.contains("does not estimate total verification capacity"));
+    }
+
+    #[test]
+    fn body_hash_count_guidance_names_ephemeral_and_durable_limits() {
+        let guidance = VerificationLimit::BodyHashMessageCount.guidance();
+        assert!(guidance.contains("Ephemeral body-hash verification"));
+        assert!(guidance.contains("100,000 messages per endpoint"));
+        assert!(guidance.contains("durable SQLite-backed run"));
+        assert!(guidance.contains("1,000,000-message limit"));
     }
 
     #[test]
