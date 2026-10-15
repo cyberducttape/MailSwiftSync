@@ -106,24 +106,19 @@ fn invalid(message: &str) -> rusqlite::Error {
 }
 
 fn validate_settings(settings: &WaveSettings) -> rusqlite::Result<WaveSettings> {
-    let name = settings.name.trim();
-    if name.is_empty() || name.chars().count() > 120 || name.chars().any(char::is_control) {
-        return Err(invalid("wave name must be 1-120 printable characters"));
-    }
+    let name = crate::storage::single_line_audit_text(&settings.name, 120 * 4)
+        .filter(|name| name.chars().count() <= 120)
+        .ok_or_else(|| invalid("wave name must be 1-120 printable characters"))?;
     let scheduled_at = settings
         .scheduled_at
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    if scheduled_at
-        .as_deref()
-        .is_some_and(|value| value.len() > 64 || value.chars().any(char::is_control))
-    {
-        return Err(invalid(
-            "wave start must be at most 64 printable characters",
-        ));
-    }
+        .map(|value| {
+            crate::storage::single_line_audit_text(value, 64)
+                .ok_or_else(|| invalid("wave start must be at most 64 printable characters"))
+        })
+        .transpose()?;
     let maintenance_window = settings
         .maintenance_window
         .as_deref()
@@ -138,7 +133,7 @@ fn validate_settings(settings: &WaveSettings) -> rusqlite::Result<WaveSettings> 
         return Err(invalid("wave concurrency must be at least 1"));
     }
     Ok(WaveSettings {
-        name: name.to_owned(),
+        name,
         scheduled_at,
         maintenance_window,
         concurrency: settings.concurrency,
@@ -252,10 +247,8 @@ impl StateStore {
     /// Record an operator's approval. Approval is final: an approved wave's
     /// members and settings no longer change.
     pub fn approve_wave(&self, wave_id: &str, operator: &str) -> rusqlite::Result<()> {
-        let operator = operator.trim();
-        if operator.is_empty() || operator.len() > 256 || operator.chars().any(char::is_control) {
-            return Err(invalid("approver must be 1-256 printable characters"));
-        }
+        let operator = crate::storage::single_line_audit_text(operator, 256)
+            .ok_or_else(|| invalid("approver must be 1-256 printable characters"))?;
         let tx = self.connection.unchecked_transaction()?;
         let (project_id, name): (String, String) = tx.query_row(
             "SELECT project_id,name FROM waves WHERE id=?1",
@@ -438,6 +431,14 @@ mod tests {
                 ..WaveSettings::default()
             },
             WaveSettings {
+                name: "Wave\u{2028}forged-event".into(),
+                ..settings("W")
+            },
+            WaveSettings {
+                scheduled_at: Some("tonight\u{2029}wave_approved".into()),
+                ..settings("W")
+            },
+            WaveSettings {
                 maintenance_window: Some("whenever".into()),
                 ..settings("W")
             },
@@ -459,6 +460,16 @@ mod tests {
         );
         store.approve_wave(&pilot.id, "operator").unwrap();
         assert!(store.approve_wave(&pilot.id, "operator").is_err());
+        assert!(
+            store
+                .approve_wave(&accounting.id, "operator\u{2028}forged-event")
+                .is_err()
+        );
+        assert!(
+            store
+                .approve_wave(&accounting.id, "operator\u{2029}forged-event")
+                .is_err()
+        );
         assert!(
             store.delete_wave(&pilot.id).is_err(),
             "approved waves are records"

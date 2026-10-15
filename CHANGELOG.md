@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- Bound and reject multiline/control-character cutover and verification-
-  exception audit inputs so operator-provided values cannot forge additional-
-  looking durable audit events.
+- Bound and reject multiline/control-character cutover, migration-wave, and
+  verification-exception audit inputs so operator-provided values cannot forge
+  additional-looking durable audit events.
 - After independent destination scanning, re-LIST the source and read-only
   EXAMINE each scanned folder. Refuse message-level verification if the
   selectable folder set, UIDVALIDITY, UIDNEXT, EXISTS, or a previously tracked
