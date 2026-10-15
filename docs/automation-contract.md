@@ -95,7 +95,7 @@ storage schema migrates and is **not** a compatibility signal: dispatch on
 
 Reports, proofs, certificates, and support bundles carry their own `format`
 markers and are artifact formats, not part of this automation contract.
-The `mailswiftsync-customer-proof` artifact uses format version `3`. Per-mailbox
+The `mailswiftsync-customer-proof` artifact uses format version `4`. Per-mailbox
 `assurance_status` distinguishes `aggregate_match`, `metadata_match`,
 `bounded_content_match`, `engine_confirmed`, `with_exceptions`, and `incomplete`.
 The summary reports `mailboxes_by_assurance` and does not emit a single
@@ -106,7 +106,11 @@ A status of `aggregate_match` means only the observed totals agree, while
 message-fidelity guarantee. Consumers of customer-proof version `2` must
 update before accepting version `3`. The provider-evidence generator accepts
 only known customer-proof versions and requires `assurance_status:
-engine_confirmed` for version 3 qualification evidence.
+engine_confirmed` for version 3 and later qualification evidence. Version 4
+adds per-run endpoint scan intervals and explicitly states that the source is
+not revalidated after destination scanning; separate endpoint scans are not a
+synchronized account-wide snapshot. Consumers of version 3 must update before
+accepting version 4.
 The `mailswiftsync-support-bundle` artifact uses format version `2`: project,
 mailbox-job, and run identifiers are type-separated pseudonyms derived with a
 fresh per-bundle salt, preserving joins inside one bundle without correlating

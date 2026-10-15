@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bump customer-proof artifacts to v4 and include per-run source/destination
+  verification intervals plus an explicit non-atomic snapshot model and
+  `not_revalidated` source status. This makes the cross-server consistency
+  boundary machine-readable; it does not claim that a final source barrier is
+  implemented. Preserve fail-closed behavior for migration transformations
+  without an immutable, qualified expected-destination model.
 - Add the missing cPanel/Dovecot-to-Google Workspace and Fastmail-to-Google
   Workspace routes to the generated qualification summaries, and test that every
   release-required signed-evidence route appears in the capability manifest.

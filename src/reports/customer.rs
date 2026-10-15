@@ -6,6 +6,43 @@ use crate::{
 use std::collections::BTreeSet;
 use std::path::Path;
 
+fn verification_consistency(folders: &[core::TransferPassFolder]) -> serde_json::Value {
+    let side_interval = |side| {
+        let side_folders = folders
+            .iter()
+            .filter(|folder| folder.side == side)
+            .collect::<Vec<_>>();
+        if side_folders.is_empty()
+            || side_folders.iter().any(|folder| {
+                !folder.complete
+                    || folder.scan_started_at.is_none()
+                    || folder.scan_completed_at.is_none()
+            })
+        {
+            return serde_json::Value::Null;
+        }
+        let start = side_folders
+            .iter()
+            .filter_map(|folder| folder.scan_started_at.as_deref())
+            .min();
+        let end = side_folders
+            .iter()
+            .filter_map(|folder| folder.scan_completed_at.as_deref())
+            .max();
+        serde_json::json!({"started_at": start, "completed_at": end})
+    };
+    let source = side_interval(core::PassSide::Source);
+    let destination = side_interval(core::PassSide::Destination);
+    let both_complete = !source.is_null() && !destination.is_null();
+    serde_json::json!({
+        "snapshot_model": "independent_endpoint_scans_not_one_synchronized_snapshot",
+        "source_scan": source,
+        "destination_scan": destination,
+        "source_revalidation_after_destination": "not_performed",
+        "source_change_status": if both_complete { "not_revalidated" } else { "unknown_incomplete_scan" },
+    })
+}
+
 fn execution_executable_sha256(plan_snapshot: &str) -> Option<String> {
     let snapshot: toml::Value = toml::from_str(plan_snapshot).ok()?;
     let identity = snapshot
@@ -227,11 +264,12 @@ pub(crate) fn export_from_store_with_options_and_identity(
             "dropped_presentation_lines": run.diagnostic_lines_dropped,
             "transfer_attempt_count": run.transfer_attempt_count,
             "unfinished_transfer_attempt_count": run.unfinished_transfer_attempt_count,
+            "verification_consistency": verification_consistency(&run.verification_folders),
         })
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-customer-proof",
-        "format_version": 3,
+        "format_version": 4,
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
         "migration_id": project.id.clone(),
@@ -560,6 +598,68 @@ mod tests {
     use ring::signature::KeyPair;
 
     #[test]
+    fn customer_proof_consistency_reports_scan_intervals_without_claiming_snapshot() {
+        let folder = |side, start: &str, end: &str| core::TransferPassFolder {
+            side,
+            folder_digest: "a".repeat(64),
+            uidvalidity: 1,
+            uidnext: 2,
+            exists: 1,
+            verified_through_uid: 1,
+            staged_messages: 1,
+            complete: true,
+            scan_started_at: Some(start.to_owned()),
+            scan_completed_at: Some(end.to_owned()),
+        };
+        let consistency = verification_consistency(&[
+            folder(
+                core::PassSide::Source,
+                "2026-10-14T10:00:00.000Z",
+                "2026-10-14T10:01:00.000Z",
+            ),
+            folder(
+                core::PassSide::Destination,
+                "2026-10-14T10:02:00.000Z",
+                "2026-10-14T10:03:00.000Z",
+            ),
+        ]);
+        assert_eq!(
+            consistency["snapshot_model"],
+            "independent_endpoint_scans_not_one_synchronized_snapshot"
+        );
+        assert_eq!(
+            consistency["source_scan"]["started_at"],
+            "2026-10-14T10:00:00.000Z"
+        );
+        assert_eq!(
+            consistency["destination_scan"]["completed_at"],
+            "2026-10-14T10:03:00.000Z"
+        );
+        assert_eq!(
+            consistency["source_revalidation_after_destination"],
+            "not_performed"
+        );
+        assert_eq!(consistency["source_change_status"], "not_revalidated");
+
+        let mut incomplete_source = folder(
+            core::PassSide::Source,
+            "2026-10-14T10:00:00.000Z",
+            "2026-10-14T10:01:00.000Z",
+        );
+        incomplete_source.complete = false;
+        let partial = verification_consistency(&[
+            incomplete_source,
+            folder(
+                core::PassSide::Destination,
+                "2026-10-14T10:02:00.000Z",
+                "2026-10-14T10:03:00.000Z",
+            ),
+        ]);
+        assert_eq!(partial["source_scan"], serde_json::Value::Null);
+        assert_eq!(partial["source_change_status"], "unknown_incomplete_scan");
+    }
+
+    #[test]
     fn customer_assurance_status_names_the_evidence_level() {
         let mut evidence = core::MailboxEvidence {
             verification_method: core::VerificationMethod::AggregateEngine,
@@ -756,7 +856,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
         assert_eq!(certificate["engine"], "imapsync 2.314");
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
-        assert_eq!(certificate["format_version"], 3);
+        assert_eq!(certificate["format_version"], 4);
         assert_eq!(certificate["proof_signature"]["algorithm"], "Ed25519");
         let evidence = &certificate["mailboxes"][0]["evidence"];
         assert_eq!(
