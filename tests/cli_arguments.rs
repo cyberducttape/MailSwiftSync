@@ -151,6 +151,8 @@ fn cutover_and_wave_writes_refuse_a_ledger_owned_by_another_process() {
         .expect("ledger lock file should be created");
     lock.lock_exclusive()
         .expect("test process should own the ledger lock");
+    let proof = directory.join("proof.json");
+    let signing_key = directory.join("signing-key.pem");
 
     for arguments in [
         vec![
@@ -166,6 +168,12 @@ fn cutover_and_wave_writes_refuse_a_ledger_owned_by_another_process() {
             "approve",
             "wave",
             "operator",
+        ],
+        vec![
+            "certificate",
+            state.to_str().unwrap(),
+            proof.to_str().unwrap(),
+            signing_key.to_str().unwrap(),
         ],
     ] {
         let output = run(&arguments);

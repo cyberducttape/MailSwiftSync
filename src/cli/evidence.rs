@@ -790,6 +790,13 @@ pub(super) fn certificate_command(mut arguments: std::env::ArgsOs) -> eframe::Re
         eprintln!("Migration certificate refused: {error}");
         std::process::exit(2);
     }
+    let _instance_lock = match crate::process::acquire_instance_lock(&state) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("Migration certificate refused: {error}");
+            std::process::exit(1);
+        }
+    };
     let store = match core::StateStore::open_readonly(&state) {
         Ok(store) => store,
         Err(error) => {
