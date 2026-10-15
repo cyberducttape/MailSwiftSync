@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Allow operators to refresh an expired source-quiescence attestation during
+  Catch-up, so it can authorize the transition to Final Delta without reopening
+  or recreating the managed cutover workflow.
 - Add a fresh pre-launch IMAP readiness check that blocks single and batch live
   runs when the destination reports an exhausted INBOX-root quota. Unsupported,
   failed, or incomplete quota observations remain unknown; non-exhausted INBOX

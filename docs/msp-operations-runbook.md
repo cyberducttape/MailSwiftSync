@@ -95,8 +95,9 @@ mailbox is complete, needs a delta, or requires operator review.
   can be admitted. The `migration.cutover_verification_started` event is
   emitted only after this post-delta reconfirmation. Refresh it again before
   externally confirmed completion if more than 15 minutes have elapsed. The
-  command accepts refreshes during Final Delta and Verification. Keep that
-  barrier in force through final verification.
+  command can refresh an expired assertion in Catch-up before advancing to
+  Final Delta, and accepts refreshes during Final Delta and Verification.
+  Keep that barrier in force through final verification.
   Verification separately re-LISTs and re-SELECTs the source after destination scanning and records
   whether the tracked folder cursors remained unchanged. The attestation is
   still an operator assertion: neither it nor the cursor recheck proves an

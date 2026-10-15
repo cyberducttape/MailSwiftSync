@@ -335,7 +335,7 @@ impl StateStore {
             .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
-            "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage IN ('catch_up','final_delta','verification') AND approved_by IS NOT NULL AND (source_quiescence_at IS NULL OR stage IN ('final_delta','verification'))",
+            "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage IN ('catch_up','final_delta','verification') AND approved_by IS NOT NULL",
             params![operator, evidence, project_id],
         )?;
         if changed != 1 {
@@ -645,6 +645,66 @@ mod tests {
                     &children[0],
                 )
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn stale_catch_up_attestation_can_be_refreshed_before_final_delta() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox(
+                "catch-up-attestation-refresh",
+                "source",
+                "destination",
+                "a",
+                "a",
+            )
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
+            .unwrap();
+        store.approve_cutover(&project.id, "operator").unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        assert_eq!(
+            store.advance_cutover(&project.id, None).unwrap(),
+            CutoverStage::CatchUp
+        );
+
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        store
+            .attest_cutover_source_quiescence(&project.id, "operator", "Initial pause")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET source_quiescence_at=datetime('now','-16 minutes') WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Delivery pause reconfirmed before final delta",
+            )
+            .expect("an expired Catch-up attestation must be refreshable in place");
+        assert_eq!(
+            store.advance_cutover(&project.id, None).unwrap(),
+            CutoverStage::FinalDelta
         );
     }
 
