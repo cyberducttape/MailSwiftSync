@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Treat changes in CONDSTORE/HIGHESTMODSEQ availability as verification snapshot
+  drift; a newly available watermark without a scan-time baseline now requires
+  a fresh verification pass.
 - Label exact per-message metadata reconciliation as a metadata match in
   customer and operator evidence, rather than implying that only aggregate
   mailbox totals were compared; body equality remains explicitly unverified.

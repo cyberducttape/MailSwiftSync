@@ -1506,16 +1506,18 @@ fn source_snapshot_revalidation_detects_uid_and_condstore_drift() {
     ));
 
     // Servers that do not advertise a tracked MODSEQ can only be compared on
-    // the inventory fields; flag coverage is independently marked incomplete.
+    // the inventory fields. A newly available watermark has no scan-time
+    // baseline, so its presence change invalidates this snapshot as well.
     let without_modseq = crate::core::FolderSnapshot {
         highest_modseq: None,
         ..baseline
     };
-    assert!(source_snapshot_matches(
+    assert!(!source_snapshot_matches(
         &without_modseq,
         &crate::core::FolderSnapshot {
             highest_modseq: Some(901),
             ..without_modseq
         }
     ));
+    assert!(source_snapshot_matches(&without_modseq, &without_modseq));
 }

@@ -1875,9 +1875,11 @@ pub(super) fn source_snapshot_matches(
     expected.uidvalidity == current.uidvalidity
         && expected.uidnext == current.uidnext
         && expected.exists == current.exists
-        && expected
-            .highest_modseq
-            .is_none_or(|expected_modseq| current.highest_modseq == Some(expected_modseq))
+        // A missing baseline watermark cannot prove that mutable flags stayed
+        // unchanged. If watermark availability changes between the scan and
+        // revalidation, invalidate the snapshot and require a fresh pass
+        // rather than silently treating the new capability as equivalent.
+        && expected.highest_modseq == current.highest_modseq
 }
 
 const MAX_FOLDER_FAILURE_DETAILS: usize = 16;
