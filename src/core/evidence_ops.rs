@@ -721,7 +721,16 @@ impl StateStore {
             [project_id],
             |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
         )?;
-        if phase == Phase::Verification.as_str() && total > 0 && total == verified {
+        let has_cutover_workflow: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        if phase == Phase::Verification.as_str()
+            && !has_cutover_workflow
+            && total > 0
+            && total == verified
+        {
             let completed = tx.execute(
                 "UPDATE projects SET phase='complete' WHERE id=?1 AND phase='verification'",
                 [project_id],

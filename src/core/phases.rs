@@ -24,6 +24,17 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         if phase == Phase::Complete && current != phase {
+            let has_cutover_workflow: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+                [id],
+                |row| row.get(0),
+            )?;
+            if has_cutover_workflow {
+                // Approved cutovers have a separate terminal gate: only
+                // advance_cutover may record external confirmation and move
+                // the workflow to Completed.
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             let total: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1",
                 [id],

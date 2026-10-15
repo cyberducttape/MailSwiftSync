@@ -271,7 +271,7 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::{CutoverStage, StateStore};
-    use crate::core::Phase;
+    use crate::core::{MailboxEvidence, Phase, VerificationMethod};
 
     #[test]
     fn cutover_requires_approval_evidence_and_external_confirmation() {
@@ -452,6 +452,126 @@ mod tests {
             )
             .unwrap();
         assert!(store.advance_cutover(&project.id, None).is_err());
+        assert_eq!(
+            store.project(&project.id).unwrap().unwrap().phase,
+            Phase::Complete
+        );
+    }
+
+    #[test]
+    fn accepted_difference_cannot_bypass_cutover_confirmation() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox("cutover", "source", "destination", "a", "a")
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-15T22:00:00Z", None)
+            .unwrap();
+        store.approve_cutover(&project.id, "operator").unwrap();
+
+        // Simulate verified seed, catch-up, and final-delta passes. The cutover
+        // workflow owns phase advancement and keeps external confirmation as
+        // the final transition.
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        assert_eq!(
+            store.advance_cutover(&project.id, None).unwrap(),
+            CutoverStage::CatchUp
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Source delivery paused for the final delta",
+            )
+            .unwrap();
+        assert_eq!(
+            store.advance_cutover(&project.id, None).unwrap(),
+            CutoverStage::FinalDelta
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        assert_eq!(
+            store.advance_cutover(&project.id, None).unwrap(),
+            CutoverStage::Verification
+        );
+
+        let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
+            source_messages: 2,
+            destination_messages: 1,
+            source_bytes: 20,
+            destination_bytes: 10,
+            unmatched_messages: Some(1),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 1,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
+            flag_verification: None,
+        };
+        store
+            .begin_run(&project.id, &job, "cutover-exception-run", "imapsync")
+            .unwrap();
+        store
+            .finish_run_for_mailbox_with_evidence(
+                &project.id,
+                &job,
+                "cutover-exception-run",
+                "completed",
+                "verification_difference",
+                "difference requires review",
+                &evidence,
+            )
+            .unwrap();
+        store
+            .accept_verification_difference(
+                &project.id,
+                &job,
+                "operator",
+                "Accepted with customer approval",
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.project(&project.id).unwrap().unwrap().phase,
+            Phase::Verification
+        );
+        assert_eq!(
+            store.cutover_stage(&project.id).unwrap(),
+            Some(CutoverStage::Verification)
+        );
+        assert!(store.transition(&project.id, Phase::Complete).is_err());
+        assert_eq!(
+            store
+                .advance_cutover(&project.id, Some("Approved MX cutover CHG-123"))
+                .unwrap(),
+            CutoverStage::Completed
+        );
         assert_eq!(
             store.project(&project.id).unwrap().unwrap().phase,
             Phase::Complete
