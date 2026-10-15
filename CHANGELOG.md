@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Exercise a real SQLite `SQLITE_FULL` failure in durable verification staging;
+  assert the page transaction rolls back, the stage survives process-style
+  reopen, and staging can resume after capacity is restored.
 - Require cutover readiness to reference current final-stage evidence; metadata
   and body evidence now need a completed Verification-phase run, a transfer-pass
   record matching the same method and outcome, and complete durable folder

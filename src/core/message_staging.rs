@@ -1589,6 +1589,72 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_full_rolls_back_page_and_retains_durable_stage_for_recovery() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let folder = snapshot(42, 2, 1);
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+        stage
+            .begin_mailbox_scan(StagedMessageSide::Source, "INBOX", folder)
+            .unwrap();
+
+        let connection = stage.connection_ref().unwrap();
+        let pages: i64 = connection
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap();
+        let maximum: i64 = connection
+            .query_row(&format!("PRAGMA max_page_count={pages}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(maximum, pages);
+
+        let oversized = ExtractedMessages::from([(
+            MailboxMessageKey::with_uidvalidity("INBOX", 42, "1"),
+            ExtractedMessage {
+                // Force a real SQLite page-allocation failure without relying
+                // on the host filesystem's free-space state.
+                message_id: Some("x".repeat(1024 * 1024)),
+                uid: Some("1".into()),
+                size_bytes: Some(64),
+                internal_date: None,
+                flags: None,
+            },
+        )]);
+        let error = stage
+            .insert_messages(StagedMessageSide::Source, &oversized)
+            .unwrap_err();
+        assert!(
+            error.contains("database or disk is full"),
+            "expected SQLITE_FULL, got {error}"
+        );
+        assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 0);
+        drop(stage);
+        assert!(
+            path.exists(),
+            "failed stage was deleted instead of retained"
+        );
+
+        let mut recovered = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+        assert_eq!(recovered.count(StagedMessageSide::Source).unwrap(), 0);
+        recovered
+            .connection_ref()
+            .unwrap()
+            .query_row("PRAGMA max_page_count=2147483646", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        let recovered_page = page(42, [1]);
+        recovered
+            .insert_messages(StagedMessageSide::Source, &recovered_page)
+            .unwrap();
+        assert_eq!(recovered.count(StagedMessageSide::Source).unwrap(), 1);
+        recovered.finish().unwrap();
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn fresh_inventory_prunes_retired_folders_and_live_scans_replace_stale_state() {
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("verification.sqlite");
