@@ -2977,6 +2977,7 @@ fn verification_difference_requires_durable_exception_acceptance() {
     };
     let mut observed_folder = pass_folder(PassSide::Source, "INBOX", true);
     observed_folder.folder_digest = folder_digest(&project.id, "INBOX");
+    observed_folder.source_revalidated_at = Some("2026-10-14T03:02:00.000Z".into());
     db.begin_verification_run(&project.id, &job, "exact-recheck", "snapshot")
         .unwrap();
     db.finish_verification_only_run(
@@ -5463,6 +5464,7 @@ fn pass_folder(side: PassSide, name: &str, complete: bool) -> TransferPassFolder
         complete,
         scan_started_at: Some("2026-10-14T03:00:00.000Z".into()),
         scan_completed_at: complete.then(|| "2026-10-14T03:01:00.000Z".into()),
+        source_revalidated_at: None,
     }
 }
 

@@ -145,14 +145,17 @@ pub(crate) struct FolderSnapshot {
     pub(crate) uidvalidity: u64,
     pub(crate) uidnext: u64,
     pub(crate) exists: u64,
+    /// Present only when the server supplied a tracked CONDSTORE watermark.
+    pub(crate) highest_modseq: Option<u64>,
 }
 
 impl FolderSnapshot {
-    fn to_sql(self) -> rusqlite::Result<(i64, i64, i64)> {
+    fn to_sql(self) -> rusqlite::Result<(i64, i64, i64, Option<i64>)> {
         Ok((
             sqlite_i64(self.uidvalidity)?,
             sqlite_i64(self.uidnext)?,
             sqlite_i64(self.exists)?,
+            self.highest_modseq.map(sqlite_i64).transpose()?,
         ))
     }
 }
@@ -170,6 +173,9 @@ pub(crate) struct FolderCursor {
     /// A missing value is possible only for a legacy or incomplete stage.
     pub(crate) scan_started_at: Option<String>,
     pub(crate) scan_completed_at: Option<String>,
+    /// Post-destination source cursor check timestamp, only after a matching
+    /// read-only EXAMINE of this folder's snapshot.
+    pub(crate) source_revalidated_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -437,7 +443,7 @@ impl MessageMetadataStage {
              DROP INDEX IF EXISTS staged_messages_uid_numeric;
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
-             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, PRIMARY KEY(side,mailbox));
+             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, PRIMARY KEY(side,mailbox));
              CREATE TABLE IF NOT EXISTS stage_permanent_flags(side INTEGER NOT NULL, mailbox TEXT NOT NULL, flags TEXT, PRIMARY KEY(side,mailbox));",
         )?;
         let staged_identity_provenance: bool = self.connection_ref()?.query_row(
@@ -482,7 +488,7 @@ impl MessageMetadataStage {
                 "DROP TABLE stage_cursors;
                  DELETE FROM staged_messages;
                  DELETE FROM stage_fingerprints;
-                 CREATE TABLE stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));",
+                 CREATE TABLE stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), source_revalidated_at TEXT, PRIMARY KEY(side,mailbox));",
             )?;
         }
         for column in ["scan_started_at", "scan_completed_at"] {
@@ -496,6 +502,26 @@ impl MessageMetadataStage {
                     "ALTER TABLE stage_cursors ADD COLUMN {column} TEXT;"
                 ))?;
             }
+        }
+        let highest_modseq: bool = self.connection_ref()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('stage_cursors') WHERE name='highest_modseq')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !highest_modseq {
+            self.connection_ref()?.execute_batch(
+                "ALTER TABLE stage_cursors ADD COLUMN highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0);",
+            )?;
+        }
+        let revalidation_column: bool = self.connection_ref()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('stage_cursors') WHERE name='source_revalidated_at')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !revalidation_column {
+            self.connection_ref()?.execute_batch(
+                "ALTER TABLE stage_cursors ADD COLUMN source_revalidated_at TEXT;",
+            )?;
         }
         if !durable {
             // Ephemeral stages are disposable and may use an in-memory temp
@@ -699,7 +725,8 @@ impl MessageMetadataStage {
         mailbox: &str,
         snapshot: FolderSnapshot,
     ) -> Result<(), String> {
-        let (uidvalidity, uidnext, exists) = snapshot.to_sql().map_err(|e| e.to_string())?;
+        let (uidvalidity, uidnext, exists, highest_modseq) =
+            snapshot.to_sql().map_err(|e| e.to_string())?;
         let tx = self
             .connection()?
             .unchecked_transaction()
@@ -717,8 +744,8 @@ impl MessageMetadataStage {
             .map_err(|e| e.to_string())?;
         }
         tx.execute(
-            "INSERT INTO stage_cursors(side,mailbox,uidvalidity,uidnext,exists_count,last_uid,completed,scan_started_at) VALUES(?1,?2,?3,?4,?5,0,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-            params![side.as_i64(), mailbox, uidvalidity, uidnext, exists],
+            "INSERT INTO stage_cursors(side,mailbox,uidvalidity,uidnext,exists_count,highest_modseq,last_uid,completed,scan_started_at) VALUES(?1,?2,?3,?4,?5,?6,0,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            params![side.as_i64(), mailbox, uidvalidity, uidnext, exists, highest_modseq],
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -746,7 +773,7 @@ impl MessageMetadataStage {
     /// names stay in process; callers persist only digests of them.
     pub(crate) fn folder_cursors(&self) -> rusqlite::Result<Vec<FolderCursor>> {
         let mut statement = self.connection_ref()?.prepare(
-            "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),c.scan_started_at,c.scan_completed_at FROM stage_cursors c ORDER BY c.side,c.mailbox",
+            "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.highest_modseq,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),c.scan_started_at,c.scan_completed_at,c.source_revalidated_at FROM stage_cursors c ORDER BY c.side,c.mailbox",
         )?;
         statement
             .query_map([], |row| {
@@ -767,15 +794,62 @@ impl MessageMetadataStage {
                         uidvalidity: unsigned(2)?,
                         uidnext: unsigned(3)?,
                         exists: unsigned(4)?,
+                        highest_modseq: row
+                            .get::<_, Option<i64>>(5)?
+                            .map(|value| {
+                                u64::try_from(value)
+                                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(5, value))
+                            })
+                            .transpose()?,
                     },
-                    last_uid: unsigned(5)?,
-                    completed: row.get(6)?,
-                    staged: unsigned(7)?,
-                    scan_started_at: row.get(8)?,
-                    scan_completed_at: row.get(9)?,
+                    last_uid: unsigned(6)?,
+                    completed: row.get(7)?,
+                    staged: unsigned(8)?,
+                    scan_started_at: row.get(9)?,
+                    scan_completed_at: row.get(10)?,
+                    source_revalidated_at: row.get(11)?,
                 })
             })?
             .collect()
+    }
+
+    /// Persist the source-side revalidation times only after every expected
+    /// source folder was reselected and matched its scanned snapshot.
+    pub(crate) fn record_source_revalidation(
+        &mut self,
+        observations: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.ensure_free_space()?;
+        let expected = self
+            .connection_ref()
+            .map_err(|error| error.to_string())?
+            .query_row(
+                "SELECT COUNT(*) FROM stage_cursors WHERE side=0 AND completed=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if expected <= 0 || usize::try_from(expected).ok() != Some(observations.len()) {
+            return Err("source revalidation did not cover every completed source folder".into());
+        }
+        let tx = self
+            .connection()?
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        for (mailbox, timestamp) in observations {
+            let changed = tx
+                .execute(
+                    "UPDATE stage_cursors SET source_revalidated_at=?1 WHERE side=0 AND mailbox=?2 AND completed=1",
+                    params![timestamp, mailbox],
+                )
+                .map_err(|error| error.to_string())?;
+            if changed != 1 {
+                return Err(format!(
+                    "source revalidation observation has no completed source folder {mailbox}"
+                ));
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())
     }
 
     pub(crate) fn complete_mailbox(
@@ -805,17 +879,19 @@ impl MessageMetadataStage {
         last_uid: u64,
         completed: bool,
     ) -> Result<(), String> {
-        let (uidvalidity, uidnext, exists) = snapshot.to_sql().map_err(|e| e.to_string())?;
+        let (uidvalidity, uidnext, exists, highest_modseq) =
+            snapshot.to_sql().map_err(|e| e.to_string())?;
         let updated = self
             .connection()?
             .execute(
-                "UPDATE stage_cursors SET last_uid=?6,completed=?7,scan_completed_at=CASE WHEN ?7=1 THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE scan_completed_at END WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uidnext=?4 AND exists_count=?5",
+                "UPDATE stage_cursors SET last_uid=?7,completed=?8,scan_completed_at=CASE WHEN ?8=1 THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE scan_completed_at END WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uidnext=?4 AND exists_count=?5 AND highest_modseq IS ?6",
                 params![
                     side.as_i64(),
                     mailbox,
                     uidvalidity,
                     uidnext,
                     exists,
+                    highest_modseq,
                     sqlite_i64(last_uid).map_err(|e| e.to_string())?,
                     i64::from(completed)
                 ],
@@ -1250,6 +1326,7 @@ mod tests {
             uidvalidity,
             uidnext,
             exists,
+            highest_modseq: None,
         }
     }
 
@@ -1446,7 +1523,10 @@ mod tests {
         let mut stage = MessageMetadataStage::open_in_memory().unwrap();
         let source = StagedMessageSide::Source;
         let destination = StagedMessageSide::Destination;
-        let inbox = snapshot(42, 9, 2);
+        let inbox = FolderSnapshot {
+            highest_modseq: Some(17),
+            ..snapshot(42, 9, 2)
+        };
         stage.begin_mailbox_scan(source, "INBOX", inbox).unwrap();
         stage.insert_messages(source, &page(42, [7, 8])).unwrap();
         stage.complete_mailbox(source, "INBOX", inbox, 8).unwrap();
@@ -1470,6 +1550,7 @@ mod tests {
 
         let cursors = stage.folder_cursors().unwrap();
         assert_eq!(cursors.len(), 2);
+        assert_eq!(cursors[0].snapshot.highest_modseq, Some(17));
         assert_eq!(
             (
                 cursors[0].side,
@@ -1498,6 +1579,27 @@ mod tests {
         );
         assert!(cursors[1].scan_started_at.is_some());
         assert_eq!(cursors[1].scan_completed_at, None);
+    }
+
+    #[test]
+    fn durable_stage_adds_modseq_to_existing_cursor_schema() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage
+            .connection_ref()
+            .unwrap()
+            .execute("ALTER TABLE stage_cursors DROP COLUMN highest_modseq", [])
+            .unwrap();
+        stage.initialize(true).unwrap();
+        let has_modseq: bool = stage
+            .connection_ref()
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('stage_cursors') WHERE name='highest_modseq')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_modseq);
     }
 
     #[test]

@@ -858,6 +858,10 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         uidvalidity: start_uidvalidity,
         uidnext,
         exists: start_exists,
+        highest_modseq: start_modseq.and_then(|modseq| match modseq {
+            ModseqSnapshot::Tracked(value) => Some(value),
+            ModseqSnapshot::Unsupported => None,
+        }),
     };
     sink.begin_mailbox_scan(mailbox, snapshot)?;
     sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
@@ -1479,6 +1483,195 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding_ref
         reconnect_credential,
         &mut sink,
     )
+}
+
+/// Re-SELECT every source folder after the destination inventory has finished.
+/// Any folder-set or mailbox cursor drift invalidates the verification result.
+/// This detects source changes across the two scans; it is not an atomic
+/// account-wide snapshot and cannot replace operator-enforced quiescence.
+pub(crate) struct TlsAccountRevalidation<'a> {
+    pub host: &'a str,
+    pub user: &'a str,
+    pub credential: &'a str,
+    pub auth_method: &'a str,
+    pub transport: &'a str,
+    pub ca_bundle: &'a str,
+    pub certificate_pin_sha256: &'a str,
+    pub budget: &'a MessageFetchBudget<'a>,
+    pub expected_mailboxes: &'a HashSet<String>,
+    pub excluded_mailboxes: &'a HashSet<String>,
+    pub expected_snapshots: &'a HashMap<String, crate::core::FolderSnapshot>,
+}
+
+pub(crate) fn revalidate_tls_account_snapshots(
+    request: TlsAccountRevalidation<'_>,
+) -> Result<HashMap<String, String>, String> {
+    let TlsAccountRevalidation {
+        host,
+        user,
+        credential,
+        auth_method,
+        transport,
+        ca_bundle,
+        certificate_pin_sha256,
+        budget,
+        expected_mailboxes,
+        excluded_mailboxes,
+        expected_snapshots,
+    } = request;
+    budget.check()?;
+    if transport == "plain" {
+        return Err("source snapshot revalidation requires TLS".into());
+    }
+    if expected_snapshots.len() != expected_mailboxes.len()
+        || expected_mailboxes
+            .iter()
+            .any(|mailbox| !expected_snapshots.contains_key(mailbox))
+    {
+        return Err("source snapshot revalidation lacks a complete folder baseline".into());
+    }
+    let (stream, greeting) =
+        connect_tls_stream_with_budget(host, transport, ca_bundle, certificate_pin_sha256, budget)?;
+    let (mut stream, capabilities) = authenticate_imap_stream(
+        stream,
+        host,
+        user,
+        credential,
+        auth_method,
+        greeting,
+        Some(budget),
+    )?;
+    let condstore_enabled = advertises_capability(&capabilities, "CONDSTORE");
+    let mut buffer = [0; 4096];
+    stream
+        .write_all(authenticated_list_command(advertises_capability(
+            &capabilities,
+            "SPECIAL-USE",
+        )))
+        .map_err(|error| format!("{host}: could not re-list source folders: {error}"))?;
+    let mut descriptors = Vec::new();
+    let inventory = read_imap_list_response_with_details(
+        &mut stream,
+        "r000",
+        &mut buffer,
+        &mut descriptors,
+        budget,
+    )
+    .map_err(tag_folder_inventory_limit)?;
+    if inventory.selectable_mailbox_count
+        != descriptors.iter().filter(|item| item.selectable).count()
+    {
+        return Err(format!(
+            "{host}: source revalidation returned an incomplete folder inventory"
+        ));
+    }
+    let current_mailboxes = descriptors
+        .iter()
+        .filter(|item| item.selectable && !excluded_mailboxes.contains(&item.wire_name))
+        .map(|item| item.wire_name.clone())
+        .collect::<HashSet<_>>();
+    if &current_mailboxes != expected_mailboxes {
+        return Err(format!(
+            "{host}: source folder inventory changed between source and destination scans; refusing exact verification"
+        ));
+    }
+
+    revalidate_source_selected_folders(
+        &mut stream,
+        host,
+        budget,
+        expected_snapshots,
+        condstore_enabled,
+    )
+}
+
+fn revalidate_source_selected_folders<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    budget: &MessageFetchBudget<'_>,
+    expected_snapshots: &HashMap<String, crate::core::FolderSnapshot>,
+    condstore_enabled: bool,
+) -> Result<HashMap<String, String>, String> {
+    let mut mailboxes = expected_snapshots.keys().collect::<Vec<_>>();
+    mailboxes.sort_unstable();
+    let mut buffer = [0; 4096];
+    let mut response = String::new();
+    let mut observations = HashMap::with_capacity(mailboxes.len());
+    for (index, mailbox) in mailboxes.into_iter().enumerate() {
+        budget.check()?;
+        let quoted_mailbox = imap_quote(mailbox)?;
+        let select_parameter = if condstore_enabled {
+            " (CONDSTORE)"
+        } else {
+            ""
+        };
+        let tag = format!("r{:06}", index + 1);
+        let command = format!("{tag} EXAMINE {quoted_mailbox}{select_parameter}\r\n");
+        write_imap_command(
+            stream,
+            command.as_bytes(),
+            Some(budget),
+            &format!("{host}: could not re-SELECT source folder"),
+        )?;
+        response.clear();
+        read_imap_tagged_with_budget(stream, &tag, &mut response, &mut buffer, 1_048_576, budget)?;
+        if !imap_command_succeeded(&response, &tag) {
+            return Err(imap_command_failure(
+                &response,
+                &tag,
+                "source snapshot revalidation",
+                host,
+            ));
+        }
+        let (exists, uidvalidity, uidnext) = parse_selected_mailbox(&response, host, mailbox)?;
+        let uidvalidity = uidvalidity.ok_or_else(|| {
+            format!("{host}: source revalidation for {mailbox} omitted UIDVALIDITY")
+        })?;
+        let uidnext = uidnext
+            .ok_or_else(|| format!("{host}: source revalidation for {mailbox} omitted UIDNEXT"))?;
+        let expected = expected_snapshots
+            .get(mailbox)
+            .ok_or_else(|| format!("{host}: source baseline missing folder {mailbox}"))?;
+        let current_modseq = if condstore_enabled {
+            match parse_select_modseq(&response, host, mailbox)? {
+                ModseqSnapshot::Tracked(value) => Some(value),
+                ModseqSnapshot::Unsupported => None,
+            }
+        } else {
+            None
+        };
+        let current = crate::core::FolderSnapshot {
+            uidvalidity,
+            uidnext,
+            exists,
+            highest_modseq: current_modseq,
+        };
+        if !source_snapshot_matches(expected, &current) {
+            let _ = stream.write_all(b"r999999 LOGOUT\r\n");
+            return Err(format!(
+                "{host}: source folder {mailbox} changed after its verification scan (UIDVALIDITY {}->{uidvalidity}, UIDNEXT {}->{uidnext}, EXISTS {}->{exists}, HIGHESTMODSEQ {:?}->{current_modseq:?}); rerun the final delta and verification",
+                expected.uidvalidity, expected.uidnext, expected.exists, expected.highest_modseq,
+            ));
+        }
+        observations.insert(
+            mailbox.clone(),
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        );
+    }
+    let _ = stream.write_all(b"r999999 LOGOUT\r\n");
+    Ok(observations)
+}
+
+pub(super) fn source_snapshot_matches(
+    expected: &crate::core::FolderSnapshot,
+    current: &crate::core::FolderSnapshot,
+) -> bool {
+    expected.uidvalidity == current.uidvalidity
+        && expected.uidnext == current.uidnext
+        && expected.exists == current.exists
+        && expected
+            .highest_modseq
+            .is_none_or(|expected_modseq| current.highest_modseq == Some(expected_modseq))
 }
 
 const MAX_FOLDER_FAILURE_DETAILS: usize = 16;

@@ -456,7 +456,8 @@ impl StateStore {
         // 31 adds real/synthetic identity match counters to evidence, and
         // version 32 records UTC scan intervals for transfer-pass folders,
         // version 33 persists folder observations for standalone reverification,
-        // and version 34 records operator-attested source quiescence for cutover.
+        // version 34 records operator-attested source quiescence for cutover,
+        // and version 35 persists post-destination source cursor revalidation.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -522,8 +523,8 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_mailbox_queue_facts_project ON mailbox_queue_facts(project_id, job_rowid);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_queue ON mailbox_jobs(project_id, id, state);
                  CREATE INDEX IF NOT EXISTS idx_batch_plans_project ON batch_plans(project_id);
-                 CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
-                 CREATE TABLE IF NOT EXISTS verification_run_folders (run_id TEXT NOT NULL REFERENCES runs(id), side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, PRIMARY KEY(run_id, side, folder_digest));
+                 CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
+                 CREATE TABLE IF NOT EXISTS verification_run_folders (run_id TEXT NOT NULL REFERENCES runs(id), side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, PRIMARY KEY(run_id, side, folder_digest));
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
                  CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_due ON webhook_deliveries(endpoint_digest, status, next_attempt_at, created_at);
@@ -944,6 +945,20 @@ impl StateStore {
             {
                 tx.execute(
                     &format!("ALTER TABLE transfer_pass_folders ADD COLUMN {column} TEXT"),
+                    [],
+                )?;
+            }
+        }
+        for table in ["transfer_pass_folders", "verification_run_folders"] {
+            let has_revalidation_column = tx
+                .prepare(&format!("PRAGMA table_info({table})"))?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .iter()
+                .any(|existing| existing == "source_revalidated_at");
+            if !has_revalidation_column {
+                tx.execute(
+                    &format!("ALTER TABLE {table} ADD COLUMN source_revalidated_at TEXT"),
                     [],
                 )?;
             }

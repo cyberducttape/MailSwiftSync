@@ -1317,6 +1317,7 @@ mod tests {
             complete: true,
             scan_started_at: Some("2026-10-14T03:00:00.000Z".into()),
             scan_completed_at: Some("2026-10-14T03:01:00.000Z".into()),
+            source_revalidated_at: None,
         };
         let output =
             super::reverify_result_json(&evidence, "run-1", "metadata", &[folder], &mismatches);

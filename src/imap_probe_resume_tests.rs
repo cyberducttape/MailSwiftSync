@@ -38,6 +38,7 @@ pub(super) struct FolderServer {
     pub(super) permanent_flags: Option<String>,
     input: Vec<u8>,
     output: Vec<u8>,
+    commands: Vec<String>,
 }
 
 impl FolderServer {
@@ -59,6 +60,7 @@ impl FolderServer {
             permanent_flags: None,
             input: Vec::new(),
             output: Vec::new(),
+            commands: Vec::new(),
         }
     }
 
@@ -67,12 +69,14 @@ impl FolderServer {
             uidvalidity: self.uidvalidity,
             uidnext: self.uidnext,
             exists: self.uids.len() as u64,
+            highest_modseq: (self.condstore && !self.modseq_unavailable).then_some(self.modseq),
         }
     }
 
     fn respond(&mut self, line: &str) {
+        self.commands.push(line.to_owned());
         let (tag, command) = line.split_once(' ').unwrap();
-        let reply = if command.starts_with("SELECT ") {
+        let reply = if command.starts_with("SELECT ") || command.starts_with("EXAMINE ") {
             let modseq = if self.condstore && command.ends_with("(CONDSTORE)") {
                 if self.modseq_unavailable {
                     "* OK [NOMODSEQ] unsupported\r\n".to_owned()
@@ -108,6 +112,8 @@ impl FolderServer {
             }
             reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
             reply
+        } else if command == "LOGOUT" {
+            format!("* BYE logging out\r\n{tag} OK LOGOUT completed\r\n")
         } else if let Some(rest) = command.strip_prefix("UID FETCH ") {
             let set = rest.split_whitespace().next().unwrap();
             let with_body = rest.contains("BODY.PEEK[]");
@@ -165,6 +171,37 @@ impl FolderServer {
         };
         self.output.extend_from_slice(reply.as_bytes());
     }
+}
+
+#[test]
+fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq_drift() {
+    let cancelled = AtomicBool::new(false);
+    let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
+    let mut server = FolderServer::new(&[1, 2], 3, 42);
+    server.condstore = true;
+    server.modseq = 12;
+    let expected = HashMap::from([("INBOX".to_owned(), server.snapshot())]);
+    revalidate_source_selected_folders(&mut server, "imap.example.test", &budget, &expected, true)
+        .unwrap();
+    assert!(
+        server
+            .commands
+            .iter()
+            .any(|command| { command.contains("EXAMINE \"INBOX\" (CONDSTORE)") })
+    );
+
+    let mut changed = FolderServer::new(&[1, 2], 3, 42);
+    changed.condstore = true;
+    changed.modseq = 13;
+    let error = revalidate_source_selected_folders(
+        &mut changed,
+        "imap.example.test",
+        &budget,
+        &expected,
+        true,
+    )
+    .unwrap_err();
+    assert!(error.contains("source folder INBOX changed"), "{error}");
 }
 
 impl Write for FolderServer {

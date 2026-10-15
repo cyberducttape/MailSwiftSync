@@ -434,4 +434,29 @@ mod tests {
             .unwrap();
         assert_eq!(columns, 3);
     }
+
+    #[test]
+    fn schema_34_folder_observations_gain_source_revalidation_timestamp() {
+        let store = StateStore::in_memory().unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE transfer_pass_folders DROP COLUMN source_revalidated_at;
+                 ALTER TABLE verification_run_folders DROP COLUMN source_revalidated_at;
+                 PRAGMA user_version=34;",
+            )
+            .unwrap();
+        store.migrate().unwrap();
+        for table in ["transfer_pass_folders", "verification_run_folders"] {
+            let columns: i64 = store
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name='source_revalidated_at'",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(columns, 1, "{table} should be upgraded");
+        }
+    }
 }

@@ -6,7 +6,8 @@ use super::{
     classify_mailbox_fetch_error, format_folder_failures, parse_list_delimiter,
     parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes, parse_message_id_header,
     read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
-    record_list_entry, tagged_response_outside_literals, write_imap_command,
+    record_list_entry, source_snapshot_matches, tagged_response_outside_literals,
+    write_imap_command,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Cursor, Read, Write};
@@ -1328,6 +1329,7 @@ fn resumed_stage_budget_counts_only_current_attempt_pages() {
         uidvalidity: 42,
         uidnext: 8,
         exists: 1,
+        highest_modseq: None,
     };
     let stale = crate::core::ExtractedMessages::from([(
         crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 42, "7"),
@@ -1359,6 +1361,7 @@ fn resumed_stage_budget_counts_only_current_attempt_pages() {
                 uidvalidity: 9,
                 uidnext: 4,
                 exists: 1,
+                highest_modseq: None,
             },
         )
         .unwrap();
@@ -1398,4 +1401,50 @@ fn resumed_stage_budget_counts_only_current_attempt_pages() {
     sink.rollback_mailbox("INBOX").unwrap();
     assert_eq!(sink.len(), 0);
     assert_eq!(sink.stage.count(side).unwrap(), 1);
+}
+
+#[test]
+fn source_snapshot_revalidation_detects_uid_and_condstore_drift() {
+    let baseline = crate::core::FolderSnapshot {
+        uidvalidity: 7,
+        uidnext: 101,
+        exists: 100,
+        highest_modseq: Some(900),
+    };
+    assert!(source_snapshot_matches(&baseline, &baseline));
+    assert!(!source_snapshot_matches(
+        &baseline,
+        &crate::core::FolderSnapshot {
+            uidnext: 102,
+            ..baseline
+        }
+    ));
+    assert!(!source_snapshot_matches(
+        &baseline,
+        &crate::core::FolderSnapshot {
+            highest_modseq: Some(901),
+            ..baseline
+        }
+    ));
+    assert!(!source_snapshot_matches(
+        &baseline,
+        &crate::core::FolderSnapshot {
+            highest_modseq: None,
+            ..baseline
+        }
+    ));
+
+    // Servers that do not advertise a tracked MODSEQ can only be compared on
+    // the inventory fields; flag coverage is independently marked incomplete.
+    let without_modseq = crate::core::FolderSnapshot {
+        highest_modseq: None,
+        ..baseline
+    };
+    assert!(source_snapshot_matches(
+        &without_modseq,
+        &crate::core::FolderSnapshot {
+            highest_modseq: Some(901),
+            ..without_modseq
+        }
+    ));
 }

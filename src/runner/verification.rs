@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 /// Perform independent, folder-aware IMAP reconciliation after a successful
 /// imapsync transfer. Engine counters remain useful as a fallback, but they
@@ -67,11 +68,11 @@ pub(crate) fn run_imap_message_verification(
     // inventories so no prior-run row or body fingerprint can enter evidence.
     stage.begin_verification_attempt()?;
     let mut source_refresh_form = form.clone();
-    let mut source_reconnect_credential = || {
-        source_refresh_form.refresh_oauth_access_token(true)?;
-        Ok(source_refresh_form.source_password.clone())
-    };
-    let source =
+    let source = {
+        let mut source_reconnect_credential = || {
+            source_refresh_form.refresh_oauth_access_token(true)?;
+            Ok(source_refresh_form.source_password.clone())
+        };
         crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes_excluding_refresh(
             &source_host,
             &form.profile.source_user,
@@ -87,7 +88,8 @@ pub(crate) fn run_imap_message_verification(
             &mut source_reconnect_credential,
             &mut stage,
             core::StagedMessageSide::Source,
-        )?;
+        )?
+    };
     let mut destination_refresh_form = form.clone();
     let mut destination_reconnect_credential = || {
         destination_refresh_form.refresh_oauth_access_token(false)?;
@@ -110,6 +112,43 @@ pub(crate) fn run_imap_message_verification(
             &mut stage,
             core::StagedMessageSide::Destination,
         )?;
+    // Source and destination are scanned serially. Re-select the complete
+    // source folder inventory after the destination scan and reject the
+    // evidence if its UID snapshot (or tracked CONDSTORE watermark) drifted.
+    // This narrows the observation gap but does not create a global atomic
+    // snapshot; the cutover workflow still requires operator quiescence.
+    let source_snapshots = stage
+        .folder_cursors()
+        .map_err(|error| format!("could not read source verification cursors: {error}"))?
+        .into_iter()
+        .filter(|cursor| cursor.side == core::StagedMessageSide::Source)
+        .map(|cursor| {
+            if !cursor.completed || cursor.staged != cursor.snapshot.exists {
+                return Err(format!(
+                    "source folder {} lacks complete staged snapshot evidence",
+                    cursor.mailbox
+                ));
+            }
+            Ok((cursor.mailbox, cursor.snapshot))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
+    source_refresh_form.refresh_oauth_access_token(true)?;
+    let source_revalidation = crate::imap_probe::revalidate_tls_account_snapshots(
+        crate::imap_probe::TlsAccountRevalidation {
+            host: &source_host,
+            user: &form.profile.source_user,
+            credential: source_refresh_form.source_password.as_str(),
+            auth_method: &form.profile.source_auth,
+            transport: &form.profile.source_tls,
+            ca_bundle: &form.profile.source_ca_bundle,
+            certificate_pin_sha256: &form.profile.source_certificate_pin_sha256,
+            budget: &budget,
+            expected_mailboxes: &source.mailboxes,
+            excluded_mailboxes: &excluded_source_folders,
+            expected_snapshots: &source_snapshots,
+        },
+    )?;
+    stage.record_source_revalidation(&source_revalidation)?;
     if (source.total_exists > 0
         && stage
             .count(core::StagedMessageSide::Source)

@@ -95,7 +95,7 @@ storage schema migrates and is **not** a compatibility signal: dispatch on
 
 Reports, proofs, certificates, and support bundles carry their own `format`
 markers and are artifact formats, not part of this automation contract.
-The `mailswiftsync-customer-proof` artifact uses format version `4`. Per-mailbox
+The `mailswiftsync-customer-proof` artifact uses format version `5`. Per-mailbox
 `assurance_status` distinguishes `aggregate_match`, `metadata_match`,
 `bounded_content_match`, `engine_confirmed`, `with_exceptions`, and `incomplete`.
 The summary reports `mailboxes_by_assurance` and does not emit a single
@@ -110,7 +110,12 @@ engine_confirmed` for version 3 and later qualification evidence. Version 4
 adds per-run endpoint scan intervals and explicitly states that the source is
 not revalidated after destination scanning; separate endpoint scans are not a
 synchronized account-wide snapshot. Consumers of version 3 must update before
-accepting version 4. Each evidence row also carries `proof_tier` (`aggregate`,
+accepting version 4. Version 5 records a post-destination source folder-list
+and per-folder cursor recheck, including timestamps and whether tracked
+UIDVALIDITY, UIDNEXT, EXISTS, and HIGHESTMODSEQ values remained unchanged.
+This is not an atomic snapshot and does not prove continued quiescence.
+Consumers of version 4 must update before accepting version 5. Each evidence
+row also carries `proof_tier` (`aggregate`,
 `metadata`, or bounded `content`) separately from `proof_result`; none implies
 cutover readiness. `cutover_readiness.status` remains `not_established` until
 the final synchronization barrier and source revalidation are implemented and

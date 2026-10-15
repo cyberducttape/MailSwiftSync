@@ -2,25 +2,33 @@
 
 ## Unreleased
 
+- After independent destination scanning, re-LIST the source and read-only
+  EXAMINE each scanned folder. Refuse message-level verification if the
+  selectable folder set, UIDVALIDITY, UIDNEXT, EXISTS, or a previously tracked
+  HIGHESTMODSEQ changed. Persist each matching source revalidation timestamp
+  through the stage, transfer-pass ledger, verification ledger, and customer
+  proof v5. This narrows the observation gap but does not claim an atomic
+  cross-server snapshot or continued quiescence after the check. Migrate the
+  ledger to schema 35.
 - Disable implicit Reqwest proxy discovery for policy-controlled OAuth token
   and webhook requests, so environment proxy variables cannot bypass locally
   resolved-address policy. Version webhook HMAC as v2 and authenticate the
   event ID, type, idempotency key, delivery timestamp, and exact body bytes
   using an unambiguous length-prefixed canonical envelope; document receiver
   replay-window and durable-deduplication responsibilities.
-- Bump customer-proof artifacts to v4 and include per-run source/destination
-  verification intervals plus an explicit non-atomic snapshot model and
-  `not_revalidated` source status. Separate evidence tier/result from cutover
-  readiness, which remains explicitly unestablished until automatic source
-  revalidation is implemented and qualified. This makes consistency boundaries
-  machine-readable without claiming a synchronized snapshot. Preserve
-  fail-closed behavior for unsupported migration transformations.
+- Bump customer-proof artifacts to v5. In addition to endpoint scan intervals,
+  proofs record whether the source folder set and per-folder cursors remained
+  unchanged during a post-destination recheck. This is still a sequential,
+  non-atomic observation and does not establish continued source quiescence or
+  cutover readiness. Preserve fail-closed behavior for unsupported migration
+  transformations.
 - Require an audited source-quiescence operator attestation before the final
   delta stage can run or advance. The durable cutover status records who
   attested, when, and the change reference/evidence; it is explicitly a manual
   operational assertion, not automatic IMAP cursor revalidation. Existing
-  ledgers migrate to schema 34 and cannot complete a newly gated final delta
-  without this attestation.
+  this introduced the cutover-attestation columns; current schema 35 also records post-destination
+  source-cursor revalidation. Older ledgers cannot complete a newly gated final
+  delta without this attestation.
 - Check available space on the verification-stage filesystem before scanning
   and before each SQLite page write; stop verification below a 512 MiB free
   reserve and report an explicit verification limit. This is a best-effort
