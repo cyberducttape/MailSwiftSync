@@ -705,27 +705,41 @@ fn probe_tls_readiness(
         greeting,
         None,
     )?;
+    live_readiness_on_authenticated_stream(
+        &mut stream,
+        request.host,
+        &post_auth_capabilities,
+        check_inbox_quota,
+    )
+}
+
+fn live_readiness_on_authenticated_stream<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    post_auth_capabilities: &str,
+    check_inbox_quota: bool,
+) -> Result<DestinationQuotaObservation, String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
     stream
         .write_all(b"a004 NOOP\r\n")
         .map_err(|e| e.to_string())?;
-    read_imap_tagged(&mut stream, "a004", &mut response, &mut buffer)?;
+    read_imap_tagged(stream, "a004", &mut response, &mut buffer)?;
     if !imap_command_succeeded(&response, "a004") {
         return Err(imap_command_failure(
             &response,
             "a004",
             "post-auth NOOP",
-            request.host,
+            host,
         ));
     }
     let quota_observation =
-        if check_inbox_quota && advertises_capability(&post_auth_capabilities, "QUOTA") {
+        if check_inbox_quota && advertises_capability(post_auth_capabilities, "QUOTA") {
             let mut quota_response = String::new();
             if stream.write_all(QUOTA_PROBE_COMMAND).is_ok()
-                && read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok()
+                && read_imap_tagged(stream, "a006", &mut quota_response, &mut buffer).is_ok()
             {
-                inbox_quota_observation(&post_auth_capabilities, Some(&quota_response))
+                inbox_quota_observation(post_auth_capabilities, Some(&quota_response))
             } else {
                 DestinationQuotaObservation::Unknown
             }
