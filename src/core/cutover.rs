@@ -64,6 +64,15 @@ fn parse_stage(value: &str) -> rusqlite::Result<CutoverStage> {
     }
 }
 
+/// Cutover inputs are copied into durable audit events and customer-facing
+/// workflow state. Keep them bounded and single-line so operator-provided
+/// text cannot forge additional-looking event records in terminals or logs.
+fn validate_cutover_text(value: &str, max_bytes: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
+}
+
 impl StateStore {
     /// Create an unapproved cutover plan.  Nothing is scheduled until an
     /// operator explicitly approves the plan.
@@ -73,10 +82,11 @@ impl StateStore {
         scheduled_at: &str,
         maintenance_window: Option<&str>,
     ) -> rusqlite::Result<()> {
-        if scheduled_at.trim().is_empty() || maintenance_window.is_some_and(|v| v.trim().is_empty())
-        {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let scheduled_at =
+            validate_cutover_text(scheduled_at, 256).ok_or(rusqlite::Error::InvalidQuery)?;
+        let maintenance_window = maintenance_window
+            .map(|value| validate_cutover_text(value, 1024).ok_or(rusqlite::Error::InvalidQuery))
+            .transpose()?;
         let tx = self.connection.unchecked_transaction()?;
         let phase: String = tx.query_row(
             "SELECT phase FROM projects WHERE id=?1",
@@ -123,9 +133,7 @@ impl StateStore {
     }
 
     pub fn approve_cutover(&self, project_id: &str, operator: &str) -> rusqlite::Result<()> {
-        if operator.trim().is_empty() || operator.len() > 256 {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let operator = validate_cutover_text(operator, 256).ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let phase: String = tx.query_row(
             "SELECT phase FROM projects WHERE id=?1",
@@ -161,15 +169,9 @@ impl StateStore {
         operator: &str,
         evidence: &str,
     ) -> rusqlite::Result<()> {
-        let operator = operator.trim();
-        let evidence = evidence.trim();
-        if operator.is_empty()
-            || operator.len() > 256
-            || evidence.is_empty()
-            || evidence.len() > 4096
-        {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let operator = validate_cutover_text(operator, 256).ok_or(rusqlite::Error::InvalidQuery)?;
+        let evidence =
+            validate_cutover_text(evidence, 4096).ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
             "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage='catch_up' AND approved_by IS NOT NULL AND source_quiescence_at IS NULL",
@@ -230,8 +232,8 @@ impl StateStore {
             }
         }
         let confirmation = external_confirmation
-            .map(str::trim)
-            .filter(|v| !v.is_empty());
+            .map(|value| validate_cutover_text(value, 4096).ok_or(rusqlite::Error::InvalidQuery))
+            .transpose()?;
         if next == CutoverStage::Completed && confirmation.is_none() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -279,6 +281,24 @@ mod tests {
             .create_project_with_mailbox("cutover", "source", "destination", "a", "a")
             .unwrap();
         store.transition(&project.id, Phase::Preflight).unwrap();
+        assert!(
+            store
+                .create_cutover_workflow(
+                    &project.id,
+                    "2026-10-03T22:00:00Z\ncutover_approved",
+                    None
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .create_cutover_workflow(
+                    &project.id,
+                    "2026-10-03T22:00:00Z",
+                    Some("22:00\ncutover_completed")
+                )
+                .is_err()
+        );
         store
             .create_cutover_workflow(&project.id, "2026-10-03T22:00:00Z", Some("22:00-01:00"))
             .unwrap();
@@ -287,8 +307,22 @@ mod tests {
                 .create_cutover_workflow(&project.id, "2026-10-04T22:00:00Z", None)
                 .is_err()
         );
+        assert!(
+            store
+                .approve_cutover(&project.id, "operator\ncutover_approved")
+                .is_err()
+        );
         assert!(store.approve_cutover(&project.id, "operator").is_ok());
         assert!(store.advance_cutover(&project.id, None).is_err());
+        assert!(
+            store
+                .attest_cutover_source_quiescence(
+                    &project.id,
+                    "operator",
+                    "delivery paused\ncutover_advanced; completed"
+                )
+                .is_err()
+        );
         store
             .connection
             .execute(
@@ -339,6 +373,11 @@ mod tests {
             )
             .unwrap();
         assert!(store.advance_cutover(&project.id, None).is_err());
+        assert!(
+            store
+                .advance_cutover(&project.id, Some("MX confirmed\ncutover completed"))
+                .is_err()
+        );
         assert_eq!(
             store
                 .advance_cutover(&project.id, Some("MX confirmed by operator"))
