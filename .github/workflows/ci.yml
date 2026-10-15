@@ -107,7 +107,7 @@ jobs:
               test ! -e /usr/bin/mailswiftsync
             '
       - name: Publish runnable test inventory
-        if: always()
+        if: ${{ always() && !cancelled() }}
         shell: bash
         run: |
           mkdir -p dist
@@ -133,7 +133,7 @@ jobs:
             cat dist/test-summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload test summary
-        if: always()
+        if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-test-summary
