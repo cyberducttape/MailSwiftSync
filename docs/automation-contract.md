@@ -148,6 +148,11 @@ provided. Consumers of version `1` must update before accepting version `2`.
 - A migration is complete only when the durable project state says so.
 - Independent verification evidence and its coverage level must be checked
   before claiming mailbox fidelity.
+- Reopening a completed project invalidates its current verified mailbox states
+  and requires fresh terminal evidence before it can complete again. Reopening
+  a project managed by a completed cutover workflow is refused until a new
+  cutover epoch can be durably represented; the prior external confirmation is
+  never reused.
 - `attention`, `failed`, `cancelled`, `verification_difference`, and
   `verification_limit_exceeded` require operator handling; automation must not
   silently retry them as success.

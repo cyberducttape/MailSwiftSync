@@ -1166,6 +1166,13 @@ fn project_cannot_complete_without_verified_mailboxes() {
         db.project(&project.id).unwrap().unwrap().phase,
         Phase::Attention
     );
+    assert_eq!(
+        db.mailbox_state(&job).unwrap().as_deref(),
+        Some("attention")
+    );
+    assert!(!db.all_mailboxes_verified(&project.id).unwrap());
+    db.transition(&project.id, Phase::Verification).unwrap();
+    assert!(db.transition(&project.id, Phase::Complete).is_err());
     let reopened_job = db
         .add_mailbox(&project.id, "new-source", "new-destination")
         .unwrap();

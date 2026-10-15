@@ -77,6 +77,17 @@ impl StateStore {
         if current != Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let has_cutover_workflow: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if has_cutover_workflow {
+            // A second cutover epoch is not modeled yet. Refuse reopening
+            // rather than strand the project behind a terminal workflow or
+            // reuse its prior external confirmation.
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let (total, verified, active_runs, active_processes): (i64, i64, i64, i64) = tx.query_row(
             "SELECT COUNT(*),
                     COALESCE(SUM(CASE WHEN j.state='verified' OR (j.state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=j.id)) THEN 1 ELSE 0 END),0),
@@ -89,6 +100,10 @@ impl StateStore {
         if total == 0 || verified != total || active_runs != 0 || active_processes != 0 {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let invalidated = tx.execute(
+            "UPDATE mailbox_jobs SET state='attention',attention_reason='verification_incomplete' WHERE project_id=?1 AND state IN ('verified','verified_with_exceptions')",
+            [id],
+        )?;
         let changed = tx.execute(
             "UPDATE projects SET phase='attention' WHERE id=?1 AND phase='complete'",
             [id],
@@ -98,7 +113,10 @@ impl StateStore {
         }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_reopened',?2)",
-            params![id, reason],
+            params![
+                id,
+                format!("{reason}; invalidated_verification_rows={invalidated}")
+            ],
         )?;
         tx.commit()
     }

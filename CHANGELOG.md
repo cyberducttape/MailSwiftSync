@@ -5,6 +5,9 @@
 - Keep approved cutover workflows in Verification after exception acceptance;
   only the cutover transition with its external confirmation can mark them
   Complete.
+- Invalidate mailbox terminal states when reopening a standalone completed
+  project, and refuse reopening completed cutover workflows until repeat
+  cutover epochs are modeled.
 - Version migration-wave list output as `mailswiftsync-wave-list` v2 and
   distinguish clean verification from accepted exceptions; wave completion no
   longer claims cutover readiness.

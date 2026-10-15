@@ -396,6 +396,15 @@ mod tests {
             store.project(&project.id).unwrap().unwrap().phase,
             Phase::Complete
         );
+        assert!(
+            store
+                .reopen_project(&project.id, "post-cutover correction requested")
+                .is_err()
+        );
+        assert_eq!(
+            store.project(&project.id).unwrap().unwrap().phase,
+            Phase::Complete
+        );
         let phase_events = store
             .connection
             .prepare("SELECT detail FROM events WHERE project_id=?1 AND kind='phase_changed' ORDER BY id")
