@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Emit `migration.final_delta_started` when a managed cutover enters its final
+  delta, and delay `migration.cutover_ready` until the final delta has durable
+  verification evidence and the workflow advances to Verification. Generic
+  non-cutover phase changes no longer emit cutover lifecycle events. Schema 36
+  repairs queued legacy notifications so they cannot announce premature
+  readiness after upgrade.
 - Keep approved cutover workflows in Verification after exception acceptance;
   only the cutover transition with its external confirmation can mark them
   Complete.

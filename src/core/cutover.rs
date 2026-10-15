@@ -252,12 +252,30 @@ impl StateStore {
             params![next_phase, project_id],
         )?;
         if phase != next_phase {
-            // `final_delta` publishes `migration.cutover_ready` and
-            // `complete` publishes `migration.completed` via the outbox.
             tx.execute(
                 "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed',?2)",
                 params![project_id, next_phase],
             )?;
+        }
+        // Emit cutover-specific outbox events from this transaction, not from
+        // generic phase changes. Readiness is published only after the final
+        // delta pass has durable verification evidence and the workflow moves
+        // to Verification. Generic migrations and ordinary verification
+        // changes must never produce cutover signals.
+        match next {
+            CutoverStage::FinalDelta => {
+                tx.execute(
+                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_final_delta_started','source quiescence attested; final delta started')",
+                    [project_id],
+                )?;
+            }
+            CutoverStage::Verification => {
+                tx.execute(
+                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_ready','final delta verified; external cutover approval pending')",
+                    [project_id],
+                )?;
+            }
+            _ => {}
         }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_advanced',?2)",
@@ -365,6 +383,24 @@ mod tests {
             store.advance_cutover(&project.id, None).unwrap(),
             CutoverStage::FinalDelta
         );
+        let cutover_ready_before_final_delta: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cutover_ready_before_final_delta, 0);
+        let final_delta_started: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.final_delta_started'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(final_delta_started, 1);
         store
             .connection
             .execute(
@@ -372,7 +408,19 @@ mod tests {
                 [&job],
             )
             .unwrap();
-        store.advance_cutover(&project.id, None).unwrap();
+        assert_eq!(
+            store.advance_cutover(&project.id, None).unwrap(),
+            CutoverStage::Verification
+        );
+        let cutover_ready_after_final_delta: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cutover_ready_after_final_delta, 1);
         store
             .connection
             .execute(
@@ -433,6 +481,111 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cutover_ready, 1);
+        let event_type_in_payload: String = store
+            .connection
+            .query_row(
+                "SELECT json_extract(payload,'$.event_type') FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_type_in_payload, "migration.cutover_ready");
+    }
+
+    #[test]
+    fn generic_final_delta_phase_does_not_publish_cutover_events() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, _) = store
+            .create_project_with_mailbox("ordinary", "source", "destination", "a", "a")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed','final_delta')",
+                [&project.id],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed','verification')",
+                [&project.id],
+            )
+            .unwrap();
+        let lifecycle_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type IN ('migration.final_delta_started','migration.cutover_ready')",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(lifecycle_count, 0);
+    }
+
+    #[test]
+    fn schema_36_repairs_queued_legacy_cutover_ready_events() {
+        let store = StateStore::in_memory().unwrap();
+        let (managed, _) = store
+            .create_project_with_mailbox("managed", "source", "destination", "a", "a")
+            .unwrap();
+        store.transition(&managed.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&managed.id, "2026-10-15T23:00:00Z", None)
+            .unwrap();
+        let (generic, _) = store
+            .create_project_with_mailbox("generic", "source", "destination", "b", "b")
+            .unwrap();
+
+        for project_id in [&managed.id, &generic.id] {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed','final_delta')",
+                    [project_id],
+                )
+                .unwrap();
+            let event_id = format!("ledger-event-{}", store.connection.last_insert_rowid());
+            store
+                .connection
+                .execute(
+                    "INSERT INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest) VALUES(?1,?2,'migration.cutover_ready','{\"event_type\":\"migration.cutover_ready\"}','')",
+                    rusqlite::params![event_id, project_id],
+                )
+                .unwrap();
+        }
+        store
+            .connection
+            .pragma_update(None, "user_version", 35)
+            .unwrap();
+        store.migrate().unwrap();
+
+        let managed_event: (String, String, String) = store
+            .connection
+            .query_row(
+                "SELECT event_type,status,json_extract(payload,'$.event_type') FROM webhook_deliveries WHERE project_id=?1",
+                [&managed.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            managed_event,
+            (
+                "migration.final_delta_started".to_owned(),
+                "queued".to_owned(),
+                "migration.final_delta_started".to_owned()
+            )
+        );
+        let generic_event: (String, String) = store
+            .connection
+            .query_row(
+                "SELECT status,last_error FROM webhook_deliveries WHERE project_id=?1",
+                [&generic.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(generic_event.0, "dead_letter");
+        assert!(generic_event.1.contains("no managed cutover workflow"));
     }
 
     #[test]
