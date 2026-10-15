@@ -875,6 +875,68 @@ fn compatibility_matrix_references_tested_providers() {
 }
 
 #[test]
+fn provider_qualification_manifest_covers_every_release_required_route() {
+    let capabilities: toml::Value = toml::from_str(
+        &fs::read_to_string("capabilities.toml").expect("capabilities.toml should exist"),
+    )
+    .expect("capabilities.toml should be valid TOML");
+    let policy: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string("tests/provider-evidence/policy.json")
+            .expect("provider evidence policy should exist"),
+    )
+    .expect("provider evidence policy should be valid JSON");
+
+    let pair_names = [
+        ("gmail->microsoft365", "Google Workspace → Microsoft 365"),
+        ("microsoft365->gmail", "Microsoft 365 → Google Workspace"),
+        (
+            "cpanel_dovecot->microsoft365",
+            "cPanel/Dovecot → Microsoft 365",
+        ),
+        ("cpanel_dovecot->gmail", "cPanel/Dovecot → Google Workspace"),
+        (
+            "cpanel_dovecot->cpanel_dovecot",
+            "cPanel/Dovecot → cPanel/Dovecot",
+        ),
+        ("fastmail->gmail", "Fastmail → Google Workspace"),
+        ("fastmail->microsoft365", "Fastmail → Microsoft 365"),
+    ];
+    let required_pairs = policy["providers"]
+        .as_array()
+        .expect("provider policy must contain routes")
+        .iter()
+        .filter(|route| route["release_required"] == true)
+        .map(|route| {
+            let key = route["pair"]
+                .as_str()
+                .expect("provider pair key must be a string");
+            pair_names
+                .iter()
+                .find_map(|(known, label)| (*known == key).then_some(*label))
+                .unwrap_or_else(|| panic!("provider policy route {key:?} has no manifest label"))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let manifest_pairs = capabilities["provider_qualifications"]
+        .as_array()
+        .expect("capabilities must list provider qualifications")
+        .iter()
+        .map(|entry| {
+            entry["pair"]
+                .as_str()
+                .expect("provider qualification pair must be a string")
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert!(
+        required_pairs.is_subset(&manifest_pairs),
+        "capabilities.toml must list every release-required evidence route; missing: {:?}",
+        required_pairs
+            .difference(&manifest_pairs)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn provider_testing_guide_exists() {
     let guide = fs::read_to_string("docs/provider-testing-guide.md")
         .expect("Provider testing guide should exist");
