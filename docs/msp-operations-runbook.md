@@ -86,9 +86,12 @@ mailbox is complete, needs a delta, or requires operator review.
   the Final Delta stage, record `cutover <state.db> attest-source-quiescence
   <project-id> <operator> <evidence>` with the change/ticket reference and the
   time delivery and mailbox edits were paused or narrowly watermarked. Keep
-  that barrier in force through final verification. This is an auditable
-  operator assertion, not automatic IMAP source-cursor revalidation; the
-  evidence and customer proof must not describe it as a synchronized snapshot.
+  that barrier in force through final verification. Verification separately
+  re-LISTs and re-SELECTs the source after destination scanning and records
+  whether the tracked folder cursors remained unchanged. The attestation is
+  still an operator assertion: neither it nor the cursor recheck proves an
+  atomic, continuously quiescent cross-server snapshot. Customer proof must
+  not describe it as one.
 - If using `notify-webhook --watch`, configure HTTPS, a customer-approved
   signing secret, a service-manager restart policy, and an owner for dead-letter
   review. The outbox is durable within the ledger, but delivery still depends

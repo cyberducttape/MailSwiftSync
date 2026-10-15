@@ -313,14 +313,25 @@ repeated differences against delivery and user-action logs. Do not treat a
 single live-change mismatch as proof of transfer loss, and do not accept it
 as harmless without recording the operator decision and evidence run.
 
-The durable cutover workflow requires an operator source-quiescence attestation
-before the Final Delta stage can be run or advanced. It records the operator,
-timestamp, and evidence/change reference and is audited in the event ledger.
-This is a workflow gate, not a server-observed barrier: MailSwiftSync does not
-currently re-SELECT every source folder after destination verification or
-prove that delivery stayed paused. The operator must maintain the stated
-quiescence through final verification. Customer proof continues to report the
-source as `not_revalidated` and cutover readiness as `not_established`.
+The verifier re-LISTs the source folders and re-SELECTs every source folder
+after destination scanning. It rejects exact verification if the selectable
+folder inventory changes, or if a tracked `UIDVALIDITY`, `UIDNEXT`, `EXISTS`,
+or `HIGHESTMODSEQ` differs from the source scan. The customer proof records
+the per-folder revalidation timestamps and whether those observed cursors
+remained unchanged. This is a bounded recheck at the end of the verification
+interval—not an atomic cross-server snapshot, proof that the source remained
+unchanged throughout the interval, or proof that delivery stayed paused after
+the recheck.
+
+Separately, the durable cutover workflow requires an operator
+source-quiescence attestation before the Final Delta stage can be run or
+advanced. It records the operator, timestamp, and evidence/change reference
+and is audited in the event ledger. This is an auditable workflow gate, not a
+server-observed delivery barrier. The operator must maintain the stated
+quiescence through final verification. Even with unchanged source cursors at
+revalidation, customer proof reports `cutover_readiness` as
+`not_established`: the application cannot machine-prove continued quiescence
+or an atomic global cutover boundary.
 
 Evidence recorded before flag verification existed, aggregate evidence, and
 native Dovecot evidence report flags as not verified. Reports and the GUI show

@@ -117,9 +117,10 @@ This is not an atomic snapshot and does not prove continued quiescence.
 Consumers of version 4 must update before accepting version 5. Each evidence
 row also carries `proof_tier` (`aggregate`,
 `metadata`, or bounded `content`) separately from `proof_result`; none implies
-cutover readiness. `cutover_readiness.status` remains `not_established` until
-the final synchronization barrier and source revalidation are implemented and
-qualified.
+cutover readiness. `cutover_readiness.status` remains `not_established`: source
+folder revalidation is recorded after destination scanning, but the operator
+quiescence barrier is not machine-enforced and the two servers do not provide
+an atomic account-wide snapshot.
 The `mailswiftsync-support-bundle` artifact uses format version `2`: project,
 mailbox-job, and run identifiers are type-separated pseudonyms derived with a
 fresh per-bundle salt, preserving joins inside one bundle without correlating
