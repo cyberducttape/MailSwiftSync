@@ -3,8 +3,9 @@
 ## Unreleased
 
 - Add a workload-specific measured-range projection for verification stage
-  plus journal storage to the scale-only risk report; it is not a capacity
-  bound, and worker disk capacity remains unknown unless separately measured.
+  storage (including sampled rollback-journal peak) to the scale-only risk
+  report; it is not a capacity bound, and worker disk capacity remains
+  unknown unless separately measured.
 - Treat changes in CONDSTORE/HIGHESTMODSEQ availability as verification snapshot
   drift; a newly available watermark without a scan-time baseline now requires
   a fresh verification pass.

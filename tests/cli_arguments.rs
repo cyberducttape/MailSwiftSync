@@ -270,11 +270,11 @@ fn risk_command_marks_its_readiness_score_as_scale_only_and_advisory() {
     );
     assert_eq!(
         report["estimated_verification_stage_and_journal_bytes_min"],
-        113_600
+        103_600
     );
     assert_eq!(
         report["estimated_verification_stage_and_journal_bytes_max"],
-        176_400
+        161_600
     );
     assert_eq!(
         report["verification_stage_capacity_status"],

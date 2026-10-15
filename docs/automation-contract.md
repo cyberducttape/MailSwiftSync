@@ -67,10 +67,11 @@ ambiguous version-1 `estimated_readiness: "ready"` value, and version 3
 clarified one-endpoint size scope and added the combined-byte projection.
 Version 4 adds low/high `estimated_verification_stage_and_journal_bytes_min`
 and `_max` projections using an equal-count two-endpoint assumption and the
-observed 568–882 bytes per staged record across current synthetic mismatch-
-heavy through missing-ID profiles. This is a workload-specific measured
-range, not a capacity bound; extra destination messages or different mailbox
-shapes can increase actual storage. `verification_stage_capacity_status`
+observed 518–808 peak stage-directory bytes per staged record across current
+synthetic mismatch-heavy through missing-ID profiles. The directory total
+includes the sampled rollback-journal peak. This is a workload-specific
+measured range, not a capacity bound; extra destination messages or different
+mailbox shapes can increase actual storage. `verification_stage_capacity_status`
 therefore remains `unknown_not_measured`: this command receives no destination
 inventory and does not inspect the worker filesystem. Consumers must handle
 the new fields and enum before accepting this report.

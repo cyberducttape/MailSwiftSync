@@ -6,11 +6,12 @@ const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
 pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 4;
 const PROJECTED_ENDPOINTS: u64 = 2;
-/// Observed stage-directory-plus-journal bytes per staged record in the
-/// current 1M-message-per-endpoint synthetic profiles (mismatch-heavy and
-/// missing-ID shapes). This workload range is not a capacity bound.
-const OBSERVED_STAGE_BYTES_PER_RECORD_MIN: u64 = 568;
-const OBSERVED_STAGE_BYTES_PER_RECORD_MAX: u64 = 882;
+/// Observed peak stage-directory bytes per staged record in the current
+/// synthetic profiles (mismatch-heavy and missing-ID shapes). The directory
+/// total already includes its rollback journal. This workload range is not a
+/// capacity bound.
+const OBSERVED_STAGE_BYTES_PER_RECORD_MIN: u64 = 518;
+const OBSERVED_STAGE_BYTES_PER_RECORD_MAX: u64 = 808;
 
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +35,8 @@ pub struct PreMigrationRisk {
     /// sum cannot be represented as a u64.
     pub estimated_combined_body_hash_bytes: Option<u64>,
     pub body_hash_byte_projection: String,
-    /// Advisory low/high SQLite metadata-stage plus journal projections. They
+    /// Advisory low/high SQLite metadata-stage projections, including the
+    /// sampled rollback-journal peak. They
     /// assume equal message counts at both endpoints and scale the observed
     /// synthetic workload range; they are not qualified capacity bounds.
     /// `None` means arithmetic overflow.
@@ -382,11 +384,11 @@ mod tests {
         let one_million = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "");
         assert_eq!(
             one_million.estimated_verification_stage_and_journal_bytes_min,
-            Some(1_136_000_000)
+            Some(1_036_000_000)
         );
         assert_eq!(
             one_million.estimated_verification_stage_and_journal_bytes_max,
-            Some(1_764_000_000)
+            Some(1_616_000_000)
         );
         assert!(
             one_million
