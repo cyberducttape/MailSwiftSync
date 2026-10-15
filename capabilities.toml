@@ -24,6 +24,13 @@ tested_engine = "imapsync 2.314"
 limitations = "Priority hosting route; no live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
+pair = "cPanel/Dovecot → Google Workspace"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "No live provider-pair evidence is bundled."
+
+[[provider_qualifications]]
 pair = "Google Workspace → Microsoft 365"
 status = "not_qualified"
 last_qualified = "none"
@@ -39,6 +46,20 @@ limitations = "No live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "Fastmail → Generic IMAP"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "No live provider-pair evidence is bundled."
+
+[[provider_qualifications]]
+pair = "Fastmail → Google Workspace"
+status = "not_qualified"
+last_qualified = "none"
+tested_engine = "imapsync 2.314"
+limitations = "No live provider-pair evidence is bundled."
+
+[[provider_qualifications]]
+pair = "Fastmail → Microsoft 365"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
