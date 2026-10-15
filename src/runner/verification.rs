@@ -183,6 +183,29 @@ pub(crate) fn run_imap_message_verification(
         },
     )?;
     stage.record_destination_revalidation(&destination_revalidation)?;
+    // The source may change while the destination's final LIST/EXAMINE pass
+    // is running. Recheck it once more at the end of the observation window so
+    // that such drift cannot be hidden by the earlier source revalidation.
+    // This narrows the race; it is not an atomic cross-server snapshot and
+    // cannot prove that mail flow stayed quiescent between observations.
+    source_refresh_form.refresh_oauth_access_token(true)?;
+    let final_source_revalidation = crate::imap_probe::revalidate_tls_account_snapshots(
+        crate::imap_probe::TlsAccountRevalidation {
+            endpoint_label: "source",
+            host: &source_host,
+            user: &form.profile.source_user,
+            credential: source_refresh_form.source_password.as_str(),
+            auth_method: &form.profile.source_auth,
+            transport: &form.profile.source_tls,
+            ca_bundle: &form.profile.source_ca_bundle,
+            certificate_pin_sha256: &form.profile.source_certificate_pin_sha256,
+            budget: &budget,
+            expected_mailboxes: &source.mailboxes,
+            excluded_mailboxes: &excluded_source_folders,
+            expected_snapshots: &source_snapshots,
+        },
+    )?;
+    stage.record_source_revalidation(&final_source_revalidation)?;
     if (source.total_exists > 0
         && stage
             .count(core::StagedMessageSide::Source)

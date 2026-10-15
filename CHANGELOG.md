@@ -97,6 +97,11 @@
   non-atomic observation and does not establish continued source quiescence or
   cutover readiness. Preserve fail-closed behavior for unsupported migration
   transformations.
+- Recheck source folder inventories and tracked cursors after destination
+  revalidation as well as before it, refusing exact evidence if the source
+  changes during the destination check. The final source observation narrows
+  the consistency window; it is not an atomic snapshot or proof of continued
+  mail-flow quiescence.
 - Require an audited source-quiescence operator attestation before the final
   delta stage can run or advance. The durable cutover status records who
   attested, when, and the change reference/evidence; it is explicitly a manual

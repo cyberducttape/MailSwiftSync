@@ -315,18 +315,21 @@ single live-change mismatch as proof of transfer loss, and do not accept it
 as harmless without recording the operator decision and evidence run.
 
 The verifier re-LISTs and re-SELECTs every source folder after destination
-scanning, then re-LISTs and re-SELECTs every destination folder. It rejects
+scanning, then re-LISTs and re-SELECTs every destination folder, and finally
+re-LISTs and re-SELECTs the source folders again. It rejects
 exact verification if either selectable-folder inventory changes, or if a
 tracked `UIDVALIDITY`, `UIDNEXT`, `EXISTS`, or `HIGHESTMODSEQ` differs from
 that endpoint's scan. The consistency phase performs a bounded LIST/EXAMINE
-traversal per endpoint; the destination traversal adds provider requests and
-scan time. The customer proof records separate per-folder revalidation
-timestamps and whether the observed cursors remained unchanged.
+traversal per endpoint, plus a second source traversal; these checks add
+provider requests and scan time. The customer proof records the final
+per-folder revalidation timestamps and whether the observed cursors remained
+unchanged.
 These sequential checks narrow the stale-evidence window on both endpoints;
 they are not an atomic cross-server snapshot, do not prove either mailbox was
 unchanged throughout the interval, and do not prove delivery stayed paused
-after the corresponding recheck. In particular, the source can change while
-the later destination revalidation is running.
+after the corresponding recheck. The final source pass detects cursor changes
+that occur during destination revalidation, but the source can still change
+immediately after that final observation.
 
 Separately, the durable cutover workflow requires an operator
 source-quiescence attestation before the Final Delta stage can be run or
