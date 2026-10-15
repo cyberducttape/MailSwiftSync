@@ -44,7 +44,7 @@ pub(crate) use events::{
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use poll_events::PollEventState;
 pub(crate) use preflight::{
-    CapabilityProbeResult, assess_plan, capability_observation_matches,
+    CapabilityProbeResult, PreflightCheckStatus, assess_plan, capability_observation_matches,
     capability_probe_result_matches,
 };
 pub(crate) use probe::{

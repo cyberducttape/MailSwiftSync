@@ -445,7 +445,7 @@ fn failed_preflight_remediation_opens_the_plan_from_the_keyboard() {
     harness.app.preflight = vec![(
         "Destination endpoint".into(),
         "Missing destination server".into(),
-        false,
+        crate::controller::PreflightCheckStatus::Blocked,
     )];
     harness.app.active_view = WorkspaceView::Overview;
     let nodes = harness.tree();

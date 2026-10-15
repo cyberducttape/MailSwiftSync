@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Represent plan checks as passed, blocked, or unknown. Show destination
+  capacity as unknown unless exhaustion is observed: even a non-exhausted
+  INBOX-root quota does not prove that the projected transfer fits or establish
+  account-wide headroom. Keep unresolved capacity visible in the readiness
+  summary and direct operators to confirm it with the provider.
 - Serialize cutover approval/attestation/advancement and migration-wave approval
   with the exclusive ledger owner lock. Make cutover/wave status reads use a
   read-only connection, and revalidate the approved cutover stage after the

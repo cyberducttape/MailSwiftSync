@@ -151,7 +151,7 @@ pub(crate) struct App {
     /// the plan presented to the operator or the next retry.
     pub(crate) locked_profile: Option<Profile>,
     pub(crate) cancel_requested: Option<Arc<AtomicBool>>,
-    pub(crate) preflight: Vec<(String, String, bool)>,
+    pub(crate) preflight: Vec<(String, String, crate::controller::PreflightCheckStatus)>,
     pub(crate) capability_receiver: Option<Receiver<CapabilityProbeResult>>,
     pub(crate) capability_probe_request_id: Option<String>,
     pub(crate) capability_probe_fingerprint: Option<String>,
