@@ -10,6 +10,9 @@
 - Share one cutover admission validator between the CLI precheck and the
   lock-held headless launch check, with regression coverage for stale stages,
   missing source-quiescence evidence, and future schedules.
+- Require Final Delta admission to use a well-formed source-quiescence
+  attestation no more than 15 minutes old, preventing an old pause assertion
+  from authorizing a later run after delivery or mailbox edits may have resumed.
 - Hold the exclusive ledger owner lock for certificate export and its durable
   `proof_ready` event, preventing that state transition from racing an active
   controller.

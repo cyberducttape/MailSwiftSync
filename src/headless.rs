@@ -901,8 +901,26 @@ pub(crate) fn validate_cutover_run_admission(
     if workflow.stage == core::CutoverStage::Completed {
         return Err("workflow is already complete".into());
     }
-    if workflow.stage == core::CutoverStage::FinalDelta && workflow.source_quiescence_at.is_none() {
-        return Err("source-quiescence attestation is missing; record it before entering the Final Delta stage".into());
+    if workflow.stage == core::CutoverStage::FinalDelta {
+        let Some(attested_at) = workflow.source_quiescence_at.as_deref() else {
+            return Err("source-quiescence attestation is missing; record it before entering the Final Delta stage".into());
+        };
+        // SQLite CURRENT_TIMESTAMP is UTC in `YYYY-MM-DD HH:MM:SS` form.
+        // A stale operator assertion must not authorize a later final-delta
+        // launch after mail delivery or mailbox edits may have resumed.
+        let attested_at = chrono::NaiveDateTime::parse_from_str(attested_at, "%Y-%m-%d %H:%M:%S")
+            .map(|value| value.and_utc())
+            .map_err(|_| {
+                "source-quiescence attestation timestamp is invalid; record a new attestation"
+                    .to_owned()
+            })?;
+        let age = chrono::Utc::now().signed_duration_since(attested_at);
+        if age < chrono::Duration::zero() {
+            return Err("source-quiescence attestation timestamp is in the future; verify the ledger clock and record a new attestation".into());
+        }
+        if age > chrono::Duration::minutes(15) {
+            return Err("source-quiescence attestation is older than 15 minutes; confirm delivery and mailbox edits are paused, then record a fresh attestation before Final Delta".into());
+        }
     }
     let scheduled_at = chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at)
         .map_err(|_| "scheduled_at is not RFC 3339".to_owned())?
@@ -1339,7 +1357,7 @@ mod tests {
             external_confirmation: None,
             source_quiescence_operator: Some("operator".into()),
             source_quiescence_evidence: Some("source delivery paused".into()),
-            source_quiescence_at: Some("2026-10-14 00:00:00".into()),
+            source_quiescence_at: Some(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
         }
     }
 
@@ -1359,6 +1377,42 @@ mod tests {
             validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
                 .expect_err("final delta must not run without a quiescence attestation");
         assert!(error.contains("source-quiescence"));
+    }
+
+    #[test]
+    fn final_delta_admission_rejects_stale_source_quiescence_attestation() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        workflow.source_quiescence_at = Some(
+            (chrono::Utc::now() - chrono::Duration::minutes(16))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        );
+        let error =
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .expect_err("a stale source-quiescence assertion must not authorize final delta");
+        assert!(error.contains("older than 15 minutes"));
+    }
+
+    #[test]
+    fn final_delta_admission_rejects_future_or_malformed_quiescence_timestamp() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        workflow.source_quiescence_at = Some("not-a-timestamp".into());
+        assert!(
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .unwrap_err()
+                .contains("timestamp is invalid")
+        );
+
+        workflow.source_quiescence_at = Some(
+            (chrono::Utc::now() + chrono::Duration::minutes(1))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        );
+        assert!(
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .unwrap_err()
+                .contains("in the future")
+        );
     }
 
     #[test]
