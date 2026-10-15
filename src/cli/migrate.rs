@@ -95,7 +95,7 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
             .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned()),
         "attest-source-quiescence" if values.len() == 5 => store
             .attest_cutover_source_quiescence(project_id, &text_arguments[2], &text_arguments[3])
-            .map(|()| "Source-quiescence attestation recorded. This is an operator assertion, not automatic IMAP source revalidation; keep source delivery paused through final delta and verification.".to_owned()),
+            .map(|()| "Source-quiescence attestation recorded/refreshed. It is an operator assertion, not automatic IMAP source revalidation; admission requires a fresh attestation when each Final Delta worker starts, and source delivery must remain paused through final verification.".to_owned()),
         "advance" if (3..=4).contains(&values.len()) => store
             .advance_cutover(project_id, text_arguments.get(2).map(String::as_str))
             .map(|stage| format!("Cutover advanced to {}.", stage.as_str())),

@@ -2,6 +2,40 @@ use super::StateStore;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 
+/// Validate the workflow/phase binding and the final-delta operator
+/// attestation. This is called inside durable run-admission transactions as
+/// well as by the headless preflight, so UI and batch callers cannot bypass
+/// managed cutover rules.
+pub(crate) fn validate_cutover_run_stage(
+    stage: &str,
+    phase: &str,
+    source_quiescence_at: Option<&str>,
+) -> Result<(), String> {
+    if stage != phase {
+        return Err("managed cutover stage does not match the project phase".into());
+    }
+    if stage != CutoverStage::FinalDelta.as_str() {
+        return Ok(());
+    }
+    let Some(attested_at) = source_quiescence_at else {
+        return Err("source-quiescence attestation is missing".into());
+    };
+    // SQLite CURRENT_TIMESTAMP is UTC in `YYYY-MM-DD HH:MM:SS` form.
+    // A stale operator assertion must not authorize a later final-delta
+    // launch after mail delivery or mailbox edits may have resumed.
+    let attested_at = chrono::NaiveDateTime::parse_from_str(attested_at, "%Y-%m-%d %H:%M:%S")
+        .map(|value| value.and_utc())
+        .map_err(|_| "source-quiescence attestation timestamp is invalid".to_owned())?;
+    let age = chrono::Utc::now().signed_duration_since(attested_at);
+    if age < chrono::Duration::zero() {
+        return Err("source-quiescence attestation timestamp is in the future".into());
+    }
+    if age > chrono::Duration::minutes(15) {
+        return Err("source-quiescence attestation is older than 15 minutes".into());
+    }
+    Ok(())
+}
+
 /// Durable, operator-approved migration lifecycle.  The stage is deliberately
 /// separate from `projects.phase`: a project phase describes the evidence
 /// currently present, while this record describes the next approved
@@ -216,7 +250,7 @@ impl StateStore {
             .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
-            "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage='catch_up' AND approved_by IS NOT NULL AND source_quiescence_at IS NULL",
+            "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage IN ('catch_up','final_delta') AND approved_by IS NOT NULL AND (source_quiescence_at IS NULL OR stage='final_delta')",
             params![operator, evidence, project_id],
         )?;
         if changed != 1 {
@@ -338,6 +372,130 @@ impl StateStore {
 mod tests {
     use super::{CutoverStage, StateStore};
     use crate::core::{MailboxEvidence, Phase, VerificationMethod};
+
+    #[test]
+    fn durable_single_and_batch_admission_reject_stale_managed_final_delta() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox("cutover-admission", "source", "destination", "a", "a")
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
+            .unwrap();
+        store.approve_cutover(&project.id, "operator").unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET phase='final_delta' WHERE id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET stage='final_delta',source_quiescence_at='2026-10-14 00:00:00' WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .begin_run(&project.id, &job, "stale-final-delta-single", "imapsync")
+                .is_err()
+        );
+        assert!(
+            store
+                .begin_batch_run_with_children(
+                    &project.id,
+                    std::slice::from_ref(&job),
+                    "stale-final-delta-batch",
+                    "imapsync",
+                    &[],
+                    "",
+                    &[],
+                )
+                .is_err()
+        );
+        let run_count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(run_count, 0, "rejected admission must be atomic");
+    }
+
+    #[test]
+    fn delayed_batch_child_claim_rechecks_and_can_refresh_final_delta_attestation() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox("cutover-child-claim", "source", "destination", "a", "a")
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
+            .unwrap();
+        store.approve_cutover(&project.id, "operator").unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET phase='final_delta' WHERE id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET stage='final_delta',source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        let children = store
+            .begin_batch_run_with_children(
+                &project.id,
+                std::slice::from_ref(&job),
+                "delayed-final-delta-batch",
+                "imapsync",
+                &[],
+                "",
+                &[],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET source_quiescence_at='2026-10-14 00:00:00' WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        assert!(
+            store
+                .claim_batch_mailbox_for_child(
+                    &project.id,
+                    &job,
+                    "delayed-final-delta-batch",
+                    &children[0],
+                )
+                .is_err()
+        );
+
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Delivery pause reconfirmed; CHG-123",
+            )
+            .unwrap();
+        assert!(
+            store
+                .claim_batch_mailbox_for_child(
+                    &project.id,
+                    &job,
+                    "delayed-final-delta-batch",
+                    &children[0],
+                )
+                .is_ok()
+        );
+    }
 
     #[test]
     fn cutover_requires_approval_evidence_and_external_confirmation() {

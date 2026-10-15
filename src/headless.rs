@@ -901,27 +901,17 @@ pub(crate) fn validate_cutover_run_admission(
     if workflow.stage == core::CutoverStage::Completed {
         return Err("workflow is already complete".into());
     }
-    if workflow.stage == core::CutoverStage::FinalDelta {
-        let Some(attested_at) = workflow.source_quiescence_at.as_deref() else {
-            return Err("source-quiescence attestation is missing; record it before entering the Final Delta stage".into());
-        };
-        // SQLite CURRENT_TIMESTAMP is UTC in `YYYY-MM-DD HH:MM:SS` form.
-        // A stale operator assertion must not authorize a later final-delta
-        // launch after mail delivery or mailbox edits may have resumed.
-        let attested_at = chrono::NaiveDateTime::parse_from_str(attested_at, "%Y-%m-%d %H:%M:%S")
-            .map(|value| value.and_utc())
-            .map_err(|_| {
-                "source-quiescence attestation timestamp is invalid; record a new attestation"
-                    .to_owned()
-            })?;
-        let age = chrono::Utc::now().signed_duration_since(attested_at);
-        if age < chrono::Duration::zero() {
-            return Err("source-quiescence attestation timestamp is in the future; verify the ledger clock and record a new attestation".into());
-        }
-        if age > chrono::Duration::minutes(15) {
-            return Err("source-quiescence attestation is older than 15 minutes; confirm delivery and mailbox edits are paused, then record a fresh attestation before Final Delta".into());
-        }
-    }
+    crate::core::validate_cutover_run_stage(
+        workflow.stage.as_str(),
+        workflow.stage.as_str(),
+        workflow.source_quiescence_at.as_deref(),
+    )
+    .map_err(|error| match workflow.stage {
+        core::CutoverStage::FinalDelta => format!(
+            "{error}; confirm delivery and mailbox edits are paused, then record a fresh attestation before Final Delta"
+        ),
+        _ => error,
+    })?;
     let scheduled_at = chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at)
         .map_err(|_| "scheduled_at is not RFC 3339".to_owned())?
         .with_timezone(&chrono::Utc);

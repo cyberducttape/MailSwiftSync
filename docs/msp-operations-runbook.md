@@ -86,8 +86,9 @@ mailbox is complete, needs a delta, or requires operator review.
   the Final Delta stage, record `cutover <state.db> attest-source-quiescence
   <project-id> <operator> <evidence>` with the change/ticket reference and the
   time delivery and mailbox edits were paused or narrowly watermarked. The
-  attestation must be no more than 15 minutes old when Final Delta execution
-  begins; if admission is delayed, reconfirm the pause and record a fresh one.
+  attestation must be no more than 15 minutes old when each Final Delta
+  mailbox worker is durably claimed; if a batch is delayed, reconfirm the pause
+  and refresh the attestation with the same command before retrying admission.
   Keep
   that barrier in force through final verification. Verification separately
   re-LISTs and re-SELECTs the source after destination scanning and records

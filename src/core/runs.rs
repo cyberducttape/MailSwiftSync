@@ -154,6 +154,21 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
+        let cutover: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                [project_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stage, source_quiescence_at)) = cutover {
+            super::cutover::validate_cutover_run_stage(
+                &stage,
+                &phase_at_start,
+                source_quiescence_at.as_deref(),
+            )
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        }
         if phase_at_start == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -266,6 +281,21 @@ impl StateStore {
             [project_id],
             |row| row.get(0),
         )?;
+        let cutover: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                [project_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stage, source_quiescence_at)) = cutover {
+            super::cutover::validate_cutover_run_stage(
+                &stage,
+                &phase_at_start,
+                source_quiescence_at.as_deref(),
+            )
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        }
         if phase_at_start == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -404,6 +434,21 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        let cutover: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                [project_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stage, source_quiescence_at)) = cutover {
+            super::cutover::validate_cutover_run_stage(
+                &stage,
+                &phase,
+                source_quiescence_at.as_deref(),
+            )
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        }
         if phase == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -456,6 +501,21 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        let cutover: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                [project_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stage, source_quiescence_at)) = cutover {
+            super::cutover::validate_cutover_run_stage(
+                &stage,
+                &phase,
+                source_quiescence_at.as_deref(),
+            )
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        }
         if phase == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }

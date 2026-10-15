@@ -56,7 +56,7 @@ mod verification_limit;
 mod waves;
 mod webhook_outbox;
 pub use capabilities::{NamespaceEntry, NamespaceInfo, ServerCapabilities};
-pub(crate) use cutover::{CutoverStage, CutoverWorkflow};
+pub(crate) use cutover::{CutoverStage, CutoverWorkflow, validate_cutover_run_stage};
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{

@@ -753,6 +753,9 @@ mod tests {
             app.store
                 .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
                 .unwrap();
+            app.store
+                .approve_cutover(&project.id, "test operator")
+                .unwrap();
             let phase_before_completion = app
                 .store
                 .project_report_snapshot(&project.id)
