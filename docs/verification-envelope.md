@@ -224,22 +224,25 @@ provider distributions, and do not establish a safe disk ceiling or GA
 capacity. Re-run the benchmark on the target filesystem and workload before
 admission policy relies on these measurements.
 
-A fresh typical-shape repeat at current main commit
+A fresh three-shape repeat at current main commit
 `293ee799059f8b081ce12e4fa4c06e6d1105aed7` on 2026-10-15 used the same
 Ubuntu 26.04.1 x86_64 / AMD Ryzen 7 7735U workstation and ext4-on-NVMe stage
-filesystem. The one-million-message-per-endpoint run passed the benchmark's
+filesystem. Each one-million-message-per-endpoint shape passed the benchmark's
 64 MiB peak-RSS and 20,000 messages/s reconciliation thresholds:
 
 | Shape | Stage write | Reconcile time / rate | Reconcile write | Peak RSS | Stage after staging | Peak stage / journal | FLAGS compared | Mismatch rows |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Typical | 868,818,944 B | 22.053 s / 45,345/s | 682,254,336 B | 22 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 980,000 | 20,000 changed |
+| Mismatch-heavy | 930,971,648 B | 38.035 s / 26,291/s | 955,047,936 B | 20 MiB | 668,516,352 B | 1,035,998,416 B / 100,893,904 B | 500,000 | 600,000 (100,000 missing, 100,000 extra, 400,000 changed) |
+| Duplicate IDs | 938,643,456 B | 26.188 s / 38,185/s | 688,828,416 B | 20 MiB | 672,989,184 B | 1,094,813,856 B / 101,443,744 B | 980,000 | 20,000 changed |
 
-Restart reconciliation took 22.783 s and wrote 702,701,568 B; flag comparison
-took 6.710 s. The synthetic benchmark ran with Rust 1.92.0 and measured the
-controller process's peak RSS. This is a repeatability datapoint for one
-message distribution and one workstation, not an end-to-end IMAP migration,
-not a full-process measurement, and not a universal disk-space estimate or
-production capacity qualification.
+Restart reconciliation took 22.783 s / 33.431 s / 26.068 s and wrote
+702,701,568 B / 873,095,168 B / 693,465,088 B, respectively; flag comparison
+took 6.710 s / 6.595 s / 7.136 s. The synthetic benchmark ran with Rust
+1.92.0 and measured the controller process's peak RSS. These are
+repeatability datapoints for three generated message distributions and one
+workstation, not an end-to-end IMAP migration, not full-process measurements,
+and not a universal disk-space estimate or production capacity qualification.
 
 ## Report-export memory boundary
 

@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- Record a current-main, one-million-message-per-endpoint durable verification
-  benchmark with host, stage/journal, reconciliation, flag, and restart
-  measurements; explicitly retain its synthetic-only, non-provider-qualified
-  interpretation.
+- Record current-main, one-million-message-per-endpoint durable verification
+  benchmarks for typical, mismatch-heavy, and duplicate-ID synthetic shapes,
+  with host, stage/journal, reconciliation, flag, and restart measurements;
+  explicitly retain their non-provider-qualified interpretation.
 - Allow standalone reverification to select a specific completed transfer
   baseline with `--baseline-run`; include the baseline run ID in the versioned
   JSON result so historical audits retain explicit provenance. Bump the
