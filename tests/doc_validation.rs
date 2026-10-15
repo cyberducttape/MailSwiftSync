@@ -905,6 +905,10 @@ fn psa_cutover_ready_contract_is_time_bounded_by_source_quiescence() {
         "without rescanning",
         "clears the prior attestation",
         "until the operator records a new, fresh attestation",
+        "independent_cursor_revalidated",
+        "engine_or_aggregate_only",
+        "Missing, stale, or",
+        "not an atomic cross-server snapshot",
     ] {
         assert!(
             contract.contains(required),

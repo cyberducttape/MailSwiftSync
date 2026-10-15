@@ -116,6 +116,11 @@ pub(super) fn maybe_emit_cutover_ready(
     if total == 0 || total != clean_verified + accepted_exceptions {
         return Ok(());
     }
+    let Some((independently_revalidated, engine_or_aggregate_only)) =
+        final_verification_evidence_summary(tx, project_id)?
+    else {
+        return Ok(());
+    };
     let latest_ready_detail: Option<String> = tx
         .query_row(
             "SELECT detail FROM events WHERE project_id=?1 AND kind='cutover_ready' ORDER BY id DESC LIMIT 1",
@@ -137,13 +142,94 @@ pub(super) fn maybe_emit_cutover_ready(
         .and_utc();
     let valid_until = (attested_at + chrono::Duration::minutes(15)).to_rfc3339();
     let detail = format!(
-        "final verification complete; mailboxes={total}; clean_verified={clean_verified}; accepted_exceptions={accepted_exceptions}; source-quiescence attestation valid until {valid_until}; external cutover approval pending"
+        "final verification complete; mailboxes={total}; clean_verified={clean_verified}; accepted_exceptions={accepted_exceptions}; independent_cursor_revalidated={independently_revalidated}; engine_or_aggregate_only={engine_or_aggregate_only}; source-quiescence attestation valid until {valid_until}; external cutover approval pending"
     );
     tx.execute(
         "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_ready',?2)",
         params![project_id, detail],
     )?;
     Ok(())
+}
+
+/// Cutover readiness must be tied to the current Verification-stage evidence,
+/// not merely to a mailbox state string. Independent IMAP evidence additionally
+/// requires its persisted post-scan source and destination cursor checks. The
+/// Dovecot/engine evidence paths do not expose those IMAP observations, so keep
+/// them explicitly counted as engine/aggregate-only rather than implying that
+/// they received cursor revalidation.
+fn final_verification_evidence_summary(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+) -> rusqlite::Result<Option<(i64, i64)>> {
+    let mut statement = tx.prepare(
+        "SELECT j.id,e.run_id,e.verification_method,r.phase_at_start,e.source_folders,e.destination_folders FROM mailbox_jobs j LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN runs r ON r.id=e.run_id WHERE j.project_id=?1 AND j.state IN ('verified','verified_with_exceptions') ORDER BY j.id",
+    )?;
+    let rows = statement
+        .query_map([project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let mut independently_revalidated = 0_i64;
+    let mut engine_or_aggregate_only = 0_i64;
+    for (_job_id, run_id, method, phase, source_folders, destination_folders) in rows {
+        let (
+            Some(run_id),
+            Some(method),
+            Some(phase),
+            Some(source_folders),
+            Some(destination_folders),
+        ) = (run_id, method, phase, source_folders, destination_folders)
+        else {
+            return Ok(None);
+        };
+        if phase != CutoverStage::Verification.as_str() {
+            return Ok(None);
+        }
+        match method.as_str() {
+            "metadata_reconciliation" | "body_hash" => {
+                let pass_attempt: Option<i64> = tx
+                    .query_row(
+                        "SELECT attempt FROM transfer_passes WHERE run_id=?1 AND verification_method=?2 AND verified_at IS NOT NULL ORDER BY pass_sequence DESC LIMIT 1",
+                        params![run_id, method],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let Some(pass_attempt) = pass_attempt else {
+                    return Ok(None);
+                };
+                let valid_side = |side: i64, expected: i64| {
+                    tx.query_row(
+                        "SELECT COUNT(*),COALESCE(SUM(complete=1 AND scan_completed_at IS NOT NULL AND ((?3=0 AND source_revalidated_at >= (SELECT MAX(scan_completed_at) FROM transfer_pass_folders WHERE run_id=?1 AND attempt=?2 AND side=1)) OR (?3=1 AND destination_revalidated_at >= (SELECT MAX(scan_completed_at) FROM transfer_pass_folders WHERE run_id=?1 AND attempt=?2 AND side=0)))),0) FROM transfer_pass_folders WHERE run_id=?1 AND attempt=?2 AND side=?3",
+                        params![run_id, pass_attempt, side],
+                        |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                        },
+                    )
+                    .map(|(observed, validated)| observed == expected && validated == expected)
+                };
+                if source_folders < 0
+                    || destination_folders < 0
+                    || !valid_side(0, source_folders)?
+                    || !valid_side(1, destination_folders)?
+                {
+                    return Ok(None);
+                }
+                independently_revalidated += 1;
+            }
+            "aggregate_engine" | "native_dovecot" => engine_or_aggregate_only += 1,
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some((independently_revalidated, engine_or_aggregate_only)))
 }
 
 fn cutover_ready_event_is_current(detail: &str) -> bool {
@@ -851,6 +937,20 @@ mod tests {
         store
             .connection
             .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,status,finished_at) VALUES('final-verification-evidence',?1,?2,'imapsync','verification','completed',CURRENT_TIMESTAMP)",
+                rusqlite::params![project.id, job],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO evidence(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,'final-verification-evidence','metadata_reconciliation','exact_metadata_match',1,1,128,128,0,0,1,1,0)",
+                [&job],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
                 "UPDATE cutover_workflows SET source_quiescence_at=datetime('now','-16 minutes') WHERE project_id=?1",
                 [&project.id],
             )
@@ -975,6 +1075,39 @@ mod tests {
                 "Reconfirmed source delivery remains paused after final verification",
             )
             .unwrap();
+        let without_cursor_revalidation: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            without_cursor_revalidation, 0,
+            "metadata evidence without persisted source/destination cursor revalidation is not cutover-ready"
+        );
+        store
+            .connection
+            .execute(
+                "INSERT INTO transfer_passes(run_id,attempt,project_id,mailbox_digest,pass_sequence,pass_kind,engine,executable_identity,command_sha256,command,folder_scope,source_range,finished_at,outcome,verification_method,verification_outcome,verified_at) VALUES('final-verification-evidence',1,?1,?2,1,'imapsync_sync','imapsync','sha256:test',?3,'[]','all_selectable_folders','full_mailbox',CURRENT_TIMESTAMP,'completed','metadata_reconciliation','exact_metadata_match',CURRENT_TIMESTAMP)",
+                rusqlite::params![project.id, "a".repeat(64), "b".repeat(64)],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO transfer_pass_folders(run_id,attempt,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete,scan_started_at,scan_completed_at,source_revalidated_at,destination_revalidated_at) VALUES('final-verification-evidence',1,0,?1,1,2,1,1,1,1,'2026-10-15T10:00:00.000Z','2026-10-15T10:00:00.000Z','2026-10-15T10:02:00.000Z',NULL),('final-verification-evidence',1,1,?1,1,2,1,1,1,1,'2026-10-15T10:01:00.000Z','2026-10-15T10:01:00.000Z',NULL,'2026-10-15T10:03:00.000Z')",
+                [crate::core::folder_digest(&project.id, "INBOX")],
+            )
+            .unwrap();
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Source cursor revalidation completed after both endpoint scans",
+            )
+            .unwrap();
         let cutover_ready_after_final_verification: i64 = store
             .connection
             .query_row(
@@ -984,6 +1117,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cutover_ready_after_final_verification, 1);
+        let readiness_detail: String = store
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE project_id=?1 AND kind='cutover_ready' ORDER BY id DESC LIMIT 1",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(readiness_detail.contains("independent_cursor_revalidated=1"));
+        assert!(readiness_detail.contains("engine_or_aggregate_only=0"));
         let repeated_ready_tx = store.connection.unchecked_transaction().unwrap();
         super::maybe_emit_cutover_ready(&repeated_ready_tx, &project.id).unwrap();
         repeated_ready_tx.commit().unwrap();

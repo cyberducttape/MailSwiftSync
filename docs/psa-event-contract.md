@@ -72,7 +72,14 @@ endpoints, or mailbox content is present.
 `migration.cutover_ready` is emitted only after every mailbox's final
 Verification-stage evidence is durable, or its difference has an explicit
 acceptance. Its detail includes separate `clean_verified` and
-`accepted_exceptions` counts and the source-quiescence attestation expiry.
+`accepted_exceptions` counts, the source-quiescence attestation expiry, and
+separate `independent_cursor_revalidated` and `engine_or_aggregate_only`
+mailbox counts. Metadata/content evidence is ineligible for readiness unless
+the durable final-pass record contains complete source and destination folder
+observations and post-scan cursor revalidation in the expected order. Engine
+or aggregate evidence remains identified separately; that count is not an
+independent mailbox-content or cursor-integrity claim. Missing, stale, or
+phase-mismatched evidence suppresses the readiness event.
 The event is published only while that attestation is fresh (15 minutes); if
 verification finishes after expiry, refreshing the attestation during
 Verification can publish readiness without rescanning. Receivers must treat
@@ -80,7 +87,11 @@ readiness as time-bounded and keep the source paused until external cutover
 approval. If a previously published readiness window expires, a later fresh
 attestation emits a new `migration.cutover_ready` event with a new event ID;
 receivers should use the latest event and its expiry rather than treating an
-older event as current. Entering Final Delta emits
+older event as current. Cursor revalidation detects changes represented by
+the observed IMAP folder inventory and UIDVALIDITY/UIDNEXT/EXISTS and, when
+available, CONDSTORE HIGHESTMODSEQ. It narrows the observation window but is
+not an atomic cross-server snapshot and cannot prove uninterrupted source
+quiescence. Entering Final Delta emits
 `migration.final_delta_started`. Transitioning from Final Delta to the
 Verification stage clears the prior attestation; no verification worker can
 be admitted until the operator records a new, fresh attestation. Only then is
