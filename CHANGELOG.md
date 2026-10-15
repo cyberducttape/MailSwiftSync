@@ -25,10 +25,10 @@
 - Require an audited source-quiescence operator attestation before the final
   delta stage can run or advance. The durable cutover status records who
   attested, when, and the change reference/evidence; it is explicitly a manual
-  operational assertion, not automatic IMAP cursor revalidation. Existing
-  this introduced the cutover-attestation columns; current schema 35 also records post-destination
-  source-cursor revalidation. Older ledgers cannot complete a newly gated final
-  delta without this attestation.
+  operational assertion, not automatic IMAP cursor revalidation. This
+  introduced the cutover-attestation columns; current schema 35 also records
+  post-destination source-cursor revalidation. Older ledgers cannot complete a
+  newly gated final delta without this attestation.
 - Check available space on the verification-stage filesystem before scanning
   and before each SQLite page write; stop verification below a 512 MiB free
   reserve and report an explicit verification limit. This is a best-effort

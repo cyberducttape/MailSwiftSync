@@ -343,8 +343,9 @@ fn oauth_http_client(
 ) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .use_rustls_tls()
-        // Do not let ambient HTTPS_PROXY/ALL_PROXY settings bypass the
-        // locally validated and pinned token-endpoint addresses.
+        // The endpoint was resolved and policy-checked above. Do not let
+        // ambient proxy settings move credential-bearing requests outside
+        // that enforced address policy.
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(REFRESH_CONNECT_TIMEOUT)

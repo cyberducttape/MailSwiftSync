@@ -8,37 +8,35 @@ ticket updates.
 
 ## Envelope
 
-Every delivery uses JSON and these headers:
+Every delivery uses JSON and the event ID, event type, and idempotency headers.
+When signing is configured, version 2 adds the signature headers shown here:
 
 ```text
 X-MailSwiftSync-Event-Id: <stable event id>
 X-MailSwiftSync-Event-Type: <event type>
-X-MailSwiftSync-Timestamp: <Unix timestamp in seconds>
+X-MailSwiftSync-Signature-Version: 2
+X-MailSwiftSync-Signature-Timestamp: <Unix seconds for this delivery attempt>
 Idempotency-Key: <same stable event id>
+X-MailSwiftSync-Signature: v2=sha256=<HMAC-SHA256>
 ```
 
-When HMAC signing is configured, the request also includes
-`X-MailSwiftSync-Signature-Version: 2` and
-`X-MailSwiftSync-Signature: hmac-sha256-v2=<lowercase hex HMAC>`. Production
-organization policy requires signing; unsigned delivery is limited to explicit
-compatibility/lab policy.
+The signature is required by the production organization policy. Version 2
+HMAC-SHA256 covers a domain-separation string followed by the event ID, event
+type, idempotency key, signature timestamp, and exact body bytes. Each field is
+encoded as an unsigned 64-bit big-endian byte length followed by that many raw
+bytes; text fields are UTF-8. The domain-separation bytes are
+`mailswiftsync:webhook-signature:v2\0`. The signature is lowercase hex.
 
-The v2 signature is HMAC-SHA256 over a canonical byte sequence. Begin with
-`mailswiftsync:webhook-signature:v2\0`; then, in order, append each of the
-following fields as an unsigned 64-bit big-endian byte length followed by the
-field's exact UTF-8/body bytes: event ID, event type, idempotency key, timestamp,
-and exact HTTP body bytes. The signature therefore authenticates the event
-identity headers as well as the payload. The signature is required by the
-production organization policy. Receivers must verify the signature before
-parsing the body, reject timestamps outside their configured replay window
-(five minutes is a reasonable starting policy), and durably deduplicate event
-IDs before performing ticket side effects. Keep deduplication records at least
-as long as the sender can retry or an operator can replay the outbox. Delivery
-order is not a contract; receivers use the timestamp and current status to
-handle retries and late delivery. v2 is not wire-compatible with the earlier
-body-only `sha256=` signature; update receiver verification before enabling
-this sender version. When the JSON body contains `event_id` or `event_type`,
-receivers should also require those values to equal the signed headers.
+Receivers must verify the signature and require the idempotency key to equal
+the event ID before parsing or acting on the payload. Check the signature
+timestamp against a bounded clock-skew/replay window (five minutes is the
+recommended default), then durably deduplicate the event ID before side effects.
+Store the event ID with the ticket link. The timestamp is regenerated for each
+delivery attempt so a delayed outbox retry can be authenticated as a fresh
+delivery; it is distinct from the event's `occurred_at`. Delivery order is not
+a contract; receivers use event time and current status to handle retries and
+late delivery. The former body-only `sha256=` signature is no longer emitted;
+receivers must upgrade to version 2 before enabling required signing.
 
 The JSON envelope has the form:
 
@@ -81,3 +79,9 @@ permanent failures to a dead-letter state. Receivers must tolerate duplicate
 events, retry non-2xx responses safely, and expose dead-letter/acknowledgement
 health to operators. The current `notify-webhook` workflow is an operator- or
 service-manager-managed integration, not a complete ticket lifecycle.
+
+The webhook and OAuth refresh clients connect directly to addresses resolved
+and checked by MailSwiftSync. They explicitly ignore ambient HTTP proxy
+environment variables; proxy use is not currently supported by these
+policy-controlled requests. Deployments requiring an outbound proxy need a
+separately designed proxy policy that preserves destination authorization.

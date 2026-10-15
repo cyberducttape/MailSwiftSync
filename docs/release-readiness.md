@@ -173,9 +173,11 @@ reconciliation as successful.
   administration remain outside this local policy file.
 - `notify-webhook` includes a deterministic event ID, event type, and
   idempotency key. Production organization policy requires
-  `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or its owner-only file form, which
-  adds an HMAC-SHA256 envelope signature; compatibility/lab policies may opt
-  out only for explicitly approved legacy receivers.
+  `MAILSWIFTSYNC_WEBHOOK_SIGNING_SECRET` or its owner-only file form. Version 2
+  HMAC-SHA256 authenticates the event ID, event type, idempotency key, per-
+  attempt timestamp, and exact body bytes. Receivers must enforce a replay
+  window and durably deduplicate event IDs; compatibility/lab policies may
+  opt out only for explicitly approved legacy receivers.
 - The notifier now persists a credential-free outbox record before attempting
   delivery, retries due records with bounded exponential backoff, and records
   dead-letter state after repeated failure. The outbox stores only an endpoint
