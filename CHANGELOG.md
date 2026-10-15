@@ -27,7 +27,7 @@
   through the stage, transfer-pass ledger, verification ledger, and customer
   proof v5. This narrows the observation gap but does not claim an atomic
   cross-server snapshot or continued quiescence after the check. Migrate the
-  ledger to schema 35.
+  ledger to persist the new source revalidation cursor and timestamp.
 - Query RFC 2087 quota roots using the mandatory INBOX mailbox name, require a
   successful tagged response with a matching QUOTAROOT, and label the result as
   INBOX-root scope instead of implying account-wide capacity.
@@ -46,10 +46,9 @@
 - Require an audited source-quiescence operator attestation before the final
   delta stage can run or advance. The durable cutover status records who
   attested, when, and the change reference/evidence; it is explicitly a manual
-  operational assertion, not automatic IMAP cursor revalidation. This
-  introduced the cutover-attestation columns; current schema 35 also records
-  post-destination source-cursor revalidation. Older ledgers cannot complete a
-  newly gated final delta without this attestation.
+  operational assertion, not automatic IMAP cursor revalidation. The ledger
+  also persists post-destination source-cursor revalidation. Older ledgers
+  cannot complete a newly gated final delta without this attestation.
 - Check available space on the verification-stage filesystem before scanning
   and before each SQLite page write; stop verification below a 512 MiB free
   reserve and report an explicit verification limit. This is a best-effort
