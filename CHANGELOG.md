@@ -17,6 +17,10 @@
   project transitions cannot advance a managed workflow. Allow an audited
   attestation refresh during Final Delta after the operator reconfirms
   quiescence.
+- Preserve managed cutover phase when a transfer pass fails; keep the failed
+  mailbox and run durable for review without attempting an invalid generic
+  Attention transition or misreporting that blocked transition as a ledger
+  durability failure.
 - Hold the exclusive ledger owner lock for certificate export and its durable
   `proof_ready` event, preventing that state transition from racing an active
   controller.
