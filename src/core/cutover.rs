@@ -1112,4 +1112,29 @@ mod tests {
             assert_eq!(columns, 1, "{table} should be upgraded");
         }
     }
+
+    #[test]
+    fn schema_37_folder_observations_gain_destination_revalidation_timestamp() {
+        let store = StateStore::in_memory().unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE transfer_pass_folders DROP COLUMN destination_revalidated_at;
+                 ALTER TABLE verification_run_folders DROP COLUMN destination_revalidated_at;
+                 PRAGMA user_version=37;",
+            )
+            .unwrap();
+        store.migrate().unwrap();
+        for table in ["transfer_pass_folders", "verification_run_folders"] {
+            let columns: i64 = store
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name='destination_revalidated_at'",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(columns, 1, "{table} should be upgraded");
+        }
+    }
 }

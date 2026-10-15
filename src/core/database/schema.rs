@@ -298,6 +298,7 @@ impl StateStore {
                     ("scan_started_at", "TEXT", false, 0),
                     ("scan_completed_at", "TEXT", false, 0),
                     ("source_revalidated_at", "TEXT", false, 0),
+                    ("destination_revalidated_at", "TEXT", false, 0),
                 ],
             ),
             (
@@ -315,6 +316,7 @@ impl StateStore {
                     ("scan_started_at", "TEXT", false, 0),
                     ("scan_completed_at", "TEXT", false, 0),
                     ("source_revalidated_at", "TEXT", false, 0),
+                    ("destination_revalidated_at", "TEXT", false, 0),
                 ],
             ),
         ];

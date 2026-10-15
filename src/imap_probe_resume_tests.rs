@@ -181,8 +181,15 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
     server.condstore = true;
     server.modseq = 12;
     let expected = HashMap::from([("INBOX".to_owned(), server.snapshot())]);
-    revalidate_source_selected_folders(&mut server, "imap.example.test", &budget, &expected, true)
-        .unwrap();
+    revalidate_source_selected_folders(
+        &mut server,
+        "imap.example.test",
+        &budget,
+        &expected,
+        true,
+        "source",
+    )
+    .unwrap();
     assert!(
         server
             .commands
@@ -199,9 +206,27 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
         &budget,
         &expected,
         true,
+        "source",
     )
     .unwrap_err();
     assert!(error.contains("source folder INBOX changed"), "{error}");
+
+    let mut changed_destination = FolderServer::new(&[1, 2], 3, 42);
+    changed_destination.condstore = true;
+    changed_destination.modseq = 13;
+    let error = revalidate_source_selected_folders(
+        &mut changed_destination,
+        "imap.example.test",
+        &budget,
+        &expected,
+        true,
+        "destination",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("destination folder INBOX changed"),
+        "{error}"
+    );
 }
 
 impl Write for FolderServer {

@@ -132,9 +132,25 @@ pub(crate) fn run_imap_message_verification(
             Ok((cursor.mailbox, cursor.snapshot))
         })
         .collect::<Result<HashMap<_, _>, String>>()?;
+    let destination_snapshots = stage
+        .folder_cursors()
+        .map_err(|error| format!("could not read destination verification cursors: {error}"))?
+        .into_iter()
+        .filter(|cursor| cursor.side == core::StagedMessageSide::Destination)
+        .map(|cursor| {
+            if !cursor.completed || cursor.staged != cursor.snapshot.exists {
+                return Err(format!(
+                    "destination folder {} lacks complete staged snapshot evidence",
+                    cursor.mailbox
+                ));
+            }
+            Ok((cursor.mailbox, cursor.snapshot))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
     source_refresh_form.refresh_oauth_access_token(true)?;
     let source_revalidation = crate::imap_probe::revalidate_tls_account_snapshots(
         crate::imap_probe::TlsAccountRevalidation {
+            endpoint_label: "source",
             host: &source_host,
             user: &form.profile.source_user,
             credential: source_refresh_form.source_password.as_str(),
@@ -149,6 +165,24 @@ pub(crate) fn run_imap_message_verification(
         },
     )?;
     stage.record_source_revalidation(&source_revalidation)?;
+    destination_refresh_form.refresh_oauth_access_token(false)?;
+    let destination_revalidation = crate::imap_probe::revalidate_tls_account_snapshots(
+        crate::imap_probe::TlsAccountRevalidation {
+            endpoint_label: "destination",
+            host: &destination_host,
+            user: &form.profile.destination_user,
+            credential: destination_refresh_form.destination_password.as_str(),
+            auth_method: &form.profile.destination_auth,
+            transport: crate::effective_destination_tls(&form.profile.destination_tls),
+            ca_bundle: &form.profile.destination_ca_bundle,
+            certificate_pin_sha256: &form.profile.destination_certificate_pin_sha256,
+            budget: &budget,
+            expected_mailboxes: &destination.mailboxes,
+            excluded_mailboxes: &HashSet::new(),
+            expected_snapshots: &destination_snapshots,
+        },
+    )?;
+    stage.record_destination_revalidation(&destination_revalidation)?;
     if (source.total_exists > 0
         && stage
             .count(core::StagedMessageSide::Source)

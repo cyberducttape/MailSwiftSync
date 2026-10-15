@@ -176,6 +176,9 @@ pub(crate) struct FolderCursor {
     /// Post-destination source cursor check timestamp, only after a matching
     /// read-only EXAMINE of this folder's snapshot.
     pub(crate) source_revalidated_at: Option<String>,
+    /// Final destination cursor recheck timestamp, performed after the source
+    /// recheck. This narrows—but cannot eliminate—the cross-server race.
+    pub(crate) destination_revalidated_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -443,7 +446,7 @@ impl MessageMetadataStage {
              DROP INDEX IF EXISTS staged_messages_uid_numeric;
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
-             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, PRIMARY KEY(side,mailbox));
+             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, destination_revalidated_at TEXT, PRIMARY KEY(side,mailbox));
              CREATE TABLE IF NOT EXISTS stage_permanent_flags(side INTEGER NOT NULL, mailbox TEXT NOT NULL, flags TEXT, PRIMARY KEY(side,mailbox));",
         )?;
         let staged_identity_provenance: bool = self.connection_ref()?.query_row(
@@ -488,7 +491,7 @@ impl MessageMetadataStage {
                 "DROP TABLE stage_cursors;
                  DELETE FROM staged_messages;
                  DELETE FROM stage_fingerprints;
-                 CREATE TABLE stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), source_revalidated_at TEXT, PRIMARY KEY(side,mailbox));",
+                 CREATE TABLE stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), highest_modseq INTEGER CHECK(highest_modseq IS NULL OR highest_modseq > 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), source_revalidated_at TEXT, destination_revalidated_at TEXT, PRIMARY KEY(side,mailbox));",
             )?;
         }
         for column in ["scan_started_at", "scan_completed_at"] {
@@ -502,6 +505,16 @@ impl MessageMetadataStage {
                     "ALTER TABLE stage_cursors ADD COLUMN {column} TEXT;"
                 ))?;
             }
+        }
+        let destination_revalidation_column: bool = self.connection_ref()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('stage_cursors') WHERE name='destination_revalidated_at')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !destination_revalidation_column {
+            self.connection_ref()?.execute_batch(
+                "ALTER TABLE stage_cursors ADD COLUMN destination_revalidated_at TEXT;",
+            )?;
         }
         let highest_modseq: bool = self.connection_ref()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('stage_cursors') WHERE name='highest_modseq')",
@@ -773,7 +786,7 @@ impl MessageMetadataStage {
     /// names stay in process; callers persist only digests of them.
     pub(crate) fn folder_cursors(&self) -> rusqlite::Result<Vec<FolderCursor>> {
         let mut statement = self.connection_ref()?.prepare(
-            "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.highest_modseq,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),c.scan_started_at,c.scan_completed_at,c.source_revalidated_at FROM stage_cursors c ORDER BY c.side,c.mailbox",
+            "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.highest_modseq,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),c.scan_started_at,c.scan_completed_at,c.source_revalidated_at,c.destination_revalidated_at FROM stage_cursors c ORDER BY c.side,c.mailbox",
         )?;
         statement
             .query_map([], |row| {
@@ -808,6 +821,7 @@ impl MessageMetadataStage {
                     scan_started_at: row.get(9)?,
                     scan_completed_at: row.get(10)?,
                     source_revalidated_at: row.get(11)?,
+                    destination_revalidated_at: row.get(12)?,
                 })
             })?
             .collect()
@@ -846,6 +860,47 @@ impl MessageMetadataStage {
             if changed != 1 {
                 return Err(format!(
                     "source revalidation observation has no completed source folder {mailbox}"
+                ));
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())
+    }
+
+    /// Persist destination cursor rechecks after every completed destination
+    /// folder was reselected and matched its scanned snapshot.
+    pub(crate) fn record_destination_revalidation(
+        &mut self,
+        observations: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.ensure_free_space()?;
+        let expected = self
+            .connection_ref()
+            .map_err(|error| error.to_string())?
+            .query_row(
+                "SELECT COUNT(*) FROM stage_cursors WHERE side=1 AND completed=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if expected <= 0 || usize::try_from(expected).ok() != Some(observations.len()) {
+            return Err(
+                "destination revalidation did not cover every completed destination folder".into(),
+            );
+        }
+        let tx = self
+            .connection()?
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        for (mailbox, timestamp) in observations {
+            let changed = tx
+                .execute(
+                    "UPDATE stage_cursors SET destination_revalidated_at=?1 WHERE side=1 AND mailbox=?2 AND completed=1",
+                    params![timestamp, mailbox],
+                )
+                .map_err(|error| error.to_string())?;
+            if changed != 1 {
+                return Err(format!(
+                    "destination revalidation observation has no completed destination folder {mailbox}"
                 ));
             }
         }
@@ -1255,6 +1310,45 @@ mod tests {
         assert_eq!(
             crate::core::VerificationLimit::from_detail(&error),
             Some(crate::core::VerificationLimit::StagingDiskSpace)
+        );
+    }
+
+    #[test]
+    fn destination_revalidation_is_persisted_only_for_the_destination_cursor() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        let empty_snapshot = snapshot(42, 1, 0);
+        stage
+            .begin_mailbox_scan(StagedMessageSide::Source, "INBOX", empty_snapshot)
+            .unwrap();
+        stage
+            .complete_mailbox(StagedMessageSide::Source, "INBOX", empty_snapshot, 0)
+            .unwrap();
+        stage
+            .begin_mailbox_scan(StagedMessageSide::Destination, "INBOX", empty_snapshot)
+            .unwrap();
+        stage
+            .complete_mailbox(StagedMessageSide::Destination, "INBOX", empty_snapshot, 0)
+            .unwrap();
+
+        stage
+            .record_destination_revalidation(&HashMap::from([(
+                "INBOX".to_owned(),
+                "2026-10-14T10:05:00.000Z".to_owned(),
+            )]))
+            .unwrap();
+        let cursors = stage.folder_cursors().unwrap();
+        let source = cursors
+            .iter()
+            .find(|cursor| cursor.side == StagedMessageSide::Source)
+            .unwrap();
+        let destination = cursors
+            .iter()
+            .find(|cursor| cursor.side == StagedMessageSide::Destination)
+            .unwrap();
+        assert_eq!(source.destination_revalidated_at, None);
+        assert_eq!(
+            destination.destination_revalidated_at.as_deref(),
+            Some("2026-10-14T10:05:00.000Z")
         );
     }
 

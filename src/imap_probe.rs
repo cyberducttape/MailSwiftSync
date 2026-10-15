@@ -1514,11 +1514,12 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding_ref
     )
 }
 
-/// Re-SELECT every source folder after the destination inventory has finished.
-/// Any folder-set or mailbox cursor drift invalidates the verification result.
-/// This detects source changes across the two scans; it is not an atomic
-/// account-wide snapshot and cannot replace operator-enforced quiescence.
+/// Re-SELECT every endpoint folder after its inventory has finished. Any
+/// folder-set or mailbox cursor drift invalidates verification. Sequential
+/// endpoint rechecks narrow stale-evidence windows but do not create an atomic
+/// account-wide snapshot or replace operator-enforced quiescence.
 pub(crate) struct TlsAccountRevalidation<'a> {
+    pub endpoint_label: &'a str,
     pub host: &'a str,
     pub user: &'a str,
     pub credential: &'a str,
@@ -1536,6 +1537,7 @@ pub(crate) fn revalidate_tls_account_snapshots(
     request: TlsAccountRevalidation<'_>,
 ) -> Result<HashMap<String, String>, String> {
     let TlsAccountRevalidation {
+        endpoint_label,
         host,
         user,
         credential,
@@ -1550,14 +1552,18 @@ pub(crate) fn revalidate_tls_account_snapshots(
     } = request;
     budget.check()?;
     if transport == "plain" {
-        return Err("source snapshot revalidation requires TLS".into());
+        return Err(format!(
+            "{endpoint_label} snapshot revalidation requires TLS"
+        ));
     }
     if expected_snapshots.len() != expected_mailboxes.len()
         || expected_mailboxes
             .iter()
             .any(|mailbox| !expected_snapshots.contains_key(mailbox))
     {
-        return Err("source snapshot revalidation lacks a complete folder baseline".into());
+        return Err(format!(
+            "{endpoint_label} snapshot revalidation lacks a complete folder baseline"
+        ));
     }
     let (stream, greeting) =
         connect_tls_stream_with_budget(host, transport, ca_bundle, certificate_pin_sha256, budget)?;
@@ -1577,7 +1583,7 @@ pub(crate) fn revalidate_tls_account_snapshots(
             authenticated_list_command("r000", advertises_capability(&capabilities, "SPECIAL-USE"))
                 .as_bytes(),
         )
-        .map_err(|error| format!("{host}: could not re-list source folders: {error}"))?;
+        .map_err(|error| format!("{host}: could not re-list {endpoint_label} folders: {error}"))?;
     let mut descriptors = Vec::new();
     let inventory = read_imap_list_response_with_details(
         &mut stream,
@@ -1591,7 +1597,7 @@ pub(crate) fn revalidate_tls_account_snapshots(
         != descriptors.iter().filter(|item| item.selectable).count()
     {
         return Err(format!(
-            "{host}: source revalidation returned an incomplete folder inventory"
+            "{host}: {endpoint_label} revalidation returned an incomplete folder inventory"
         ));
     }
     let current_mailboxes = descriptors
@@ -1601,7 +1607,7 @@ pub(crate) fn revalidate_tls_account_snapshots(
         .collect::<HashSet<_>>();
     if &current_mailboxes != expected_mailboxes {
         return Err(format!(
-            "{host}: source folder inventory changed between source and destination scans; refusing exact verification"
+            "{host}: {endpoint_label} folder inventory changed after its scan; refusing exact verification"
         ));
     }
 
@@ -1611,6 +1617,7 @@ pub(crate) fn revalidate_tls_account_snapshots(
         budget,
         expected_snapshots,
         condstore_enabled,
+        endpoint_label,
     )
 }
 
@@ -1620,6 +1627,7 @@ fn revalidate_source_selected_folders<S: Read + Write>(
     budget: &MessageFetchBudget<'_>,
     expected_snapshots: &HashMap<String, crate::core::FolderSnapshot>,
     condstore_enabled: bool,
+    endpoint_label: &str,
 ) -> Result<HashMap<String, String>, String> {
     let mut mailboxes = expected_snapshots.keys().collect::<Vec<_>>();
     mailboxes.sort_unstable();
@@ -1640,7 +1648,7 @@ fn revalidate_source_selected_folders<S: Read + Write>(
             stream,
             command.as_bytes(),
             Some(budget),
-            &format!("{host}: could not re-SELECT source folder"),
+            &format!("{host}: could not re-SELECT {endpoint_label} folder"),
         )?;
         response.clear();
         read_imap_tagged_with_budget(stream, &tag, &mut response, &mut buffer, 1_048_576, budget)?;
@@ -1648,19 +1656,20 @@ fn revalidate_source_selected_folders<S: Read + Write>(
             return Err(imap_command_failure(
                 &response,
                 &tag,
-                "source snapshot revalidation",
+                &format!("{endpoint_label} snapshot revalidation"),
                 host,
             ));
         }
         let (exists, uidvalidity, uidnext) = parse_selected_mailbox(&response, host, mailbox)?;
         let uidvalidity = uidvalidity.ok_or_else(|| {
-            format!("{host}: source revalidation for {mailbox} omitted UIDVALIDITY")
+            format!("{host}: {endpoint_label} revalidation for {mailbox} omitted UIDVALIDITY")
         })?;
-        let uidnext = uidnext
-            .ok_or_else(|| format!("{host}: source revalidation for {mailbox} omitted UIDNEXT"))?;
+        let uidnext = uidnext.ok_or_else(|| {
+            format!("{host}: {endpoint_label} revalidation for {mailbox} omitted UIDNEXT")
+        })?;
         let expected = expected_snapshots
             .get(mailbox)
-            .ok_or_else(|| format!("{host}: source baseline missing folder {mailbox}"))?;
+            .ok_or_else(|| format!("{host}: {endpoint_label} baseline missing folder {mailbox}"))?;
         let current_modseq = if condstore_enabled {
             match parse_select_modseq(&response, host, mailbox)? {
                 ModseqSnapshot::Tracked(value) => Some(value),
@@ -1678,7 +1687,7 @@ fn revalidate_source_selected_folders<S: Read + Write>(
         if !source_snapshot_matches(expected, &current) {
             let _ = stream.write_all(b"r999999 LOGOUT\r\n");
             return Err(format!(
-                "{host}: source folder {mailbox} changed after its verification scan (UIDVALIDITY {}->{uidvalidity}, UIDNEXT {}->{uidnext}, EXISTS {}->{exists}, HIGHESTMODSEQ {:?}->{current_modseq:?}); rerun the final delta and verification",
+                "{host}: {endpoint_label} folder {mailbox} changed after its verification scan (UIDVALIDITY {}->{uidvalidity}, UIDNEXT {}->{uidnext}, EXISTS {}->{exists}, HIGHESTMODSEQ {:?}->{current_modseq:?}); rerun the final delta and verification",
                 expected.uidvalidity, expected.uidnext, expected.exists, expected.highest_modseq,
             ));
         }

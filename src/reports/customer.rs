@@ -54,8 +54,28 @@ fn verification_consistency(folders: &[core::TransferPassFolder]) -> serde_json:
         .iter()
         .filter_map(|folder| folder.source_revalidated_at.as_deref())
         .max();
+    let destination_folders = folders
+        .iter()
+        .filter(|folder| folder.side == core::PassSide::Destination)
+        .collect::<Vec<_>>();
+    let destination_revalidation_complete = !destination_folders.is_empty()
+        && destination_folders.iter().all(|folder| {
+            folder.complete
+                && folder
+                    .destination_revalidated_at
+                    .as_deref()
+                    .is_some_and(|timestamp| !timestamp.is_empty())
+        });
+    let destination_revalidation_started = destination_folders
+        .iter()
+        .filter_map(|folder| folder.destination_revalidated_at.as_deref())
+        .min();
+    let destination_revalidation_completed = destination_folders
+        .iter()
+        .filter_map(|folder| folder.destination_revalidated_at.as_deref())
+        .max();
     serde_json::json!({
-        "snapshot_model": "independent_endpoint_scans_with_post_destination_source_cursor_revalidation_not_atomic",
+        "snapshot_model": "independent_endpoint_scans_with_sequential_post_scan_cursor_revalidation_not_atomic",
         "source_scan": source,
         "destination_scan": destination,
         "source_revalidation_after_destination": if source_revalidation_complete {
@@ -63,7 +83,14 @@ fn verification_consistency(folders: &[core::TransferPassFolder]) -> serde_json:
         } else {
             serde_json::json!({"status": "not_performed", "started_at": serde_json::Value::Null, "completed_at": serde_json::Value::Null})
         },
+        "destination_revalidation_after_source": if destination_revalidation_complete {
+            serde_json::json!({"status": "completed_unchanged", "started_at": destination_revalidation_started, "completed_at": destination_revalidation_completed})
+        } else {
+            serde_json::json!({"status": "not_performed", "started_at": serde_json::Value::Null, "completed_at": serde_json::Value::Null})
+        },
         "source_change_status": if !both_complete { "unknown_incomplete_scan" } else if source_revalidation_complete { "unchanged_at_revalidation" } else { "not_revalidated" },
+        "destination_change_status": if !both_complete { "unknown_incomplete_scan" } else if destination_revalidation_complete { "unchanged_at_revalidation" } else { "not_revalidated" },
+        "limitation": "Sequential post-scan endpoint checks are not a synchronized or atomic cross-server snapshot and do not prove continued quiescence."
     })
 }
 
@@ -307,7 +334,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-customer-proof",
-        "format_version": 5,
+        "format_version": 6,
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
         "migration_id": project.id.clone(),
@@ -341,7 +368,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
         },
         "cutover_readiness": {
             "status": "not_established",
-            "reason": "Source folder cursors are revalidated after destination scanning, but source quiescence remains an operator attestation and the endpoint observations are not an atomic global snapshot.",
+            "reason": "Source and destination folder cursors are revalidated sequentially after their scans, but source quiescence remains an operator attestation and the endpoint observations are not an atomic global snapshot.",
             "requirement": "Maintain the approved source-quiescence barrier through final delta and verification; automated cross-provider atomic snapshot semantics remain unsupported."
         },
         "verification_summary": {
@@ -654,6 +681,7 @@ mod tests {
             scan_started_at: Some(start.to_owned()),
             scan_completed_at: Some(end.to_owned()),
             source_revalidated_at: None,
+            destination_revalidated_at: None,
         };
         let consistency = verification_consistency(&[
             folder(
@@ -669,7 +697,7 @@ mod tests {
         ]);
         assert_eq!(
             consistency["snapshot_model"],
-            "independent_endpoint_scans_with_post_destination_source_cursor_revalidation_not_atomic"
+            "independent_endpoint_scans_with_sequential_post_scan_cursor_revalidation_not_atomic"
         );
         assert_eq!(
             consistency["source_scan"]["started_at"],
@@ -684,6 +712,7 @@ mod tests {
             "not_performed"
         );
         assert_eq!(consistency["source_change_status"], "not_revalidated");
+        assert_eq!(consistency["destination_change_status"], "not_revalidated");
 
         let mut revalidated_source = folder(
             core::PassSide::Source,
@@ -692,7 +721,7 @@ mod tests {
         );
         revalidated_source.source_revalidated_at = Some("2026-10-14T10:04:00.000Z".to_owned());
         let revalidated = verification_consistency(&[
-            revalidated_source,
+            revalidated_source.clone(),
             folder(
                 core::PassSide::Destination,
                 "2026-10-14T10:02:00.000Z",
@@ -709,6 +738,25 @@ mod tests {
         );
         assert_eq!(
             revalidated["source_change_status"],
+            "unchanged_at_revalidation"
+        );
+        assert_eq!(revalidated["destination_change_status"], "not_revalidated");
+
+        let mut revalidated_destination = folder(
+            core::PassSide::Destination,
+            "2026-10-14T10:02:00.000Z",
+            "2026-10-14T10:03:00.000Z",
+        );
+        revalidated_destination.destination_revalidated_at =
+            Some("2026-10-14T10:05:00.000Z".to_owned());
+        let both_revalidated =
+            verification_consistency(&[revalidated_source, revalidated_destination]);
+        assert_eq!(
+            both_revalidated["destination_revalidation_after_source"]["status"],
+            "completed_unchanged"
+        );
+        assert_eq!(
+            both_revalidated["destination_change_status"],
             "unchanged_at_revalidation"
         );
 
@@ -963,7 +1011,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
         assert_eq!(certificate["engine"], "imapsync 2.314");
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
-        assert_eq!(certificate["format_version"], 5);
+        assert_eq!(certificate["format_version"], 6);
         assert_eq!(
             certificate["cutover_readiness"]["status"],
             "not_established"

@@ -5502,6 +5502,7 @@ fn pass_folder(side: PassSide, name: &str, complete: bool) -> TransferPassFolder
         scan_started_at: Some("2026-10-14T03:00:00.000Z".into()),
         scan_completed_at: complete.then(|| "2026-10-14T03:01:00.000Z".into()),
         source_revalidated_at: None,
+        destination_revalidated_at: None,
     }
 }
 

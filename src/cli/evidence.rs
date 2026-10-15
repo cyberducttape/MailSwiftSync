@@ -667,7 +667,7 @@ fn reverify_result_json(
 ) -> serde_json::Value {
     serde_json::json!({
         "format": "mailswiftsync.reverify",
-        "format_version": 2,
+        "format_version": 3,
         "run_id": run_id,
         "mode": mode,
         "verification_outcome": evidence.verification_outcome().as_str(),
@@ -1325,11 +1325,12 @@ mod tests {
             scan_started_at: Some("2026-10-14T03:00:00.000Z".into()),
             scan_completed_at: Some("2026-10-14T03:01:00.000Z".into()),
             source_revalidated_at: None,
+            destination_revalidated_at: None,
         };
         let output =
             super::reverify_result_json(&evidence, "run-1", "metadata", &[folder], &mismatches);
         assert_eq!(output["format"], "mailswiftsync.reverify");
-        assert_eq!(output["format_version"], 2);
+        assert_eq!(output["format_version"], 3);
         assert_eq!(output["verification_status"], "verified_with_exceptions");
         assert_eq!(output["message_coverage"]["checked"], 4);
         assert_eq!(output["flag_verification"]["compared"], 2);
