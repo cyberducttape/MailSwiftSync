@@ -38,7 +38,7 @@ use ring::hmac;
 use std::{
     io::Read,
     net::{IpAddr, SocketAddr},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use zeroize::Zeroizing;
 
@@ -51,6 +51,10 @@ fn webhook_client(
 ) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .use_rustls_tls()
+        // DNS policy is enforced by resolve_webhook_target above. Do not
+        // silently delegate name resolution or forwarding to an ambient
+        // HTTPS_PROXY/ALL_PROXY configuration.
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
         .timeout(WEBHOOK_TOTAL_BUDGET)
@@ -132,12 +136,25 @@ pub(crate) fn post_json(
         .header("Idempotency-Key", event_id)
         .body(body.to_owned());
     if let Some(secret) = signing_secret {
-        let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_str().as_bytes());
-        let signature = hmac::sign(&key, body.as_bytes());
-        request = request.header(
-            "X-MailSwiftSync-Signature",
-            format!("sha256={}", hex_encode(signature.as_ref())),
-        );
+        let signed_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "system clock is before the Unix epoch; cannot sign webhook".to_owned())?
+            .as_secs()
+            .to_string();
+        request = request
+            .header(
+                "X-MailSwiftSync-Signature",
+                webhook_signature_v2(
+                    secret.as_str(),
+                    event_id,
+                    event_type,
+                    event_id,
+                    &signed_at,
+                    body.as_bytes(),
+                ),
+            )
+            .header("X-MailSwiftSync-Signature-Version", "2")
+            .header("X-MailSwiftSync-Signature-Timestamp", signed_at);
     }
     if let Some(token) = bearer_token {
         let authorization = Zeroizing::new(format!("Bearer {}", token.as_str()));
@@ -162,6 +179,33 @@ pub(crate) fn post_json(
         .map_err(|error| format!("webhook request failed: {}", error.without_url()))?;
     read_bounded_response(&mut response)?;
     Ok(response.status().as_u16())
+}
+
+/// HMAC-sign the immutable delivery identity and exact request body. Fields
+/// are length-prefixed so arbitrary UTF-8 and body bytes have one unambiguous
+/// canonical representation across implementations.
+fn webhook_signature_v2(
+    secret: &str,
+    event_id: &str,
+    event_type: &str,
+    idempotency_key: &str,
+    timestamp: &str,
+    body: &[u8],
+) -> String {
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+    let mut context = hmac::Context::with_key(&key);
+    context.update(b"mailswiftsync:webhook-signature:v2\0");
+    for field in [
+        event_id.as_bytes(),
+        event_type.as_bytes(),
+        idempotency_key.as_bytes(),
+        timestamp.as_bytes(),
+        body,
+    ] {
+        context.update(&(field.len() as u64).to_be_bytes());
+        context.update(field);
+    }
+    format!("v2=sha256={}", hex_encode(context.sign().as_ref()))
 }
 
 pub(crate) fn endpoint_digest(url: &str) -> Result<String, String> {
@@ -510,6 +554,90 @@ fn validate_header_value(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webhook_v2_signature_authenticates_all_delivery_identity_fields() {
+        let signature = webhook_signature_v2(
+            "test-secret",
+            "event-1",
+            "mailbox.failed",
+            "event-1",
+            "1792020000",
+            b"{\"ok\":true}",
+        );
+        assert!(signature.starts_with("v2=sha256="));
+        assert_eq!(signature.len(), "v2=sha256=".len() + 64);
+        assert_eq!(
+            signature,
+            "v2=sha256=2835e874426c79c553032cc9b797e6b77865f74cb24bd586b3f501ace13fb9b3"
+        );
+        assert_eq!(
+            signature,
+            webhook_signature_v2(
+                "test-secret",
+                "event-1",
+                "mailbox.failed",
+                "event-1",
+                "1792020000",
+                b"{\"ok\":true}",
+            )
+        );
+        assert_ne!(
+            signature,
+            webhook_signature_v2(
+                "test-secret",
+                "event-2",
+                "mailbox.failed",
+                "event-1",
+                "1792020000",
+                b"{\"ok\":true}",
+            )
+        );
+        assert_ne!(
+            signature,
+            webhook_signature_v2(
+                "test-secret",
+                "event-1",
+                "mailbox.completed",
+                "event-1",
+                "1792020000",
+                b"{\"ok\":true}",
+            )
+        );
+        assert_ne!(
+            signature,
+            webhook_signature_v2(
+                "test-secret",
+                "event-1",
+                "mailbox.failed",
+                "substituted-idempotency-key",
+                "1792020000",
+                b"{\"ok\":true}",
+            )
+        );
+        assert_ne!(
+            signature,
+            webhook_signature_v2(
+                "test-secret",
+                "event-1",
+                "mailbox.failed",
+                "event-1",
+                "1792020001",
+                b"{\"ok\":true}",
+            )
+        );
+        assert_ne!(
+            signature,
+            webhook_signature_v2(
+                "test-secret",
+                "event-1",
+                "mailbox.failed",
+                "event-1",
+                "1792020000",
+                b"{\"ok\":false}",
+            )
+        );
+    }
 
     #[test]
     fn webhook_resolution_rejects_private_addresses_from_dns() {
