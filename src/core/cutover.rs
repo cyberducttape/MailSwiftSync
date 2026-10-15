@@ -64,17 +64,6 @@ fn parse_stage(value: &str) -> rusqlite::Result<CutoverStage> {
     }
 }
 
-/// Cutover inputs are copied into durable audit events and customer-facing
-/// workflow state. Keep them bounded and single-line so operator-provided
-/// text cannot forge additional-looking event records in terminals or logs.
-fn validate_cutover_text(value: &str, max_bytes: usize) -> Option<String> {
-    let value = value.trim();
-    let has_line_break = value
-        .chars()
-        .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'));
-    (!value.is_empty() && value.len() <= max_bytes && !has_line_break).then(|| value.to_owned())
-}
-
 impl StateStore {
     /// Create an unapproved cutover plan.  Nothing is scheduled until an
     /// operator explicitly approves the plan.
@@ -84,10 +73,13 @@ impl StateStore {
         scheduled_at: &str,
         maintenance_window: Option<&str>,
     ) -> rusqlite::Result<()> {
-        let scheduled_at =
-            validate_cutover_text(scheduled_at, 256).ok_or(rusqlite::Error::InvalidQuery)?;
+        let scheduled_at = crate::storage::single_line_audit_text(scheduled_at, 256)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
         let maintenance_window = maintenance_window
-            .map(|value| validate_cutover_text(value, 1024).ok_or(rusqlite::Error::InvalidQuery))
+            .map(|value| {
+                crate::storage::single_line_audit_text(value, 1024)
+                    .ok_or(rusqlite::Error::InvalidQuery)
+            })
             .transpose()?;
         let tx = self.connection.unchecked_transaction()?;
         let phase: String = tx.query_row(
@@ -135,7 +127,8 @@ impl StateStore {
     }
 
     pub fn approve_cutover(&self, project_id: &str, operator: &str) -> rusqlite::Result<()> {
-        let operator = validate_cutover_text(operator, 256).ok_or(rusqlite::Error::InvalidQuery)?;
+        let operator = crate::storage::single_line_audit_text(operator, 256)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let phase: String = tx.query_row(
             "SELECT phase FROM projects WHERE id=?1",
@@ -171,9 +164,10 @@ impl StateStore {
         operator: &str,
         evidence: &str,
     ) -> rusqlite::Result<()> {
-        let operator = validate_cutover_text(operator, 256).ok_or(rusqlite::Error::InvalidQuery)?;
-        let evidence =
-            validate_cutover_text(evidence, 4096).ok_or(rusqlite::Error::InvalidQuery)?;
+        let operator = crate::storage::single_line_audit_text(operator, 256)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
+        let evidence = crate::storage::single_line_audit_text(evidence, 4096)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
             "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage='catch_up' AND approved_by IS NOT NULL AND source_quiescence_at IS NULL",
@@ -234,7 +228,10 @@ impl StateStore {
             }
         }
         let confirmation = external_confirmation
-            .map(|value| validate_cutover_text(value, 4096).ok_or(rusqlite::Error::InvalidQuery))
+            .map(|value| {
+                crate::storage::single_line_audit_text(value, 4096)
+                    .ok_or(rusqlite::Error::InvalidQuery)
+            })
             .transpose()?;
         if next == CutoverStage::Completed && confirmation.is_none() {
             return Err(rusqlite::Error::InvalidQuery);

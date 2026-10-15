@@ -3024,6 +3024,24 @@ fn verification_difference_requires_durable_exception_acceptance() {
         },
     )
     .unwrap();
+    assert!(
+        db.accept_verification_difference(
+            &project.id,
+            &job,
+            "operator\u{2028}forged-approval",
+            "Approved in change CHG-123",
+        )
+        .is_err()
+    );
+    assert!(
+        db.accept_verification_difference(
+            &project.id,
+            &job,
+            "operator@example",
+            "Approved in change CHG-123\u{2029}forged-event",
+        )
+        .is_err()
+    );
     db.accept_verification_difference(
         &project.id,
         &job,

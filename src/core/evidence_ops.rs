@@ -668,17 +668,10 @@ impl StateStore {
         operator: &str,
         reason: &str,
     ) -> rusqlite::Result<()> {
-        let operator = operator.trim();
-        let reason = reason.trim();
-        if operator.is_empty()
-            || operator.len() > 256
-            || reason.is_empty()
-            || reason.len() > 4096
-            || operator.chars().any(|character| character.is_control())
-            || reason.chars().any(|character| character.is_control())
-        {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let operator = crate::storage::single_line_audit_text(operator, 256)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
+        let reason = crate::storage::single_line_audit_text(reason, 4096)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let (state, phase): (String, String) = tx.query_row(
             "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
