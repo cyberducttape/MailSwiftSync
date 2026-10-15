@@ -6369,6 +6369,34 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
     )
     .unwrap();
 
+    let aggregate_job = db
+        .add_mailbox(&project.id, "aggregate-source", "aggregate-destination")
+        .unwrap();
+    db.begin_run(&project.id, &aggregate_job, "metrics-aggregate", "dovecot")
+        .unwrap();
+    let mut aggregate_evidence = flag_evidence(VerificationOutcome::ExactMetadataMatch, None);
+    aggregate_evidence.verification_method = VerificationMethod::NativeDovecot;
+    aggregate_evidence.authoritative = true;
+    db.record_evidence_for_run(&aggregate_job, "metrics-aggregate", &aggregate_evidence)
+        .unwrap();
+
+    let content_job = db
+        .add_mailbox(&project.id, "content-source", "content-destination")
+        .unwrap();
+    db.begin_run(&project.id, &content_job, "metrics-content", "imapsync")
+        .unwrap();
+    let mut content_evidence = flag_evidence(
+        VerificationOutcome::ExactBodyMatch,
+        Some(FlagVerification {
+            compared_messages: 6,
+            mismatched_messages: 0,
+            excepted_messages: 0,
+        }),
+    );
+    content_evidence.verification_method = VerificationMethod::BodyHash;
+    db.record_evidence_for_run(&content_job, "metrics-content", &content_evidence)
+        .unwrap();
+
     let metrics = db.project_operation_metrics(&project.id).unwrap();
     assert_eq!(metrics.transfer_attempts, 3);
     assert_eq!(metrics.retried_attempts, 2);
@@ -6382,7 +6410,18 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
     );
     assert_eq!(
         metrics.verification_outcomes,
-        std::collections::BTreeMap::from([("exact_metadata_match".to_owned(), 1)])
+        std::collections::BTreeMap::from([
+            ("exact_body_match".to_owned(), 1),
+            ("exact_metadata_match".to_owned(), 2),
+        ])
+    );
+    assert_eq!(
+        metrics.verification_method_outcomes,
+        std::collections::BTreeMap::from([
+            ("body_hash:exact_body_match".to_owned(), 1),
+            ("metadata_reconciliation:exact_metadata_match".to_owned(), 1),
+            ("native_dovecot:exact_metadata_match".to_owned(), 1),
+        ])
     );
 }
 

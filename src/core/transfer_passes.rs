@@ -741,6 +741,9 @@ pub struct ProjectOperationMetrics {
     pub attempt_outcomes: std::collections::BTreeMap<String, usize>,
     /// Current verification outcome per mailbox with evidence.
     pub verification_outcomes: std::collections::BTreeMap<String, usize>,
+    /// Current outcome cross-tabulated by evidence method, so an aggregate
+    /// total match cannot be confused with per-message metadata or body proof.
+    pub verification_method_outcomes: std::collections::BTreeMap<String, usize>,
 }
 
 impl StateStore {
@@ -766,13 +769,23 @@ impl StateStore {
             metrics.attempt_outcomes.insert(outcome, count);
         }
         let mut statement = self.connection.prepare(
-            "SELECT e.verification_outcome,COUNT(*) FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1 GROUP BY 1",
+            "SELECT e.verification_method,e.verification_outcome,COUNT(*) FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1 GROUP BY e.verification_method,e.verification_outcome",
         )?;
         for row in statement.query_map([project_id], |row| {
-            Ok((row.get::<_, String>(0)?, super::sqlite_usize(row.get(1)?)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                super::sqlite_usize(row.get(2)?)?,
+            ))
         })? {
-            let (outcome, count) = row?;
-            metrics.verification_outcomes.insert(outcome, count);
+            let (method, outcome, count) = row?;
+            *metrics
+                .verification_outcomes
+                .entry(outcome.clone())
+                .or_default() += count;
+            metrics
+                .verification_method_outcomes
+                .insert(format!("{method}:{outcome}"), count);
         }
         Ok(metrics)
     }
