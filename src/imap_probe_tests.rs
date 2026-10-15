@@ -89,12 +89,16 @@ fn budgeted_write_honors_cancellation_before_writing() {
 #[test]
 fn list_request_asks_for_rfc6154_attributes_when_supported() {
     assert_eq!(
-        authenticated_list_command(true),
-        b"a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
+        authenticated_list_command("a005", true),
+        "a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
     );
     assert_eq!(
-        authenticated_list_command(false),
-        b"a005 LIST \"\" \"*\"\r\n"
+        authenticated_list_command("a005", false),
+        "a005 LIST \"\" \"*\"\r\n"
+    );
+    assert_eq!(
+        authenticated_list_command("r000", true),
+        "r000 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
     );
 }
 

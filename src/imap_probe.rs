@@ -644,10 +644,13 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     let mut namespace_response = String::new();
     read_imap_tagged(&mut stream, "a004", &mut namespace_response, &mut buffer)?;
     stream
-        .write_all(authenticated_list_command(advertises_capability(
-            &post_auth_response,
-            "SPECIAL-USE",
-        )))
+        .write_all(
+            authenticated_list_command(
+                "a005",
+                advertises_capability(&post_auth_response, "SPECIAL-USE"),
+            )
+            .as_bytes(),
+        )
         .map_err(|e| e.to_string())?;
     let list_summary = read_imap_list_response(&mut stream, "a005", &mut buffer)
         .map_err(|error| format!("{host}: folder inventory failed: {error}"))?;
@@ -1319,7 +1322,11 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     let mut condstore_enabled = advertises_capability(&post_auth_response, "CONDSTORE");
     write_imap_command(
         &mut stream,
-        authenticated_list_command(advertises_capability(&post_auth_response, "SPECIAL-USE")),
+        authenticated_list_command(
+            "a005",
+            advertises_capability(&post_auth_response, "SPECIAL-USE"),
+        )
+        .as_bytes(),
         Some(budget),
         &format!("{host}: could not enumerate folders"),
     )?;
@@ -1566,10 +1573,10 @@ pub(crate) fn revalidate_tls_account_snapshots(
     let condstore_enabled = advertises_capability(&capabilities, "CONDSTORE");
     let mut buffer = [0; 4096];
     stream
-        .write_all(authenticated_list_command(advertises_capability(
-            &capabilities,
-            "SPECIAL-USE",
-        )))
+        .write_all(
+            authenticated_list_command("r000", advertises_capability(&capabilities, "SPECIAL-USE"))
+                .as_bytes(),
+        )
         .map_err(|error| format!("{host}: could not re-list source folders: {error}"))?;
     let mut descriptors = Vec::new();
     let inventory = read_imap_list_response_with_details(

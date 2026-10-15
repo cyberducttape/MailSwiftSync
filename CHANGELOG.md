@@ -13,6 +13,9 @@
 - Hold the exclusive ledger owner lock for certificate export and its durable
   `proof_ready` event, preventing that state transition from racing an active
   controller.
+- Use the caller's IMAP tag in LIST commands during source snapshot
+  revalidation; the previous hard-coded tag caused the verifier to ignore
+  Dovecot's tagged LIST completion and time out after a successful inventory.
 - Emit `migration.final_delta_started` when a managed cutover enters its final
   delta, emit `migration.cutover_verification_started` when that pass enters
   final verification, and delay `migration.cutover_ready` until all final
