@@ -1,6 +1,6 @@
 # Authoritative capability status for documentation and release review.
 schema_version = 1
-last_reviewed = "2026-10-14"
+last_reviewed = "2026-10-15"
 
 [release]
 status = "Technical Preview"
@@ -148,7 +148,7 @@ evidence = "The advanced plan editor supports bounded exact source-to-destinatio
 [[production_features]]
 feature = "Executable cutover orchestration"
 status = "partial"
-evidence = "Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI with persisted schedule/window enforcement; external MX/DNS confirmation remains an explicit operator acknowledgement."
+evidence = "Durable approval-gated Seed, Catch-up, Final Delta, and Verification stages are executable through the cutover CLI with persisted schedule/window enforcement. Cutover readiness requires current Verification-phase evidence; metadata/content evidence must include complete, ordered source and destination cursor revalidation, while aggregate/native engine evidence is reported separately. External MX/DNS confirmation remains an explicit operator acknowledgement, and source quiescence remains an operator assertion rather than an atomic cross-server guarantee."
 
 [[production_features]]
 feature = "Organization policy enforcement"
