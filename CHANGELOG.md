@@ -3,10 +3,11 @@
 ## Unreleased
 
 - Require cutover readiness to reference current final-stage evidence; metadata
-  and body evidence now need complete durable folder scans with source and
-  destination cursor revalidation ordered after the opposite endpoint's scan.
-  Readiness event details separately count independently revalidated mailboxes
-  and engine/aggregate-only evidence.
+  and body evidence now need a completed Verification-phase run, a transfer-pass
+  record matching the same method and outcome, and complete durable folder
+  scans with source and destination cursor revalidation ordered after the
+  opposite endpoint's scan. Readiness event details separately count
+  independently revalidated mailboxes and engine/aggregate-only evidence.
 - Record current-main, one-million-message-per-endpoint durable verification
   benchmarks for typical, mismatch-heavy, duplicate-ID, and missing-ID
   synthetic shapes, with host, stage/journal, reconciliation, flag, and restart

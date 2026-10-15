@@ -75,8 +75,10 @@ acceptance. Its detail includes separate `clean_verified` and
 `accepted_exceptions` counts, the source-quiescence attestation expiry, and
 separate `independent_cursor_revalidated` and `engine_or_aggregate_only`
 mailbox counts. Metadata/content evidence is ineligible for readiness unless
-the durable final-pass record contains complete source and destination folder
-observations and post-scan cursor revalidation in the expected order. Engine
+the referenced run completed in the Verification phase and its transfer-pass
+record matches the same verification method and outcome. That final-pass record
+must contain complete source and destination folder observations and post-scan
+cursor revalidation in the expected order. Engine
 or aggregate evidence remains identified separately; that count is not an
 independent mailbox-content or cursor-integrity claim. Missing, stale, or
 phase-mismatched evidence suppresses the readiness event.

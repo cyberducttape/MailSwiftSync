@@ -907,6 +907,7 @@ fn psa_cutover_ready_contract_is_time_bounded_by_source_quiescence() {
         "until the operator records a new, fresh attestation",
         "independent_cursor_revalidated",
         "engine_or_aggregate_only",
+        "same verification method and outcome",
         "Missing, stale, or",
         "not an atomic cross-server snapshot",
     ] {

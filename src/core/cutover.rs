@@ -162,44 +162,51 @@ fn final_verification_evidence_summary(
     project_id: &str,
 ) -> rusqlite::Result<Option<(i64, i64)>> {
     let mut statement = tx.prepare(
-        "SELECT j.id,e.run_id,e.verification_method,r.phase_at_start,e.source_folders,e.destination_folders FROM mailbox_jobs j LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN runs r ON r.id=e.run_id WHERE j.project_id=?1 AND j.state IN ('verified','verified_with_exceptions') ORDER BY j.id",
+        "SELECT j.id,e.run_id,e.verification_method,e.verification_outcome,r.phase_at_start,r.status,e.source_folders,e.destination_folders FROM mailbox_jobs j LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN runs r ON r.id=e.run_id WHERE j.project_id=?1 AND j.state IN ('verified','verified_with_exceptions') ORDER BY j.id",
     )?;
-    let rows = statement
-        .query_map([project_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, Option<i64>>(5)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
+    let mut rows = statement.query([project_id])?;
 
     let mut independently_revalidated = 0_i64;
     let mut engine_or_aggregate_only = 0_i64;
-    for (_job_id, run_id, method, phase, source_folders, destination_folders) in rows {
+    while let Some(row) = rows.next()? {
+        let (run_id, method, outcome, phase, run_status, source_folders, destination_folders) = (
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<i64>>(6)?,
+            row.get::<_, Option<i64>>(7)?,
+        );
         let (
             Some(run_id),
             Some(method),
+            Some(outcome),
             Some(phase),
+            Some(run_status),
             Some(source_folders),
             Some(destination_folders),
-        ) = (run_id, method, phase, source_folders, destination_folders)
+        ) = (
+            run_id,
+            method,
+            outcome,
+            phase,
+            run_status,
+            source_folders,
+            destination_folders,
+        )
         else {
             return Ok(None);
         };
-        if phase != CutoverStage::Verification.as_str() {
+        if phase != CutoverStage::Verification.as_str() || run_status != "completed" {
             return Ok(None);
         }
         match method.as_str() {
             "metadata_reconciliation" | "body_hash" => {
                 let pass_attempt: Option<i64> = tx
                     .query_row(
-                        "SELECT attempt FROM transfer_passes WHERE run_id=?1 AND verification_method=?2 AND verified_at IS NOT NULL ORDER BY pass_sequence DESC LIMIT 1",
-                        params![run_id, method],
+                        "SELECT attempt FROM transfer_passes WHERE run_id=?1 AND verification_method=?2 AND verification_outcome=?3 AND verified_at IS NOT NULL ORDER BY pass_sequence DESC LIMIT 1",
+                        params![run_id, method, outcome],
                         |row| row.get(0),
                     )
                     .optional()?;
@@ -1099,6 +1106,36 @@ mod tests {
             .execute(
                 "INSERT INTO transfer_pass_folders(run_id,attempt,side,folder_digest,uidvalidity,uidnext,exists_count,verified_through_uid,staged_messages,complete,scan_started_at,scan_completed_at,source_revalidated_at,destination_revalidated_at) VALUES('final-verification-evidence',1,0,?1,1,2,1,1,1,1,'2026-10-15T10:00:00.000Z','2026-10-15T10:00:00.000Z','2026-10-15T10:02:00.000Z',NULL),('final-verification-evidence',1,1,?1,1,2,1,1,1,1,'2026-10-15T10:01:00.000Z','2026-10-15T10:01:00.000Z',NULL,'2026-10-15T10:03:00.000Z')",
                 [crate::core::folder_digest(&project.id, "INBOX")],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE transfer_passes SET verification_outcome='exact_body_match' WHERE run_id='final-verification-evidence' AND attempt=1",
+                [],
+            )
+            .unwrap();
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Cursor evidence exists but belongs to a different verification outcome",
+            )
+            .unwrap();
+        let mismatched_outcome_readiness: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mismatched_outcome_readiness, 0);
+        store
+            .connection
+            .execute(
+                "UPDATE transfer_passes SET verification_outcome='exact_metadata_match' WHERE run_id='final-verification-evidence' AND attempt=1",
+                [],
             )
             .unwrap();
         store
