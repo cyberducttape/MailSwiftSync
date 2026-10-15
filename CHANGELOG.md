@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Label exact per-message metadata reconciliation as a metadata match in
+  customer and operator evidence, rather than implying that only aggregate
+  mailbox totals were compared; body equality remains explicitly unverified.
 - Exercise a real SQLite `SQLITE_FULL` failure in durable verification staging;
   assert the page transaction rolls back, the stage survives process-style
   reopen, and staging can resume after capacity is restored.

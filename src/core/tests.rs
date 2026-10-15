@@ -783,11 +783,32 @@ fn aggregate_match_has_bounded_but_nonmisleading_score() {
     );
     assert_eq!(
         MailboxEvidence {
+            verification_method: VerificationMethod::MetadataReconciliation,
+            flag_verification: Some(FlagVerification {
+                compared_messages: 12,
+                mismatched_messages: 0,
+                excepted_messages: 0,
+            }),
+            ..evidence.clone()
+        }
+        .evidence_level(),
+        "Metadata match — message bodies not compared"
+    );
+    assert_eq!(
+        MailboxEvidence {
             verification_method: VerificationMethod::BodyHash,
-            ..evidence
+            ..evidence.clone()
         }
         .verification_level(),
         "Level 3 — Bounded content fingerprints — not full byte-for-byte proof"
+    );
+    assert_eq!(
+        MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
+            ..evidence
+        }
+        .evidence_level(),
+        "Aggregate match — not message-body proof"
     );
 }
 

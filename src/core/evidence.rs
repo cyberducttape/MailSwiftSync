@@ -704,8 +704,10 @@ impl VerificationEvidence {
             return "Flag or keyword mismatch";
         }
         let exact = self.aggregate_totals_match();
-        if self.evidence_scope() == EvidenceScope::BodyHashed && exact {
+        if self.verification_method == VerificationMethod::BodyHash && exact {
             "Level 3 — Bounded content fingerprints"
+        } else if self.verification_method == VerificationMethod::MetadataReconciliation && exact {
+            "Metadata match — message bodies not compared"
         } else if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
             "Engine-confirmed exact match — not message-body proof"
         } else if exact {

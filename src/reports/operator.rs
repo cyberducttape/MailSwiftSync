@@ -762,7 +762,7 @@ mod project_json_tests {
         );
         assert_eq!(
             report["mailboxes"][0]["evidence"]["evidence_level"],
-            "Aggregate match — not message-body proof"
+            "Metadata match — message bodies not compared"
         );
         assert_eq!(
             report["mailboxes"][0]["evidence"]["identity_match_counts"]["rfc_message_id_matches"],

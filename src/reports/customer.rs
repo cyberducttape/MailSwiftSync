@@ -805,6 +805,10 @@ mod tests {
             }),
         };
         assert_eq!(proof_tier(&evidence), "metadata");
+        assert_eq!(
+            evidence.evidence_level(),
+            "Metadata match — message bodies not compared"
+        );
         let mut content = evidence.clone();
         content.verification_method = core::VerificationMethod::BodyHash;
         content.verification_outcome = Some(core::VerificationOutcome::ExactBodyMatch);
