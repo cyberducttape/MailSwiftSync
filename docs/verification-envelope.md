@@ -224,6 +224,23 @@ provider distributions, and do not establish a safe disk ceiling or GA
 capacity. Re-run the benchmark on the target filesystem and workload before
 admission policy relies on these measurements.
 
+A fresh typical-shape repeat at current main commit
+`293ee799059f8b081ce12e4fa4c06e6d1105aed7` on 2026-10-15 used the same
+Ubuntu 26.04.1 x86_64 / AMD Ryzen 7 7735U workstation and ext4-on-NVMe stage
+filesystem. The one-million-message-per-endpoint run passed the benchmark's
+64 MiB peak-RSS and 20,000 messages/s reconciliation thresholds:
+
+| Shape | Stage write | Reconcile time / rate | Reconcile write | Peak RSS | Stage after staging | Peak stage / journal | FLAGS compared | Mismatch rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Typical | 868,818,944 B | 22.053 s / 45,345/s | 682,254,336 B | 22 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 980,000 | 20,000 changed |
+
+Restart reconciliation took 22.783 s and wrote 702,701,568 B; flag comparison
+took 6.710 s. The synthetic benchmark ran with Rust 1.92.0 and measured the
+controller process's peak RSS. This is a repeatability datapoint for one
+message distribution and one workstation, not an end-to-end IMAP migration,
+not a full-process measurement, and not a universal disk-space estimate or
+production capacity qualification.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of
