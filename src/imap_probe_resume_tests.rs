@@ -197,6 +197,29 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
             .any(|command| { command.contains("EXAMINE \"INBOX\" (CONDSTORE)") })
     );
 
+    let mut changed_all = FolderServer::new(&[1, 2, 3], 30, 420);
+    changed_all.condstore = true;
+    changed_all.modseq = 130;
+    let error = revalidate_source_selected_folders(
+        &mut changed_all,
+        "imap.example.test",
+        &budget,
+        &expected,
+        true,
+        "source",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("changed fields: UIDVALIDITY, UIDNEXT, EXISTS, HIGHESTMODSEQ"),
+        "{error}"
+    );
+    for raw_cursor_pair in ["3->30", "42->420", "2->3", "Some(12)->Some(130)"] {
+        assert!(
+            !error.contains(raw_cursor_pair),
+            "raw cursor pair {raw_cursor_pair} leaked in {error}"
+        );
+    }
+
     let mut changed = FolderServer::new(&[1, 2], 3, 42);
     changed.condstore = true;
     changed.modseq = 13;
