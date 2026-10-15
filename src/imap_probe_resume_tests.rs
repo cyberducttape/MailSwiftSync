@@ -210,6 +210,15 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
     )
     .unwrap_err();
     assert!(error.contains("source folder INBOX changed"), "{error}");
+    assert!(error.contains("HIGHESTMODSEQ"), "{error}");
+    assert!(
+        !error.contains("12"),
+        "snapshot values must not be logged: {error}"
+    );
+    assert!(
+        !error.contains("13"),
+        "snapshot values must not be logged: {error}"
+    );
 
     let mut changed_destination = FolderServer::new(&[1, 2], 3, 42);
     changed_destination.condstore = true;
@@ -226,6 +235,15 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
     assert!(
         error.contains("destination folder INBOX changed"),
         "{error}"
+    );
+    assert!(error.contains("HIGHESTMODSEQ"), "{error}");
+    assert!(
+        !error.contains("12"),
+        "snapshot values must not be logged: {error}"
+    );
+    assert!(
+        !error.contains("13"),
+        "snapshot values must not be logged: {error}"
     );
 }
 

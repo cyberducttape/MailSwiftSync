@@ -6,6 +6,9 @@
   attestation is fresh, include its expiry in the event detail, and allow a
   refreshed attestation to publish readiness after verification without a
   redundant mailbox rescan.
+- Keep exact UIDVALIDITY, UIDNEXT, message-count, and MODSEQ values out of
+  verification revalidation errors; retain the names of changed fields for
+  useful diagnosis without logging raw mailbox cursor state.
 - Return actionable cutover refusal reasons (including missing or stale source-
   quiescence attestations and missing operator confirmation) instead of
   presenting safety-gate refusals as generic SQLite errors.

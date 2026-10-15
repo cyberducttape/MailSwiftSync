@@ -1699,9 +1699,21 @@ fn revalidate_source_selected_folders<S: Read + Write>(
         };
         if !source_snapshot_matches(expected, &current) {
             let _ = stream.write_all(b"r999999 LOGOUT\r\n");
+            let changed_fields = [
+                (expected.uidvalidity != current.uidvalidity, "UIDVALIDITY"),
+                (expected.uidnext != current.uidnext, "UIDNEXT"),
+                (expected.exists != current.exists, "EXISTS"),
+                (
+                    expected.highest_modseq != current.highest_modseq,
+                    "HIGHESTMODSEQ",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(changed, field)| changed.then_some(field))
+            .collect::<Vec<_>>()
+            .join(", ");
             return Err(format!(
-                "{host}: {endpoint_label} folder {mailbox} changed after its verification scan (UIDVALIDITY {}->{uidvalidity}, UIDNEXT {}->{uidnext}, EXISTS {}->{exists}, HIGHESTMODSEQ {:?}->{current_modseq:?}); rerun the final delta and verification",
-                expected.uidvalidity, expected.uidnext, expected.exists, expected.highest_modseq,
+                "{host}: {endpoint_label} folder {mailbox} changed after its verification scan (changed fields: {changed_fields}); rerun the final delta and verification",
             ));
         }
         observations.insert(

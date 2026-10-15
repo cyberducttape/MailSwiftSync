@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn body_hash_capacity_distinguishes_durable_and_ephemeral_envelopes() {
         let mut data = inputs();
-        data.verification_level = "Level 3 — Bounded body-hash verification";
+        data.verification_level = "Level 3 — Bounded content fingerprints";
         let findings = migration_confidence(data);
         let capacity = findings
             .iter()
