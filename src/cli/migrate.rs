@@ -89,16 +89,20 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
             .map(|()| {
                 "Cutover workflow created; explicit approval is required before execution."
                     .to_owned()
-            }),
+            })
+            .map_err(|error| error.to_string()),
         "approve" if values.len() == 4 => store
             .approve_cutover(project_id, &text_arguments[2])
-            .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned()),
+            .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned())
+            .map_err(|error| error.to_string()),
         "attest-source-quiescence" if values.len() == 5 => store
             .attest_cutover_source_quiescence(project_id, &text_arguments[2], &text_arguments[3])
-            .map(|()| "Source-quiescence attestation recorded/refreshed. It is an operator assertion, not automatic IMAP source revalidation; keep it fresh when advancing from Final Delta to Verification and before external cutover completion, and keep source delivery paused throughout.".to_owned()),
+            .map(|()| "Source-quiescence attestation recorded/refreshed. It is an operator assertion, not automatic IMAP source revalidation; keep it fresh when advancing from Final Delta to Verification and before external cutover completion, and keep source delivery paused throughout.".to_owned())
+            .map_err(|error| error.to_string()),
         "advance" if (3..=4).contains(&values.len()) => store
             .advance_cutover(project_id, text_arguments.get(2).map(String::as_str))
-            .map(|stage| format!("Cutover advanced to {}.", stage.as_str())),
+            .map(|stage| format!("Cutover advanced to {}.", stage.as_str()))
+            .map_err(|error| error.to_string()),
         "run" if (3..=4).contains(&values.len()) => {
             let acknowledge_destination_loss = values
                 .get(3)
@@ -133,14 +137,13 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
                 project_id,
                 workflow.stage,
             )
-            .map_err(|error| {
-                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error)))
-            })
+            .map_err(|error| error.to_string())
             .map(|message| format!("{} Cutover stage: {}.", message, workflow.stage.as_str()))
         }
         "status" if values.len() == 3 => store.cutover_workflow(project_id).and_then(|workflow| {
-            serde_json::to_string_pretty(&workflow).map_err(|_| rusqlite::Error::InvalidQuery)
-        }),
+            serde_json::to_string_pretty(&workflow)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+        }).map_err(|error| error.to_string()),
         _ => {
             eprintln!("{usage}");
             std::process::exit(2);

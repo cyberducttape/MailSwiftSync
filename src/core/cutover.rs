@@ -1,6 +1,30 @@
 use super::StateStore;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
+use std::fmt;
+
+#[derive(Debug)]
+pub(crate) enum CutoverAdvanceError {
+    Ledger(rusqlite::Error),
+    Refused(String),
+}
+
+impl From<rusqlite::Error> for CutoverAdvanceError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Ledger(error)
+    }
+}
+
+impl fmt::Display for CutoverAdvanceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ledger(error) => write!(formatter, "ledger operation failed: {error}"),
+            Self::Refused(reason) => formatter.write_str(reason),
+        }
+    }
+}
+
+impl std::error::Error for CutoverAdvanceError {}
 
 /// Validate the workflow/phase binding and the final-delta operator
 /// attestation. This is called inside durable run-admission transactions as
@@ -277,11 +301,11 @@ impl StateStore {
     /// delta pass. Final-delta entry requires a recorded source-quiescence
     /// attestation; final completion additionally requires external cutover
     /// confirmation. The attestation is not automatic server revalidation.
-    pub fn advance_cutover(
+    pub(crate) fn advance_cutover(
         &self,
         project_id: &str,
         external_confirmation: Option<&str>,
-    ) -> rusqlite::Result<CutoverStage> {
+    ) -> Result<CutoverStage, CutoverAdvanceError> {
         let tx = self.connection.unchecked_transaction()?;
         let (stage_name, approved): (String, Option<String>) = tx.query_row(
             "SELECT stage,approved_by FROM cutover_workflows WHERE project_id=?1",
@@ -289,7 +313,9 @@ impl StateStore {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         if approved.is_none() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(CutoverAdvanceError::Refused(
+                "cutover advancement requires explicit approval".into(),
+            ));
         }
         let stage = parse_stage(&stage_name)?;
         // Complete is terminal; only `reopen_project` may leave it.
@@ -299,7 +325,9 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if phase == "complete" {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(CutoverAdvanceError::Refused(
+                "completed cutover workflows cannot be advanced again".into(),
+            ));
         }
         let (total, clean_verified, accepted_exceptions): (i64, i64, i64) = tx.query_row(
             "SELECT COUNT(*),COALESCE(SUM(state='verified'),0),COALESCE(SUM(state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)),0) FROM mailbox_jobs WHERE project_id=?1",
@@ -307,9 +335,13 @@ impl StateStore {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         if total == 0 || total != clean_verified + accepted_exceptions {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(CutoverAdvanceError::Refused(
+                "every mailbox must have durable verification evidence or an accepted exception before advancing".into(),
+            ));
         }
-        let next = stage.next().ok_or(rusqlite::Error::InvalidQuery)?;
+        let next = stage.next().ok_or_else(|| {
+            CutoverAdvanceError::Refused("cutover workflow is already at its terminal stage".into())
+        })?;
         if next == CutoverStage::FinalDelta
             || stage == CutoverStage::FinalDelta
             || next == CutoverStage::Completed
@@ -319,18 +351,25 @@ impl StateStore {
                 [project_id],
                 |row| row.get(0),
             )?;
-            if source_quiescence_error(attested_at.as_deref()).is_some() {
-                return Err(rusqlite::Error::InvalidQuery);
+            if let Some(error) = source_quiescence_error(attested_at.as_deref()) {
+                return Err(CutoverAdvanceError::Refused(format!(
+                    "cannot advance cutover: {error}; reconfirm source delivery is paused and refresh the attestation"
+                )));
             }
         }
         let confirmation = external_confirmation
             .map(|value| {
-                crate::storage::single_line_audit_text(value, 4096)
-                    .ok_or(rusqlite::Error::InvalidQuery)
+                crate::storage::single_line_audit_text(value, 4096).ok_or_else(|| {
+                    CutoverAdvanceError::Refused(
+                        "external confirmation must be nonempty, single-line audit text".into(),
+                    )
+                })
             })
             .transpose()?;
         if next == CutoverStage::Completed && confirmation.is_none() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(CutoverAdvanceError::Refused(
+                "external cutover confirmation is required before completing the workflow".into(),
+            ));
         }
         if next != CutoverStage::Completed {
             tx.execute("UPDATE mailbox_jobs SET state='ready',attention_reason=NULL WHERE project_id=?1 AND state IN ('verified','verified_with_exceptions')", [project_id])?;
@@ -635,7 +674,12 @@ mod tests {
                 [&job],
             )
             .unwrap();
-        assert!(store.advance_cutover(&project.id, None).is_err());
+        let missing_final_delta_attestation = store.advance_cutover(&project.id, None).unwrap_err();
+        assert!(
+            missing_final_delta_attestation
+                .to_string()
+                .contains("attestation is missing")
+        );
         store
             .attest_cutover_source_quiescence(
                 &project.id,
@@ -679,7 +723,12 @@ mod tests {
                 [&project.id],
             )
             .unwrap();
-        assert!(store.advance_cutover(&project.id, None).is_err());
+        let stale_verification_attestation = store.advance_cutover(&project.id, None).unwrap_err();
+        assert!(
+            stale_verification_attestation
+                .to_string()
+                .contains("older than 15 minutes")
+        );
         store
             .attest_cutover_source_quiescence(
                 &project.id,
@@ -754,10 +803,13 @@ mod tests {
                 [&project.id],
             )
             .unwrap();
+        let stale_completion = store
+            .advance_cutover(&project.id, Some("MX confirmed by operator"))
+            .unwrap_err();
         assert!(
-            store
-                .advance_cutover(&project.id, Some("MX confirmed by operator"))
-                .is_err()
+            stale_completion
+                .to_string()
+                .contains("older than 15 minutes")
         );
         store
             .attest_cutover_source_quiescence(

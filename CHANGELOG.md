@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Return actionable cutover refusal reasons (including missing or stale source-
+  quiescence attestations and missing operator confirmation) instead of
+  presenting safety-gate refusals as generic SQLite errors.
 - Represent plan checks as passed, blocked, or unknown. Show destination
   capacity as unknown unless exhaustion is observed: even a non-exhausted
   INBOX-root quota does not prove that the projected transfer fits or establish
