@@ -49,6 +49,8 @@
     "ledgers[].summary.projects[].operations.transfer_attempts": "integer",
     "ledgers[].summary.projects[].operations.verification_outcomes": "map",
     "ledgers[].summary.projects[].operations.verification_outcomes{}": "integer",
+    "ledgers[].summary.projects[].operations.verification_method_outcomes": "map",
+    "ledgers[].summary.projects[].operations.verification_method_outcomes{}": "integer",
     "ledgers[].summary.projects[].phase": "string",
     "ledgers[].summary.projects[].source_endpoint": "string",
     "ledgers[].summary.projects_truncated": "boolean",

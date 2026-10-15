@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a method-qualified verification outcome breakdown to automation status,
+  distinguishing aggregate totals from metadata and bounded-content evidence.
 - Skip test-inventory generation and upload when CI is canceled by a newer
   commit, while retaining inventory publication after ordinary failures.
 - Clarify that Debian/RPM packages are already shipped with signed checksums,

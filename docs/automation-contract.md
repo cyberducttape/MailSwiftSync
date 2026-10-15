@@ -65,7 +65,11 @@ outcome: `completed`, `delta_required`, `failed:<class>` such as
 `failed:capacity` for provider throttling or connection limits and
 `failed:transport` for network failures, or `unfinished` for running or
 interrupted attempts), and `verification_outcomes` (current outcome per
-mailbox with evidence). Mailbox state counts and `attention_reason_counts`
+mailbox with evidence). `verification_method_outcomes` provides the same
+current evidence counts as `method:outcome` keys (for example,
+`metadata_reconciliation:exact_metadata_match` versus
+`native_dovecot:exact_metadata_match`) so aggregate totals are not mistaken for
+per-message reconciliation. Mailbox state counts and `attention_reason_counts`
 give the recovery backlog. Alert on rates between successive polls rather than
 on absolute totals.
 
