@@ -260,13 +260,27 @@ fn risk_command_marks_its_readiness_score_as_scale_only_and_advisory() {
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["format"], "mailswiftsync-pre-migration-risk");
-    assert_eq!(report["format_version"], 3);
+    assert_eq!(report["format_version"], 4);
     assert_eq!(report["assessment_scope"], "scale_only");
     assert_eq!(report["size_input_scope"], "source_endpoint_inventory");
     assert_eq!(report["estimated_combined_body_hash_bytes"], 200_000_000);
     assert_eq!(
         report["body_hash_byte_projection"],
         "source_bytes_plus_equal_size_destination_estimate"
+    );
+    assert_eq!(
+        report["estimated_verification_stage_and_journal_bytes"],
+        204_800
+    );
+    assert_eq!(
+        report["verification_stage_capacity_status"],
+        "unknown_not_measured"
+    );
+    assert!(
+        report["verification_stage_projection_basis"]
+            .as_str()
+            .unwrap()
+            .contains("not a safe upper bound")
     );
     assert_eq!(report["advisory_only"], true);
     assert_eq!(report["scale_assessment"], "scale_clear");

@@ -4,7 +4,12 @@ const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
-pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 3;
+pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 4;
+const PROJECTED_ENDPOINTS: u64 = 2;
+/// Planning-only allowance based on observed per-row stage-plus-journal use
+/// in the synthetic 1M-message profiles. This is not a proven maximum:
+/// unusually large metadata and destination extras can increase actual use.
+const PROJECTED_STAGE_BYTES_PER_MESSAGE: u64 = 1024;
 
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +33,14 @@ pub struct PreMigrationRisk {
     /// sum cannot be represented as a u64.
     pub estimated_combined_body_hash_bytes: Option<u64>,
     pub body_hash_byte_projection: String,
+    /// Advisory SQLite metadata-stage plus journal projection. It assumes an
+    /// equal message count at both endpoints and uses a planning allowance,
+    /// not a qualified upper bound. `None` means arithmetic overflow.
+    pub estimated_verification_stage_and_journal_bytes: Option<u64>,
+    pub verification_stage_projection_basis: String,
+    /// Always `unknown_not_measured` for this scale-only API: it has neither a
+    /// destination inventory nor a live filesystem-space observation.
+    pub verification_stage_capacity_status: String,
     pub warnings: Vec<RiskWarning>,
     /// Advisory score for the scale facts supplied to `assess`. This is never
     /// a substitute for hard preflight gates or provider qualification.
@@ -145,6 +158,9 @@ impl PreMigrationRisk {
         }
 
         let estimated_combined_body_hash_bytes = total_size_bytes.checked_mul(2);
+        let estimated_verification_stage_and_journal_bytes = total_messages
+            .checked_mul(PROJECTED_ENDPOINTS)
+            .and_then(|messages| messages.checked_mul(PROJECTED_STAGE_BYTES_PER_MESSAGE));
         if estimated_combined_body_hash_bytes
             .is_none_or(|combined| combined > DEFAULT_BODY_HASH_BYTE_BUDGET)
         {
@@ -197,6 +213,11 @@ impl PreMigrationRisk {
             estimated_combined_body_hash_bytes,
             body_hash_byte_projection: "source_bytes_plus_equal_size_destination_estimate"
                 .to_owned(),
+            estimated_verification_stage_and_journal_bytes,
+            verification_stage_projection_basis: format!(
+                "source_messages × {PROJECTED_ENDPOINTS} endpoints (equal-count assumption) × {PROJECTED_STAGE_BYTES_PER_MESSAGE} bytes/message; unqualified planning projection, not a safe upper bound"
+            ),
+            verification_stage_capacity_status: "unknown_not_measured".to_owned(),
             warnings,
             readiness_score: score,
             scale_assessment,
@@ -347,6 +368,45 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| { warning.message.contains("projection cannot be represented") })
+        );
+    }
+
+    #[test]
+    fn stage_projection_is_explicitly_advisory_and_capacity_remains_unknown() {
+        let one_million = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "");
+        assert_eq!(
+            one_million.estimated_verification_stage_and_journal_bytes,
+            Some(2_048_000_000)
+        );
+        assert!(
+            one_million
+                .verification_stage_projection_basis
+                .contains("equal-count assumption")
+        );
+        assert!(
+            one_million
+                .verification_stage_projection_basis
+                .contains("not a safe upper bound")
+        );
+        assert_eq!(
+            one_million.verification_stage_capacity_status,
+            "unknown_not_measured"
+        );
+        assert!(
+            one_million
+                .not_evaluated
+                .iter()
+                .any(|gate| gate == "worker_disk_capacity")
+        );
+
+        let overflow = PreMigrationRisk::assess(u64::MAX, 1, 1, "");
+        assert_eq!(
+            overflow.estimated_verification_stage_and_journal_bytes,
+            None
+        );
+        assert_eq!(
+            overflow.verification_stage_capacity_status,
+            "unknown_not_measured"
         );
     }
 }

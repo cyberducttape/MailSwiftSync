@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add an explicitly unqualified verification-stage-plus-journal storage
+  projection to the scale-only risk report; worker disk capacity remains
+  unknown unless separately measured.
 - Treat changes in CONDSTORE/HIGHESTMODSEQ availability as verification snapshot
   drift; a newly available watermark without a scan-time baseline now requires
   a fresh verification pass.

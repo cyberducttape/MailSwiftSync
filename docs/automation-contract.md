@@ -52,7 +52,7 @@ remain authoritative. Consumers must check the format and version before
 using this output.
 
 `mailswiftsync risk <source-messages> <source-folders> <source-bytes>` emits the versioned
-`mailswiftsync-pre-migration-risk` format, version `3`. The inventory inputs
+`mailswiftsync-pre-migration-risk` format, version `4`. The inventory inputs
 describe the source endpoint only. The report exposes that scope and an
 equal-size source-plus-destination body-hash byte projection; destination size
 and actual fetched RFC822 bytes remain unknown, so this projection is advisory
@@ -64,8 +64,15 @@ policy. `scale_assessment: "scale_clear"` means only that none of the
 scale-only warnings triggered. It is deliberately not named `ready` and never
 clears or substitutes for those unevaluated gates. Version 2 removed the
 ambiguous version-1 `estimated_readiness: "ready"` value, and version 3
-clarified one-endpoint size scope and added the combined-byte projection;
-consumers must handle the new fields and enum before accepting this report.
+clarified one-endpoint size scope and added the combined-byte projection.
+Version 4 adds `estimated_verification_stage_and_journal_bytes`, a planning
+projection using an equal-count two-endpoint assumption and 1 KiB per staged
+message. This allowance is informed by synthetic 1M-message measurements but
+is not a qualified upper bound; extra destination messages or unusually large
+metadata can increase actual storage. `verification_stage_capacity_status`
+therefore remains `unknown_not_measured`: this command receives no destination
+inventory and does not inspect the worker filesystem. Consumers must handle
+the new fields and enum before accepting this report.
 
 The JSON contains project identity, durable lifecycle state, mailbox state
 counts, attention reasons, and bounded project summaries. Each fixture lists
