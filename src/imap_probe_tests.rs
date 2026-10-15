@@ -1,10 +1,11 @@
 use super::fetch_parser::{canonical_flag_set, parse_message_fetch_body_hashes_response_bytes};
 use super::{
-    ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
-    MailboxFetchError, MessageFetchBudget, MessageSink, MessageStateBudget, QUOTA_PROBE_COMMAND,
-    StageMessageSink, StateReservation, TaggedResponseScanner, authenticated_list_command,
-    classify_mailbox_fetch_error, format_folder_failures, parse_list_delimiter,
-    parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes, parse_message_id_header,
+    DestinationQuotaObservation, ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES,
+    MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageSink,
+    MessageStateBudget, QUOTA_PROBE_COMMAND, StageMessageSink, StateReservation,
+    TaggedResponseScanner, authenticated_list_command, classify_mailbox_fetch_error,
+    format_folder_failures, inbox_quota_observation, parse_list_delimiter, parse_list_mailbox_name,
+    parse_message_fetch_metadata_response_bytes, parse_message_id_header,
     quota_response_has_successful_root, read_imap_list_response,
     read_imap_list_response_with_mailboxes, read_with_deadline, record_list_entry,
     source_snapshot_matches, tagged_response_outside_literals, write_imap_command,
@@ -551,6 +552,43 @@ fn quota_observation_requires_success_and_a_matching_inbox_root() {
         "a006",
         "INBOX"
     ));
+    let capabilities = "* CAPABILITY IMAP4rev1 QUOTA\r\n";
+    assert_eq!(
+        inbox_quota_observation(
+            capabilities,
+            Some(
+                "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::NotExhausted
+    );
+    assert_eq!(
+        inbox_quota_observation(
+            capabilities,
+            Some(
+                "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::Exhausted
+    );
+    assert_eq!(
+        inbox_quota_observation(
+            "* CAPABILITY IMAP4rev1\r\n",
+            Some(
+                "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::Unknown
+    );
+    assert_eq!(
+        inbox_quota_observation(
+            capabilities,
+            Some(
+                "* QUOTAROOT Archive \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::Unknown
+    );
 }
 
 #[test]

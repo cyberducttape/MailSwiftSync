@@ -3289,6 +3289,7 @@ fn live_auth_proof_requires_matching_plan_and_credentials() {
     let proof = LiveAuthProof {
         plan_fingerprint: "plan-a".into(),
         credential_fingerprint: "credentials-a".into(),
+        destination_quota: crate::imap_probe::DestinationQuotaObservation::Unknown,
     };
 
     assert!(proof.matches("plan-a", "credentials-a"));

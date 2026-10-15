@@ -505,7 +505,7 @@ fn live_batch_confirmation_shows_cutover_readiness() {
         "the confirmation does not report outstanding queue review:\n{text}"
     );
     assert!(
-        text.contains("Destination capacity is not checked per mailbox"),
+        text.contains("does not establish projected or account-wide capacity"),
         "the confirmation does not state the capacity boundary:\n{text}"
     );
 }

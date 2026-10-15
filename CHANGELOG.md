@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a fresh pre-launch IMAP readiness check that blocks single and batch live
+  runs when the destination reports an exhausted INBOX-root quota. Unsupported,
+  failed, or incomplete quota observations remain unknown; non-exhausted INBOX
+  quota does not imply projected or account-wide capacity.
 - Require operators to reconfirm source quiescence after Final Delta before
   admitting final-verification workers or standalone re-verification. Clear
   the prior-stage attestation at the Verification transition and emit

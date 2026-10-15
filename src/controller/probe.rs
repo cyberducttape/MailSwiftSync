@@ -9,6 +9,7 @@ use crate::core;
 use crate::credentials::SecretString;
 use crate::imap_probe::{
     probe_tls_authentication_with_transport, probe_tls_capabilities_with_transport,
+    probe_tls_live_readiness_with_transport,
 };
 use std::sync::mpsc::{self, Receiver};
 
@@ -57,9 +58,20 @@ pub(crate) fn spawn_live_auth_probe(
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = probe_auth_endpoint(&spec.source).and_then(|_| {
-            probe_auth_endpoint(&spec.destination).map(|_| LiveAuthProof {
+            let endpoint = &spec.destination;
+            probe_tls_live_readiness_with_transport(
+                &endpoint.endpoint,
+                &endpoint.user,
+                endpoint.password.as_str(),
+                &endpoint.auth,
+                &endpoint.tls,
+                &endpoint.ca_bundle,
+                &endpoint.certificate_pin_sha256,
+            )
+            .map(|destination_quota| LiveAuthProof {
                 plan_fingerprint: spec.plan_fingerprint,
                 credential_fingerprint: spec.credential_fingerprint,
+                destination_quota,
             })
         });
         let _ = tx.send(result);

@@ -604,8 +604,9 @@ pub(crate) fn probe_tls_capabilities_with_transport(
 
 /// Authenticate an already TLS-protected connection and perform only the
 /// post-authentication readiness checks needed immediately before a live
-/// engine launch. Folder discovery, namespace analysis, and quota collection
-/// belong to the comprehensive preflight probe below, not this hot path.
+/// engine launch. Full folder discovery and namespace analysis remain in the
+/// comprehensive preflight probe; the separate live-readiness check observes
+/// only the destination's INBOX quota root when the server advertises QUOTA.
 pub(crate) fn probe_tls_authentication_with_transport(
     host: &str,
     user: &str,
@@ -615,10 +616,95 @@ pub(crate) fn probe_tls_authentication_with_transport(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
 ) -> Result<(), String> {
-    let (stream, greeting) =
-        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
-    let (mut stream, _) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting, None)?;
+    probe_tls_readiness(
+        TlsProbeRequest {
+            host,
+            user,
+            credential,
+            auth_method,
+            transport,
+            ca_bundle,
+            certificate_pin_sha256,
+        },
+        false,
+    )
+    .map(|_| ())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DestinationQuotaObservation {
+    /// QUOTA is unavailable, the root query failed, or usable headroom was
+    /// not reported. This never implies that capacity is sufficient.
+    Unknown,
+    /// The INBOX quota root reported valid usage below its limit. Other quota
+    /// roots and projected transfer headroom remain unknown.
+    NotExhausted,
+    /// A valid INBOX quota-root resource reports usage at or above its limit.
+    Exhausted,
+}
+
+impl DestinationQuotaObservation {
+    pub(crate) fn is_exhausted(self) -> bool {
+        self == Self::Exhausted
+    }
+}
+
+/// Freshly authenticate and perform the bounded pre-launch endpoint checks.
+/// When requested, observe only the quota root associated with INBOX. A
+/// successful observation below its limit is not treated as proof of projected
+/// or account-wide capacity.
+pub(crate) fn probe_tls_live_readiness_with_transport(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+) -> Result<DestinationQuotaObservation, String> {
+    probe_tls_readiness(
+        TlsProbeRequest {
+            host,
+            user,
+            credential,
+            auth_method,
+            transport,
+            ca_bundle,
+            certificate_pin_sha256,
+        },
+        true,
+    )
+}
+
+struct TlsProbeRequest<'a> {
+    host: &'a str,
+    user: &'a str,
+    credential: &'a str,
+    auth_method: &'a str,
+    transport: &'a str,
+    ca_bundle: &'a str,
+    certificate_pin_sha256: &'a str,
+}
+
+fn probe_tls_readiness(
+    request: TlsProbeRequest<'_>,
+    check_inbox_quota: bool,
+) -> Result<DestinationQuotaObservation, String> {
+    let (stream, greeting) = connect_tls_stream(
+        request.host,
+        request.transport,
+        request.ca_bundle,
+        request.certificate_pin_sha256,
+    )?;
+    let (mut stream, post_auth_capabilities) = authenticate_imap_stream(
+        stream,
+        request.host,
+        request.user,
+        request.credential,
+        request.auth_method,
+        greeting,
+        None,
+    )?;
     let mut response = String::new();
     let mut buffer = [0; 4096];
     stream
@@ -630,11 +716,24 @@ pub(crate) fn probe_tls_authentication_with_transport(
             &response,
             "a004",
             "post-auth NOOP",
-            host,
+            request.host,
         ));
     }
-    let _ = stream.write_all(b"a005 LOGOUT\r\n");
-    Ok(())
+    let quota_observation =
+        if check_inbox_quota && advertises_capability(&post_auth_capabilities, "QUOTA") {
+            let mut quota_response = String::new();
+            if stream.write_all(QUOTA_PROBE_COMMAND).is_ok()
+                && read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok()
+            {
+                inbox_quota_observation(&post_auth_capabilities, Some(&quota_response))
+            } else {
+                DestinationQuotaObservation::Unknown
+            }
+        } else {
+            DestinationQuotaObservation::Unknown
+        };
+    let _ = stream.write_all(b"a007 LOGOUT\r\n");
+    Ok(quota_observation)
 }
 
 fn complete_authenticated_imap_probe<S: Read + Write>(
@@ -719,6 +818,30 @@ fn quota_response_has_successful_root(response: &str, tag: &str, expected: &str)
         })
 }
 
+fn inbox_quota_observation(
+    capabilities_response: &str,
+    quota_response: Option<&str>,
+) -> DestinationQuotaObservation {
+    if !advertises_capability(capabilities_response, "QUOTA") {
+        return DestinationQuotaObservation::Unknown;
+    }
+    let Some(response) = quota_response
+        .filter(|response| quota_response_has_successful_root(response, "a006", "INBOX"))
+    else {
+        return DestinationQuotaObservation::Unknown;
+    };
+    let mut capabilities =
+        crate::core::ServerCapabilities::from_inventory_summary(capabilities_response, 1, 0);
+    capabilities.record_quota_response(response);
+    if !capabilities.quota_observed {
+        DestinationQuotaObservation::Unknown
+    } else if capabilities.quota_exceeded {
+        DestinationQuotaObservation::Exhausted
+    } else {
+        DestinationQuotaObservation::NotExhausted
+    }
+}
+
 /// Which side of a migration an endpoint belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum MailSide {
@@ -734,7 +857,7 @@ pub(crate) struct SidedProbeError {
     pub(crate) message: String,
 }
 
-pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), SidedProbeError> {
+pub(crate) fn fresh_dual_imaps_readiness(form: &crate::Form) -> Result<(), SidedProbeError> {
     if !fresh_imap_authentication_applies(form) {
         return Ok(());
     }
@@ -756,7 +879,7 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.source_certificate_pin_sha256,
     )
     .map_err(sided(MailSide::Source))?;
-    probe_tls_authentication_with_transport(
+    let destination_quota = probe_tls_live_readiness_with_transport(
         &destination,
         &form.profile.destination_user,
         form.destination_password.as_str(),
@@ -766,6 +889,12 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.destination_certificate_pin_sha256,
     )
     .map_err(sided(MailSide::Destination))?;
+    if destination_quota.is_exhausted() {
+        return Err(sided(MailSide::Destination)(
+            "destination INBOX-root quota reports exhausted capacity; live migration was not started"
+                .into(),
+        ));
+    }
     Ok(())
 }
 

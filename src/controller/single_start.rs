@@ -132,6 +132,17 @@ impl App {
                 self.start_live_imaps_auth_probe(plan_fingerprint, credential_fingerprint);
                 return;
             }
+            if self.live_auth_proof.as_ref().is_some_and(|proof| {
+                proof.matches(&plan_fingerprint, &credential_fingerprint)
+                    && proof.destination_quota.is_exhausted()
+            }) {
+                self.live_auth_proof = None;
+                self.set_status(
+                    "Live migration blocked: the fresh destination INBOX-root quota observation reports exhausted capacity. Check other quota roots and projected headroom with the provider before retrying.",
+                    StatusSeverity::Error,
+                );
+                return;
+            }
         }
         self.durability_error = false;
         self.durability_recovery_pending = false;

@@ -70,6 +70,7 @@ impl ActiveRunContext {
 pub(crate) struct LiveAuthProof {
     pub(crate) plan_fingerprint: String,
     pub(crate) credential_fingerprint: String,
+    pub(crate) destination_quota: crate::imap_probe::DestinationQuotaObservation,
 }
 
 impl LiveAuthProof {
