@@ -394,4 +394,26 @@ mod tests {
         assert!(!stream.sent().contains("GETQUOTAROOT"));
         assert!(stream.sent().contains("a007 LOGOUT\r\n"));
     }
+
+    #[test]
+    fn live_readiness_keeps_denied_quota_root_query_unknown() {
+        let mut stream = ScriptedStream::new(&[
+            "a004 OK NOOP completed\r\n",
+            "a006 NO [NOPERM] quota roots are unavailable\r\n",
+        ]);
+        let observation = super::super::live_readiness_on_authenticated_stream(
+            &mut stream,
+            "imap.example.test",
+            "* CAPABILITY IMAP4rev1 QUOTA\r\n",
+            true,
+        )
+        .expect("a denied advisory quota query must not fail endpoint readiness");
+
+        assert_eq!(
+            observation,
+            super::super::DestinationQuotaObservation::Unknown
+        );
+        assert!(stream.sent().contains("a006 GETQUOTAROOT INBOX\r\n"));
+        assert!(stream.sent().contains("a007 LOGOUT\r\n"));
+    }
 }
