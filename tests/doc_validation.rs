@@ -875,6 +875,26 @@ fn compatibility_matrix_references_tested_providers() {
 }
 
 #[test]
+fn webhook_contract_documents_signed_identity_and_replay_requirements() {
+    let contract =
+        fs::read_to_string("docs/psa-event-contract.md").expect("PSA event contract should exist");
+    for required in [
+        "X-MailSwiftSync-Signature-Version: 2",
+        "X-MailSwiftSync-Signature-Timestamp",
+        "v2=sha256=",
+        "idempotency key, signature timestamp, and exact body bytes",
+        "durably deduplicate the event ID",
+        "The former body-only",
+        "ignore ambient HTTP proxy",
+    ] {
+        assert!(
+            contract.contains(required),
+            "missing webhook contract requirement: {required}"
+        );
+    }
+}
+
+#[test]
 fn provider_testing_guide_exists() {
     let guide = fs::read_to_string("docs/provider-testing-guide.md")
         .expect("Provider testing guide should exist");

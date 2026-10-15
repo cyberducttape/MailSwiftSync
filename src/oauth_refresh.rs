@@ -343,6 +343,10 @@ fn oauth_http_client(
 ) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .use_rustls_tls()
+        // The endpoint was resolved and policy-checked above. Do not let
+        // ambient proxy settings move credential-bearing requests outside
+        // that enforced address policy.
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(REFRESH_CONNECT_TIMEOUT)
         .timeout(REFRESH_TOTAL_BUDGET)

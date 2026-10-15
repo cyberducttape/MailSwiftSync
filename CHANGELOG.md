@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Disable ambient system proxies for DNS-policy-pinned webhook and OAuth
+  requests. Upgrade webhook HMAC to version 2, authenticating event identity,
+  idempotency key, per-attempt timestamp, and exact body bytes; document
+  receiver replay-window and durable-deduplication requirements.
 - Add a method-qualified verification outcome breakdown to automation status,
   distinguishing aggregate totals from metadata and bounded-content evidence.
 - Skip test-inventory generation and upload when CI is canceled by a newer
