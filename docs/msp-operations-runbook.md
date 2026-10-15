@@ -89,9 +89,11 @@ mailbox is complete, needs a delta, or requires operator review.
   attestation must be no more than 15 minutes old when each Final Delta
   mailbox worker is durably claimed; if a batch is delayed, reconfirm the pause
   and refresh the attestation with the same command before retrying admission.
-  Keep
-  that barrier in force through final verification. Verification separately
-  re-LISTs and re-SELECTs the source after destination scanning and records
+  Reconfirm and refresh it before advancing from Final Delta to final
+  Verification, and again before externally confirmed completion if more than
+  15 minutes have elapsed. The command accepts refreshes during Final Delta
+  and Verification. Keep that barrier in force through final verification.
+  Verification separately re-LISTs and re-SELECTs the source after destination scanning and records
   whether the tracked folder cursors remained unchanged. The attestation is
   still an operator assertion: neither it nor the cursor recheck proves an
   atomic, continuously quiescent cross-server snapshot. Customer proof must

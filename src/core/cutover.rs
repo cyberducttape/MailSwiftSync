@@ -17,23 +17,32 @@ pub(crate) fn validate_cutover_run_stage(
     if stage != CutoverStage::FinalDelta.as_str() {
         return Ok(());
     }
+    if let Some(error) = source_quiescence_error(source_quiescence_at) {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn source_quiescence_error(source_quiescence_at: Option<&str>) -> Option<String> {
     let Some(attested_at) = source_quiescence_at else {
-        return Err("source-quiescence attestation is missing".into());
+        return Some("source-quiescence attestation is missing".into());
     };
     // SQLite CURRENT_TIMESTAMP is UTC in `YYYY-MM-DD HH:MM:SS` form.
     // A stale operator assertion must not authorize a later final-delta
     // launch after mail delivery or mailbox edits may have resumed.
-    let attested_at = chrono::NaiveDateTime::parse_from_str(attested_at, "%Y-%m-%d %H:%M:%S")
-        .map(|value| value.and_utc())
-        .map_err(|_| "source-quiescence attestation timestamp is invalid".to_owned())?;
+    let attested_at = match chrono::NaiveDateTime::parse_from_str(attested_at, "%Y-%m-%d %H:%M:%S")
+    {
+        Ok(value) => value.and_utc(),
+        Err(_) => return Some("source-quiescence attestation timestamp is invalid".into()),
+    };
     let age = chrono::Utc::now().signed_duration_since(attested_at);
     if age < chrono::Duration::zero() {
-        return Err("source-quiescence attestation timestamp is in the future".into());
+        return Some("source-quiescence attestation timestamp is in the future".into());
     }
     if age > chrono::Duration::minutes(15) {
-        return Err("source-quiescence attestation is older than 15 minutes".into());
+        return Some("source-quiescence attestation is older than 15 minutes".into());
     }
-    Ok(())
+    None
 }
 
 /// Durable, operator-approved migration lifecycle.  The stage is deliberately
@@ -250,7 +259,7 @@ impl StateStore {
             .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let changed = tx.execute(
-            "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage IN ('catch_up','final_delta') AND approved_by IS NOT NULL AND (source_quiescence_at IS NULL OR stage='final_delta')",
+            "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage IN ('catch_up','final_delta','verification') AND approved_by IS NOT NULL AND (source_quiescence_at IS NULL OR stage IN ('final_delta','verification'))",
             params![operator, evidence, project_id],
         )?;
         if changed != 1 {
@@ -301,13 +310,16 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let next = stage.next().ok_or(rusqlite::Error::InvalidQuery)?;
-        if next == CutoverStage::FinalDelta || stage == CutoverStage::FinalDelta {
-            let barrier_recorded: bool = tx.query_row(
-                "SELECT source_quiescence_at IS NOT NULL FROM cutover_workflows WHERE project_id=?1",
+        if next == CutoverStage::FinalDelta
+            || stage == CutoverStage::FinalDelta
+            || next == CutoverStage::Completed
+        {
+            let attested_at: Option<String> = tx.query_row(
+                "SELECT source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
                 [project_id],
                 |row| row.get(0),
             )?;
-            if !barrier_recorded {
+            if source_quiescence_error(attested_at.as_deref()).is_some() {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
@@ -509,7 +521,7 @@ mod tests {
         store
             .connection
             .execute(
-                "UPDATE cutover_workflows SET source_quiescence_at='2026-10-14 00:00:00' WHERE project_id=?1",
+                "UPDATE cutover_workflows SET source_quiescence_at=datetime('now','-16 minutes') WHERE project_id=?1",
                 [&project.id],
             )
             .unwrap();
@@ -660,6 +672,21 @@ mod tests {
                 [&job],
             )
             .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET source_quiescence_at=datetime('now','-16 minutes') WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        assert!(store.advance_cutover(&project.id, None).is_err());
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Reconfirmed source delivery remains paused before final verification",
+            )
+            .unwrap();
         assert_eq!(
             store.advance_cutover(&project.id, None).unwrap(),
             CutoverStage::Verification
@@ -720,6 +747,25 @@ mod tests {
                 .advance_cutover(&project.id, Some("MX confirmed\ncutover completed"))
                 .is_err()
         );
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET source_quiescence_at='2026-10-14 00:00:00' WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        assert!(
+            store
+                .advance_cutover(&project.id, Some("MX confirmed by operator"))
+                .is_err()
+        );
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Reconfirmed source delivery remains paused at external cutover",
+            )
+            .unwrap();
         assert_eq!(
             store
                 .advance_cutover(&project.id, Some("MX confirmed by operator"))

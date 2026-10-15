@@ -7,6 +7,10 @@
   INBOX-root quota does not prove that the projected transfer fits or establish
   account-wide headroom. Keep unresolved capacity visible in the readiness
   summary and direct operators to confirm it with the provider.
+- Revalidate the freshness of source-quiescence attestations when advancing
+  out of Final Delta and before cutover completion. Allow audited refreshes
+  during Verification so a long final scan does not force use of stale
+  operator confirmation.
 - Serialize cutover approval/attestation/advancement and migration-wave approval
   with the exclusive ledger owner lock. Make cutover/wave status reads use a
   read-only connection, and revalidate the approved cutover stage after the
