@@ -41,13 +41,19 @@ pub struct Wave {
 pub struct WaveSummary {
     pub wave: Wave,
     pub members: usize,
-    pub completed: usize,
     pub migrating: usize,
     pub needs_attention: usize,
     pub catch_up_pending: usize,
     pub waiting: usize,
     /// Members with durable verification evidence.
     pub evidenced: usize,
+    /// Members with a clean verified state and no accepted exception.
+    pub verified: usize,
+    /// Members whose verification differences were explicitly accepted.
+    pub accepted_exceptions: usize,
+    /// Members with either clean verification or a durable accepted exception.
+    /// This is workflow completion, not a claim of clean fidelity or cutover readiness.
+    pub completed: usize,
 }
 
 /// Derived lifecycle of a wave, from approval and member state.
@@ -61,8 +67,10 @@ pub enum WaveStatus {
     NeedsAttention,
     /// Bulk transfer done for some members; the final catch-up remains.
     CatchUpPending,
-    /// Every member is verified; ready for cutover.
+    /// Every member is cleanly verified; cutover readiness is a separate gate.
     Complete,
+    /// Every member is verified or has an explicitly accepted exception.
+    CompleteWithExceptions,
 }
 
 impl WaveStatus {
@@ -74,6 +82,7 @@ impl WaveStatus {
             Self::NeedsAttention => "needs_attention",
             Self::CatchUpPending => "catch_up_pending",
             Self::Complete => "complete",
+            Self::CompleteWithExceptions => "complete_with_exceptions",
         }
     }
 }
@@ -83,7 +92,11 @@ impl WaveSummary {
         if self.wave.approved_by.is_none() {
             WaveStatus::Draft
         } else if self.members > 0 && self.completed == self.members {
-            WaveStatus::Complete
+            if self.accepted_exceptions > 0 {
+                WaveStatus::CompleteWithExceptions
+            } else {
+                WaveStatus::Complete
+            }
         } else if self.needs_attention > 0 {
             WaveStatus::NeedsAttention
         } else if self.migrating > 0 {
@@ -296,7 +309,8 @@ impl StateStore {
         let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {WAVE_COLUMNS},
                     COUNT(m.job_id),
-                    COALESCE(SUM(j.state='verified' OR (j.state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=j.id))),0),
+                    COALESCE(SUM(j.state='verified'),0),
+                    COALESCE(SUM(j.state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=j.id)),0),
                     COALESCE(SUM(j.state IN ('preflight','running','completed')),0),
                     COALESCE(SUM(j.state IN ('attention','failed','verification_difference')),0),
                     COALESCE(SUM(j.state='delta_required'),0),
@@ -314,20 +328,24 @@ impl StateStore {
                     Ok(usize::try_from(row.get::<_, i64>(index)?).unwrap_or(0))
                 };
                 let members = count(8)?;
-                let completed = count(9)?;
-                let migrating = count(10)?;
-                let needs_attention = count(11)?;
-                let catch_up_pending = count(12)?;
+                let verified = count(9)?;
+                let accepted_exceptions = count(10)?;
+                let completed = verified.saturating_add(accepted_exceptions);
+                let migrating = count(11)?;
+                let needs_attention = count(12)?;
+                let catch_up_pending = count(13)?;
                 Ok(WaveSummary {
                     wave: wave_from_row(row)?,
                     members,
-                    completed,
                     migrating,
                     needs_attention,
                     catch_up_pending,
                     waiting: members
                         .saturating_sub(completed + migrating + needs_attention + catch_up_pending),
-                    evidenced: count(13)?,
+                    evidenced: count(14)?,
+                    verified,
+                    accepted_exceptions,
+                    completed,
                 })
             })?
             .collect()
@@ -506,11 +524,45 @@ mod tests {
         for id in &ids {
             store.force_mailbox_state(id, "verified").unwrap();
         }
-        let summary = &store.wave_summaries(&project).unwrap()[0];
+        let summary = store.wave_summaries(&project).unwrap().remove(0);
         assert_eq!(summary.status(), WaveStatus::Complete);
         assert_eq!(
-            (summary.members, summary.completed, summary.waiting),
-            (3, 3, 0)
+            (
+                summary.members,
+                summary.verified,
+                summary.accepted_exceptions,
+                summary.completed,
+                summary.waiting
+            ),
+            (3, 3, 0, 3, 0)
+        );
+
+        store
+            .force_mailbox_state(&ids[0], "verified_with_exceptions")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES('wave-exception-run',?1,?2,'imapsync','completed')",
+                rusqlite::params![project, ids[0]],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO verification_acceptances(job_id,run_id,operator,reason) VALUES(?1,'wave-exception-run','operator','reviewed difference')",
+                [&ids[0]],
+            )
+            .unwrap();
+        let summary = store.wave_summaries(&project).unwrap().remove(0);
+        assert_eq!(summary.status(), WaveStatus::CompleteWithExceptions);
+        assert_eq!(
+            (
+                summary.verified,
+                summary.accepted_exceptions,
+                summary.completed
+            ),
+            (2, 1, 3)
         );
     }
 }

@@ -35,6 +35,16 @@ contains a mailbox ID, a `completed` or `failed` status, and either the normal
 `failed` count as incomplete evidence; the batch envelope is not a global
 point-in-time snapshot.
 
+`mailswiftsync wave <state.db> list <project-id>` emits
+`mailswiftsync-wave-list`, version `2`. `verified` counts only mailboxes with
+clean verification; `accepted_exceptions` counts mailboxes whose verification
+differences were explicitly accepted; and `completed` is their sum for wave
+workflow progress. A `complete_with_exceptions` wave status is not equivalent
+to clean verification. Neither `complete` nor `complete_with_exceptions`
+establishes cutover readiness; the cutover workflow and its separate approvals
+remain authoritative. Consumers must check the format and version before
+using this output.
+
 `mailswiftsync risk <source-messages> <source-folders> <source-bytes>` emits the versioned
 `mailswiftsync-pre-migration-risk` format, version `3`. The inventory inputs
 describe the source endpoint only. The report exposes that scope and an

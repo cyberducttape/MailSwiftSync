@@ -40,6 +40,7 @@ fn status_key(status: WaveStatus) -> &'static str {
         WaveStatus::NeedsAttention => "ui.wave-status-needs-attention",
         WaveStatus::CatchUpPending => "ui.wave-status-catch-up",
         WaveStatus::Complete => "ui.wave-status-complete",
+        WaveStatus::CompleteWithExceptions => "ui.wave-status-complete-with-exceptions",
     }
 }
 
@@ -106,6 +107,7 @@ impl App {
                     WaveStatus::NeedsAttention => colors.danger,
                     WaveStatus::CatchUpPending => colors.warning,
                     WaveStatus::Complete => colors.success,
+                    WaveStatus::CompleteWithExceptions => colors.warning,
                 };
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
@@ -118,7 +120,8 @@ impl App {
                     ui.label(
                         self.language
                             .message("ui.wave-progress")
-                            .replace("{done}", &summary.completed.to_string())
+                            .replace("{verified}", &summary.verified.to_string())
+                            .replace("{exceptions}", &summary.accepted_exceptions.to_string())
                             .replace("{total}", &summary.members.to_string()),
                     );
                     if summary.needs_attention > 0 {

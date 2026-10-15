@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Version migration-wave list output as `mailswiftsync-wave-list` v2 and
+  distinguish clean verification from accepted exceptions; wave completion no
+  longer claims cutover readiness.
 - Bound and reject multiline/control-character cutover, migration-wave,
   project-reopen, and verification-exception audit inputs so operator-provided
   values cannot forge additional-looking durable audit events.
