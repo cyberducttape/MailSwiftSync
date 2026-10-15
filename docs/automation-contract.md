@@ -65,11 +65,12 @@ scale-only warnings triggered. It is deliberately not named `ready` and never
 clears or substitutes for those unevaluated gates. Version 2 removed the
 ambiguous version-1 `estimated_readiness: "ready"` value, and version 3
 clarified one-endpoint size scope and added the combined-byte projection.
-Version 4 adds `estimated_verification_stage_and_journal_bytes`, a planning
-projection using an equal-count two-endpoint assumption and 1 KiB per staged
-message. This allowance is informed by synthetic 1M-message measurements but
-is not a qualified upper bound; extra destination messages or unusually large
-metadata can increase actual storage. `verification_stage_capacity_status`
+Version 4 adds low/high `estimated_verification_stage_and_journal_bytes_min`
+and `_max` projections using an equal-count two-endpoint assumption and the
+observed 568–882 bytes per staged record across current synthetic mismatch-
+heavy through missing-ID profiles. This is a workload-specific measured
+range, not a capacity bound; extra destination messages or different mailbox
+shapes can increase actual storage. `verification_stage_capacity_status`
 therefore remains `unknown_not_measured`: this command receives no destination
 inventory and does not inspect the worker filesystem. Consumers must handle
 the new fields and enum before accepting this report.

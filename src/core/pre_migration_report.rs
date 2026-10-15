@@ -6,10 +6,11 @@ const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
 pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 4;
 const PROJECTED_ENDPOINTS: u64 = 2;
-/// Planning-only allowance based on observed per-row stage-plus-journal use
-/// in the synthetic 1M-message profiles. This is not a proven maximum:
-/// unusually large metadata and destination extras can increase actual use.
-const PROJECTED_STAGE_BYTES_PER_MESSAGE: u64 = 1024;
+/// Observed stage-directory-plus-journal bytes per staged record in the
+/// current 1M-message-per-endpoint synthetic profiles (mismatch-heavy and
+/// missing-ID shapes). This workload range is not a capacity bound.
+const OBSERVED_STAGE_BYTES_PER_RECORD_MIN: u64 = 568;
+const OBSERVED_STAGE_BYTES_PER_RECORD_MAX: u64 = 882;
 
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,10 +34,12 @@ pub struct PreMigrationRisk {
     /// sum cannot be represented as a u64.
     pub estimated_combined_body_hash_bytes: Option<u64>,
     pub body_hash_byte_projection: String,
-    /// Advisory SQLite metadata-stage plus journal projection. It assumes an
-    /// equal message count at both endpoints and uses a planning allowance,
-    /// not a qualified upper bound. `None` means arithmetic overflow.
-    pub estimated_verification_stage_and_journal_bytes: Option<u64>,
+    /// Advisory low/high SQLite metadata-stage plus journal projections. They
+    /// assume equal message counts at both endpoints and scale the observed
+    /// synthetic workload range; they are not qualified capacity bounds.
+    /// `None` means arithmetic overflow.
+    pub estimated_verification_stage_and_journal_bytes_min: Option<u64>,
+    pub estimated_verification_stage_and_journal_bytes_max: Option<u64>,
     pub verification_stage_projection_basis: String,
     /// Always `unknown_not_measured` for this scale-only API: it has neither a
     /// destination inventory nor a live filesystem-space observation.
@@ -158,9 +161,11 @@ impl PreMigrationRisk {
         }
 
         let estimated_combined_body_hash_bytes = total_size_bytes.checked_mul(2);
-        let estimated_verification_stage_and_journal_bytes = total_messages
-            .checked_mul(PROJECTED_ENDPOINTS)
-            .and_then(|messages| messages.checked_mul(PROJECTED_STAGE_BYTES_PER_MESSAGE));
+        let staged_records = total_messages.checked_mul(PROJECTED_ENDPOINTS);
+        let estimated_verification_stage_and_journal_bytes_min = staged_records
+            .and_then(|records| records.checked_mul(OBSERVED_STAGE_BYTES_PER_RECORD_MIN));
+        let estimated_verification_stage_and_journal_bytes_max = staged_records
+            .and_then(|records| records.checked_mul(OBSERVED_STAGE_BYTES_PER_RECORD_MAX));
         if estimated_combined_body_hash_bytes
             .is_none_or(|combined| combined > DEFAULT_BODY_HASH_BYTE_BUDGET)
         {
@@ -213,9 +218,10 @@ impl PreMigrationRisk {
             estimated_combined_body_hash_bytes,
             body_hash_byte_projection: "source_bytes_plus_equal_size_destination_estimate"
                 .to_owned(),
-            estimated_verification_stage_and_journal_bytes,
+            estimated_verification_stage_and_journal_bytes_min,
+            estimated_verification_stage_and_journal_bytes_max,
             verification_stage_projection_basis: format!(
-                "source_messages × {PROJECTED_ENDPOINTS} endpoints (equal-count assumption) × {PROJECTED_STAGE_BYTES_PER_MESSAGE} bytes/message; unqualified planning projection, not a safe upper bound"
+                "source_messages × {PROJECTED_ENDPOINTS} endpoints (equal-count assumption) × observed synthetic range {OBSERVED_STAGE_BYTES_PER_RECORD_MIN}–{OBSERVED_STAGE_BYTES_PER_RECORD_MAX} bytes/staged record (mismatch-heavy through missing-ID shapes); workload projection, not a safe upper bound"
             ),
             verification_stage_capacity_status: "unknown_not_measured".to_owned(),
             warnings,
@@ -375,8 +381,12 @@ mod tests {
     fn stage_projection_is_explicitly_advisory_and_capacity_remains_unknown() {
         let one_million = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "");
         assert_eq!(
-            one_million.estimated_verification_stage_and_journal_bytes,
-            Some(2_048_000_000)
+            one_million.estimated_verification_stage_and_journal_bytes_min,
+            Some(1_136_000_000)
+        );
+        assert_eq!(
+            one_million.estimated_verification_stage_and_journal_bytes_max,
+            Some(1_764_000_000)
         );
         assert!(
             one_million
@@ -401,7 +411,11 @@ mod tests {
 
         let overflow = PreMigrationRisk::assess(u64::MAX, 1, 1, "");
         assert_eq!(
-            overflow.estimated_verification_stage_and_journal_bytes,
+            overflow.estimated_verification_stage_and_journal_bytes_min,
+            None
+        );
+        assert_eq!(
+            overflow.estimated_verification_stage_and_journal_bytes_max,
             None
         );
         assert_eq!(
