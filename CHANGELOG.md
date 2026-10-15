@@ -5,10 +5,16 @@
 - Bump customer-proof artifacts to v4 and include per-run source/destination
   verification intervals plus an explicit non-atomic snapshot model and
   `not_revalidated` source status. Separate evidence tier/result from cutover
-  readiness, which remains explicitly unestablished until a final source
-  barrier is implemented and qualified. This makes consistency boundaries
+  readiness, which remains explicitly unestablished until automatic source
+  revalidation is implemented and qualified. This makes consistency boundaries
   machine-readable without claiming a synchronized snapshot. Preserve
   fail-closed behavior for unsupported migration transformations.
+- Require an audited source-quiescence operator attestation before the final
+  delta stage can run or advance. The durable cutover status records who
+  attested, when, and the change reference/evidence; it is explicitly a manual
+  operational assertion, not automatic IMAP cursor revalidation. Existing
+  ledgers migrate to schema 34 and cannot complete a newly gated final delta
+  without this attestation.
 - Check available space on the verification-stage filesystem before scanning
   and before each SQLite page write; stop verification below a 512 MiB free
   reserve and report an explicit verification limit. This is a best-effort

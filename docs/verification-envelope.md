@@ -313,6 +313,15 @@ repeated differences against delivery and user-action logs. Do not treat a
 single live-change mismatch as proof of transfer loss, and do not accept it
 as harmless without recording the operator decision and evidence run.
 
+The durable cutover workflow requires an operator source-quiescence attestation
+before the Final Delta stage can be run or advanced. It records the operator,
+timestamp, and evidence/change reference and is audited in the event ledger.
+This is a workflow gate, not a server-observed barrier: MailSwiftSync does not
+currently re-SELECT every source folder after destination verification or
+prove that delivery stayed paused. The operator must maintain the stated
+quiescence through final verification. Customer proof continues to report the
+source as `not_revalidated` and cutover readiness as `not_established`.
+
 Evidence recorded before flag verification existed, aggregate evidence, and
 native Dovecot evidence report flags as not verified. Reports and the GUI show
 the verification tier, how many source messages were individually checked,

@@ -37,7 +37,7 @@ pub(super) fn parse_cutover_text_arguments(arguments: &[OsString]) -> Result<Vec
 
 pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let values = arguments.collect::<Vec<_>>();
-    let usage = "Usage: mailswiftsync cutover <state.db> <create|approve|advance|status> <project-id> [...]";
+    let usage = "Usage: mailswiftsync cutover <state.db> <create|approve|attest-source-quiescence|advance|status> <project-id> [...]";
     if values.len() < 3 {
         eprintln!("{usage}");
         std::process::exit(2);
@@ -73,6 +73,9 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
         "approve" if values.len() == 4 => store
             .approve_cutover(project_id, &text_arguments[2])
             .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned()),
+        "attest-source-quiescence" if values.len() == 5 => store
+            .attest_cutover_source_quiescence(project_id, &text_arguments[2], &text_arguments[3])
+            .map(|()| "Source-quiescence attestation recorded. This is an operator assertion, not automatic IMAP source revalidation; keep source delivery paused through final delta and verification.".to_owned()),
         "advance" if (3..=4).contains(&values.len()) => store
             .advance_cutover(project_id, text_arguments.get(2).map(String::as_str))
             .map(|stage| format!("Cutover advanced to {}.", stage.as_str())),
@@ -103,6 +106,12 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
             }
             if workflow.stage == crate::core::CutoverStage::Completed {
                 eprintln!("Cutover run refused: workflow is already complete");
+                std::process::exit(1);
+            }
+            if workflow.stage == crate::core::CutoverStage::FinalDelta
+                && workflow.source_quiescence_at.is_none()
+            {
+                eprintln!("Cutover run refused: source-quiescence attestation is missing; record it before entering the Final Delta stage (cutover ... attest-source-quiescence <project-id> <operator> <evidence>)");
                 std::process::exit(1);
             }
             let scheduled_at = match chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at) {

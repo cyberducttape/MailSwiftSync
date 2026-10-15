@@ -455,7 +455,8 @@ impl StateStore {
         // trigger-maintained run and acceptance counts on queue facts, version
         // 31 adds real/synthetic identity match counters to evidence, and
         // version 32 records UTC scan intervals for transfer-pass folders,
-        // and version 33 persists folder observations for standalone reverification.
+        // version 33 persists folder observations for standalone reverification,
+        // and version 34 records operator-attested source quiescence for cutover.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -498,7 +499,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS wave_members (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), wave_id TEXT NOT NULL REFERENCES waves(id));
                  CREATE TABLE IF NOT EXISTS evidence_flag_verification (job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), compared_messages INTEGER NOT NULL CHECK(compared_messages >= 0), mismatched_messages INTEGER NOT NULL CHECK(mismatched_messages >= 0), excepted_messages INTEGER NOT NULL CHECK(excepted_messages >= 0), CHECK(mismatched_messages + excepted_messages <= compared_messages), PRIMARY KEY(job_id, run_id));
                  CREATE INDEX IF NOT EXISTS idx_wave_members_wave ON wave_members(wave_id);
-                 CREATE TABLE IF NOT EXISTS cutover_workflows (project_id TEXT PRIMARY KEY REFERENCES projects(id), stage TEXT NOT NULL CHECK(stage IN ('seed','catch_up','final_delta','verification','completed')), scheduled_at TEXT NOT NULL, maintenance_window TEXT, approved_by TEXT, approved_at TEXT, external_confirmation TEXT);
+                 CREATE TABLE IF NOT EXISTS cutover_workflows (project_id TEXT PRIMARY KEY REFERENCES projects(id), stage TEXT NOT NULL CHECK(stage IN ('seed','catch_up','final_delta','verification','completed')), scheduled_at TEXT NOT NULL, maintenance_window TEXT, approved_by TEXT, approved_at TEXT, external_confirmation TEXT, source_quiescence_operator TEXT, source_quiescence_evidence TEXT, source_quiescence_at TEXT);
                  CREATE TABLE IF NOT EXISTS batch_plans (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), config TEXT NOT NULL);
                  CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT, batch_plan_id TEXT REFERENCES batch_plans(id), row_overrides TEXT);
                  CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL DEFAULT 0 CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL DEFAULT 0 CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), rfc_message_id_matches INTEGER NOT NULL DEFAULT 0 CHECK(rfc_message_id_matches >= 0), synthetic_identity_matches INTEGER NOT NULL DEFAULT 0 CHECK(synthetic_identity_matches >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -531,6 +532,25 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);",
             )?;
         Self::migrate_webhook_delivery_leases(&tx)?;
+        let cutover_columns = tx
+            .prepare("PRAGMA table_info(cutover_workflows)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for column in [
+            ("source_quiescence_operator", "TEXT"),
+            ("source_quiescence_evidence", "TEXT"),
+            ("source_quiescence_at", "TEXT"),
+        ] {
+            if !cutover_columns.iter().any(|existing| existing == column.0) {
+                tx.execute(
+                    &format!(
+                        "ALTER TABLE cutover_workflows ADD COLUMN {} {}",
+                        column.0, column.1
+                    ),
+                    [],
+                )?;
+            }
+        }
         if stored_schema_version < 25 {
             Self::migrate_queue_search_index(&tx)?;
         }

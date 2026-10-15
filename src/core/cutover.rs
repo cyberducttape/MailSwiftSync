@@ -46,6 +46,11 @@ pub struct CutoverWorkflow {
     pub approved_by: Option<String>,
     pub approved_at: Option<String>,
     pub external_confirmation: Option<String>,
+    /// Operator attestation that source delivery/mutation was quiesced before
+    /// the final delta. This is not an automatically observed IMAP watermark.
+    pub source_quiescence_operator: Option<String>,
+    pub source_quiescence_evidence: Option<String>,
+    pub source_quiescence_at: Option<String>,
 }
 
 fn parse_stage(value: &str) -> rusqlite::Result<CutoverStage> {
@@ -94,12 +99,14 @@ impl StateStore {
 
     pub fn cutover_workflow(&self, project_id: &str) -> rusqlite::Result<Option<CutoverWorkflow>> {
         self.connection.query_row(
-            "SELECT project_id,stage,scheduled_at,maintenance_window,approved_by,approved_at,external_confirmation FROM cutover_workflows WHERE project_id=?1",
+            "SELECT project_id,stage,scheduled_at,maintenance_window,approved_by,approved_at,external_confirmation,source_quiescence_operator,source_quiescence_evidence,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
             [project_id],
             |row| Ok(CutoverWorkflow {
                 project_id: row.get(0)?, stage: parse_stage(&row.get::<_, String>(1)?)?,
                 scheduled_at: row.get(2)?, maintenance_window: row.get(3)?, approved_by: row.get(4)?,
                 approved_at: row.get(5)?, external_confirmation: row.get(6)?,
+                source_quiescence_operator: row.get(7)?, source_quiescence_evidence: row.get(8)?,
+                source_quiescence_at: row.get(9)?,
             }),
         ).optional()
     }
@@ -145,10 +152,44 @@ impl StateStore {
         tx.commit()
     }
 
+    /// Record the operator's source-quiescence attestation before entering the
+    /// final-delta stage. The evidence is intentionally explicit that this is a
+    /// manual operational claim, not machine-verified source stability.
+    pub fn attest_cutover_source_quiescence(
+        &self,
+        project_id: &str,
+        operator: &str,
+        evidence: &str,
+    ) -> rusqlite::Result<()> {
+        let operator = operator.trim();
+        let evidence = evidence.trim();
+        if operator.is_empty()
+            || operator.len() > 256
+            || evidence.is_empty()
+            || evidence.len() > 4096
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let changed = tx.execute(
+            "UPDATE cutover_workflows SET source_quiescence_operator=?1,source_quiescence_evidence=?2,source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?3 AND stage='catch_up' AND approved_by IS NOT NULL AND source_quiescence_at IS NULL",
+            params![operator, evidence, project_id],
+        )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_source_quiescence_attested',?2)",
+            params![project_id, format!("operator={operator}; evidence={evidence}")],
+        )?;
+        tx.commit()
+    }
+
     /// Advance only after every mailbox has durable verification evidence.
     /// Intermediate advances requeue verified rows for the next idempotent
-    /// delta pass; final completion additionally requires external cutover
-    /// confirmation recorded by the operator.
+    /// delta pass. Final-delta entry requires a recorded source-quiescence
+    /// attestation; final completion additionally requires external cutover
+    /// confirmation. The attestation is not automatic server revalidation.
     pub fn advance_cutover(
         &self,
         project_id: &str,
@@ -178,6 +219,16 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let next = stage.next().ok_or(rusqlite::Error::InvalidQuery)?;
+        if next == CutoverStage::FinalDelta || stage == CutoverStage::FinalDelta {
+            let barrier_recorded: bool = tx.query_row(
+                "SELECT source_quiescence_at IS NOT NULL FROM cutover_workflows WHERE project_id=?1",
+                [project_id],
+                |row| row.get(0),
+            )?;
+            if !barrier_recorded {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         let confirmation = external_confirmation
             .map(str::trim)
             .filter(|v| !v.is_empty());
@@ -260,7 +311,18 @@ mod tests {
                 [&job],
             )
             .unwrap();
-        store.advance_cutover(&project.id, None).unwrap();
+        assert!(store.advance_cutover(&project.id, None).is_err());
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Source delivery paused at 22:00 UTC; MX change ticket CHG-123",
+            )
+            .unwrap();
+        assert_eq!(
+            store.advance_cutover(&project.id, None).unwrap(),
+            CutoverStage::FinalDelta
+        );
         store
             .connection
             .execute(
@@ -347,5 +409,29 @@ mod tests {
             store.project(&project.id).unwrap().unwrap().phase,
             Phase::Complete
         );
+    }
+
+    #[test]
+    fn schema_33_cutover_rows_gain_empty_source_quiescence_fields() {
+        let store = StateStore::in_memory().unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE cutover_workflows DROP COLUMN source_quiescence_operator;
+                 ALTER TABLE cutover_workflows DROP COLUMN source_quiescence_evidence;
+                 ALTER TABLE cutover_workflows DROP COLUMN source_quiescence_at;
+                 PRAGMA user_version=33;",
+            )
+            .unwrap();
+        store.migrate().unwrap();
+        let columns: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('cutover_workflows') WHERE name IN ('source_quiescence_operator','source_quiescence_evidence','source_quiescence_at')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 3);
     }
 }

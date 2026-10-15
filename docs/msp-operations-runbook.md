@@ -78,7 +78,13 @@ mailbox is complete, needs a delta, or requires operator review.
   unless the evidence escalates to their shared provider or global domain.
 - Use the durable cutover workflow for staged Seed, Catch-up, Final Delta, and
   Verification where the customer change requires it. External DNS/MX
-  confirmation remains an explicit operator acknowledgement.
+  confirmation remains an explicit operator acknowledgement. Before running
+  the Final Delta stage, record `cutover <state.db> attest-source-quiescence
+  <project-id> <operator> <evidence>` with the change/ticket reference and the
+  time delivery and mailbox edits were paused or narrowly watermarked. Keep
+  that barrier in force through final verification. This is an auditable
+  operator assertion, not automatic IMAP source-cursor revalidation; the
+  evidence and customer proof must not describe it as a synchronized snapshot.
 - If using `notify-webhook --watch`, configure HTTPS, a customer-approved
   signing secret, a service-manager restart policy, and an owner for dead-letter
   review. The outbox is durable within the ledger, but delivery still depends

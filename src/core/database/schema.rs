@@ -69,6 +69,9 @@ impl StateStore {
                     ("approved_by", "TEXT", false, 0),
                     ("approved_at", "TEXT", false, 0),
                     ("external_confirmation", "TEXT", false, 0),
+                    ("source_quiescence_operator", "TEXT", false, 0),
+                    ("source_quiescence_evidence", "TEXT", false, 0),
+                    ("source_quiescence_at", "TEXT", false, 0),
                 ],
             ),
             (
