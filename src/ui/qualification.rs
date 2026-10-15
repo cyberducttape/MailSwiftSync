@@ -404,11 +404,11 @@ fn format_quota_details(
     if capabilities.quota_exceeded {
         return if destination {
             language
-                .text("Blocked: provider-reported quota is exhausted")
+                .text("Blocked: provider-reported INBOX-root quota is exhausted")
                 .to_owned()
         } else {
             language
-                .text("Observed: source quota is exhausted; source remains read-only")
+                .text("Observed: source INBOX-root quota is exhausted; source remains read-only")
                 .to_owned()
         };
     }
@@ -423,7 +423,7 @@ fn format_quota_details(
         if !quota_details.is_empty() {
             details.push(format!(
                 "{}{}",
-                language.text("Provider units: "),
+                language.text("INBOX-root quota provider units: "),
                 quota_details
             ));
         }
@@ -438,7 +438,7 @@ fn format_quota_details(
     }
     if !capabilities.quota_observed {
         return language
-            .text("Unknown: provider did not report usable quota headroom")
+            .text("Unknown: provider did not report usable INBOX-root quota headroom")
             .to_owned();
     }
     let details = capabilities
@@ -452,7 +452,11 @@ fn format_quota_details(
             .message("ui.observed-no-supported-quota-or-message-size-limit")
             .to_owned()
     } else {
-        format!("{}{}", language.text("Provider units: "), details)
+        format!(
+            "{}{}",
+            language.text("INBOX-root quota provider units: "),
+            details
+        )
     }
 }
 
@@ -549,7 +553,7 @@ mod tests {
             ServerCapabilities::from_inventory_summary("* CAPABILITY IMAP4rev1 QUOTA", 1, 0);
         assert_eq!(
             format_quota_details(Some(&capabilities), crate::ui::UiLanguage::English, true),
-            "Unknown: provider did not report usable quota headroom"
+            "Unknown: provider did not report usable INBOX-root quota headroom"
         );
     }
 }

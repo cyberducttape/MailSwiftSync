@@ -10,6 +10,9 @@
   proof v5. This narrows the observation gap but does not claim an atomic
   cross-server snapshot or continued quiescence after the check. Migrate the
   ledger to schema 35.
+- Query RFC 2087 quota roots using the mandatory INBOX mailbox name, require a
+  successful tagged response with a matching QUOTAROOT, and label the result as
+  INBOX-root scope instead of implying account-wide capacity.
 - Disable implicit Reqwest proxy discovery for policy-controlled OAuth token
   and webhook requests, so environment proxy variables cannot bypass locally
   resolved-address policy. Version webhook HMAC as v2 and authenticate the

@@ -70,6 +70,10 @@ mailbox is complete, needs a delta, or requires operator review.
   throttling, queue eligibility, verification coverage, and destination
   capacity observations. Unknown quota is a blocker for any customer policy
   that requires known capacity.
+- Treat an observed IMAP quota as the quota root returned for INBOX only. A
+  multi-root account can have different limits on other folders, and a
+  non-exhausted INBOX quota does not establish account-wide headroom; confirm
+  destination quota coverage with the provider before admission when required.
 - When provider throttling pauses launches, the Activity view reports the
   limiting domain, adaptive ceiling versus configured ceiling, and escalation
   event count. Treat this as run telemetry: adaptive cooldown state is held in

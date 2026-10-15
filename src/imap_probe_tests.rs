@@ -1,13 +1,13 @@
 use super::fetch_parser::{canonical_flag_set, parse_message_fetch_body_hashes_response_bytes};
 use super::{
     ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
-    MailboxFetchError, MessageFetchBudget, MessageSink, MessageStateBudget, StageMessageSink,
-    StateReservation, TaggedResponseScanner, authenticated_list_command,
+    MailboxFetchError, MessageFetchBudget, MessageSink, MessageStateBudget, QUOTA_PROBE_COMMAND,
+    StageMessageSink, StateReservation, TaggedResponseScanner, authenticated_list_command,
     classify_mailbox_fetch_error, format_folder_failures, parse_list_delimiter,
     parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes, parse_message_id_header,
-    read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
-    record_list_entry, source_snapshot_matches, tagged_response_outside_literals,
-    write_imap_command,
+    quota_response_has_successful_root, read_imap_list_response,
+    read_imap_list_response_with_mailboxes, read_with_deadline, record_list_entry,
+    source_snapshot_matches, tagged_response_outside_literals, write_imap_command,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Cursor, Read, Write};
@@ -523,6 +523,35 @@ fn list_parser_preserves_nil_delimiter_as_absent() {
         parse_list_delimiter(r#"* LIST (\HasNoChildren) NIL "INBOX""#),
         None
     );
+}
+
+#[test]
+fn quota_observation_requires_success_and_a_matching_inbox_root() {
+    assert!(quota_response_has_successful_root(
+        "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n",
+        "a006",
+        "INBOX"
+    ));
+    assert!(quota_response_has_successful_root(
+        "* QUOTAROOT \"INBOX\" \"\"\r\na006 OK quota completed\r\n",
+        "a006",
+        "inbox"
+    ));
+    assert!(!quota_response_has_successful_root(
+        "* QUOTAROOT Archive \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n",
+        "a006",
+        "INBOX"
+    ));
+    assert!(!quota_response_has_successful_root(
+        "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 NO quota lookup denied\r\n",
+        "a006",
+        "INBOX"
+    ));
+}
+
+#[test]
+fn quota_probe_uses_mailbox_argument_to_get_its_quota_roots() {
+    assert_eq!(QUOTA_PROBE_COMMAND, b"a006 GETQUOTAROOT INBOX\r\n");
 }
 
 #[test]

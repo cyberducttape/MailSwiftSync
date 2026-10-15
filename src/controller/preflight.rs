@@ -215,21 +215,21 @@ fn quota_summary(capabilities: &core::ServerCapabilities, quota_is_blocking: boo
         "quota not advertised".into()
     } else if capabilities.quota_exceeded {
         if quota_is_blocking {
-            "quota exceeded; destination capacity check blocked".into()
+            "INBOX quota exceeded; destination capacity check blocked".into()
         } else {
-            "quota full; source remains readable and is advisory".into()
+            "INBOX quota full; source remains readable and is advisory".into()
         }
     } else if capabilities.quota_observed {
         let storage = capabilities.quota_resources.get("STORAGE");
         match storage {
             Some(quota) => format!(
-                "quota reported within limit (usage {} / limit {} provider units)",
+                "INBOX-root quota reported (usage {} / limit {} provider units)",
                 quota.used, quota.limit
             ),
-            None => "quota reported within limit".into(),
+            None => "INBOX-root quota reported; storage headroom unknown".into(),
         }
     } else {
-        "quota status unavailable; verify capacity with the provider".into()
+        "INBOX-root quota status unavailable; verify account capacity with the provider".into()
     }
 }
 

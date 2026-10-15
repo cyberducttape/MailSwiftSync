@@ -27,6 +27,8 @@ pub struct ServerCapabilities {
     pub inventory_complete: bool,
     pub mailbox_count: usize,
     pub special_use_mailboxes: usize,
+    /// Whether a usable QUOTA response was observed for one of the quota roots
+    /// returned for INBOX. This does not establish account-wide headroom.
     pub quota_observed: bool,
     pub quota_exceeded: bool,
     pub quota_resources: BTreeMap<String, QuotaResource>,

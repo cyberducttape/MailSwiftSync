@@ -164,11 +164,11 @@ pub(crate) fn migration_confidence(input: ConfidenceInputs<'_>) -> Vec<Confidenc
     let (quota_state, quota_evidence) = match input.quota_exceeded {
         Some(true) => (
             ConfidenceState::Blocked,
-            "The latest destination observation reports exhausted quota.".into(),
+            "The latest destination observation reports exhausted INBOX-root quota.".into(),
         ),
         Some(false) => (
             ConfidenceState::Warning,
-            "Observed destination quota is not exhausted; available headroom is not established."
+            "Observed destination INBOX-root quota is not exhausted; other quota roots and available account-wide headroom are not established."
                 .into(),
         ),
         None => (

@@ -671,17 +671,39 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     if caps.supports("QUOTA") {
         let mut quota_response = String::new();
         stream
-            .write_all(b"a006 GETQUOTAROOT \"\"\r\n")
+            .write_all(QUOTA_PROBE_COMMAND)
             .map_err(|e| e.to_string())?;
         // A provider can advertise QUOTA while denying the root query. Keep
         // that result explicitly unknown; quota support is advisory and must
         // not turn an otherwise valid mailbox into a false capacity failure.
-        if read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok() {
+        // GETQUOTAROOT requires a mailbox name; the empty-root example belongs
+        // to GETQUOTA. INBOX is mandatory, and this observation is scoped to
+        // the quota roots returned for INBOX rather than all account folders.
+        if read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok()
+            && quota_response_has_successful_root(&quota_response, "a006", "INBOX")
+        {
             caps.record_quota_response(&quota_response);
         }
     }
     let _ = stream.write_all(b"a007 LOGOUT\r\n");
     Ok(caps)
+}
+
+const QUOTA_PROBE_COMMAND: &[u8] = b"a006 GETQUOTAROOT INBOX\r\n";
+
+fn quota_response_has_successful_root(response: &str, tag: &str, expected: &str) -> bool {
+    imap_command_succeeded(response, tag)
+        && response.lines().any(|line| {
+            if !crate::imap_protocol::is_untagged_response(line, "QUOTAROOT") {
+                return false;
+            }
+            let mut fields = line.split_whitespace();
+            fields.next(); // '*'
+            fields.next(); // 'QUOTAROOT'
+            fields
+                .next()
+                .is_some_and(|mailbox| mailbox.trim_matches('"').eq_ignore_ascii_case(expected))
+        })
 }
 
 /// Which side of a migration an endpoint belongs to.
