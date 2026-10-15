@@ -72,11 +72,16 @@ endpoints, or mailbox content is present.
 `migration.cutover_ready` is emitted only after every mailbox's final
 Verification-stage evidence is durable, or its difference has an explicit
 acceptance. Its detail includes separate `clean_verified` and
-`accepted_exceptions` counts. Entering Final Delta emits
+`accepted_exceptions` counts and the source-quiescence attestation expiry.
+The event is published only while that attestation is fresh (15 minutes); if
+verification finishes after expiry, refreshing the attestation during
+Verification can publish readiness without rescanning. Receivers must treat
+readiness as time-bounded and keep the source paused until external cutover
+approval. Entering Final Delta emits
 `migration.final_delta_started`; entering the subsequent Verification phase
 emits `migration.cutover_verification_started`, not a readiness signal. The
-source-quiescence attestation remains an operator claim, so receivers should
-keep the source paused until external cutover approval.
+source-quiescence attestation remains an operator claim, not machine-verified
+source stability.
 
 Ticket correlation is intentionally receiver-owned. A future control plane may
 add an opaque `external_ticket_ref` and project-scoped mapping, but must make

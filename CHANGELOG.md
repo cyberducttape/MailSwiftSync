@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Publish `migration.cutover_ready` only while the source-quiescence
+  attestation is fresh, include its expiry in the event detail, and allow a
+  refreshed attestation to publish readiness after verification without a
+  redundant mailbox rescan.
 - Return actionable cutover refusal reasons (including missing or stale source-
   quiescence attestations and missing operator confirmation) instead of
   presenting safety-gate refusals as generic SQLite errors.

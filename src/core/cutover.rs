@@ -83,22 +83,27 @@ pub enum CutoverStage {
 }
 
 /// Publish cutover readiness only after the last mailbox's final verification
-/// result is durable. Called from the same SQLite transaction that commits
-/// verified state or an explicit exception acceptance.
+/// result is durable and the source-quiescence assertion is fresh. Called from
+/// the same SQLite transaction that commits verified state or an explicit
+/// exception acceptance, and when an operator refreshes the assertion during
+/// Verification.
 pub(super) fn maybe_emit_cutover_ready(
     tx: &rusqlite::Transaction<'_>,
     project_id: &str,
 ) -> rusqlite::Result<()> {
-    let workflow: Option<(String, String)> = tx
+    let workflow: Option<(String, String, Option<String>)> = tx
         .query_row(
-            "SELECT c.stage,p.phase FROM cutover_workflows c JOIN projects p ON p.id=c.project_id WHERE c.project_id=?1",
+            "SELECT c.stage,p.phase,c.source_quiescence_at FROM cutover_workflows c JOIN projects p ON p.id=c.project_id WHERE c.project_id=?1",
             [project_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    if !workflow
-        .as_ref()
-        .is_some_and(|(stage, phase)| stage == "verification" && phase == "verification")
+    let Some((stage, phase, source_quiescence_at)) = workflow else {
+        return Ok(());
+    };
+    if stage != "verification"
+        || phase != "verification"
+        || source_quiescence_error(source_quiescence_at.as_deref()).is_some()
     {
         return Ok(());
     }
@@ -118,8 +123,15 @@ pub(super) fn maybe_emit_cutover_ready(
     if already_published {
         return Ok(());
     }
+    let Some(attested_at) = source_quiescence_at else {
+        return Ok(());
+    };
+    let attested_at = chrono::NaiveDateTime::parse_from_str(&attested_at, "%Y-%m-%d %H:%M:%S")
+        .map_err(|_| rusqlite::Error::InvalidQuery)?
+        .and_utc();
+    let valid_until = (attested_at + chrono::Duration::minutes(15)).to_rfc3339();
     let detail = format!(
-        "final verification complete; mailboxes={total}; clean_verified={clean_verified}; accepted_exceptions={accepted_exceptions}; external cutover approval pending"
+        "final verification complete; mailboxes={total}; clean_verified={clean_verified}; accepted_exceptions={accepted_exceptions}; source-quiescence attestation valid until {valid_until}; external cutover approval pending"
     );
     tx.execute(
         "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_ready',?2)",
@@ -293,6 +305,7 @@ impl StateStore {
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_source_quiescence_attested',?2)",
             params![project_id, format!("operator={operator}; evidence={evidence}")],
         )?;
+        maybe_emit_cutover_ready(&tx, project_id)?;
         tx.commit()
     }
 
@@ -756,9 +769,32 @@ mod tests {
                 [&job],
             )
             .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET source_quiescence_at=datetime('now','-16 minutes') WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
         let verification_tx = store.connection.unchecked_transaction().unwrap();
         super::maybe_emit_cutover_ready(&verification_tx, &project.id).unwrap();
         verification_tx.commit().unwrap();
+        let stale_cutover_ready_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale_cutover_ready_count, 0);
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Reconfirmed source delivery remains paused after final verification",
+            )
+            .unwrap();
         let cutover_ready_after_final_verification: i64 = store
             .connection
             .query_row(
@@ -789,6 +825,12 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("accepted_exceptions=0")
+        );
+        assert!(
+            payload["detail"]
+                .as_str()
+                .unwrap()
+                .contains("source-quiescence attestation valid until")
         );
         assert!(store.advance_cutover(&project.id, None).is_err());
         assert!(
