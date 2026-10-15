@@ -20,7 +20,12 @@ The three status commands emit the versioned status automation contract:
 | `mailswiftsync fleet-status <directory>` | `mailswiftsync-fleet-status` | `1` | [`fleet-status.v1.json`](../tests/fixtures/automation/fleet-status.v1.json) |
 
 The standalone `mailswiftsync reverify` command also emits a versioned JSON
-result (`mailswiftsync.reverify`, version `3`). Its `verification_status`,
+result (`mailswiftsync.reverify`, version `4`). It selects the latest completed
+live transfer as its baseline by default; `--baseline-run RUN_ID` can select a
+specific completed transfer for an intentional historical audit. The result's
+`based_on_transfer_run_id` records the exact parent transfer in either case.
+An explicitly selected run must belong to the mailbox, be a completed transfer,
+and have an eligible immutable live plan snapshot. Its `verification_status`,
 `verification_level`, `message_coverage`, `flag_verification`, and
 `folder_observations` fields must be consumed together; `verification_outcome`
 alone is not an unqualified assurance claim. Folder observations contain
@@ -30,7 +35,7 @@ is an evidence artifact rather than a status projection and therefore is not
 included in the status golden-fixture set.
 
 `mailswiftsync reverify-batch` emits `mailswiftsync.reverify_batch`, version
-`1`, with `total`, `completed`, `failed`, and a `results` array. Each result
+`2`, with `total`, `completed`, `failed`, and a `results` array. Each result
 contains a mailbox ID, a `completed` or `failed` status, and either the normal
 `reverify` artifact or a bounded error string. Callers must treat any nonzero
 `failed` count as incomplete evidence; the batch envelope is not a global

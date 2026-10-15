@@ -171,11 +171,12 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
     )
     else {
         eprintln!(
-            "Usage: mailswiftsync reverify <state.db> <project-id> <mailbox-id> <source-secret-file> <destination-secret-file> [--mode metadata|content] [--differences output.csv]"
+            "Usage: mailswiftsync reverify <state.db> <project-id> <mailbox-id> <source-secret-file> <destination-secret-file> [--baseline-run RUN_ID] [--mode metadata|content] [--differences output.csv]"
         );
         std::process::exit(2);
     };
     let mut mode = "metadata".to_owned();
+    let mut baseline_run_id = None;
     let mut differences = None;
     while let Some(argument) = arguments.next() {
         let argument = argument.to_string_lossy().into_owned();
@@ -186,6 +187,14 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
                 .next()
                 .and_then(|value| value.into_string().ok())
                 .unwrap_or_default();
+        } else if let Some(value) = argument.strip_prefix("--baseline-run=") {
+            baseline_run_id = Some(value.to_owned());
+        } else if argument == "--baseline-run" {
+            baseline_run_id = arguments.next().and_then(|value| value.into_string().ok());
+            if baseline_run_id.as_deref().is_none_or(str::is_empty) {
+                eprintln!("Reverification refused: --baseline-run requires a non-empty run ID");
+                std::process::exit(2);
+            }
         } else if let Some(value) = argument.strip_prefix("--differences=") {
             differences = Some(required_path_option_or_exit(
                 Some(value.into()),
@@ -202,6 +211,10 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
             eprintln!("Reverification refused: unknown option {argument}");
             std::process::exit(2);
         }
+    }
+    if baseline_run_id.as_deref().is_some_and(str::is_empty) {
+        eprintln!("Reverification refused: --baseline-run requires a non-empty run ID");
+        std::process::exit(2);
     }
     let project_id = match project_id.into_string() {
         Ok(value) => value,
@@ -245,6 +258,7 @@ pub(super) fn reverify_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
             source_secret: std::path::Path::new(&source_secret),
             destination_secret: std::path::Path::new(&destination_secret),
             mode: &mode,
+            baseline_run_id: baseline_run_id.as_deref(),
             differences: differences.as_deref(),
         },
     ) {
@@ -265,6 +279,7 @@ struct ReverifyRequest<'a> {
     source_secret: &'a std::path::Path,
     destination_secret: &'a std::path::Path,
     mode: &'a str,
+    baseline_run_id: Option<&'a str>,
     differences: Option<&'a std::path::Path>,
 }
 
@@ -279,25 +294,14 @@ fn run_reverify_one(
         source_secret,
         destination_secret,
         mode,
+        baseline_run_id,
         differences,
     } = request;
     let source_password = read_secret_file(source_secret)
         .map_err(|error| format!("Reverification refused: source secret file: {error}"))?;
     let destination_password = read_secret_file(destination_secret)
         .map_err(|error| format!("Reverification refused: destination secret file: {error}"))?;
-    let previous_run = match store.latest_completed_transfer_run(job_id, is_reverify_baseline) {
-        Ok(Some(run)) => run,
-        Ok(None) => {
-            return Err(format!(
-                "Reverification refused: no completed transfer exists for mailbox {job_id}"
-            ));
-        }
-        Err(error) => {
-            return Err(format!(
-                "Reverification refused: could not read migration history: {error}"
-            ));
-        }
-    };
+    let previous_run = select_reverify_baseline(store, job_id, baseline_run_id)?;
     let snapshot =
         match crate::migration_plan::decode_report_run_snapshot(&previous_run.plan_snapshot) {
             Ok(Some(snapshot)) => snapshot,
@@ -420,10 +424,47 @@ fn run_reverify_one(
     Ok(reverify_result_json(
         &evidence,
         &run_id,
+        &previous_run.id,
         mode,
         &folder_observations,
         &mismatches,
     ))
+}
+
+fn select_reverify_baseline(
+    store: &core::StateStore,
+    job_id: &str,
+    baseline_run_id: Option<&str>,
+) -> Result<core::RunSummary, String> {
+    let selected = match baseline_run_id {
+        Some(run_id) => store.completed_transfer_run(job_id, run_id),
+        None => store.latest_completed_transfer_run(job_id, is_reverify_baseline),
+    };
+    let run = match selected {
+        Ok(Some(run)) => run,
+        Ok(None) => {
+            return Err(match baseline_run_id {
+                Some(run_id) => format!(
+                    "Reverification refused: completed transfer run {run_id} was not found for mailbox {job_id}"
+                ),
+                None => format!(
+                    "Reverification refused: no completed transfer exists for mailbox {job_id}"
+                ),
+            });
+        }
+        Err(error) => {
+            return Err(format!(
+                "Reverification refused: could not read migration history: {error}"
+            ));
+        }
+    };
+    if !is_reverify_baseline(&run) {
+        return Err(format!(
+            "Reverification refused: transfer run {} is not an eligible live migration baseline",
+            run.id
+        ));
+    }
+    Ok(run)
 }
 
 fn reverify_persistence_failure_message(
@@ -622,6 +663,7 @@ pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe:
                 source_secret: &row.source_secret,
                 destination_secret: &row.destination_secret,
                 mode: &mode,
+                baseline_run_id: None,
                 differences: differences.as_deref(),
             },
         ) {
@@ -642,7 +684,7 @@ pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe:
     }
     let output = serde_json::json!({
         "format": "mailswiftsync.reverify_batch",
-        "format_version": 1,
+        "format_version": 2,
         "project_id": project_id,
         "mode": mode,
         "total": rows.len(),
@@ -661,14 +703,16 @@ pub(super) fn reverify_batch_command(mut arguments: std::env::ArgsOs) -> eframe:
 fn reverify_result_json(
     evidence: &core::MailboxEvidence,
     run_id: &str,
+    baseline_run_id: &str,
     mode: &str,
     folder_observations: &[core::TransferPassFolder],
     mismatches: &core::MismatchSet,
 ) -> serde_json::Value {
     serde_json::json!({
         "format": "mailswiftsync.reverify",
-        "format_version": 3,
+        "format_version": 4,
         "run_id": run_id,
+        "based_on_transfer_run_id": baseline_run_id,
         "mode": mode,
         "verification_outcome": evidence.verification_outcome().as_str(),
         "verification_status": evidence.verification_status(),
@@ -1327,10 +1371,17 @@ mod tests {
             source_revalidated_at: None,
             destination_revalidated_at: None,
         };
-        let output =
-            super::reverify_result_json(&evidence, "run-1", "metadata", &[folder], &mismatches);
+        let output = super::reverify_result_json(
+            &evidence,
+            "run-1",
+            "transfer-run-1",
+            "metadata",
+            &[folder],
+            &mismatches,
+        );
         assert_eq!(output["format"], "mailswiftsync.reverify");
-        assert_eq!(output["format_version"], 3);
+        assert_eq!(output["format_version"], 4);
+        assert_eq!(output["based_on_transfer_run_id"], "transfer-run-1");
         assert_eq!(output["verification_status"], "verified_with_exceptions");
         assert_eq!(output["message_coverage"]["checked"], 4);
         assert_eq!(output["flag_verification"]["compared"], 2);
@@ -1372,6 +1423,22 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(baseline.id, "transfer");
+        assert_eq!(
+            super::select_reverify_baseline(&store, &job, Some("transfer"))
+                .unwrap()
+                .id,
+            "transfer"
+        );
+        assert!(
+            super::select_reverify_baseline(&store, &job, Some("preflight"))
+                .unwrap_err()
+                .contains("not an eligible live migration baseline")
+        );
+        assert!(
+            super::select_reverify_baseline(&store, &job, Some("missing"))
+                .unwrap_err()
+                .contains("was not found for mailbox")
+        );
 
         let only_preflight = store
             .add_mailbox(&project.id, "other@example.com", "other@example.net")

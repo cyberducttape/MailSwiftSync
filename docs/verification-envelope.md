@@ -467,7 +467,11 @@ success alone is not sufficient evidence to enable it.
 ## Independent post-migration verification
 
 The transfer engine and verifier have separate lifecycles. A completed
-imapsync mailbox can be audited again without launching imapsync:
+imapsync mailbox can be audited again without launching imapsync. The command
+uses the latest completed live transfer by default; `--baseline-run RUN_ID`
+selects a specific completed transfer for a historical audit. The JSON result
+records `based_on_transfer_run_id`; the selected baseline must belong to the
+mailbox and have an eligible immutable live plan snapshot:
 
 ```text
 mailswiftsync reverify STATE PROJECT_ID MAILBOX_ID SOURCE_SECRET_FILE DESTINATION_SECRET_FILE \
@@ -487,11 +491,11 @@ mailbox-002,secrets/mailbox-002-source,secrets/mailbox-002-destination
 
 Use `--mode content` for the bounded body-fingerprint path. Secret files must
 be regular, owner-only files; credentials are never accepted in argv. The
-command reuses the immutable plan snapshot, records a separate
+command reuses the selected immutable plan snapshot, records a separate
 verification-only run and `evidence_history` row, and stores differences under
-that run for CSV export. The run is linked to the most recent completed
-transfer run that provided its baseline (a dry-run preflight is never a
-baseline), and the command holds the same exclusive ledger lock as
+that run for CSV export. The run is linked to the selected completed transfer
+baseline (a dry-run preflight is never eligible), and the command holds the
+same exclusive ledger lock as
 the GUI/recovery controller for the entire provider scan and evidence commit.
 Current organization policy is rechecked against the requested evidence mode;
 a historical plan is not an exemption from a stronger current minimum. The

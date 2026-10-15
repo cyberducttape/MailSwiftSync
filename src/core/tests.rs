@@ -3493,6 +3493,19 @@ fn latest_completed_transfer_run_excludes_reverification_history() {
         .unwrap();
     assert_eq!(baseline.id, "transfer");
     assert_eq!(baseline.engine, "imapsync");
+    assert_eq!(
+        db.completed_transfer_run(&job, "transfer")
+            .unwrap()
+            .unwrap()
+            .id,
+        "transfer"
+    );
+    assert!(db.completed_transfer_run(&job, "audit").unwrap().is_none());
+    assert!(
+        db.completed_transfer_run("another-mailbox", "transfer")
+            .unwrap()
+            .is_none()
+    );
 
     db.begin_verification_run_from_transfer(
         &project.id,

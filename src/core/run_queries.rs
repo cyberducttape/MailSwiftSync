@@ -66,6 +66,36 @@ impl StateStore {
         }
         Ok(None)
     }
+
+    /// Load one explicitly selected completed transfer run for a mailbox.
+    /// Verification-only runs and runs from another mailbox cannot be used as
+    /// transfer baselines.
+    pub fn completed_transfer_run(
+        &self,
+        job_id: &str,
+        run_id: &str,
+    ) -> rusqlite::Result<Option<RunSummary>> {
+        self.connection
+            .query_row(
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1 AND job_id=?2 AND status='completed' AND engine <> 'imap-verification'",
+                params![run_id, job_id],
+                |row| {
+                    Ok(RunSummary {
+                        id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        parent_run_id: row.get(2)?,
+                        engine: row.get(3)?,
+                        phase_at_start: row.get(4)?,
+                        plan_snapshot: row.get(5)?,
+                        status: row.get(6)?,
+                        started_at: row.get(7)?,
+                        finished_at: row.get(8)?,
+                        detail: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+    }
     #[cfg(test)]
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection

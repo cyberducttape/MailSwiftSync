@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Allow standalone reverification to select a specific completed transfer
+  baseline with `--baseline-run`; include the baseline run ID in the versioned
+  JSON result so historical audits retain explicit provenance. Bump the
+  reverification and batch-result schema versions.
 - Re-emit managed cutover readiness with a new event identity when its prior
   source-quiescence validity window has expired and the operator reconfirms;
   active readiness windows remain deduplicated.
