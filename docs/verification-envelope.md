@@ -349,6 +349,10 @@ traversal per endpoint, plus a second source traversal; these checks add
 provider requests and scan time. The customer proof records the final
 per-folder revalidation timestamps and whether the observed cursors remained
 unchanged.
+The presence or absence of a tracked `HIGHESTMODSEQ` must also match the scan
+baseline; if watermark availability changes between scan and revalidation, the
+pass is invalidated and must be repeated so a new watermark is never treated
+as a scan-time stability proof.
 These sequential checks narrow the stale-evidence window on both endpoints;
 they are not an atomic cross-server snapshot, do not prove either mailbox was
 unchanged throughout the interval, and do not prove delivery stayed paused
