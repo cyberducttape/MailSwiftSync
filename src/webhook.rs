@@ -569,6 +569,10 @@ mod tests {
         assert_eq!(signature.len(), "v2=sha256=".len() + 64);
         assert_eq!(
             signature,
+            "v2=sha256=2835e874426c79c553032cc9b797e6b77865f74cb24bd586b3f501ace13fb9b3"
+        );
+        assert_eq!(
+            signature,
             webhook_signature_v2(
                 "test-secret",
                 "event-1",
