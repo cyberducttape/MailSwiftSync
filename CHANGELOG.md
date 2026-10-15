@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Require operators to reconfirm source quiescence after Final Delta before
+  admitting final-verification workers or standalone re-verification. Clear
+  the prior-stage attestation at the Verification transition and emit
+  `migration.cutover_verification_started` only after the new attestation;
+  retain the earlier assertion in audit history.
 - Publish `migration.cutover_ready` only while the source-quiescence
   attestation is fresh, include its expiry in the event detail, and allow a
   refreshed attestation to publish readiness after verification without a

@@ -26,10 +26,11 @@ impl fmt::Display for CutoverAdvanceError {
 
 impl std::error::Error for CutoverAdvanceError {}
 
-/// Validate the workflow/phase binding and the final-delta operator
-/// attestation. This is called inside durable run-admission transactions as
-/// well as by the headless preflight, so UI and batch callers cannot bypass
-/// managed cutover rules.
+/// Validate the workflow/phase binding and the operator's current
+/// source-quiescence attestation for both Final Delta and final Verification.
+/// This is called inside durable run-admission transactions as well as by the
+/// headless preflight, so UI and batch callers cannot bypass managed cutover
+/// rules.
 pub(crate) fn validate_cutover_run_stage(
     stage: &str,
     phase: &str,
@@ -38,7 +39,7 @@ pub(crate) fn validate_cutover_run_stage(
     if stage != phase {
         return Err("managed cutover stage does not match the project phase".into());
     }
-    if stage != CutoverStage::FinalDelta.as_str() {
+    if stage != CutoverStage::FinalDelta.as_str() && stage != CutoverStage::Verification.as_str() {
         return Ok(());
     }
     if let Some(error) = source_quiescence_error(source_quiescence_at) {
@@ -136,6 +137,44 @@ pub(super) fn maybe_emit_cutover_ready(
     tx.execute(
         "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_ready',?2)",
         params![project_id, detail],
+    )?;
+    Ok(())
+}
+
+/// Publish the final-verification lifecycle event only after the operator has
+/// reconfirmed source quiescence at the Verification stage. Entering the stage
+/// alone is not authorization to scan a source that may have resumed delivery.
+fn maybe_emit_cutover_verification_started(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+) -> rusqlite::Result<()> {
+    let stage: Option<(String, String, Option<String>)> = tx
+        .query_row(
+            "SELECT c.stage,p.phase,c.source_quiescence_at FROM cutover_workflows c JOIN projects p ON p.id=c.project_id WHERE c.project_id=?1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((stage, phase, source_quiescence_at)) = stage else {
+        return Ok(());
+    };
+    if stage != CutoverStage::Verification.as_str()
+        || phase != CutoverStage::Verification.as_str()
+        || source_quiescence_error(source_quiescence_at.as_deref()).is_some()
+    {
+        return Ok(());
+    }
+    let already_published: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND kind='cutover_verification_started')",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    if already_published {
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_verification_started','final delta complete; source quiescence reconfirmed for final verification')",
+        [project_id],
     )?;
     Ok(())
 }
@@ -280,9 +319,10 @@ impl StateStore {
         tx.commit()
     }
 
-    /// Record the operator's source-quiescence attestation before entering the
-    /// final-delta stage. The evidence is intentionally explicit that this is a
-    /// manual operational claim, not machine-verified source stability.
+    /// Record the operator's source-quiescence attestation before a Final Delta
+    /// or final Verification pass. The evidence is intentionally explicit that
+    /// this is a manual operational claim, not machine-verified source
+    /// stability.
     pub fn attest_cutover_source_quiescence(
         &self,
         project_id: &str,
@@ -305,6 +345,7 @@ impl StateStore {
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_source_quiescence_attested',?2)",
             params![project_id, format!("operator={operator}; evidence={evidence}")],
         )?;
+        maybe_emit_cutover_verification_started(&tx, project_id)?;
         maybe_emit_cutover_ready(&tx, project_id)?;
         tx.commit()
     }
@@ -387,7 +428,10 @@ impl StateStore {
         if next != CutoverStage::Completed {
             tx.execute("UPDATE mailbox_jobs SET state='ready',attention_reason=NULL WHERE project_id=?1 AND state IN ('verified','verified_with_exceptions')", [project_id])?;
         }
-        tx.execute("UPDATE cutover_workflows SET stage=?1,external_confirmation=COALESCE(?2,external_confirmation) WHERE project_id=?3", params![next.as_str(), confirmation, project_id])?;
+        tx.execute(
+            "UPDATE cutover_workflows SET stage=?1,external_confirmation=COALESCE(?2,external_confirmation),source_quiescence_operator=CASE WHEN ?1='verification' THEN NULL ELSE source_quiescence_operator END,source_quiescence_evidence=CASE WHEN ?1='verification' THEN NULL ELSE source_quiescence_evidence END,source_quiescence_at=CASE WHEN ?1='verification' THEN NULL ELSE source_quiescence_at END WHERE project_id=?3",
+            params![next.as_str(), confirmation, project_id],
+        )?;
         let next_phase = match next {
             CutoverStage::CatchUp => "catch_up",
             CutoverStage::FinalDelta => "final_delta",
@@ -415,12 +459,9 @@ impl StateStore {
                     [project_id],
                 )?;
             }
-            CutoverStage::Verification => {
-                tx.execute(
-                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_verification_started','final delta complete; final verification stage started')",
-                    [project_id],
-                )?;
-            }
+            // The Verification-stage signal is emitted only after a new
+            // source-quiescence attestation is recorded in this stage.
+            CutoverStage::Verification => {}
             _ => {}
         }
         tx.execute(
@@ -753,6 +794,67 @@ mod tests {
             store.advance_cutover(&project.id, None).unwrap(),
             CutoverStage::Verification
         );
+        assert!(
+            store
+                .begin_run(
+                    &project.id,
+                    &job,
+                    "verification-without-reconfirmation",
+                    "imapsync"
+                )
+                .is_err(),
+            "the pre-final-delta attestation must not authorize final verification"
+        );
+        assert!(
+            store
+                .begin_batch_run_with_children(
+                    &project.id,
+                    std::slice::from_ref(&job),
+                    "verification-batch-without-reconfirmation",
+                    "imapsync",
+                    &[],
+                    "",
+                    &[],
+                )
+                .is_err(),
+            "batch admission must enforce the same post-delta barrier"
+        );
+        assert!(
+            store
+                .begin_verification_run(
+                    &project.id,
+                    &job,
+                    "reverify-without-reconfirmation",
+                    "historical-plan-snapshot",
+                )
+                .is_err(),
+            "standalone verification must enforce the managed cutover barrier too"
+        );
+        let verification_started_before_reconfirmation: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_verification_started'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(verification_started_before_reconfirmation, 0);
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Reconfirmed source delivery remains paused after final delta",
+            )
+            .unwrap();
+        let verification_started_after_reconfirmation: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_verification_started'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(verification_started_after_reconfirmation, 1);
         let cutover_ready_before_final_verification: i64 = store
             .connection
             .query_row(
@@ -1114,6 +1216,13 @@ mod tests {
             store.advance_cutover(&project.id, None).unwrap(),
             CutoverStage::Verification
         );
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Source delivery remains paused after final delta",
+            )
+            .unwrap();
         let ready_before_final_verification: i64 = store
             .connection
             .query_row(

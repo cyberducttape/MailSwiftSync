@@ -903,6 +903,8 @@ fn psa_cutover_ready_contract_is_time_bounded_by_source_quiescence() {
         "15 minutes",
         "refreshing the attestation during",
         "without rescanning",
+        "clears the prior attestation",
+        "until the operator records a new, fresh attestation",
     ] {
         assert!(
             contract.contains(required),

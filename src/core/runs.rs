@@ -106,6 +106,7 @@ impl StateStore {
             params![project_id, job_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
+        validate_managed_cutover_run_admission(&tx, project_id, &phase)?;
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
             params![project_id, job_id],

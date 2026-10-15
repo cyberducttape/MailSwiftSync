@@ -333,11 +333,16 @@ immediately after that final observation.
 
 Separately, the durable cutover workflow requires an operator
 source-quiescence attestation before the Final Delta stage can be run or
-advanced. It records the operator, timestamp, and evidence/change reference
-and is audited in the event ledger. This is an auditable workflow gate, not a
-server-observed delivery barrier. The operator must maintain the stated
-quiescence through final verification. Even with unchanged source cursors at
-revalidation, customer proof reports `cutover_readiness` as
+advanced. On transition from Final Delta to Verification, the workflow clears
+that stage's current attestation and requires a fresh reconfirmation before
+any final-verification or standalone re-verification run can be admitted. The
+`migration.cutover_verification_started` event is emitted only after that
+reconfirmation. The ledger retains the earlier attestation in its audit event
+history. Each attestation records the operator, timestamp, and evidence/change
+reference; it is an auditable workflow gate, not a server-observed delivery
+barrier. The operator must maintain the stated quiescence through final
+verification. Even with unchanged source cursors at revalidation, customer
+proof reports `cutover_readiness` as
 `not_established`: the application cannot machine-prove continued quiescence
 or an atomic global cutover boundary.
 
