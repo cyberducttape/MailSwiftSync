@@ -733,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn cutover_lookup_error_preserves_phase_after_evidence_commit() {
+    fn cutover_lookup_error_prevents_terminal_evidence_commit() {
         with_app(|app| {
             let project = app
                 .store
@@ -763,9 +763,9 @@ mod tests {
             app.store
                 .begin_run(&project.id, &job, "cutover-read-error-run", "imapsync")
                 .unwrap();
-            // Make only the cutover-stage SELECT fail. SQLite can still write
-            // the evidence, terminal run, and ordinary project phase, so the
-            // assertion catches the former .ok().flatten() fail-open path.
+            // Remove the cutover relation after run admission. The terminal
+            // evidence transaction must fail closed because it cannot prove
+            // whether this result completes a cutover verification epoch.
             app.store.drop_cutover_table_for_test().unwrap();
             app.active_run = Some(ActiveRunContext {
                 run_id: "cutover-read-error-run".into(),
@@ -802,12 +802,14 @@ mod tests {
                 .project_report_snapshot(&project.id)
                 .unwrap()
                 .unwrap();
-            assert_eq!(snapshot.mailboxes[0].job.state, "verified");
+            assert_eq!(snapshot.mailboxes[0].job.state, "running");
             assert_eq!(snapshot.project.phase, phase_before_completion);
             assert!(app.durability_error);
-            assert!(app.output.iter().any(|line| {
-                line.contains("read cutover workflow before phase advancement failed")
-            }));
+            assert!(
+                app.output
+                    .iter()
+                    .any(|line| { line.contains("Could not persist terminal state") })
+            );
         });
     }
 }

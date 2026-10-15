@@ -187,13 +187,16 @@ reconciliation as successful.
   operational concerns.
 - Ledger transitions now generate lifecycle events transactionally in the
   outbox (`migration.started`, `migration.completed`,
-  `migration.final_delta_started`, `migration.cutover_ready`, `mailbox.completed`,
+  `migration.final_delta_started`, `migration.cutover_verification_started`,
+  `migration.cutover_ready`, `mailbox.completed`,
   `mailbox.preflight_failed`, `mailbox.verification_difference`,
   `migration.proof_ready`, and verification acceptance). Proof-ready events
   carry the SHA-256 of the successfully signed certificate. Events are
   endpoint-unbound until delivery configuration is supplied, so credentials
   and URLs remain outside durable state. `migration.cutover_ready` is emitted
-  only after final-delta mailbox verification, not when the final delta starts.
+  only after all final Verification-stage evidence is durable (including any
+  explicit exception acceptances), not when Final Delta or Verification starts;
+  clean and accepted-exception counts are distinct in its detail.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy

@@ -3,11 +3,13 @@
 ## Unreleased
 
 - Emit `migration.final_delta_started` when a managed cutover enters its final
-  delta, and delay `migration.cutover_ready` until the final delta has durable
-  verification evidence and the workflow advances to Verification. Generic
-  non-cutover phase changes no longer emit cutover lifecycle events. Schema 36
-  repairs queued legacy notifications so they cannot announce premature
-  readiness after upgrade.
+  delta, emit `migration.cutover_verification_started` when that pass enters
+  final verification, and delay `migration.cutover_ready` until all final
+  Verification-stage evidence is durable or differences are explicitly
+  accepted. Include separate clean and exception counts in readiness events;
+  generic non-cutover phase changes no longer emit cutover lifecycle events.
+  The ledger migration repairs queued legacy notifications and moves readiness
+  publication to the final verification commit.
 - Keep approved cutover workflows in Verification after exception acceptance;
   only the cutover transition with its external confirmation can mark them
   Complete.

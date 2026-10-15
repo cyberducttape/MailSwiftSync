@@ -458,8 +458,9 @@ impl StateStore {
         // version 33 persists folder observations for standalone reverification,
         // version 34 records operator-attested source quiescence for cutover,
         // version 35 persists post-destination source cursor revalidation, and
-        // version 36 separates final-delta-started from verified cutover-ready
-        // webhook events and repairs queued legacy event classifications.
+        // version 36 separates final-delta-started from cutover-ready webhook
+        // events and repairs queued legacy classifications; version 37 delays
+        // cutover-ready until final Verification evidence is durable.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -582,7 +583,7 @@ impl StateStore {
         tx.execute_batch(
             "DROP TRIGGER IF EXISTS events_webhook_outbox;
              CREATE TRIGGER events_webhook_outbox AFTER INSERT ON events
-             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted','proof_ready','cutover_final_delta_started','cutover_ready')
+             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted','proof_ready','cutover_final_delta_started','cutover_verification_started','cutover_ready')
                  OR (NEW.kind='phase_changed' AND NEW.detail='complete')
              BEGIN
                  INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest)
@@ -591,6 +592,7 @@ impl StateStore {
                          WHEN NEW.kind='run_started' THEN 'migration.started'
                          WHEN NEW.kind='proof_ready' THEN 'migration.proof_ready'
                          WHEN NEW.kind='cutover_final_delta_started' THEN 'migration.final_delta_started'
+                         WHEN NEW.kind='cutover_verification_started' THEN 'migration.cutover_verification_started'
                          WHEN NEW.kind='cutover_ready' THEN 'migration.cutover_ready'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL AND r.phase_at_start='preflight' AND r.status='failed') THEN 'mailbox.preflight_failed'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
@@ -605,6 +607,7 @@ impl StateStore {
                              WHEN NEW.kind='run_started' THEN 'migration.started'
                              WHEN NEW.kind='proof_ready' THEN 'migration.proof_ready'
                              WHEN NEW.kind='cutover_final_delta_started' THEN 'migration.final_delta_started'
+                             WHEN NEW.kind='cutover_verification_started' THEN 'migration.cutover_verification_started'
                              WHEN NEW.kind='cutover_ready' THEN 'migration.cutover_ready'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL AND r.phase_at_start='preflight' AND r.status='failed') THEN 'mailbox.preflight_failed'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
@@ -630,6 +633,18 @@ impl StateStore {
                AND event_id IN (
                    SELECT printf('ledger-event-%lld',id) FROM events
                    WHERE kind='phase_changed' AND detail='final_delta'
+               )
+               AND EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=webhook_deliveries.project_id)",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE webhook_deliveries
+             SET event_type='migration.cutover_verification_started',
+                 payload=json_set(payload,'$.event_type','migration.cutover_verification_started','$.detail','legacy notification: final verification began; completion was not established')
+             WHERE status='queued' AND event_type='migration.cutover_ready'
+               AND event_id IN (
+                   SELECT printf('ledger-event-%lld',id) FROM events
+                   WHERE kind='phase_changed' AND detail='verification'
                )
                AND EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=webhook_deliveries.project_id)",
             [],

@@ -15,6 +15,52 @@ pub enum CutoverStage {
     Completed,
 }
 
+/// Publish cutover readiness only after the last mailbox's final verification
+/// result is durable. Called from the same SQLite transaction that commits
+/// verified state or an explicit exception acceptance.
+pub(super) fn maybe_emit_cutover_ready(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+) -> rusqlite::Result<()> {
+    let workflow: Option<(String, String)> = tx
+        .query_row(
+            "SELECT c.stage,p.phase FROM cutover_workflows c JOIN projects p ON p.id=c.project_id WHERE c.project_id=?1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if !workflow
+        .as_ref()
+        .is_some_and(|(stage, phase)| stage == "verification" && phase == "verification")
+    {
+        return Ok(());
+    }
+    let (total, clean_verified, accepted_exceptions): (i64, i64, i64) = tx.query_row(
+        "SELECT COUNT(*),COALESCE(SUM(state='verified'),0),COALESCE(SUM(state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)),0) FROM mailbox_jobs WHERE project_id=?1",
+        [project_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if total == 0 || total != clean_verified + accepted_exceptions {
+        return Ok(());
+    }
+    let already_published: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE project_id=?1 AND kind='cutover_ready')",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    if already_published {
+        return Ok(());
+    }
+    let detail = format!(
+        "final verification complete; mailboxes={total}; clean_verified={clean_verified}; accepted_exceptions={accepted_exceptions}; external cutover approval pending"
+    );
+    tx.execute(
+        "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_ready',?2)",
+        params![project_id, detail],
+    )?;
+    Ok(())
+}
+
 impl CutoverStage {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -212,8 +258,12 @@ impl StateStore {
         if phase == "complete" {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let (total, verified): (i64, i64) = tx.query_row("SELECT COUNT(*),COALESCE(SUM(state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id))),0) FROM mailbox_jobs WHERE project_id=?1", [project_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        if total == 0 || total != verified {
+        let (total, clean_verified, accepted_exceptions): (i64, i64, i64) = tx.query_row(
+            "SELECT COUNT(*),COALESCE(SUM(state='verified'),0),COALESCE(SUM(state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)),0) FROM mailbox_jobs WHERE project_id=?1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        if total == 0 || total != clean_verified + accepted_exceptions {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let next = stage.next().ok_or(rusqlite::Error::InvalidQuery)?;
@@ -257,11 +307,9 @@ impl StateStore {
                 params![project_id, next_phase],
             )?;
         }
-        // Emit cutover-specific outbox events from this transaction, not from
-        // generic phase changes. Readiness is published only after the final
-        // delta pass has durable verification evidence and the workflow moves
-        // to Verification. Generic migrations and ordinary verification
-        // changes must never produce cutover signals.
+        // Emit phase-start signals transactionally. Readiness itself is
+        // emitted only when the final Verification-phase mailbox reaches an
+        // acceptable terminal state after this method requeues prior evidence.
         match next {
             CutoverStage::FinalDelta => {
                 tx.execute(
@@ -271,7 +319,7 @@ impl StateStore {
             }
             CutoverStage::Verification => {
                 tx.execute(
-                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_ready','final delta verified; external cutover approval pending')",
+                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'cutover_verification_started','final delta complete; final verification stage started')",
                     [project_id],
                 )?;
             }
@@ -412,7 +460,7 @@ mod tests {
             store.advance_cutover(&project.id, None).unwrap(),
             CutoverStage::Verification
         );
-        let cutover_ready_after_final_delta: i64 = store
+        let cutover_ready_before_final_verification: i64 = store
             .connection
             .query_row(
                 "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
@@ -420,7 +468,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(cutover_ready_after_final_delta, 1);
+        assert_eq!(cutover_ready_before_final_verification, 0);
         store
             .connection
             .execute(
@@ -428,6 +476,40 @@ mod tests {
                 [&job],
             )
             .unwrap();
+        let verification_tx = store.connection.unchecked_transaction().unwrap();
+        super::maybe_emit_cutover_ready(&verification_tx, &project.id).unwrap();
+        verification_tx.commit().unwrap();
+        let cutover_ready_after_final_verification: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cutover_ready_after_final_verification, 1);
+        let event_payload: String = store
+            .connection
+            .query_row(
+                "SELECT payload FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&event_payload).unwrap();
+        assert_eq!(payload["event_type"], "migration.cutover_ready");
+        assert!(
+            payload["detail"]
+                .as_str()
+                .unwrap()
+                .contains("clean_verified=1")
+        );
+        assert!(
+            payload["detail"]
+                .as_str()
+                .unwrap()
+                .contains("accepted_exceptions=0")
+        );
         assert!(store.advance_cutover(&project.id, None).is_err());
         assert!(
             store
@@ -481,15 +563,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cutover_ready, 1);
-        let event_type_in_payload: String = store
-            .connection
-            .query_row(
-                "SELECT json_extract(payload,'$.event_type') FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
-                [&project.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(event_type_in_payload, "migration.cutover_ready");
     }
 
     #[test]
@@ -515,7 +588,7 @@ mod tests {
         let lifecycle_count: i64 = store
             .connection
             .query_row(
-                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type IN ('migration.final_delta_started','migration.cutover_ready')",
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type IN ('migration.final_delta_started','migration.cutover_verification_started','migration.cutover_ready')",
                 [&project.id],
                 |row| row.get(0),
             )
@@ -524,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_36_repairs_queued_legacy_cutover_ready_events() {
+    fn schema_37_repairs_queued_legacy_cutover_ready_events() {
         let store = StateStore::in_memory().unwrap();
         let (managed, _) = store
             .create_project_with_mailbox("managed", "source", "destination", "a", "a")
@@ -537,12 +610,17 @@ mod tests {
             .create_project_with_mailbox("generic", "source", "destination", "b", "b")
             .unwrap();
 
-        for project_id in [&managed.id, &generic.id] {
+        let mut legacy_event_ids = Vec::new();
+        for (project_id, phase) in [
+            (&managed.id, "final_delta"),
+            (&managed.id, "verification"),
+            (&generic.id, "final_delta"),
+        ] {
             store
                 .connection
                 .execute(
-                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed','final_delta')",
-                    [project_id],
+                    "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed',?2)",
+                    rusqlite::params![project_id, phase],
                 )
                 .unwrap();
             let event_id = format!("ledger-event-{}", store.connection.last_insert_rowid());
@@ -553,6 +631,7 @@ mod tests {
                     rusqlite::params![event_id, project_id],
                 )
                 .unwrap();
+            legacy_event_ids.push(event_id);
         }
         store
             .connection
@@ -563,8 +642,8 @@ mod tests {
         let managed_event: (String, String, String) = store
             .connection
             .query_row(
-                "SELECT event_type,status,json_extract(payload,'$.event_type') FROM webhook_deliveries WHERE project_id=?1",
-                [&managed.id],
+                "SELECT event_type,status,json_extract(payload,'$.event_type') FROM webhook_deliveries WHERE event_id=?1",
+                [&legacy_event_ids[0]],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
@@ -576,11 +655,27 @@ mod tests {
                 "migration.final_delta_started".to_owned()
             )
         );
+        let verification_started_event: (String, String, String) = store
+            .connection
+            .query_row(
+                "SELECT event_type,status,json_extract(payload,'$.event_type') FROM webhook_deliveries WHERE event_id=?1",
+                [&legacy_event_ids[1]],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            verification_started_event,
+            (
+                "migration.cutover_verification_started".to_owned(),
+                "queued".to_owned(),
+                "migration.cutover_verification_started".to_owned()
+            )
+        );
         let generic_event: (String, String) = store
             .connection
             .query_row(
-                "SELECT status,last_error FROM webhook_deliveries WHERE project_id=?1",
-                [&generic.id],
+                "SELECT status,last_error FROM webhook_deliveries WHERE event_id=?1",
+                [&legacy_event_ids[2]],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
@@ -675,6 +770,15 @@ mod tests {
             store.advance_cutover(&project.id, None).unwrap(),
             CutoverStage::Verification
         );
+        let ready_before_final_verification: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(ready_before_final_verification, 0);
 
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
@@ -718,6 +822,22 @@ mod tests {
                 "Accepted with customer approval",
             )
             .unwrap();
+
+        let ready_payload: String = store
+            .connection
+            .query_row(
+                "SELECT payload FROM webhook_deliveries WHERE project_id=?1 AND event_type='migration.cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ready_payload: serde_json::Value = serde_json::from_str(&ready_payload).unwrap();
+        assert!(
+            ready_payload["detail"]
+                .as_str()
+                .unwrap()
+                .contains("accepted_exceptions=1")
+        );
 
         assert_eq!(
             store.project(&project.id).unwrap().unwrap().phase,

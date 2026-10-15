@@ -1070,6 +1070,9 @@ impl StateStore {
             "UPDATE mailbox_jobs SET state=?1,attention_reason=?2,preflight_plan=COALESCE(?3,preflight_plan),checkpoint=COALESCE(?4,checkpoint) WHERE id=?5 AND project_id=?6",
             params![mailbox_state, attention_reason, preflight_plan, checkpoint, job_id, project_id],
         )?;
+        if mailbox_state == "verified" {
+            super::cutover::maybe_emit_cutover_ready(&tx, project_id)?;
+        }
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_finished',?3)",

@@ -63,17 +63,20 @@ endpoints, or mailbox content is present.
 | `mailbox.preflight_failed` | Add affected mailbox and remediation | Waiting on technician |
 | `mailbox.failed` | Add classified failure and affected mailbox | Waiting on customer/technician |
 | `migration.final_delta_started` | Begin the approved final-delta window; keep source delivery paused | In progress |
-| `migration.cutover_ready` | Final delta and its verification passed; request external cutover approval/action | Pending customer approval |
+| `migration.cutover_verification_started` | Begin final independent verification; keep source delivery paused | Verification in progress |
+| `migration.cutover_ready` | Final Verification-stage evidence is complete; request external cutover approval/action | Pending customer approval |
 | `migration.completed` | Update totals and link evidence | Ready for review |
 | `migration.proof_ready` | Attach or link signed proof artifact | Customer signoff pending |
 | `migration.status_snapshot` | Reconcile current aggregate projection | Set current status |
 
-`migration.cutover_ready` is emitted only when the cutover workflow advances
-from Final Delta to Verification after every mailbox has durable verification
-evidence (or an explicitly accepted exception). Merely entering the Final
-Delta phase emits `migration.final_delta_started`; it is not a readiness or
-approval signal. The source-quiescence attestation remains an operator claim,
-so receivers should keep the source paused until external cutover approval.
+`migration.cutover_ready` is emitted only after every mailbox's final
+Verification-stage evidence is durable, or its difference has an explicit
+acceptance. Its detail includes separate `clean_verified` and
+`accepted_exceptions` counts. Entering Final Delta emits
+`migration.final_delta_started`; entering the subsequent Verification phase
+emits `migration.cutover_verification_started`, not a readiness signal. The
+source-quiescence attestation remains an operator claim, so receivers should
+keep the source paused until external cutover approval.
 
 Ticket correlation is intentionally receiver-owned. A future control plane may
 add an opaque `external_ticket_ref` and project-scoped mapping, but must make
