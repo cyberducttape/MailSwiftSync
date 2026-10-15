@@ -52,7 +52,27 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
     let state = &values[0];
     let operation = &text_arguments[0];
     let project_id = &text_arguments[1];
-    let store = match core::StateStore::open(state) {
+    let _instance_lock = if matches!(
+        operation.as_str(),
+        "create" | "approve" | "attest-source-quiescence" | "advance"
+    ) {
+        Some(
+            crate::process::acquire_instance_lock(std::path::Path::new(state)).unwrap_or_else(
+                |error| {
+                    eprintln!("Cutover workflow unavailable: {error}");
+                    std::process::exit(1);
+                },
+            ),
+        )
+    } else {
+        None
+    };
+    let store_result = if matches!(operation.as_str(), "run" | "status") {
+        core::StateStore::open_readonly(state)
+    } else {
+        core::StateStore::open(state)
+    };
+    let store = match store_result {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Cutover workflow unavailable: {error}");
@@ -140,10 +160,11 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
                     std::process::exit(1);
                 }
             }
-            headless_batch_execute(
+            crate::headless::headless_cutover_batch_execute(
                 std::path::Path::new(state),
-                true,
                 acknowledge_destination_loss,
+                project_id,
+                workflow.stage,
             )
             .map_err(|error| {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error)))
@@ -407,7 +428,24 @@ pub(super) fn wave_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
         eprintln!("{WAVE_USAGE}");
         std::process::exit(2);
     }
-    let store = match core::StateStore::open(state) {
+    let _instance_lock = if matches!(shape.as_slice(), ["approve", _, _]) {
+        Some(
+            crate::process::acquire_instance_lock(std::path::Path::new(state)).unwrap_or_else(
+                |error| {
+                    eprintln!("Migration wave operation failed: {error}");
+                    std::process::exit(1);
+                },
+            ),
+        )
+    } else {
+        None
+    };
+    let store_result = match text[0].as_str() {
+        "list" => core::StateStore::open_readonly(state),
+        "approve" => core::StateStore::open(state),
+        _ => unreachable!("request shape validated above"),
+    };
+    let store = match store_result {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Migration waves unavailable: {error}");

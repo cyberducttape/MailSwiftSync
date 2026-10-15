@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Serialize cutover approval/attestation/advancement and migration-wave approval
+  with the exclusive ledger owner lock. Make cutover/wave status reads use a
+  read-only connection, and revalidate the approved cutover stage after the
+  headless worker acquires the lock so a stale pre-lock read cannot launch a
+  later stage.
 - Emit `migration.final_delta_started` when a managed cutover enters its final
   delta, emit `migration.cutover_verification_started` when that pass enters
   final verification, and delay `migration.cutover_ready` until all final

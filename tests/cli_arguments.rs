@@ -125,6 +125,64 @@ fn reverify_refuses_a_ledger_owned_by_another_process_before_opening_inputs() {
 }
 
 #[test]
+fn cutover_and_wave_writes_refuse_a_ledger_owned_by_another_process() {
+    use fs2::FileExt;
+    use std::fs::OpenOptions;
+
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-lifecycle-lock-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir(&directory).expect("private test directory should be created");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("test directory should be owner-only");
+    }
+    let state = directory.join("state.db");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(state.with_extension("lock"))
+        .expect("ledger lock file should be created");
+    lock.lock_exclusive()
+        .expect("test process should own the ledger lock");
+
+    for arguments in [
+        vec![
+            "cutover",
+            state.to_str().unwrap(),
+            "approve",
+            "project",
+            "operator",
+        ],
+        vec![
+            "wave",
+            state.to_str().unwrap(),
+            "approve",
+            "wave",
+            "operator",
+        ],
+    ] {
+        let output = run(&arguments);
+        assert_eq!(output.status.code(), Some(1), "{}", output.status);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Another MailSwiftSync instance holds the project database"),
+            "{stderr}"
+        );
+        assert!(!state.exists(), "write command opened the locked ledger");
+    }
+
+    FileExt::unlock(&lock).expect("test process should release the ledger lock");
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn headless_path_option_without_value_names_the_option() {
     let state = missing_ledger("diagnostic-missing");
     let output = run(&[

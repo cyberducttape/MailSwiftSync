@@ -1,8 +1,8 @@
 use crate::credentials::read_secret_file;
 use crate::headless::{
-    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute,
-    headless_batch_execute_selected, headless_execute_with_credentials, headless_recover,
-    headless_status, headless_status_summary, headless_supervise,
+    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute_selected,
+    headless_execute_with_credentials, headless_recover, headless_status, headless_status_summary,
+    headless_supervise,
 };
 use crate::maintenance_window::MaintenanceWindow;
 use crate::*;

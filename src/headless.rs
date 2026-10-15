@@ -855,6 +855,43 @@ pub(crate) fn headless_batch_execute_selected(
     acknowledge_destination_loss: bool,
     diagnostic_log: Option<&std::path::Path>,
 ) -> Result<String, String> {
+    headless_batch_execute_selected_inner(
+        state_path,
+        live,
+        requested_ids,
+        acknowledge_destination_loss,
+        diagnostic_log,
+        None,
+    )
+}
+
+/// Run the approved cutover stage only if it is still the same stage after
+/// acquiring the App's exclusive ledger lock. The CLI's earlier read is for
+/// actionable diagnostics; this locked recheck closes the intervening race.
+pub(crate) fn headless_cutover_batch_execute(
+    state_path: &std::path::Path,
+    acknowledge_destination_loss: bool,
+    project_id: &str,
+    expected_stage: core::CutoverStage,
+) -> Result<String, String> {
+    headless_batch_execute_selected_inner(
+        state_path,
+        true,
+        None,
+        acknowledge_destination_loss,
+        None,
+        Some((project_id, expected_stage)),
+    )
+}
+
+fn headless_batch_execute_selected_inner(
+    state_path: &std::path::Path,
+    live: bool,
+    requested_ids: Option<&HashSet<String>>,
+    acknowledge_destination_loss: bool,
+    diagnostic_log: Option<&std::path::Path>,
+    cutover_guard: Option<(&str, core::CutoverStage)>,
+) -> Result<String, String> {
     let mut app =
         App::try_from_state_path(Some(state_path)).map_err(|failure| failure.to_string())?;
     if let Some(directory) = diagnostic_log {
@@ -880,6 +917,50 @@ pub(crate) fn headless_batch_execute_selected(
                 .into(),
         );
     };
+    if let Some((expected_project_id, expected_stage)) = cutover_guard {
+        if project_id != expected_project_id {
+            return Err(
+                "cutover run refused: the locked durable queue belongs to a different project"
+                    .into(),
+            );
+        }
+        let workflow = app
+            .store
+            .cutover_workflow(&project_id)
+            .map_err(|error| {
+                format!(
+                    "cutover run refused: could not re-read workflow under the ledger lock: {error}"
+                )
+            })?
+            .ok_or_else(|| {
+                "cutover run refused: workflow disappeared before locked admission".to_owned()
+            })?;
+        if workflow.stage != expected_stage
+            || workflow.approved_by.is_none()
+            || workflow.stage == core::CutoverStage::Completed
+            || (workflow.stage == core::CutoverStage::FinalDelta
+                && workflow.source_quiescence_at.is_none())
+        {
+            return Err("cutover run refused: workflow stage, approval, or source-quiescence evidence changed before locked admission".into());
+        }
+        let scheduled_at = chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at)
+            .map_err(|_| "cutover run refused: scheduled_at is not RFC 3339".to_owned())?
+            .with_timezone(&chrono::Utc);
+        if scheduled_at > chrono::Utc::now() {
+            return Err("cutover run refused: scheduled time has not arrived".into());
+        }
+        if let Some(window) = workflow.maintenance_window.as_deref() {
+            let window = MaintenanceWindow::parse(window).map_err(|_| {
+                "cutover run refused: durable maintenance window is invalid".to_owned()
+            })?;
+            if !window.contains_now() {
+                return Err(
+                    "cutover run refused: current time is outside the approved maintenance window"
+                        .into(),
+                );
+            }
+        }
+    }
     if requested_ids.is_some_and(HashSet::is_empty) {
         return Err("selective remediation requested zero mailbox IDs; refusing success".into());
     }
