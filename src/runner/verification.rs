@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 /// Perform independent, folder-aware IMAP reconciliation after a successful
 /// imapsync transfer. Engine counters remain useful as a fallback, but they
@@ -61,16 +62,17 @@ pub(crate) fn run_imap_message_verification(
     } else {
         core::MessageMetadataStage::open_ephemeral()?
     };
+    stage.ensure_free_space()?;
     // Folder-level invalidation cannot remove rows for a folder deleted or
     // renamed since an interrupted attempt. Begin from empty endpoint
     // inventories so no prior-run row or body fingerprint can enter evidence.
     stage.begin_verification_attempt()?;
     let mut source_refresh_form = form.clone();
-    let mut source_reconnect_credential = || {
-        source_refresh_form.refresh_oauth_access_token(true)?;
-        Ok(source_refresh_form.source_password.clone())
-    };
-    let source =
+    let source = {
+        let mut source_reconnect_credential = || {
+            source_refresh_form.refresh_oauth_access_token(true)?;
+            Ok(source_refresh_form.source_password.clone())
+        };
         crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes_excluding_refresh(
             &source_host,
             &form.profile.source_user,
@@ -86,7 +88,8 @@ pub(crate) fn run_imap_message_verification(
             &mut source_reconnect_credential,
             &mut stage,
             core::StagedMessageSide::Source,
-        )?;
+        )?
+    };
     let mut destination_refresh_form = form.clone();
     let mut destination_reconnect_credential = || {
         destination_refresh_form.refresh_oauth_access_token(false)?;
@@ -109,6 +112,100 @@ pub(crate) fn run_imap_message_verification(
             &mut stage,
             core::StagedMessageSide::Destination,
         )?;
+    // Source and destination are scanned serially. Re-select the complete
+    // source folder inventory after the destination scan and reject the
+    // evidence if its UID snapshot (or tracked CONDSTORE watermark) drifted.
+    // This narrows the observation gap but does not create a global atomic
+    // snapshot; the cutover workflow still requires operator quiescence.
+    let source_snapshots = stage
+        .folder_cursors()
+        .map_err(|error| format!("could not read source verification cursors: {error}"))?
+        .into_iter()
+        .filter(|cursor| cursor.side == core::StagedMessageSide::Source)
+        .map(|cursor| {
+            if !cursor.completed || cursor.staged != cursor.snapshot.exists {
+                return Err(format!(
+                    "source folder {} lacks complete staged snapshot evidence",
+                    cursor.mailbox
+                ));
+            }
+            Ok((cursor.mailbox, cursor.snapshot))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
+    let destination_snapshots = stage
+        .folder_cursors()
+        .map_err(|error| format!("could not read destination verification cursors: {error}"))?
+        .into_iter()
+        .filter(|cursor| cursor.side == core::StagedMessageSide::Destination)
+        .map(|cursor| {
+            if !cursor.completed || cursor.staged != cursor.snapshot.exists {
+                return Err(format!(
+                    "destination folder {} lacks complete staged snapshot evidence",
+                    cursor.mailbox
+                ));
+            }
+            Ok((cursor.mailbox, cursor.snapshot))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
+    source_refresh_form.refresh_oauth_access_token(true)?;
+    let source_revalidation = crate::imap_probe::revalidate_tls_account_snapshots(
+        crate::imap_probe::TlsAccountRevalidation {
+            endpoint_label: "source",
+            host: &source_host,
+            user: &form.profile.source_user,
+            credential: source_refresh_form.source_password.as_str(),
+            auth_method: &form.profile.source_auth,
+            transport: &form.profile.source_tls,
+            ca_bundle: &form.profile.source_ca_bundle,
+            certificate_pin_sha256: &form.profile.source_certificate_pin_sha256,
+            budget: &budget,
+            expected_mailboxes: &source.mailboxes,
+            excluded_mailboxes: &excluded_source_folders,
+            expected_snapshots: &source_snapshots,
+        },
+    )?;
+    stage.record_source_revalidation(&source_revalidation)?;
+    destination_refresh_form.refresh_oauth_access_token(false)?;
+    let destination_revalidation = crate::imap_probe::revalidate_tls_account_snapshots(
+        crate::imap_probe::TlsAccountRevalidation {
+            endpoint_label: "destination",
+            host: &destination_host,
+            user: &form.profile.destination_user,
+            credential: destination_refresh_form.destination_password.as_str(),
+            auth_method: &form.profile.destination_auth,
+            transport: crate::effective_destination_tls(&form.profile.destination_tls),
+            ca_bundle: &form.profile.destination_ca_bundle,
+            certificate_pin_sha256: &form.profile.destination_certificate_pin_sha256,
+            budget: &budget,
+            expected_mailboxes: &destination.mailboxes,
+            excluded_mailboxes: &HashSet::new(),
+            expected_snapshots: &destination_snapshots,
+        },
+    )?;
+    stage.record_destination_revalidation(&destination_revalidation)?;
+    // The source may change while the destination's final LIST/EXAMINE pass
+    // is running. Recheck it once more at the end of the observation window so
+    // that such drift cannot be hidden by the earlier source revalidation.
+    // This narrows the race; it is not an atomic cross-server snapshot and
+    // cannot prove that mail flow stayed quiescent between observations.
+    source_refresh_form.refresh_oauth_access_token(true)?;
+    let final_source_revalidation = crate::imap_probe::revalidate_tls_account_snapshots(
+        crate::imap_probe::TlsAccountRevalidation {
+            endpoint_label: "source",
+            host: &source_host,
+            user: &form.profile.source_user,
+            credential: source_refresh_form.source_password.as_str(),
+            auth_method: &form.profile.source_auth,
+            transport: &form.profile.source_tls,
+            ca_bundle: &form.profile.source_ca_bundle,
+            certificate_pin_sha256: &form.profile.source_certificate_pin_sha256,
+            budget: &budget,
+            expected_mailboxes: &source.mailboxes,
+            excluded_mailboxes: &excluded_source_folders,
+            expected_snapshots: &source_snapshots,
+        },
+    )?;
+    stage.record_source_revalidation(&final_source_revalidation)?;
     if (source.total_exists > 0
         && stage
             .count(core::StagedMessageSide::Source)
@@ -152,43 +249,65 @@ pub(crate) fn run_imap_message_verification(
         form.profile.delete2,
     )?;
     let (mismatches, summary) = if form.profile.body_hash_verification {
-        for side in [
-            core::StagedMessageSide::Source,
-            core::StagedMessageSide::Destination,
-        ] {
-            let count = stage.count(side).map_err(|error| error.to_string())?;
-            if count > crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT as u64 {
-                return Err(core::VerificationLimit::BodyHashMessageCount.tag(format!(
-                    "body-hash verification refuses to load more than {} messages per endpoint into the forensic reconciler (requested {count})",
-                    crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
-                )));
+        if let Some(stage_path) = durable_stage_path {
+            stage.reset_reconciliation()?;
+            let (count, summary) =
+                core::MessageVerification::reconcile_stage_with_content_fingerprints(
+                    job_id,
+                    run_id,
+                    &stage,
+                    &folder_mapping,
+                )?;
+            let folders = stage.staged_mismatch_folders()?;
+            (
+                core::MismatchSet::Staged {
+                    stage_path: stage_path.to_path_buf(),
+                    job_id: Arc::from(job_id),
+                    run_id: Arc::from(run_id),
+                    count,
+                    folders,
+                },
+                summary,
+            )
+        } else {
+            for side in [
+                core::StagedMessageSide::Source,
+                core::StagedMessageSide::Destination,
+            ] {
+                let count = stage.count(side).map_err(|error| error.to_string())?;
+                if count > crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT as u64 {
+                    return Err(core::VerificationLimit::BodyHashMessageCount.tag(format!(
+                        "body-hash verification refuses to load more than {} messages per endpoint into the ephemeral forensic reconciler (requested {count})",
+                        crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
+                    )));
+                }
             }
+            let source_messages = stage
+                .all_messages(core::StagedMessageSide::Source)
+                .map_err(|error| {
+                    format!("could not load source messages for body verification: {error}")
+                })?;
+            let destination_messages = stage
+                .all_messages(core::StagedMessageSide::Destination)
+                .map_err(|error| {
+                    format!("could not load destination messages for body verification: {error}")
+                })?;
+            let source_fingerprints =
+                stage.try_content_fingerprints(core::StagedMessageSide::Source)?;
+            let destination_fingerprints =
+                stage.try_content_fingerprints(core::StagedMessageSide::Destination)?;
+            let (mismatches, summary) =
+                core::MessageVerification::detect_mismatches_with_content_fingerprints(
+                    job_id,
+                    run_id,
+                    &source_messages,
+                    &destination_messages,
+                    &source_fingerprints,
+                    &destination_fingerprints,
+                    &folder_mapping,
+                )?;
+            (core::MismatchSet::InMemory(mismatches), summary)
         }
-        let source_messages = stage
-            .all_messages(core::StagedMessageSide::Source)
-            .map_err(|error| {
-                format!("could not load source messages for body verification: {error}")
-            })?;
-        let destination_messages = stage
-            .all_messages(core::StagedMessageSide::Destination)
-            .map_err(|error| {
-                format!("could not load destination messages for body verification: {error}")
-            })?;
-        let source_fingerprints = stage.content_fingerprints(core::StagedMessageSide::Source);
-        let destination_fingerprints =
-            stage.content_fingerprints(core::StagedMessageSide::Destination);
-        // The reconciler refuses incomplete or orphaned fingerprint coverage.
-        let (mismatches, summary) =
-            core::MessageVerification::detect_mismatches_with_content_fingerprints(
-                job_id,
-                run_id,
-                &source_messages,
-                &destination_messages,
-                &source_fingerprints,
-                &destination_fingerprints,
-                &folder_mapping,
-            )?;
-        (core::MismatchSet::InMemory(mismatches), summary)
     } else {
         stage.reset_reconciliation()?;
         if let Some(stage_path) = durable_stage_path {

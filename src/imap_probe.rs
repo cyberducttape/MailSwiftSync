@@ -290,6 +290,12 @@ trait MessageSink {
     }
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
+    /// A durable SQLite stage can reconcile body hashes without constructing
+    /// mailbox-sized in-memory indexes. Ephemeral sinks retain the stricter
+    /// forensic cap because their downstream reconciler is memory-backed.
+    fn has_durable_stage(&self) -> bool {
+        false
+    }
     /// Rows currently staged for one folder generation. Compared against the
     /// server's EXISTS after a scan to require complete coverage of the
     /// current SELECT snapshot.
@@ -377,6 +383,10 @@ impl MessageSink for StageMessageSink<'_> {
 
     fn len(&self) -> usize {
         self.count
+    }
+
+    fn has_durable_stage(&self) -> bool {
+        self.stage.is_durable()
     }
 
     fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String> {
@@ -594,8 +604,9 @@ pub(crate) fn probe_tls_capabilities_with_transport(
 
 /// Authenticate an already TLS-protected connection and perform only the
 /// post-authentication readiness checks needed immediately before a live
-/// engine launch. Folder discovery, namespace analysis, and quota collection
-/// belong to the comprehensive preflight probe below, not this hot path.
+/// engine launch. Full folder discovery and namespace analysis remain in the
+/// comprehensive preflight probe; the separate live-readiness check observes
+/// only the destination's INBOX quota root when the server advertises QUOTA.
 pub(crate) fn probe_tls_authentication_with_transport(
     host: &str,
     user: &str,
@@ -605,16 +616,115 @@ pub(crate) fn probe_tls_authentication_with_transport(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
 ) -> Result<(), String> {
-    let (stream, greeting) =
-        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
-    let (mut stream, _) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting, None)?;
+    probe_tls_readiness(
+        TlsProbeRequest {
+            host,
+            user,
+            credential,
+            auth_method,
+            transport,
+            ca_bundle,
+            certificate_pin_sha256,
+        },
+        false,
+    )
+    .map(|_| ())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DestinationQuotaObservation {
+    /// QUOTA is unavailable, the root query failed, or usable headroom was
+    /// not reported. This never implies that capacity is sufficient.
+    Unknown,
+    /// The INBOX quota root reported valid usage below its limit. Other quota
+    /// roots and projected transfer headroom remain unknown.
+    NotExhausted,
+    /// A valid INBOX quota-root resource reports usage at or above its limit.
+    Exhausted,
+}
+
+impl DestinationQuotaObservation {
+    pub(crate) fn is_exhausted(self) -> bool {
+        self == Self::Exhausted
+    }
+}
+
+/// Freshly authenticate and perform the bounded pre-launch endpoint checks.
+/// When requested, observe only the quota root associated with INBOX. A
+/// successful observation below its limit is not treated as proof of projected
+/// or account-wide capacity.
+pub(crate) fn probe_tls_live_readiness_with_transport(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+) -> Result<DestinationQuotaObservation, String> {
+    probe_tls_readiness(
+        TlsProbeRequest {
+            host,
+            user,
+            credential,
+            auth_method,
+            transport,
+            ca_bundle,
+            certificate_pin_sha256,
+        },
+        true,
+    )
+}
+
+struct TlsProbeRequest<'a> {
+    host: &'a str,
+    user: &'a str,
+    credential: &'a str,
+    auth_method: &'a str,
+    transport: &'a str,
+    ca_bundle: &'a str,
+    certificate_pin_sha256: &'a str,
+}
+
+fn probe_tls_readiness(
+    request: TlsProbeRequest<'_>,
+    check_inbox_quota: bool,
+) -> Result<DestinationQuotaObservation, String> {
+    let (stream, greeting) = connect_tls_stream(
+        request.host,
+        request.transport,
+        request.ca_bundle,
+        request.certificate_pin_sha256,
+    )?;
+    let (mut stream, post_auth_capabilities) = authenticate_imap_stream(
+        stream,
+        request.host,
+        request.user,
+        request.credential,
+        request.auth_method,
+        greeting,
+        None,
+    )?;
+    live_readiness_on_authenticated_stream(
+        &mut stream,
+        request.host,
+        &post_auth_capabilities,
+        check_inbox_quota,
+    )
+}
+
+fn live_readiness_on_authenticated_stream<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    post_auth_capabilities: &str,
+    check_inbox_quota: bool,
+) -> Result<DestinationQuotaObservation, String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
     stream
         .write_all(b"a004 NOOP\r\n")
         .map_err(|e| e.to_string())?;
-    read_imap_tagged(&mut stream, "a004", &mut response, &mut buffer)?;
+    read_imap_tagged(stream, "a004", &mut response, &mut buffer)?;
     if !imap_command_succeeded(&response, "a004") {
         return Err(imap_command_failure(
             &response,
@@ -623,8 +733,21 @@ pub(crate) fn probe_tls_authentication_with_transport(
             host,
         ));
     }
-    let _ = stream.write_all(b"a005 LOGOUT\r\n");
-    Ok(())
+    let quota_observation =
+        if check_inbox_quota && advertises_capability(post_auth_capabilities, "QUOTA") {
+            let mut quota_response = String::new();
+            if stream.write_all(QUOTA_PROBE_COMMAND).is_ok()
+                && read_imap_tagged(stream, "a006", &mut quota_response, &mut buffer).is_ok()
+            {
+                inbox_quota_observation(post_auth_capabilities, Some(&quota_response))
+            } else {
+                DestinationQuotaObservation::Unknown
+            }
+        } else {
+            DestinationQuotaObservation::Unknown
+        };
+    let _ = stream.write_all(b"a007 LOGOUT\r\n");
+    Ok(quota_observation)
 }
 
 fn complete_authenticated_imap_probe<S: Read + Write>(
@@ -644,10 +767,13 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     let mut namespace_response = String::new();
     read_imap_tagged(&mut stream, "a004", &mut namespace_response, &mut buffer)?;
     stream
-        .write_all(authenticated_list_command(advertises_capability(
-            &post_auth_response,
-            "SPECIAL-USE",
-        )))
+        .write_all(
+            authenticated_list_command(
+                "a005",
+                advertises_capability(&post_auth_response, "SPECIAL-USE"),
+            )
+            .as_bytes(),
+        )
         .map_err(|e| e.to_string())?;
     let list_summary = read_imap_list_response(&mut stream, "a005", &mut buffer)
         .map_err(|error| format!("{host}: folder inventory failed: {error}"))?;
@@ -671,17 +797,63 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     if caps.supports("QUOTA") {
         let mut quota_response = String::new();
         stream
-            .write_all(b"a006 GETQUOTAROOT \"\"\r\n")
+            .write_all(QUOTA_PROBE_COMMAND)
             .map_err(|e| e.to_string())?;
         // A provider can advertise QUOTA while denying the root query. Keep
         // that result explicitly unknown; quota support is advisory and must
         // not turn an otherwise valid mailbox into a false capacity failure.
-        if read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok() {
+        // GETQUOTAROOT requires a mailbox name; the empty-root example belongs
+        // to GETQUOTA. INBOX is mandatory, and this observation is scoped to
+        // the quota roots returned for INBOX rather than all account folders.
+        if read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok()
+            && quota_response_has_successful_root(&quota_response, "a006", "INBOX")
+        {
             caps.record_quota_response(&quota_response);
         }
     }
     let _ = stream.write_all(b"a007 LOGOUT\r\n");
     Ok(caps)
+}
+
+const QUOTA_PROBE_COMMAND: &[u8] = b"a006 GETQUOTAROOT INBOX\r\n";
+
+fn quota_response_has_successful_root(response: &str, tag: &str, expected: &str) -> bool {
+    imap_command_succeeded(response, tag)
+        && response.lines().any(|line| {
+            if !crate::imap_protocol::is_untagged_response(line, "QUOTAROOT") {
+                return false;
+            }
+            let mut fields = line.split_whitespace();
+            fields.next(); // '*'
+            fields.next(); // 'QUOTAROOT'
+            fields
+                .next()
+                .is_some_and(|mailbox| mailbox.trim_matches('"').eq_ignore_ascii_case(expected))
+        })
+}
+
+fn inbox_quota_observation(
+    capabilities_response: &str,
+    quota_response: Option<&str>,
+) -> DestinationQuotaObservation {
+    if !advertises_capability(capabilities_response, "QUOTA") {
+        return DestinationQuotaObservation::Unknown;
+    }
+    let Some(response) = quota_response
+        .filter(|response| quota_response_has_successful_root(response, "a006", "INBOX"))
+    else {
+        return DestinationQuotaObservation::Unknown;
+    };
+    let mut capabilities =
+        crate::core::ServerCapabilities::from_inventory_summary(capabilities_response, 1, 0);
+    capabilities.record_quota_response(response);
+    if !capabilities.quota_observed {
+        DestinationQuotaObservation::Unknown
+    } else if capabilities.quota_exceeded {
+        DestinationQuotaObservation::Exhausted
+    } else {
+        DestinationQuotaObservation::NotExhausted
+    }
 }
 
 /// Which side of a migration an endpoint belongs to.
@@ -699,7 +871,7 @@ pub(crate) struct SidedProbeError {
     pub(crate) message: String,
 }
 
-pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), SidedProbeError> {
+pub(crate) fn fresh_dual_imaps_readiness(form: &crate::Form) -> Result<(), SidedProbeError> {
     if !fresh_imap_authentication_applies(form) {
         return Ok(());
     }
@@ -721,7 +893,7 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.source_certificate_pin_sha256,
     )
     .map_err(sided(MailSide::Source))?;
-    probe_tls_authentication_with_transport(
+    let destination_quota = probe_tls_live_readiness_with_transport(
         &destination,
         &form.profile.destination_user,
         form.destination_password.as_str(),
@@ -731,6 +903,12 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.destination_certificate_pin_sha256,
     )
     .map_err(sided(MailSide::Destination))?;
+    if destination_quota.is_exhausted() {
+        return Err(sided(MailSide::Destination)(
+            "destination INBOX-root quota reports exhausted capacity; live migration was not started"
+                .into(),
+        ));
+    }
     Ok(())
 }
 
@@ -858,6 +1036,10 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         uidvalidity: start_uidvalidity,
         uidnext,
         exists: start_exists,
+        highest_modseq: start_modseq.and_then(|modseq| match modseq {
+            ModseqSnapshot::Tracked(value) => Some(value),
+            ModseqSnapshot::Unsupported => None,
+        }),
     };
     sink.begin_mailbox_scan(mailbox, snapshot)?;
     sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
@@ -876,9 +1058,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         },
         |stream, buffer, uid_page, uid_set| {
             budget.check()?;
-            if body_hash.is_some() && body_hash_message_limit_exceeded(sink.len(), uid_page.len()) {
+            if body_hash.is_some()
+                && !sink.has_durable_stage()
+                && body_hash_message_limit_exceeded(sink.len(), uid_page.len())
+            {
                 return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
-                    "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
+                    "{host}: ephemeral body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use a durable SQLite-backed verification run or metadata-only verification"
                 )));
             }
             let tag = format!("v{:03}", page_number + 3);
@@ -1293,7 +1478,11 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     let mut condstore_enabled = advertises_capability(&post_auth_response, "CONDSTORE");
     write_imap_command(
         &mut stream,
-        authenticated_list_command(advertises_capability(&post_auth_response, "SPECIAL-USE")),
+        authenticated_list_command(
+            "a005",
+            advertises_capability(&post_auth_response, "SPECIAL-USE"),
+        )
+        .as_bytes(),
         Some(budget),
         &format!("{host}: could not enumerate folders"),
     )?;
@@ -1479,6 +1668,216 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding_ref
         reconnect_credential,
         &mut sink,
     )
+}
+
+/// Re-SELECT every endpoint folder after its inventory has finished. Any
+/// folder-set or mailbox cursor drift invalidates verification. Sequential
+/// endpoint rechecks narrow stale-evidence windows but do not create an atomic
+/// account-wide snapshot or replace operator-enforced quiescence.
+pub(crate) struct TlsAccountRevalidation<'a> {
+    pub endpoint_label: &'a str,
+    pub host: &'a str,
+    pub user: &'a str,
+    pub credential: &'a str,
+    pub auth_method: &'a str,
+    pub transport: &'a str,
+    pub ca_bundle: &'a str,
+    pub certificate_pin_sha256: &'a str,
+    pub budget: &'a MessageFetchBudget<'a>,
+    pub expected_mailboxes: &'a HashSet<String>,
+    pub excluded_mailboxes: &'a HashSet<String>,
+    pub expected_snapshots: &'a HashMap<String, crate::core::FolderSnapshot>,
+}
+
+pub(crate) fn revalidate_tls_account_snapshots(
+    request: TlsAccountRevalidation<'_>,
+) -> Result<HashMap<String, String>, String> {
+    let TlsAccountRevalidation {
+        endpoint_label,
+        host,
+        user,
+        credential,
+        auth_method,
+        transport,
+        ca_bundle,
+        certificate_pin_sha256,
+        budget,
+        expected_mailboxes,
+        excluded_mailboxes,
+        expected_snapshots,
+    } = request;
+    budget.check()?;
+    if transport == "plain" {
+        return Err(format!(
+            "{endpoint_label} snapshot revalidation requires TLS"
+        ));
+    }
+    if expected_snapshots.len() != expected_mailboxes.len()
+        || expected_mailboxes
+            .iter()
+            .any(|mailbox| !expected_snapshots.contains_key(mailbox))
+    {
+        return Err(format!(
+            "{endpoint_label} snapshot revalidation lacks a complete folder baseline"
+        ));
+    }
+    let (stream, greeting) =
+        connect_tls_stream_with_budget(host, transport, ca_bundle, certificate_pin_sha256, budget)?;
+    let (mut stream, capabilities) = authenticate_imap_stream(
+        stream,
+        host,
+        user,
+        credential,
+        auth_method,
+        greeting,
+        Some(budget),
+    )?;
+    let condstore_enabled = advertises_capability(&capabilities, "CONDSTORE");
+    let mut buffer = [0; 4096];
+    stream
+        .write_all(
+            authenticated_list_command("r000", advertises_capability(&capabilities, "SPECIAL-USE"))
+                .as_bytes(),
+        )
+        .map_err(|error| format!("{host}: could not re-list {endpoint_label} folders: {error}"))?;
+    let mut descriptors = Vec::new();
+    let inventory = read_imap_list_response_with_details(
+        &mut stream,
+        "r000",
+        &mut buffer,
+        &mut descriptors,
+        budget,
+    )
+    .map_err(tag_folder_inventory_limit)?;
+    if inventory.selectable_mailbox_count
+        != descriptors.iter().filter(|item| item.selectable).count()
+    {
+        return Err(format!(
+            "{host}: {endpoint_label} revalidation returned an incomplete folder inventory"
+        ));
+    }
+    let current_mailboxes = descriptors
+        .iter()
+        .filter(|item| item.selectable && !excluded_mailboxes.contains(&item.wire_name))
+        .map(|item| item.wire_name.clone())
+        .collect::<HashSet<_>>();
+    if &current_mailboxes != expected_mailboxes {
+        return Err(format!(
+            "{host}: {endpoint_label} folder inventory changed after its scan; refusing exact verification"
+        ));
+    }
+
+    revalidate_source_selected_folders(
+        &mut stream,
+        host,
+        budget,
+        expected_snapshots,
+        condstore_enabled,
+        endpoint_label,
+    )
+}
+
+fn revalidate_source_selected_folders<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    budget: &MessageFetchBudget<'_>,
+    expected_snapshots: &HashMap<String, crate::core::FolderSnapshot>,
+    condstore_enabled: bool,
+    endpoint_label: &str,
+) -> Result<HashMap<String, String>, String> {
+    let mut mailboxes = expected_snapshots.keys().collect::<Vec<_>>();
+    mailboxes.sort_unstable();
+    let mut buffer = [0; 4096];
+    let mut response = String::new();
+    let mut observations = HashMap::with_capacity(mailboxes.len());
+    for (index, mailbox) in mailboxes.into_iter().enumerate() {
+        budget.check()?;
+        let quoted_mailbox = imap_quote(mailbox)?;
+        let select_parameter = if condstore_enabled {
+            " (CONDSTORE)"
+        } else {
+            ""
+        };
+        let tag = format!("r{:06}", index + 1);
+        let command = format!("{tag} EXAMINE {quoted_mailbox}{select_parameter}\r\n");
+        write_imap_command(
+            stream,
+            command.as_bytes(),
+            Some(budget),
+            &format!("{host}: could not re-SELECT {endpoint_label} folder"),
+        )?;
+        response.clear();
+        read_imap_tagged_with_budget(stream, &tag, &mut response, &mut buffer, 1_048_576, budget)?;
+        if !imap_command_succeeded(&response, &tag) {
+            return Err(imap_command_failure(
+                &response,
+                &tag,
+                &format!("{endpoint_label} snapshot revalidation"),
+                host,
+            ));
+        }
+        let (exists, uidvalidity, uidnext) = parse_selected_mailbox(&response, host, mailbox)?;
+        let uidvalidity = uidvalidity.ok_or_else(|| {
+            format!("{host}: {endpoint_label} revalidation for {mailbox} omitted UIDVALIDITY")
+        })?;
+        let uidnext = uidnext.ok_or_else(|| {
+            format!("{host}: {endpoint_label} revalidation for {mailbox} omitted UIDNEXT")
+        })?;
+        let expected = expected_snapshots
+            .get(mailbox)
+            .ok_or_else(|| format!("{host}: {endpoint_label} baseline missing folder {mailbox}"))?;
+        let current_modseq = if condstore_enabled {
+            match parse_select_modseq(&response, host, mailbox)? {
+                ModseqSnapshot::Tracked(value) => Some(value),
+                ModseqSnapshot::Unsupported => None,
+            }
+        } else {
+            None
+        };
+        let current = crate::core::FolderSnapshot {
+            uidvalidity,
+            uidnext,
+            exists,
+            highest_modseq: current_modseq,
+        };
+        if !source_snapshot_matches(expected, &current) {
+            let _ = stream.write_all(b"r999999 LOGOUT\r\n");
+            let changed_fields = [
+                (expected.uidvalidity != current.uidvalidity, "UIDVALIDITY"),
+                (expected.uidnext != current.uidnext, "UIDNEXT"),
+                (expected.exists != current.exists, "EXISTS"),
+                (
+                    expected.highest_modseq != current.highest_modseq,
+                    "HIGHESTMODSEQ",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(changed, field)| changed.then_some(field))
+            .collect::<Vec<_>>()
+            .join(", ");
+            return Err(format!(
+                "{host}: {endpoint_label} folder {mailbox} changed after its verification scan (changed fields: {changed_fields}); rerun the final delta and verification",
+            ));
+        }
+        observations.insert(
+            mailbox.clone(),
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        );
+    }
+    let _ = stream.write_all(b"r999999 LOGOUT\r\n");
+    Ok(observations)
+}
+
+pub(super) fn source_snapshot_matches(
+    expected: &crate::core::FolderSnapshot,
+    current: &crate::core::FolderSnapshot,
+) -> bool {
+    expected.uidvalidity == current.uidvalidity
+        && expected.uidnext == current.uidnext
+        && expected.exists == current.exists
+        && expected
+            .highest_modseq
+            .is_none_or(|expected_modseq| current.highest_modseq == Some(expected_modseq))
 }
 
 const MAX_FOLDER_FAILURE_DETAILS: usize = 16;

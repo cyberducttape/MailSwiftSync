@@ -353,4 +353,67 @@ mod tests {
         assert!(error.contains("invalid credentials"));
         assert!(!error.contains("secret-value"));
     }
+
+    #[test]
+    fn live_readiness_queries_and_blocks_on_a_valid_exhausted_inbox_quota() {
+        let mut stream = ScriptedStream::new(&[
+            "a004 OK NOOP completed\r\n",
+            "* QUOTAROOT INBOX \"mailbox\"\r\n* QUOTA \"mailbox\" (STORAGE 100 100)\r\na006 OK quota completed\r\n",
+        ]);
+        let observation = super::super::live_readiness_on_authenticated_stream(
+            &mut stream,
+            "imap.example.test",
+            "* CAPABILITY IMAP4rev1 QUOTA\r\n",
+            true,
+        )
+        .expect("a valid NOOP and quota response should complete readiness");
+
+        assert_eq!(
+            observation,
+            super::super::DestinationQuotaObservation::Exhausted
+        );
+        assert!(stream.sent().contains("a006 GETQUOTAROOT INBOX\r\n"));
+        assert!(stream.sent().contains("a007 LOGOUT\r\n"));
+    }
+
+    #[test]
+    fn live_readiness_does_not_query_quota_without_advertised_support() {
+        let mut stream = ScriptedStream::new(&["a004 OK NOOP completed\r\n"]);
+        let observation = super::super::live_readiness_on_authenticated_stream(
+            &mut stream,
+            "imap.example.test",
+            "* CAPABILITY IMAP4rev1\r\n",
+            true,
+        )
+        .expect("NOOP should complete readiness when QUOTA is unavailable");
+
+        assert_eq!(
+            observation,
+            super::super::DestinationQuotaObservation::Unknown
+        );
+        assert!(!stream.sent().contains("GETQUOTAROOT"));
+        assert!(stream.sent().contains("a007 LOGOUT\r\n"));
+    }
+
+    #[test]
+    fn live_readiness_keeps_denied_quota_root_query_unknown() {
+        let mut stream = ScriptedStream::new(&[
+            "a004 OK NOOP completed\r\n",
+            "a006 NO [NOPERM] quota roots are unavailable\r\n",
+        ]);
+        let observation = super::super::live_readiness_on_authenticated_stream(
+            &mut stream,
+            "imap.example.test",
+            "* CAPABILITY IMAP4rev1 QUOTA\r\n",
+            true,
+        )
+        .expect("a denied advisory quota query must not fail endpoint readiness");
+
+        assert_eq!(
+            observation,
+            super::super::DestinationQuotaObservation::Unknown
+        );
+        assert!(stream.sent().contains("a006 GETQUOTAROOT INBOX\r\n"));
+        assert!(stream.sent().contains("a007 LOGOUT\r\n"));
+    }
 }

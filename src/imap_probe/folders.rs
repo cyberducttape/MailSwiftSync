@@ -331,10 +331,10 @@ fn list_literal_size(line: &str) -> Option<usize> {
     literal_framing::literal_length(line.as_bytes())
 }
 
-pub(super) fn authenticated_list_command(request_special_use: bool) -> &'static [u8] {
+pub(super) fn authenticated_list_command(tag: &str, request_special_use: bool) -> String {
     if request_special_use {
-        b"a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
+        format!("{tag} LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n")
     } else {
-        b"a005 LIST \"\" \"*\"\r\n"
+        format!("{tag} LIST \"\" \"*\"\r\n")
     }
 }

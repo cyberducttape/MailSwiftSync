@@ -1148,12 +1148,31 @@ fn project_cannot_complete_without_verified_mailboxes() {
         )
         .is_err()
     );
+    assert!(
+        db.reopen_project(&project.id, "approved\nproject_reopened")
+            .is_err()
+    );
+    assert!(
+        db.reopen_project(&project.id, "approved\u{2028}project_reopened")
+            .is_err()
+    );
+    assert!(
+        db.reopen_project(&project.id, "approved\u{2029}project_reopened")
+            .is_err()
+    );
     db.reopen_project(&project.id, "customer requested a post-cutover correction")
         .unwrap();
     assert_eq!(
         db.project(&project.id).unwrap().unwrap().phase,
         Phase::Attention
     );
+    assert_eq!(
+        db.mailbox_state(&job).unwrap().as_deref(),
+        Some("attention")
+    );
+    assert!(!db.all_mailboxes_verified(&project.id).unwrap());
+    db.transition(&project.id, Phase::Verification).unwrap();
+    assert!(db.transition(&project.id, Phase::Complete).is_err());
     let reopened_job = db
         .add_mailbox(&project.id, "new-source", "new-destination")
         .unwrap();
@@ -2977,6 +2996,7 @@ fn verification_difference_requires_durable_exception_acceptance() {
     };
     let mut observed_folder = pass_folder(PassSide::Source, "INBOX", true);
     observed_folder.folder_digest = folder_digest(&project.id, "INBOX");
+    observed_folder.source_revalidated_at = Some("2026-10-14T03:02:00.000Z".into());
     db.begin_verification_run(&project.id, &job, "exact-recheck", "snapshot")
         .unwrap();
     db.finish_verification_only_run(
@@ -3023,6 +3043,24 @@ fn verification_difference_requires_durable_exception_acceptance() {
         },
     )
     .unwrap();
+    assert!(
+        db.accept_verification_difference(
+            &project.id,
+            &job,
+            "operator\u{2028}forged-approval",
+            "Approved in change CHG-123",
+        )
+        .is_err()
+    );
+    assert!(
+        db.accept_verification_difference(
+            &project.id,
+            &job,
+            "operator@example",
+            "Approved in change CHG-123\u{2029}forged-event",
+        )
+        .is_err()
+    );
     db.accept_verification_difference(
         &project.id,
         &job,
@@ -3455,6 +3493,19 @@ fn latest_completed_transfer_run_excludes_reverification_history() {
         .unwrap();
     assert_eq!(baseline.id, "transfer");
     assert_eq!(baseline.engine, "imapsync");
+    assert_eq!(
+        db.completed_transfer_run(&job, "transfer")
+            .unwrap()
+            .unwrap()
+            .id,
+        "transfer"
+    );
+    assert!(db.completed_transfer_run(&job, "audit").unwrap().is_none());
+    assert!(
+        db.completed_transfer_run("another-mailbox", "transfer")
+            .unwrap()
+            .is_none()
+    );
 
     db.begin_verification_run_from_transfer(
         &project.id,
@@ -5463,6 +5514,8 @@ fn pass_folder(side: PassSide, name: &str, complete: bool) -> TransferPassFolder
         complete,
         scan_started_at: Some("2026-10-14T03:00:00.000Z".into()),
         scan_completed_at: complete.then(|| "2026-10-14T03:01:00.000Z".into()),
+        source_revalidated_at: None,
+        destination_revalidated_at: None,
     }
 }
 

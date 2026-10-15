@@ -6,8 +6,16 @@ provider, mailbox shape, or host has been qualified at that size.
 
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
-| Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Mismatch rows are staged on disk and streamed into the ledger for durable runs; ephemeral and body-hash runs keep an estimated 64 MiB in-memory mismatch cap. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; operators need adequate free space for the private SQLite stage. |
-| Body fingerprint proof | Up to 100,000 messages per endpoint are admitted before requesting the next body page and loaded into the forensic reconciler. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The 100,000-message guard is a message-count ceiling, not evidence that 100,000 large bodies fit within the byte budget or a memory guarantee. |
+| Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
+| Body fingerprint proof | Durable SQLite-backed verification supports the general 1,000,000-message-per-endpoint limit; ephemeral in-memory verification retains a 100,000-message-per-endpoint ceiling. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. Durable reconciliation uses staged indexes and bounded Rust batches, but its disk amplification and large-scale latency have not yet been qualified. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The configured body-byte budget is independent of message count and does not establish a memory or disk-capacity guarantee. |
+
+The free-space check runs before network scanning, each fetched-page commit,
+major SQLite materialization phases, and every 256 persisted mismatch rows.
+It runs between operations: an individual SQLite operation may consume space
+before the next check. It does not reserve space or bound aggregate stage growth,
+terminal evidence persistence, WAL/journal activity, or report export. Keep
+monitoring the entire filesystem and leave capacity for those phases; the guard
+reduces one failure mode but cannot guarantee that the disk will not fill.
 
 The latest release-mode durable-stage benchmark on a local real-disk
 workspace (100,000 synthetic messages per endpoint, typical distribution)
@@ -306,6 +314,38 @@ repeated differences against delivery and user-action logs. Do not treat a
 single live-change mismatch as proof of transfer loss, and do not accept it
 as harmless without recording the operator decision and evidence run.
 
+The verifier re-LISTs and re-SELECTs every source folder after destination
+scanning, then re-LISTs and re-SELECTs every destination folder, and finally
+re-LISTs and re-SELECTs the source folders again. It rejects
+exact verification if either selectable-folder inventory changes, or if a
+tracked `UIDVALIDITY`, `UIDNEXT`, `EXISTS`, or `HIGHESTMODSEQ` differs from
+that endpoint's scan. The consistency phase performs a bounded LIST/EXAMINE
+traversal per endpoint, plus a second source traversal; these checks add
+provider requests and scan time. The customer proof records the final
+per-folder revalidation timestamps and whether the observed cursors remained
+unchanged.
+These sequential checks narrow the stale-evidence window on both endpoints;
+they are not an atomic cross-server snapshot, do not prove either mailbox was
+unchanged throughout the interval, and do not prove delivery stayed paused
+after the corresponding recheck. The final source pass detects cursor changes
+that occur during destination revalidation, but the source can still change
+immediately after that final observation.
+
+Separately, the durable cutover workflow requires an operator
+source-quiescence attestation before the Final Delta stage can be run or
+advanced. On transition from Final Delta to Verification, the workflow clears
+that stage's current attestation and requires a fresh reconfirmation before
+any final-verification or standalone re-verification run can be admitted. The
+`migration.cutover_verification_started` event is emitted only after that
+reconfirmation. The ledger retains the earlier attestation in its audit event
+history. Each attestation records the operator, timestamp, and evidence/change
+reference; it is an auditable workflow gate, not a server-observed delivery
+barrier. The operator must maintain the stated quiescence through final
+verification. Even with unchanged source cursors at revalidation, customer
+proof reports `cutover_readiness` as
+`not_established`: the application cannot machine-prove continued quiescence
+or an atomic global cutover boundary.
+
 Evidence recorded before flag verification existed, aggregate evidence, and
 native Dovecot evidence report flags as not verified. Reports and the GUI show
 the verification tier, how many source messages were individually checked,
@@ -427,7 +467,11 @@ success alone is not sufficient evidence to enable it.
 ## Independent post-migration verification
 
 The transfer engine and verifier have separate lifecycles. A completed
-imapsync mailbox can be audited again without launching imapsync:
+imapsync mailbox can be audited again without launching imapsync. The command
+uses the latest completed live transfer by default; `--baseline-run RUN_ID`
+selects a specific completed transfer for a historical audit. The JSON result
+records `based_on_transfer_run_id`; the selected baseline must belong to the
+mailbox and have an eligible immutable live plan snapshot:
 
 ```text
 mailswiftsync reverify STATE PROJECT_ID MAILBOX_ID SOURCE_SECRET_FILE DESTINATION_SECRET_FILE \
@@ -447,11 +491,11 @@ mailbox-002,secrets/mailbox-002-source,secrets/mailbox-002-destination
 
 Use `--mode content` for the bounded body-fingerprint path. Secret files must
 be regular, owner-only files; credentials are never accepted in argv. The
-command reuses the immutable plan snapshot, records a separate
+command reuses the selected immutable plan snapshot, records a separate
 verification-only run and `evidence_history` row, and stores differences under
-that run for CSV export. The run is linked to the most recent completed
-transfer run that provided its baseline (a dry-run preflight is never a
-baseline), and the command holds the same exclusive ledger lock as
+that run for CSV export. The run is linked to the selected completed transfer
+baseline (a dry-run preflight is never eligible), and the command holds the
+same exclusive ledger lock as
 the GUI/recovery controller for the entire provider scan and evidence commit.
 Current organization policy is rechecked against the requested evidence mode;
 a historical plan is not an exemption from a stronger current minimum. The
@@ -486,10 +530,10 @@ project report exposes it per run as `verification_limit` (`code`,
 | `response_size` | One IMAP response 64 MiB | No | Lower the body-hash per-message bound or use metadata verification |
 | `fetched_state` | Transient fetched state 256 MiB | Retryable; full folder rescan | Rerun; use metadata verification if it recurs |
 | `message_count` | 1,000,000 messages per endpoint | No | Split into smaller folder scopes or accept the difference explicitly |
-| `body_hash_message_count` | 100,000 messages per endpoint in body-hash mode | No | Disable body-hash verification to obtain metadata evidence |
+| `body_hash_message_count` | 100,000 messages per endpoint in ephemeral body-hash mode | No | Use a durable verification run or disable body-hash verification to obtain metadata evidence |
 | `body_hash_message_size` | Per-message body-hash bound | No | Raise the bound (up to 64 MiB) or disable body hashing |
 | `body_hash_total_size` | Total body-hash bound | No | Raise the bound (up to 8 GiB) or disable body hashing |
-| `reconciliation_state` | Reconciliation state, or 64 MiB in-memory mismatch detail (ephemeral or body-hash runs) | No | Inspect the transfer and run another delta pass |
+| `reconciliation_state` | Reconciliation state, or 64 MiB in-memory mismatch detail (ephemeral runs) | No | Inspect the transfer and run another delta pass |
 | `deadline` | Verification exceeded the migration timeout | Retryable; full folder rescan | Rerun for a fresh scan, or raise the migration timeout |
 
 "Retryable" means the same plan may make progress on another attempt; it does

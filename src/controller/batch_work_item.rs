@@ -13,7 +13,7 @@ use crate::{
     },
     core,
     credentials::CleanupGuard,
-    imap_probe::{SidedProbeError, fresh_dual_imaps_authentication},
+    imap_probe::{SidedProbeError, fresh_dual_imaps_readiness},
     process::ProcessLaunchLimiter,
     runner::{
         MessageVerificationResult, ResolvedImapsyncIdentity, RunContext, TerminalEvidenceSource,
@@ -955,7 +955,7 @@ impl BatchAttemptRunner {
             if let Err(SidedProbeError {
                 side,
                 message: error,
-            }) = fresh_dual_imaps_authentication(&task.form)
+            }) = fresh_dual_imaps_readiness(&task.form)
             {
                 let provider = provider_for_side(&task.form, side);
                 if should_retry_batch_error_for_provider(
@@ -982,7 +982,7 @@ impl BatchAttemptRunner {
                 self.line(
                     &task,
                     format!(
-                        "[{}] fresh live authentication failed before launch: {error}",
+                        "[{}] fresh live endpoint readiness failed before launch: {error}",
                         task.index + 1
                     ),
                 );

@@ -9,6 +9,18 @@ impl StateStore {
                 row.get(0)
             })?;
         let current = Phase::parse(&current_name)?;
+        if current != phase {
+            let has_cutover_workflow: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+                [id],
+                |row| row.get(0),
+            )?;
+            if has_cutover_workflow {
+                // Managed cutover transitions must atomically update both the
+                // workflow stage and project phase through approve/advance.
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         let backwards_transition = current != Phase::Attention
             && phase != Phase::Attention
             && phase_rank(phase) < phase_rank(current);
@@ -24,6 +36,17 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         if phase == Phase::Complete && current != phase {
+            let has_cutover_workflow: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+                [id],
+                |row| row.get(0),
+            )?;
+            if has_cutover_workflow {
+                // Approved cutovers have a separate terminal gate: only
+                // advance_cutover may record external confirmation and move
+                // the workflow to Completed.
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             let total: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1",
                 [id],
@@ -56,16 +79,25 @@ impl StateStore {
     /// operation. This preserves the meaning of Complete while allowing an
     /// operator to document a legitimate post-cutover correction.
     pub fn reopen_project(&self, id: &str, reason: &str) -> rusqlite::Result<()> {
-        let reason = reason.trim();
-        if reason.is_empty() || reason.len() > 4096 {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let reason = crate::storage::single_line_audit_text(reason, 4096)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let current: String =
             tx.query_row("SELECT phase FROM projects WHERE id=?1", [id], |row| {
                 row.get(0)
             })?;
         if current != Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let has_cutover_workflow: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if has_cutover_workflow {
+            // A second cutover epoch is not modeled yet. Refuse reopening
+            // rather than strand the project behind a terminal workflow or
+            // reuse its prior external confirmation.
             return Err(rusqlite::Error::InvalidQuery);
         }
         let (total, verified, active_runs, active_processes): (i64, i64, i64, i64) = tx.query_row(
@@ -80,6 +112,10 @@ impl StateStore {
         if total == 0 || verified != total || active_runs != 0 || active_processes != 0 {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let invalidated = tx.execute(
+            "UPDATE mailbox_jobs SET state='attention',attention_reason='verification_incomplete' WHERE project_id=?1 AND state IN ('verified','verified_with_exceptions')",
+            [id],
+        )?;
         let changed = tx.execute(
             "UPDATE projects SET phase='attention' WHERE id=?1 AND phase='complete'",
             [id],
@@ -89,7 +125,10 @@ impl StateStore {
         }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_reopened',?2)",
-            params![id, reason],
+            params![
+                id,
+                format!("{reason}; invalidated_verification_rows={invalidated}")
+            ],
         )?;
         tx.commit()
     }

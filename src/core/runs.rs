@@ -1,5 +1,27 @@
 use super::*;
 
+fn validate_managed_cutover_run_admission(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+    phase: &str,
+) -> rusqlite::Result<()> {
+    let cutover: Option<(String, Option<String>, bool)> = tx
+        .query_row(
+            "SELECT stage,source_quiescence_at,approved_by IS NOT NULL FROM cutover_workflows WHERE project_id=?1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((stage, source_quiescence_at, approved)) = cutover {
+        if !approved {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        super::cutover::validate_cutover_run_stage(&stage, phase, source_quiescence_at.as_deref())
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    }
+    Ok(())
+}
+
 fn ensure_no_active_destination_lock_conflict(
     tx: &rusqlite::Transaction<'_>,
     candidates: &[String],
@@ -84,6 +106,7 @@ impl StateStore {
             params![project_id, job_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
+        validate_managed_cutover_run_admission(&tx, project_id, &phase)?;
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
             params![project_id, job_id],
@@ -154,6 +177,7 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
+        validate_managed_cutover_run_admission(&tx, project_id, &phase_at_start)?;
         if phase_at_start == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -266,6 +290,7 @@ impl StateStore {
             [project_id],
             |row| row.get(0),
         )?;
+        validate_managed_cutover_run_admission(&tx, project_id, &phase_at_start)?;
         if phase_at_start == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -404,6 +429,7 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        validate_managed_cutover_run_admission(&tx, project_id, &phase)?;
         if phase == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -456,6 +482,7 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        validate_managed_cutover_run_admission(&tx, project_id, &phase)?;
         if phase == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -1070,6 +1097,9 @@ impl StateStore {
             "UPDATE mailbox_jobs SET state=?1,attention_reason=?2,preflight_plan=COALESCE(?3,preflight_plan),checkpoint=COALESCE(?4,checkpoint) WHERE id=?5 AND project_id=?6",
             params![mailbox_state, attention_reason, preflight_plan, checkpoint, job_id, project_id],
         )?;
+        if mailbox_state == "verified" {
+            super::cutover::maybe_emit_cutover_ready(&tx, project_id)?;
+        }
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_finished',?3)",

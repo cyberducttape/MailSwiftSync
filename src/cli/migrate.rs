@@ -37,7 +37,7 @@ pub(super) fn parse_cutover_text_arguments(arguments: &[OsString]) -> Result<Vec
 
 pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let values = arguments.collect::<Vec<_>>();
-    let usage = "Usage: mailswiftsync cutover <state.db> <create|approve|advance|status> <project-id> [...]";
+    let usage = "Usage: mailswiftsync cutover <state.db> <create|approve|attest-source-quiescence|advance|status> <project-id> [...]";
     if values.len() < 3 {
         eprintln!("{usage}");
         std::process::exit(2);
@@ -52,7 +52,27 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
     let state = &values[0];
     let operation = &text_arguments[0];
     let project_id = &text_arguments[1];
-    let store = match core::StateStore::open(state) {
+    let _instance_lock = if matches!(
+        operation.as_str(),
+        "create" | "approve" | "attest-source-quiescence" | "advance"
+    ) {
+        Some(
+            crate::process::acquire_instance_lock(std::path::Path::new(state)).unwrap_or_else(
+                |error| {
+                    eprintln!("Cutover workflow unavailable: {error}");
+                    std::process::exit(1);
+                },
+            ),
+        )
+    } else {
+        None
+    };
+    let store_result = if matches!(operation.as_str(), "run" | "status") {
+        core::StateStore::open_readonly(state)
+    } else {
+        core::StateStore::open(state)
+    };
+    let store = match store_result {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Cutover workflow unavailable: {error}");
@@ -69,13 +89,20 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
             .map(|()| {
                 "Cutover workflow created; explicit approval is required before execution."
                     .to_owned()
-            }),
+            })
+            .map_err(|error| error.to_string()),
         "approve" if values.len() == 4 => store
             .approve_cutover(project_id, &text_arguments[2])
-            .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned()),
+            .map(|()| "Cutover approved; Seed is now the active lifecycle stage.".to_owned())
+            .map_err(|error| error.to_string()),
+        "attest-source-quiescence" if values.len() == 5 => store
+            .attest_cutover_source_quiescence(project_id, &text_arguments[2], &text_arguments[3])
+            .map(|()| "Source-quiescence attestation recorded/refreshed. It is an operator assertion, not automatic IMAP source revalidation; keep it fresh when advancing from Final Delta to Verification and before external cutover completion, and keep source delivery paused throughout.".to_owned())
+            .map_err(|error| error.to_string()),
         "advance" if (3..=4).contains(&values.len()) => store
             .advance_cutover(project_id, text_arguments.get(2).map(String::as_str))
-            .map(|stage| format!("Cutover advanced to {}.", stage.as_str())),
+            .map(|stage| format!("Cutover advanced to {}.", stage.as_str()))
+            .map_err(|error| error.to_string()),
         "run" if (3..=4).contains(&values.len()) => {
             let acknowledge_destination_loss = values
                 .get(3)
@@ -97,53 +124,26 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
                     std::process::exit(1);
                 }
             };
-            if workflow.approved_by.is_none() {
-                eprintln!("Cutover run refused: explicit operator approval is required");
+            if let Err(error) = crate::headless::validate_cutover_run_admission(
+                &workflow,
+                workflow.stage,
+            ) {
+                eprintln!("Cutover run refused: {error}");
                 std::process::exit(1);
             }
-            if workflow.stage == crate::core::CutoverStage::Completed {
-                eprintln!("Cutover run refused: workflow is already complete");
-                std::process::exit(1);
-            }
-            let scheduled_at = match chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at) {
-                Ok(value) => value.with_timezone(&chrono::Utc),
-                Err(_) => {
-                    eprintln!("Cutover run refused: scheduled_at is not RFC 3339");
-                    std::process::exit(1);
-                }
-            };
-            if scheduled_at > chrono::Utc::now() {
-                eprintln!("Cutover run refused: scheduled time has not arrived");
-                std::process::exit(1);
-            }
-            if let Some(window) = workflow.maintenance_window.as_deref() {
-                let window = match MaintenanceWindow::parse(window) {
-                    Ok(window) => window,
-                    Err(_) => {
-                        eprintln!("Cutover run refused: durable maintenance window is invalid");
-                        std::process::exit(1);
-                    }
-                };
-                if !window.contains_now() {
-                    eprintln!(
-                        "Cutover run refused: current time is outside the approved maintenance window"
-                    );
-                    std::process::exit(1);
-                }
-            }
-            headless_batch_execute(
+            crate::headless::headless_cutover_batch_execute(
                 std::path::Path::new(state),
-                true,
                 acknowledge_destination_loss,
+                project_id,
+                workflow.stage,
             )
-            .map_err(|error| {
-                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error)))
-            })
+            .map_err(|error| error.to_string())
             .map(|message| format!("{} Cutover stage: {}.", message, workflow.stage.as_str()))
         }
         "status" if values.len() == 3 => store.cutover_workflow(project_id).and_then(|workflow| {
-            serde_json::to_string_pretty(&workflow).map_err(|_| rusqlite::Error::InvalidQuery)
-        }),
+            serde_json::to_string_pretty(&workflow)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+        }).map_err(|error| error.to_string()),
         _ => {
             eprintln!("{usage}");
             std::process::exit(2);
@@ -341,6 +341,40 @@ pub(super) fn headless_command(mut arguments: std::env::ArgsOs) -> eframe::Resul
 
 const WAVE_USAGE: &str = "Usage: mailswiftsync wave <state.db> list <project-id> | wave <state.db> approve <wave-id> <approver>";
 
+pub(super) fn wave_list_json(summaries: &[core::WaveSummary]) -> Result<String, String> {
+    let waves = summaries
+        .iter()
+        .map(|summary| {
+            serde_json::json!({
+                "id": summary.wave.id,
+                "position": summary.wave.position + 1,
+                "name": summary.wave.settings.name,
+                "status": summary.status().as_str(),
+                "scheduled_at": summary.wave.settings.scheduled_at,
+                "maintenance_window": summary.wave.settings.maintenance_window,
+                "concurrency": summary.wave.settings.concurrency,
+                "approved_by": summary.wave.approved_by,
+                "approved_at": summary.wave.approved_at,
+                "mailboxes": summary.members,
+                "verified": summary.verified,
+                "accepted_exceptions": summary.accepted_exceptions,
+                "completed": summary.completed,
+                "migrating": summary.migrating,
+                "needs_attention": summary.needs_attention,
+                "catch_up_pending": summary.catch_up_pending,
+                "waiting": summary.waiting,
+                "with_evidence": summary.evidenced,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "format": "mailswiftsync-wave-list",
+        "format_version": 2,
+        "waves": waves
+    }))
+    .map_err(|error| error.to_string())
+}
+
 /// List a project's migration waves with derived status, or approve one.
 /// Approval from automation lets a separate approver gate live migration
 /// without opening the GUI.
@@ -364,7 +398,24 @@ pub(super) fn wave_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
         eprintln!("{WAVE_USAGE}");
         std::process::exit(2);
     }
-    let store = match core::StateStore::open(state) {
+    let _instance_lock = if matches!(shape.as_slice(), ["approve", _, _]) {
+        Some(
+            crate::process::acquire_instance_lock(std::path::Path::new(state)).unwrap_or_else(
+                |error| {
+                    eprintln!("Migration wave operation failed: {error}");
+                    std::process::exit(1);
+                },
+            ),
+        )
+    } else {
+        None
+    };
+    let store_result = match text[0].as_str() {
+        "list" => core::StateStore::open_readonly(state),
+        "approve" => core::StateStore::open(state),
+        _ => unreachable!("request shape validated above"),
+    };
+    let store = match store_result {
         Ok(store) => store,
         Err(error) => {
             eprintln!("Migration waves unavailable: {error}");
@@ -380,33 +431,7 @@ pub(super) fn wave_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
         ["list", project_id] => store
             .wave_summaries(project_id)
             .map_err(|error| error.to_string())
-            .and_then(|waves| {
-                let waves = waves
-                    .iter()
-                    .map(|summary| {
-                        serde_json::json!({
-                            "id": summary.wave.id,
-                            "position": summary.wave.position + 1,
-                            "name": summary.wave.settings.name,
-                            "status": summary.status().as_str(),
-                            "scheduled_at": summary.wave.settings.scheduled_at,
-                            "maintenance_window": summary.wave.settings.maintenance_window,
-                            "concurrency": summary.wave.settings.concurrency,
-                            "approved_by": summary.wave.approved_by,
-                            "approved_at": summary.wave.approved_at,
-                            "mailboxes": summary.members,
-                            "verified": summary.completed,
-                            "migrating": summary.migrating,
-                            "needs_attention": summary.needs_attention,
-                            "catch_up_pending": summary.catch_up_pending,
-                            "waiting": summary.waiting,
-                            "with_evidence": summary.evidenced,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                serde_json::to_string_pretty(&serde_json::json!({ "waves": waves }))
-                    .map_err(|error| error.to_string())
-            }),
+            .and_then(|waves| wave_list_json(&waves)),
         ["approve", wave_id, approver] => match store.wave(wave_id) {
             Ok(Some(wave)) => store
                 .approve_wave(wave_id, approver)

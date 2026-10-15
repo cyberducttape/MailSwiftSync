@@ -1222,6 +1222,178 @@ fn staged_reconciliation_matches_in_memory_accounting() {
 }
 
 #[test]
+fn staged_body_hash_reconciliation_preserves_content_pairing_semantics() {
+    let message = |id: &str, uid: &str, size: u64| ExtractedMessage {
+        message_id: Some(id.to_owned()),
+        uid: Some(uid.to_owned()),
+        size_bytes: Some(size),
+        internal_date: Some("01-Jan-2024 00:00:00 +0000".to_owned()),
+        flags: None,
+    };
+    let source_key_a = MailboxMessageKey::new("INBOX", "1");
+    let source_key_b = MailboxMessageKey::new("INBOX", "2");
+    let destination_key_a = MailboxMessageKey::new("INBOX", "11");
+    let destination_key_b = MailboxMessageKey::new("INBOX", "12");
+    let source = ExtractedMessages::from([
+        (source_key_a.clone(), message("<a>", "1", 10)),
+        (source_key_b.clone(), message("<source-b>", "2", 20)),
+    ]);
+    let destination = ExtractedMessages::from([
+        (destination_key_a.clone(), message("<a>", "11", 10)),
+        (
+            destination_key_b.clone(),
+            message("<destination-b>", "12", 21),
+        ),
+    ]);
+    let source_fingerprints = HashMap::from([
+        (source_key_a.clone(), "body-a-source".to_owned()),
+        (source_key_b.clone(), "body-b".to_owned()),
+    ]);
+    let destination_fingerprints = HashMap::from([
+        (destination_key_a.clone(), "body-a-destination".to_owned()),
+        (destination_key_b.clone(), "body-b".to_owned()),
+    ]);
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    stage
+        .insert_messages_with_fingerprints(StagedMessageSide::Source, &source, &source_fingerprints)
+        .unwrap();
+    stage
+        .insert_messages_with_fingerprints(
+            StagedMessageSide::Destination,
+            &destination,
+            &destination_fingerprints,
+        )
+        .unwrap();
+
+    let (count, summary) = MessageVerification::reconcile_stage_with_content_fingerprints(
+        "body-job",
+        "body-run",
+        &stage,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(summary.total_source, 2);
+    assert_eq!(summary.total_destination, 2);
+    assert_eq!(summary.metadata_matches, 1);
+    assert_eq!(summary.missing_count, 0);
+    assert_eq!(summary.extra_count, 0);
+    assert_eq!(summary.changed_count, 1);
+
+    let mut mismatches = Vec::new();
+    visit_staged_mismatches(
+        stage.connection().unwrap(),
+        &Arc::from("body-job"),
+        &Arc::from("body-run"),
+        &mut |mismatch| {
+            mismatches.push(mismatch.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(mismatches.len(), 1);
+    assert_eq!(mismatches[0].mismatch_type, MismatchType::MessageIdOnly);
+    assert_eq!(mismatches[0].source_uid.as_deref(), Some("1"));
+    assert_eq!(mismatches[0].dest_uid.as_deref(), Some("11"));
+    assert_eq!(
+        mismatches[0].source_fingerprint.as_deref(),
+        Some("body-a-source")
+    );
+    assert_eq!(
+        mismatches[0].destination_fingerprint.as_deref(),
+        Some("body-a-destination")
+    );
+}
+
+#[test]
+fn staged_body_hash_reconciliation_rejects_incomplete_fingerprint_coverage() {
+    let key = MailboxMessageKey::new("INBOX", "1");
+    let messages = ExtractedMessages::from([(
+        key,
+        ExtractedMessage {
+            message_id: Some("<a>".to_owned()),
+            uid: Some("1".to_owned()),
+            size_bytes: Some(10),
+            internal_date: Some("01-Jan-2024 00:00:00 +0000".to_owned()),
+            flags: None,
+        },
+    )]);
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    stage
+        .insert_messages_with_fingerprints(StagedMessageSide::Source, &messages, &HashMap::new())
+        .unwrap();
+    stage
+        .insert_messages_with_fingerprints(
+            StagedMessageSide::Destination,
+            &messages,
+            &HashMap::from([(messages.keys().next().unwrap().clone(), "hash".to_owned())]),
+        )
+        .unwrap();
+
+    let error = MessageVerification::reconcile_stage_with_content_fingerprints(
+        "body-job",
+        "body-run",
+        &stage,
+        &HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(error.contains("exact source message/fingerprint key coverage"));
+}
+
+#[test]
+fn staged_body_hash_reconciliation_handles_ten_thousand_exact_pairs() {
+    const COUNT: usize = 10_000;
+    let mut source = ExtractedMessages::with_capacity(COUNT);
+    let mut destination = ExtractedMessages::with_capacity(COUNT);
+    let mut source_fingerprints = HashMap::with_capacity(COUNT);
+    let mut destination_fingerprints = HashMap::with_capacity(COUNT);
+    for index in 0..COUNT {
+        let source_uid = index.to_string();
+        let destination_uid = (index + COUNT).to_string();
+        let message_id = format!("<body-scale-{index}@example.test>");
+        let message = |uid: &str| ExtractedMessage {
+            message_id: Some(message_id.clone()),
+            uid: Some(uid.to_owned()),
+            size_bytes: Some(256),
+            internal_date: Some("01-Jan-2024 00:00:00 +0000".to_owned()),
+            flags: None,
+        };
+        let source_key = MailboxMessageKey::new("INBOX", &source_uid);
+        let destination_key = MailboxMessageKey::new("INBOX", &destination_uid);
+        source.insert(source_key.clone(), message(&source_uid));
+        destination.insert(destination_key.clone(), message(&destination_uid));
+        let fingerprint = format!("sha256:{index:064x}");
+        source_fingerprints.insert(source_key, fingerprint.clone());
+        destination_fingerprints.insert(destination_key, fingerprint);
+    }
+
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    stage
+        .insert_messages_with_fingerprints(StagedMessageSide::Source, &source, &source_fingerprints)
+        .unwrap();
+    stage
+        .insert_messages_with_fingerprints(
+            StagedMessageSide::Destination,
+            &destination,
+            &destination_fingerprints,
+        )
+        .unwrap();
+
+    let (mismatch_count, summary) = MessageVerification::reconcile_stage_with_content_fingerprints(
+        "body-scale-job",
+        "body-scale-run",
+        &stage,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(mismatch_count, 0);
+    assert_eq!(summary.total_source, COUNT as u64);
+    assert_eq!(summary.total_destination, COUNT as u64);
+    assert_eq!(summary.metadata_matches, COUNT as u64);
+    assert_eq!(summary.changed_count, 0);
+}
+
+#[test]
 fn staged_fingerprint_lookups_seek_on_mapped_folder_date_and_size() {
     let stage = MessageMetadataStage::open_in_memory().unwrap();
     let mut statement = stage

@@ -20,20 +20,36 @@ The three status commands emit the versioned status automation contract:
 | `mailswiftsync fleet-status <directory>` | `mailswiftsync-fleet-status` | `1` | [`fleet-status.v1.json`](../tests/fixtures/automation/fleet-status.v1.json) |
 
 The standalone `mailswiftsync reverify` command also emits a versioned JSON
-result (`mailswiftsync.reverify`, version `2`). Its `verification_status`,
+result (`mailswiftsync.reverify`, version `4`). It selects the latest completed
+live transfer as its baseline by default; `--baseline-run RUN_ID` can select a
+specific completed transfer for an intentional historical audit. The result's
+`based_on_transfer_run_id` records the exact parent transfer in either case.
+An explicitly selected run must belong to the mailbox, be a completed transfer,
+and have an eligible immutable live plan snapshot. Its `verification_status`,
 `verification_level`, `message_coverage`, `flag_verification`, and
 `folder_observations` fields must be consumed together; `verification_outcome`
 alone is not an unqualified assurance claim. Folder observations contain
-project-scoped folder digests, UID snapshots, and UTC scan intervals, not raw
-folder names. This result is an evidence artifact rather than a status
-projection and therefore is not included in the status golden-fixture set.
+project-scoped folder digests, UID snapshots, UTC scan intervals, and separate
+source/destination revalidation timestamps, not raw folder names. This result
+is an evidence artifact rather than a status projection and therefore is not
+included in the status golden-fixture set.
 
 `mailswiftsync reverify-batch` emits `mailswiftsync.reverify_batch`, version
-`1`, with `total`, `completed`, `failed`, and a `results` array. Each result
+`2`, with `total`, `completed`, `failed`, and a `results` array. Each result
 contains a mailbox ID, a `completed` or `failed` status, and either the normal
 `reverify` artifact or a bounded error string. Callers must treat any nonzero
 `failed` count as incomplete evidence; the batch envelope is not a global
 point-in-time snapshot.
+
+`mailswiftsync wave <state.db> list <project-id>` emits
+`mailswiftsync-wave-list`, version `2`. `verified` counts only mailboxes with
+clean verification; `accepted_exceptions` counts mailboxes whose verification
+differences were explicitly accepted; and `completed` is their sum for wave
+workflow progress. A `complete_with_exceptions` wave status is not equivalent
+to clean verification. Neither `complete` nor `complete_with_exceptions`
+establishes cutover readiness; the cutover workflow and its separate approvals
+remain authoritative. Consumers must check the format and version before
+using this output.
 
 `mailswiftsync risk <source-messages> <source-folders> <source-bytes>` emits the versioned
 `mailswiftsync-pre-migration-risk` format, version `3`. The inventory inputs
@@ -95,7 +111,7 @@ storage schema migrates and is **not** a compatibility signal: dispatch on
 
 Reports, proofs, certificates, and support bundles carry their own `format`
 markers and are artifact formats, not part of this automation contract.
-The `mailswiftsync-customer-proof` artifact uses format version `3`. Per-mailbox
+The `mailswiftsync-customer-proof` artifact uses format version `6`. Per-mailbox
 `assurance_status` distinguishes `aggregate_match`, `metadata_match`,
 `bounded_content_match`, `engine_confirmed`, `with_exceptions`, and `incomplete`.
 The summary reports `mailboxes_by_assurance` and does not emit a single
@@ -106,7 +122,24 @@ A status of `aggregate_match` means only the observed totals agree, while
 message-fidelity guarantee. Consumers of customer-proof version `2` must
 update before accepting version `3`. The provider-evidence generator accepts
 only known customer-proof versions and requires `assurance_status:
-engine_confirmed` for version 3 qualification evidence.
+engine_confirmed` for version 3 and later qualification evidence. Version 4
+adds per-run endpoint scan intervals and explicitly states that the source is
+not revalidated after destination scanning; separate endpoint scans are not a
+synchronized account-wide snapshot. Consumers of version 3 must update before
+accepting version 4. Version 5 records a post-destination source folder-list
+and per-folder cursor recheck, including timestamps and whether tracked
+UIDVALIDITY, UIDNEXT, EXISTS, and HIGHESTMODSEQ values remained unchanged on
+the source. This is not an atomic snapshot and does not prove continued
+quiescence. Consumers of version 4 must update before accepting version 5.
+Version 6 adds post-scan destination cursor revalidation evidence alongside
+the source recheck; the two checks are sequential, not atomic, and do not
+prove continued quiescence.
+Consumers of version 5 must update before accepting version 6. Each evidence
+row also carries `proof_tier` (`aggregate`, `metadata`, or bounded `content`)
+separately from `proof_result`; none implies cutover readiness.
+`cutover_readiness.status` remains `not_established`: the operator
+quiescence barrier is not machine-enforced and the two servers do not provide
+an atomic account-wide snapshot.
 The `mailswiftsync-support-bundle` artifact uses format version `2`: project,
 mailbox-job, and run identifiers are type-separated pseudonyms derived with a
 fresh per-bundle salt, preserving joins inside one bundle without correlating
@@ -124,6 +157,11 @@ provided. Consumers of version `1` must update before accepting version `2`.
 - A migration is complete only when the durable project state says so.
 - Independent verification evidence and its coverage level must be checked
   before claiming mailbox fidelity.
+- Reopening a completed project invalidates its current verified mailbox states
+  and requires fresh terminal evidence before it can complete again. Reopening
+  a project managed by a completed cutover workflow is refused until a new
+  cutover epoch can be durably represented; the prior external confirmation is
+  never reused.
 - `attention`, `failed`, `cancelled`, `verification_difference`, and
   `verification_limit_exceeded` require operator handling; automation must not
   silently retry them as success.

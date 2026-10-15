@@ -1,6 +1,20 @@
 //! SQLite-staged reconciliation for accounts too large to hold in memory.
 
 use super::*;
+use crate::core::sqlite_i64;
+
+const STAGE_SPACE_RECHECK_MISMATCH_INTERVAL: u64 = 256;
+
+fn stage_table_count(connection: &rusqlite::Connection, table: &str) -> Result<u64, String> {
+    // `table` is selected only from private, static reconciliation table
+    // names at call sites; it is not derived from mailbox or operator input.
+    let count = connection
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| format!("could not count staged {table}: {error}"))?;
+    u64::try_from(count).map_err(|_| format!("staged {table} count is invalid: {count}"))
+}
 
 pub(super) fn sqlite_stage_size(message: &StagedMessage) -> Result<i64, String> {
     message
@@ -56,15 +70,339 @@ pub(super) fn mark_stage_matched(
 /// Stage one mismatch row; reconciliation keeps no mismatch detail in memory.
 pub(super) fn append_stage_mismatch(
     connection: &rusqlite::Connection,
+    stage: &MessageMetadataStage,
     mismatch: MessageMismatch,
     staged: &mut u64,
 ) -> Result<(), String> {
     insert_staged_mismatch(connection, &mismatch)?;
     *staged = staged.saturating_add(1);
+    if staged.is_multiple_of(STAGE_SPACE_RECHECK_MISMATCH_INTERVAL) {
+        stage.ensure_free_space()?;
+    }
     Ok(())
 }
 
 impl MessageVerification {
+    /// Validate the one-to-one relationship between staged messages and
+    /// content fingerprints without constructing mailbox-sized Rust maps.
+    fn validate_fingerprint_coverage(connection: &rusqlite::Connection) -> Result<(), String> {
+        for (side_name, side) in [
+            ("source", StagedMessageSide::Source),
+            ("destination", StagedMessageSide::Destination),
+        ] {
+            let message_count = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM staged_messages WHERE side=?1",
+                    [side.as_i64()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| format!("could not count {side_name} content records: {error}"))?;
+            let fingerprint_count = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM stage_fingerprints WHERE side=?1",
+                    [side.as_i64()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| {
+                    format!("could not count {side_name} content fingerprints: {error}")
+                })?;
+            let missing_or_orphaned = connection
+                .query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM staged_messages m LEFT JOIN stage_fingerprints f
+                          ON f.side=m.side AND f.mailbox=m.mailbox
+                         AND f.uidvalidity=m.uidvalidity AND f.uid=m.uid
+                        WHERE m.side=?1 AND f.uid IS NULL
+                     ) OR EXISTS(
+                        SELECT 1 FROM stage_fingerprints f LEFT JOIN staged_messages m
+                          ON m.side=f.side AND m.mailbox=f.mailbox
+                         AND m.uidvalidity=f.uidvalidity AND m.uid=f.uid
+                        WHERE f.side=?1 AND m.uid IS NULL
+                     )",
+                    [side.as_i64()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| {
+                    format!("could not validate {side_name} fingerprint coverage: {error}")
+                })?;
+            if message_count != fingerprint_count || missing_or_orphaned {
+                return Err(format!(
+                    "content verification requires exact {side_name} message/fingerprint key coverage"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Reconcile staged metadata and enrich only the reconciler's established
+    /// exact pairs with body fingerprints. Fingerprint fallback remains
+    /// limited to unique Missing/Extra pairs in the expected folder. All
+    /// identity, fingerprint, and mismatch state stays in the private SQLite
+    /// stage; Rust holds only a bounded batch while emitting changed-pair
+    /// evidence.
+    pub(crate) fn reconcile_stage_with_content_fingerprints(
+        job_id: &str,
+        run_id: &str,
+        stage: &MessageMetadataStage,
+        folder_mapping: &HashMap<String, String>,
+    ) -> Result<(u64, VerificationSummary), String> {
+        let (mut mismatch_count, mut summary) =
+            Self::reconcile_stage(job_id, run_id, stage, folder_mapping)?;
+        stage.ensure_free_space()?;
+        let connection = stage.connection()?;
+        Self::validate_fingerprint_coverage(connection)?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| format!("could not begin staged content reconciliation: {error}"))?;
+
+        crate::core::stage_sql::execute_batch(
+            connection,
+            "CREATE TABLE staged_content_source_unique AS
+                SELECT fingerprint,MIN(rowid) AS message_rowid
+                FROM stage_fingerprints WHERE side=0
+                GROUP BY fingerprint HAVING COUNT(*)=1;
+             CREATE UNIQUE INDEX staged_content_source_unique_key
+                ON staged_content_source_unique(fingerprint);
+             CREATE TABLE staged_content_destination_unique AS
+                SELECT fingerprint,MIN(rowid) AS message_rowid
+                FROM stage_fingerprints WHERE side=1
+                GROUP BY fingerprint HAVING COUNT(*)=1;
+             CREATE UNIQUE INDEX staged_content_destination_unique_key
+                ON staged_content_destination_unique(fingerprint);
+             CREATE TABLE staged_content_fallback_pairs AS
+                SELECT s.message_rowid AS source_fingerprint_rowid,
+                       d.message_rowid AS destination_fingerprint_rowid,
+                       sm.rowid AS source_rowid,dm.rowid AS destination_rowid
+                FROM staged_content_source_unique s
+                JOIN staged_content_destination_unique d USING(fingerprint)
+                JOIN stage_fingerprints sf ON sf.rowid=s.message_rowid
+                JOIN stage_fingerprints df ON df.rowid=d.message_rowid
+                JOIN staged_messages sm ON sm.side=0 AND sm.mailbox=sf.mailbox
+                  AND sm.uidvalidity=sf.uidvalidity AND sm.uid=sf.uid
+                JOIN staged_messages dm ON dm.side=1 AND dm.mailbox=df.mailbox
+                  AND dm.uidvalidity=df.uidvalidity AND dm.uid=df.uid
+                JOIN staged_mismatches missing ON missing.mismatch_type='missing'
+                  AND missing.source_folder=sm.mailbox
+                  AND missing.source_uidvalidity IS NULLIF(sm.uidvalidity,-1)
+                  AND missing.source_uid=sm.uid
+                JOIN staged_mismatches extra ON extra.mismatch_type='extra'
+                  AND extra.destination_folder=dm.mailbox
+                  AND extra.destination_uidvalidity IS NULLIF(dm.uidvalidity,-1)
+                  AND extra.dest_uid=dm.uid
+                WHERE dm.mailbox=sm.match_mailbox;
+             CREATE UNIQUE INDEX staged_content_fallback_source
+                ON staged_content_fallback_pairs(source_rowid);
+             CREATE UNIQUE INDEX staged_content_fallback_destination
+                ON staged_content_fallback_pairs(destination_rowid);
+             INSERT INTO staged_matched(side,mailbox,uidvalidity,uid)
+                SELECT 0,sm.mailbox,sm.uidvalidity,sm.uid
+                FROM staged_content_fallback_pairs p
+                JOIN staged_messages sm ON sm.rowid=p.source_rowid
+             UNION ALL
+                SELECT 1,dm.mailbox,dm.uidvalidity,dm.uid
+                FROM staged_content_fallback_pairs p
+                JOIN staged_messages dm ON dm.rowid=p.destination_rowid;
+             DELETE FROM staged_mismatches WHERE mismatch_type='missing' AND EXISTS(
+                SELECT 1 FROM staged_content_fallback_pairs p
+                JOIN staged_messages sm ON sm.rowid=p.source_rowid
+                WHERE staged_mismatches.source_folder=sm.mailbox
+                  AND staged_mismatches.source_uidvalidity IS NULLIF(sm.uidvalidity,-1)
+                  AND staged_mismatches.source_uid=sm.uid);
+             DELETE FROM staged_mismatches WHERE mismatch_type='extra' AND EXISTS(
+                SELECT 1 FROM staged_content_fallback_pairs p
+                JOIN staged_messages dm ON dm.rowid=p.destination_rowid
+                WHERE staged_mismatches.destination_folder=dm.mailbox
+                  AND staged_mismatches.destination_uidvalidity IS NULLIF(dm.uidvalidity,-1)
+                  AND staged_mismatches.dest_uid=dm.uid);
+             CREATE TABLE staged_content_exact_source_ranked AS
+                SELECT rowid AS message_rowid,message_id,match_mailbox,date_key,size_bytes,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY message_id,match_mailbox,date_key,size_bytes ORDER BY rowid
+                       ) AS ordinal
+                FROM staged_messages WHERE side=0 AND message_id IS NOT NULL
+                  AND identity_provenance='rfc_message_id'
+                  AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
+             CREATE TABLE staged_content_exact_destination_ranked AS
+                SELECT rowid AS message_rowid,message_id,mailbox AS match_mailbox,date_key,size_bytes,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY message_id,mailbox,date_key,size_bytes
+                         ORDER BY mailbox,uidvalidity,uid
+                       ) AS ordinal
+                FROM staged_messages WHERE side=1 AND message_id IS NOT NULL
+                  AND identity_provenance='rfc_message_id'
+                  AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
+             CREATE INDEX staged_content_exact_source_key
+                ON staged_content_exact_source_ranked(message_id,match_mailbox,date_key,size_bytes,ordinal);
+             CREATE INDEX staged_content_exact_destination_key
+                ON staged_content_exact_destination_ranked(message_id,match_mailbox,date_key,size_bytes,ordinal);
+             CREATE TABLE staged_content_exact_pairs AS
+                SELECT s.message_rowid AS source_rowid,d.message_rowid AS destination_rowid
+                FROM staged_content_exact_source_ranked s
+                JOIN staged_content_exact_destination_ranked d
+                  ON d.message_id=s.message_id AND d.match_mailbox=s.match_mailbox
+                 AND d.date_key=s.date_key AND d.size_bytes=s.size_bytes
+                 AND d.ordinal=s.ordinal
+                JOIN stage_fingerprints sf ON sf.side=0
+                  AND sf.mailbox=(SELECT mailbox FROM staged_messages WHERE rowid=s.message_rowid)
+                  AND sf.uidvalidity=(SELECT uidvalidity FROM staged_messages WHERE rowid=s.message_rowid)
+                  AND sf.uid=(SELECT uid FROM staged_messages WHERE rowid=s.message_rowid)
+                JOIN stage_fingerprints df ON df.side=1
+                  AND df.mailbox=(SELECT mailbox FROM staged_messages WHERE rowid=d.message_rowid)
+                  AND df.uidvalidity=(SELECT uidvalidity FROM staged_messages WHERE rowid=d.message_rowid)
+                  AND df.uid=(SELECT uid FROM staged_messages WHERE rowid=d.message_rowid)
+                WHERE EXISTS(SELECT 1 FROM staged_matched m JOIN staged_messages x
+                    ON x.side=m.side AND x.mailbox=m.mailbox
+                   AND x.uidvalidity=m.uidvalidity AND x.uid=m.uid
+                    WHERE m.side=0 AND x.rowid=s.message_rowid)
+                  AND EXISTS(SELECT 1 FROM staged_matched m JOIN staged_messages x
+                    ON x.side=m.side AND x.mailbox=m.mailbox
+                   AND x.uidvalidity=m.uidvalidity AND x.uid=m.uid
+                    WHERE m.side=1 AND x.rowid=d.message_rowid)
+                  AND sf.fingerprint<>df.fingerprint;",
+        )
+        .map_err(|error| format!("could not classify staged content fingerprints: {error}"))?;
+        stage.ensure_free_space()?;
+
+        let fallback_count = stage_table_count(connection, "staged_content_fallback_pairs")?;
+        mismatch_count = mismatch_count.saturating_sub(fallback_count.saturating_mul(2));
+        summary.missing_count = summary.missing_count.saturating_sub(fallback_count);
+        summary.extra_count = summary.extra_count.saturating_sub(fallback_count);
+        summary.metadata_matches = summary.metadata_matches.saturating_add(fallback_count);
+
+        let job_context: Arc<str> = Arc::from(job_id);
+        let run_context: Arc<str> = Arc::from(run_id);
+        let mut after_rowid = 0_i64;
+        loop {
+            let pairs = {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes,
+                                d.rowid,d.mailbox,d.uidvalidity,d.uid,d.message_id,d.internal_date,d.date_key,d.size_bytes,
+                                sf.fingerprint,df.fingerprint
+                         FROM staged_content_exact_pairs p
+                         JOIN staged_messages s ON s.rowid=p.source_rowid
+                         JOIN staged_messages d ON d.rowid=p.destination_rowid
+                         JOIN stage_fingerprints sf ON sf.side=0 AND sf.mailbox=s.mailbox
+                           AND sf.uidvalidity=s.uidvalidity AND sf.uid=s.uid
+                         JOIN stage_fingerprints df ON df.side=1 AND df.mailbox=d.mailbox
+                           AND df.uidvalidity=d.uidvalidity AND df.uid=d.uid
+                         WHERE s.rowid>?1 ORDER BY s.rowid LIMIT 256",
+                    )
+                    .map_err(|error| format!("could not query staged content differences: {error}"))?;
+                let mut rows = statement.query([after_rowid]).map_err(|error| {
+                    format!("could not read staged content differences: {error}")
+                })?;
+                let mut batch = Vec::new();
+                while let Some(row) = rows.next().map_err(|error| {
+                    format!("could not read staged content difference row: {error}")
+                })? {
+                    batch.push((
+                        staged_message_pair_from_row(row).map_err(|error| error.to_string())?,
+                        row.get::<_, String>(16)
+                            .map_err(|error| error.to_string())?,
+                        row.get::<_, String>(17)
+                            .map_err(|error| error.to_string())?,
+                    ));
+                }
+                batch
+            };
+            if pairs.is_empty() {
+                break;
+            }
+            stage.ensure_free_space()?;
+            for ((source, destination), source_fingerprint, destination_fingerprint) in pairs {
+                after_rowid = source.rowid;
+                let mut mismatch = make_mismatch(
+                    &job_context,
+                    &run_context,
+                    MismatchType::MessageIdOnly,
+                    Some(&source.key),
+                    Some(&destination.key),
+                    Some(&source.message),
+                    Some(&destination.message),
+                );
+                mismatch.source_fingerprint = Some(source_fingerprint);
+                mismatch.destination_fingerprint = Some(destination_fingerprint);
+                insert_staged_mismatch(connection, &mismatch)?;
+                connection
+                    .execute(
+                        "DELETE FROM staged_matched WHERE (side=0 AND mailbox=?1 AND uidvalidity=?2 AND uid=?3)
+                           OR (side=1 AND mailbox=?4 AND uidvalidity=?5 AND uid=?6)",
+                        params![
+                            source.key.mailbox.as_ref(),
+                            source.key.uidvalidity.map(sqlite_i64).transpose().map_err(|error| error.to_string())?.unwrap_or(-1),
+                            source.key.uid,
+                            destination.key.mailbox.as_ref(),
+                            destination.key.uidvalidity.map(sqlite_i64).transpose().map_err(|error| error.to_string())?.unwrap_or(-1),
+                            destination.key.uid,
+                        ],
+                    )
+                    .map_err(|error| format!("could not update staged content classification: {error}"))?;
+                mismatch_count = mismatch_count.saturating_add(1);
+                summary.metadata_matches = summary.metadata_matches.saturating_sub(1);
+                summary.changed_count = summary.changed_count.saturating_add(1);
+            }
+            stage.ensure_free_space()?;
+        }
+
+        crate::core::stage_sql::execute_batch(
+            connection,
+            "DROP TABLE staged_content_exact_pairs;
+             DROP INDEX staged_content_exact_source_key;
+             DROP INDEX staged_content_exact_destination_key;
+             DROP TABLE staged_content_exact_source_ranked;
+             DROP TABLE staged_content_exact_destination_ranked;
+             DROP TABLE staged_content_fallback_pairs;
+             DROP TABLE staged_content_source_unique;
+             DROP TABLE staged_content_destination_unique;",
+        )
+        .map_err(|error| {
+            format!("could not release staged content reconciliation tables: {error}")
+        })?;
+        stage.ensure_free_space()?;
+        let total_source = stage
+            .count(StagedMessageSide::Source)
+            .map_err(|error| error.to_string())?;
+        let total_destination = stage
+            .count(StagedMessageSide::Destination)
+            .map_err(|error| error.to_string())?;
+        if total_source
+            != summary
+                .metadata_matches
+                .saturating_add(summary.probable_matches)
+                .saturating_add(summary.missing_count)
+                .saturating_add(summary.changed_count)
+            || total_destination
+                != summary
+                    .metadata_matches
+                    .saturating_add(summary.probable_matches)
+                    .saturating_add(summary.extra_count)
+                    .saturating_add(summary.duplicated_count)
+                    .saturating_add(summary.changed_count)
+        {
+            return Err(
+                "staged body-hash reconciliation accounting did not partition both message populations"
+                    .into(),
+            );
+        }
+        let persisted_mismatches = connection
+            .query_row("SELECT COUNT(*) FROM staged_mismatches", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| {
+                format!("could not validate staged body-hash mismatch count: {error}")
+            })?;
+        if u64::try_from(persisted_mismatches).ok() != Some(mismatch_count) {
+            return Err(
+                "staged body-hash mismatch details do not agree with the summary count".into(),
+            );
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("could not commit staged content reconciliation: {error}"))?;
+        Ok((mismatch_count, summary))
+    }
+
     /// Reconcile staged metadata and return its mismatches in memory, under
     /// the estimated mismatch-detail budget. Durable live runs use
     /// `reconcile_stage` instead and stream the staged rows into the ledger.
@@ -110,6 +448,7 @@ impl MessageVerification {
         stage: &MessageMetadataStage,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(u64, VerificationSummary), String> {
+        stage.ensure_free_space()?;
         let connection = stage.connection()?;
         // One transaction for the whole pass. A durable stage runs with FULL
         // synchronization, so autocommitting each matched-row insert costs a
@@ -202,6 +541,7 @@ impl MessageVerification {
                  DROP TABLE staged_exact_destination_ranked;",
             )
             .map_err(|error| format!("could not reconcile exact staged metadata: {error}"))?;
+        stage.ensure_free_space()?;
         let metadata_matches = connection
             .query_row(
                 "SELECT COUNT(*) FROM staged_matched WHERE side=0",
@@ -271,6 +611,7 @@ impl MessageVerification {
                     JOIN staged_messages m ON m.rowid=p.destination_rowid;",
         )
         .map_err(|error| format!("could not reconcile changed staged IDs: {error}"))?;
+        stage.ensure_free_space()?;
         {
             let mut statement = crate::core::stage_sql::prepare(connection,
                     "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes,
@@ -289,6 +630,7 @@ impl MessageVerification {
                     pair.map_err(|error| format!("could not decode changed staged pair: {error}"))?;
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -365,6 +707,7 @@ impl MessageVerification {
                 mark_stage_matched(connection, StagedMessageSide::Destination, &destination)?;
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -431,6 +774,7 @@ impl MessageVerification {
                 SELECT 1,destination_mailbox,destination_uidvalidity,destination_uid FROM staged_probable_pairs;",
         )
         .map_err(|error| format!("could not reconcile unique staged fingerprints: {error}"))?;
+        stage.ensure_free_space()?;
         let probable_matches = connection
             .query_row("SELECT COUNT(*) FROM staged_probable_pairs", [], |row| {
                 row.get::<_, i64>(0)
@@ -461,6 +805,7 @@ impl MessageVerification {
              DROP TABLE staged_probable_destination;",
         )
         .map_err(|error| format!("could not release probable reconciliation rows: {error}"))?;
+        stage.ensure_free_space()?;
 
         // Remaining rows become bounded mismatch evidence.
         after_rowid = 0;
@@ -475,6 +820,7 @@ impl MessageVerification {
             for source in batch {
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -490,6 +836,7 @@ impl MessageVerification {
             }
         }
         crate::core::stage_sql::execute_batch(connection, "CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.identity_provenance='rfc_message_id' GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id AND s.identity_provenance='rfc_message_id') AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id AND s.identity_provenance='rfc_message_id') > 0; CREATE INDEX staged_duplicate_ids_message_id ON staged_duplicate_ids(message_id);").map_err(|error| error.to_string())?;
+        stage.ensure_free_space()?;
         after_rowid = 0;
         loop {
             let batch = stage
@@ -520,6 +867,7 @@ impl MessageVerification {
                 };
                 append_stage_mismatch(
                     connection,
+                    stage,
                     make_mismatch(
                         &job_context,
                         &run_context,
@@ -562,6 +910,7 @@ impl MessageVerification {
                     .into(),
             );
         }
+        stage.ensure_free_space()?;
         transaction
             .commit()
             .map_err(|error| format!("could not finish staged reconciliation: {error}"))?;

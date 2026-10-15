@@ -1,8 +1,8 @@
 use crate::credentials::read_secret_file;
 use crate::headless::{
-    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute,
-    headless_batch_execute_selected, headless_execute_with_credentials, headless_recover,
-    headless_status, headless_status_summary, headless_supervise,
+    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute_selected,
+    headless_execute_with_credentials, headless_recover, headless_status, headless_status_summary,
+    headless_supervise,
 };
 use crate::maintenance_window::MaintenanceWindow;
 use crate::*;
@@ -295,6 +295,41 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wave_list_contract_separates_verified_exceptions_and_cutover_readiness() {
+        let summary = crate::core::WaveSummary {
+            wave: crate::core::Wave {
+                id: "wave-1".into(),
+                position: 0,
+                settings: crate::core::WaveSettings {
+                    name: "Wave 1".into(),
+                    ..crate::core::WaveSettings::default()
+                },
+                approved_by: Some("operator".into()),
+                approved_at: Some("2026-10-14T12:00:00Z".into()),
+            },
+            members: 3,
+            migrating: 0,
+            needs_attention: 0,
+            catch_up_pending: 0,
+            waiting: 0,
+            evidenced: 3,
+            verified: 2,
+            accepted_exceptions: 1,
+            completed: 3,
+        };
+        let output: serde_json::Value = serde_json::from_str(
+            &super::migrate::wave_list_json(&[summary]).expect("wave list should serialize"),
+        )
+        .expect("wave list should be JSON");
+        assert_eq!(output["format"], "mailswiftsync-wave-list");
+        assert_eq!(output["format_version"], 2);
+        assert_eq!(output["waves"][0]["status"], "complete_with_exceptions");
+        assert_eq!(output["waves"][0]["verified"], 2);
+        assert_eq!(output["waves"][0]["accepted_exceptions"], 1);
+        assert_eq!(output["waves"][0]["completed"], 3);
     }
 
     #[test]

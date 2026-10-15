@@ -855,6 +855,87 @@ pub(crate) fn headless_batch_execute_selected(
     acknowledge_destination_loss: bool,
     diagnostic_log: Option<&std::path::Path>,
 ) -> Result<String, String> {
+    headless_batch_execute_selected_inner(
+        state_path,
+        live,
+        requested_ids,
+        acknowledge_destination_loss,
+        diagnostic_log,
+        None,
+    )
+}
+
+/// Run the approved cutover stage only if it is still the same stage after
+/// acquiring the App's exclusive ledger lock. The CLI's earlier read is for
+/// actionable diagnostics; this locked recheck closes the intervening race.
+pub(crate) fn headless_cutover_batch_execute(
+    state_path: &std::path::Path,
+    acknowledge_destination_loss: bool,
+    project_id: &str,
+    expected_stage: core::CutoverStage,
+) -> Result<String, String> {
+    headless_batch_execute_selected_inner(
+        state_path,
+        true,
+        None,
+        acknowledge_destination_loss,
+        None,
+        Some((project_id, expected_stage)),
+    )
+}
+
+/// Validate the durable cutover conditions required before launching a
+/// mailbox pass. Both the CLI's diagnostic check and the worker's
+/// lock-held admission check use this function so their safety rules cannot
+/// drift apart.
+pub(crate) fn validate_cutover_run_admission(
+    workflow: &core::CutoverWorkflow,
+    expected_stage: core::CutoverStage,
+) -> Result<(), String> {
+    if workflow.stage != expected_stage {
+        return Err("workflow stage changed since cutover admission".into());
+    }
+    if workflow.approved_by.is_none() {
+        return Err("explicit operator approval is required".into());
+    }
+    if workflow.stage == core::CutoverStage::Completed {
+        return Err("workflow is already complete".into());
+    }
+    crate::core::validate_cutover_run_stage(
+        workflow.stage.as_str(),
+        workflow.stage.as_str(),
+        workflow.source_quiescence_at.as_deref(),
+    )
+    .map_err(|error| match workflow.stage {
+        core::CutoverStage::FinalDelta => format!(
+            "{error}; confirm delivery and mailbox edits are paused, then record a fresh attestation before Final Delta"
+        ),
+        _ => error,
+    })?;
+    let scheduled_at = chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at)
+        .map_err(|_| "scheduled_at is not RFC 3339".to_owned())?
+        .with_timezone(&chrono::Utc);
+    if scheduled_at > chrono::Utc::now() {
+        return Err("scheduled time has not arrived".into());
+    }
+    if let Some(window) = workflow.maintenance_window.as_deref() {
+        let window = MaintenanceWindow::parse(window)
+            .map_err(|_| "durable maintenance window is invalid".to_owned())?;
+        if !window.contains_now() {
+            return Err("current time is outside the approved maintenance window".into());
+        }
+    }
+    Ok(())
+}
+
+fn headless_batch_execute_selected_inner(
+    state_path: &std::path::Path,
+    live: bool,
+    requested_ids: Option<&HashSet<String>>,
+    acknowledge_destination_loss: bool,
+    diagnostic_log: Option<&std::path::Path>,
+    cutover_guard: Option<(&str, core::CutoverStage)>,
+) -> Result<String, String> {
     let mut app =
         App::try_from_state_path(Some(state_path)).map_err(|failure| failure.to_string())?;
     if let Some(directory) = diagnostic_log {
@@ -880,6 +961,27 @@ pub(crate) fn headless_batch_execute_selected(
                 .into(),
         );
     };
+    if let Some((expected_project_id, expected_stage)) = cutover_guard {
+        if project_id != expected_project_id {
+            return Err(
+                "cutover run refused: the locked durable queue belongs to a different project"
+                    .into(),
+            );
+        }
+        let workflow = app
+            .store
+            .cutover_workflow(&project_id)
+            .map_err(|error| {
+                format!(
+                    "cutover run refused: could not re-read workflow under the ledger lock: {error}"
+                )
+            })?
+            .ok_or_else(|| {
+                "cutover run refused: workflow disappeared before locked admission".to_owned()
+            })?;
+        validate_cutover_run_admission(&workflow, expected_stage)
+            .map_err(|error| format!("cutover run refused: {error}"))?;
+    }
     if requested_ids.is_some_and(HashSet::is_empty) {
         return Err("selective remediation requested zero mailbox IDs; refusing success".into());
     }
@@ -1231,8 +1333,88 @@ fn last_durability_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_durability_detail, last_verification_detail};
+    use super::{last_durability_detail, last_verification_detail, validate_cutover_run_admission};
     use crate::BoundedLineBuffer;
+
+    fn approved_cutover(stage: crate::core::CutoverStage) -> crate::core::CutoverWorkflow {
+        crate::core::CutoverWorkflow {
+            project_id: "project".into(),
+            stage,
+            scheduled_at: (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
+            maintenance_window: None,
+            approved_by: Some("operator".into()),
+            approved_at: Some(chrono::Utc::now().to_rfc3339()),
+            external_confirmation: None,
+            source_quiescence_operator: Some("operator".into()),
+            source_quiescence_evidence: Some("source delivery paused".into()),
+            source_quiescence_at: Some(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+        }
+    }
+
+    #[test]
+    fn locked_cutover_admission_rejects_a_stage_changed_after_the_cli_read() {
+        let workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        let error = validate_cutover_run_admission(&workflow, crate::core::CutoverStage::CatchUp)
+            .expect_err("a stale pre-lock stage must not authorize execution");
+        assert!(error.contains("workflow stage"));
+    }
+
+    #[test]
+    fn final_delta_admission_requires_source_quiescence_evidence() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        workflow.source_quiescence_at = None;
+        let error =
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .expect_err("final delta must not run without a quiescence attestation");
+        assert!(error.contains("source-quiescence"));
+    }
+
+    #[test]
+    fn final_delta_admission_rejects_stale_source_quiescence_attestation() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        workflow.source_quiescence_at = Some(
+            (chrono::Utc::now() - chrono::Duration::minutes(16))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        );
+        let error =
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .expect_err("a stale source-quiescence assertion must not authorize final delta");
+        assert!(error.contains("older than 15 minutes"));
+    }
+
+    #[test]
+    fn final_delta_admission_rejects_future_or_malformed_quiescence_timestamp() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        workflow.source_quiescence_at = Some("not-a-timestamp".into());
+        assert!(
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .unwrap_err()
+                .contains("timestamp is invalid")
+        );
+
+        workflow.source_quiescence_at = Some(
+            (chrono::Utc::now() + chrono::Duration::minutes(1))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        );
+        assert!(
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .unwrap_err()
+                .contains("in the future")
+        );
+    }
+
+    #[test]
+    fn cutover_admission_rejects_a_future_schedule() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::Seed);
+        workflow.scheduled_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert!(
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::Seed)
+                .expect_err("future cutover must be refused")
+                .contains("scheduled time")
+        );
+    }
 
     #[test]
     fn support_references_are_stable_and_namespace_separated() {

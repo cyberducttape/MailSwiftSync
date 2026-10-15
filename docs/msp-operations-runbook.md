@@ -70,6 +70,10 @@ mailbox is complete, needs a delta, or requires operator review.
   throttling, queue eligibility, verification coverage, and destination
   capacity observations. Unknown quota is a blocker for any customer policy
   that requires known capacity.
+- Treat an observed IMAP quota as the quota root returned for INBOX only. A
+  multi-root account can have different limits on other folders, and a
+  non-exhausted INBOX quota does not establish account-wide headroom; confirm
+  destination quota coverage with the provider before admission when required.
 - When provider throttling pauses launches, the Activity view reports the
   limiting domain, adaptive ceiling versus configured ceiling, and escalation
   event count. Treat this as run telemetry: adaptive cooldown state is held in
@@ -78,7 +82,27 @@ mailbox is complete, needs a delta, or requires operator review.
   unless the evidence escalates to their shared provider or global domain.
 - Use the durable cutover workflow for staged Seed, Catch-up, Final Delta, and
   Verification where the customer change requires it. External DNS/MX
-  confirmation remains an explicit operator acknowledgement.
+  confirmation remains an explicit operator acknowledgement. Before running
+  the Final Delta stage, record `cutover <state.db> attest-source-quiescence
+  <project-id> <operator> <evidence>` with the change/ticket reference and the
+  time delivery and mailbox edits were paused or narrowly watermarked. The
+  attestation must be no more than 15 minutes old when each Final Delta
+  mailbox worker is durably claimed; if a batch is delayed, reconfirm the pause
+  and refresh the attestation with the same command before retrying admission.
+  Reconfirm and refresh it before advancing from Final Delta. On entering
+  Verification, the workflow clears that earlier attestation; record a new
+  attestation in the Verification stage before any final-verification worker
+  can be admitted. The `migration.cutover_verification_started` event is
+  emitted only after this post-delta reconfirmation. Refresh it again before
+  externally confirmed completion if more than 15 minutes have elapsed. The
+  command can refresh an expired assertion in Catch-up before advancing to
+  Final Delta, and accepts refreshes during Final Delta and Verification.
+  Keep that barrier in force through final verification.
+  Verification separately re-LISTs and re-SELECTs the source after destination scanning and records
+  whether the tracked folder cursors remained unchanged. The attestation is
+  still an operator assertion: neither it nor the cursor recheck proves an
+  atomic, continuously quiescent cross-server snapshot. Customer proof must
+  not describe it as one.
 - If using `notify-webhook --watch`, configure HTTPS, a customer-approved
   signing secret, a service-manager restart policy, and an owner for dead-letter
   review. The outbox is durable within the ledger, but delivery still depends

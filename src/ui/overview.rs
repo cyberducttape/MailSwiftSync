@@ -282,7 +282,12 @@ impl App {
         let preflight_blockers = self
             .preflight
             .iter()
-            .filter(|(_, _, passed)| !passed)
+            .filter(|(_, _, status)| *status == crate::controller::PreflightCheckStatus::Blocked)
+            .count();
+        let preflight_unknown = self
+            .preflight
+            .iter()
+            .filter(|(_, _, status)| *status == crate::controller::PreflightCheckStatus::Unknown)
             .count();
         let plan_digest = crate::plan_identity::fingerprint_digest(&self.form.plan_fingerprint());
         let accounts_current = crate::controller::capability_observation_matches(
@@ -361,13 +366,15 @@ impl App {
                         self.language
                             .message("ui.blocker-count")
                             .replace("{}", &preflight_blockers.to_string())
+                    } else if preflight_unknown > 0 {
+                        format!("{preflight_unknown} checks unresolved")
                     } else {
                         self.language.message("ui.no-blockers-recorded").to_owned()
                     };
                     ui.label(
                         RichText::new(preflight_status).color(if self.preflight.is_empty() {
                             colors.text_secondary
-                        } else if preflight_blockers > 0 {
+                        } else if preflight_blockers > 0 || preflight_unknown > 0 {
                             colors.warning
                         } else {
                             colors.success
@@ -540,7 +547,7 @@ impl App {
             } else if self.preflight.is_empty() {
                 (
                     None,
-                    "plan validation checks passed",
+                    "plan assessment checks",
                     "Plan assessment",
                     "Review assessment",
                     false,
@@ -550,15 +557,19 @@ impl App {
                     Some((
                         self.preflight
                             .iter()
-                            .filter(|(_, _, passed)| *passed)
+                            .filter(|(_, _, status)| {
+                                *status == crate::controller::PreflightCheckStatus::Passed
+                            })
                             .count(),
                         self.preflight
                             .iter()
-                            .filter(|(_, _, passed)| !*passed)
+                            .filter(|(_, _, status)| {
+                                *status != crate::controller::PreflightCheckStatus::Passed
+                            })
                             .count(),
                         self.preflight.len(),
                     )),
-                    "plan validation checks passed",
+                    "plan assessment checks",
                     "Plan assessment",
                     "Review assessment",
                     false,
@@ -1033,15 +1044,20 @@ impl App {
                         crate::ui::table_header(ui, self.language.message("ui.result"));
                         crate::ui::table_header(ui, self.language.message("ui.action"));
                         ui.end_row();
-                        for (name, detail, passed) in &self.preflight {
-                            let status = ui.label(
-                                RichText::new(if *passed { "✓" } else { "!" }).color(if *passed {
-                                    self.theme_colors().success
-                                } else {
-                                    self.theme_colors().danger
-                                }),
-                            );
-                            if !passed {
+                        for (name, detail, check_status) in &self.preflight {
+                            let (symbol, color) = match check_status {
+                                crate::controller::PreflightCheckStatus::Passed => {
+                                    ("✓", self.theme_colors().success)
+                                }
+                                crate::controller::PreflightCheckStatus::Blocked => {
+                                    ("!", self.theme_colors().danger)
+                                }
+                                crate::controller::PreflightCheckStatus::Unknown => {
+                                    ("?", self.theme_colors().warning)
+                                }
+                            };
+                            let status = ui.label(RichText::new(symbol).color(color));
+                            if *check_status == crate::controller::PreflightCheckStatus::Blocked {
                                 status.on_hover_text(self.language.message(
                                     "ui.preflight-check-not-satisfied-may-block-readiness",
                                 ));
@@ -1052,7 +1068,7 @@ impl App {
                                     .family(crate::ui::fonts::medium()),
                             );
                             ui.label(detail);
-                            if !passed {
+                            if *check_status == crate::controller::PreflightCheckStatus::Blocked {
                                 let fix_button = ui.add_enabled(
                                     !self.running() && !self.workspace_read_only,
                                     egui::Button::new(self.language.message("ui.fix-in-plan")),
@@ -1065,6 +1081,10 @@ impl App {
                                 {
                                     open_plan = true;
                                 }
+                            } else if *check_status
+                                == crate::controller::PreflightCheckStatus::Unknown
+                            {
+                                ui.label(self.language.text("Confirm capacity with provider"));
                             } else {
                                 ui.label(self.language.message("ui.not-applicable"));
                             }

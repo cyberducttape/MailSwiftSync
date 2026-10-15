@@ -75,6 +75,11 @@ re-resolved to bypass the check during the request. Set
 receiver. When `allowed_domains` is non-empty, the webhook host must match an
 exact entry or a `*.example.com` subdomain pattern. Keep this file owner-only;
 it is read and enforced when the endpoint is validated and before delivery.
+Webhook and OAuth token HTTP clients disable implicit system/environment proxy
+discovery. A configured `HTTPS_PROXY`, `ALL_PROXY`, or similar variable does
+not override this direct-address policy. Enterprise proxy routing is not
+currently a supported policy mode; do not rely on ambient proxy variables to
+reach these endpoints.
 Production also requires `require_signing = true` and refuses delivery unless
 an HMAC-SHA256 signing secret is supplied through an owner-only secret file or
 environment variable. Rotate that secret by provisioning the replacement at
@@ -84,12 +89,12 @@ compatibility/lab policy may set `require_signing = false` for legacy receivers.
 
 OAuth authorization and token endpoints are restricted to the built-in Google
 and Microsoft hosts by default. All resolved addresses are checked for global
-unicast egress; token HTTP connections are pinned to the checked DNS
-answers. Interactive authorization is handed to the operator's browser after
-the check; browser DNS, certificate validation, and connection pinning are
-outside MailSwiftSync's transport boundary. Set `allow_custom_endpoints = true`
-only for reviewed enterprise providers, and use `allowed_domains` to limit the
-approved host boundary.
+unicast egress; token HTTP connections are pinned to the checked DNS answers
+and bypass implicit proxies. Interactive authorization is handed to the
+operator's browser after the check; browser DNS, certificate validation, and
+connection pinning are outside MailSwiftSync's transport boundary. Set
+`allow_custom_endpoints = true` only for reviewed enterprise providers, and use
+`allowed_domains` to limit the approved host boundary.
 
 Tenant scheduling scope can be set separately for source and destination in
 Migration plan → Advanced options. For batch imports, `source_rate_tenant` and

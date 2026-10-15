@@ -27,11 +27,13 @@ pub enum VerificationLimit {
     BodyHashTotalSize,
     /// Reconciliation state or mismatch detail exceeded its budget.
     ReconciliationState,
+    /// The verification stage filesystem approached its minimum free-space reserve.
+    StagingDiskSpace,
     /// Verification ran past its execution deadline.
     Deadline,
 }
 
-const ALL: [VerificationLimit; 9] = [
+const ALL: [VerificationLimit; 10] = [
     VerificationLimit::FolderInventory,
     VerificationLimit::ResponseSize,
     VerificationLimit::FetchedState,
@@ -40,6 +42,7 @@ const ALL: [VerificationLimit; 9] = [
     VerificationLimit::BodyHashMessageSize,
     VerificationLimit::BodyHashTotalSize,
     VerificationLimit::ReconciliationState,
+    VerificationLimit::StagingDiskSpace,
     VerificationLimit::Deadline,
 ];
 
@@ -56,6 +59,7 @@ impl VerificationLimit {
             Self::BodyHashMessageSize => "body_hash_message_size",
             Self::BodyHashTotalSize => "body_hash_total_size",
             Self::ReconciliationState => "reconciliation_state",
+            Self::StagingDiskSpace => "staging_disk_space",
             Self::Deadline => "deadline",
         }
     }
@@ -107,7 +111,7 @@ impl VerificationLimit {
                 "An endpoint holds more than the 1,000,000 messages metadata verification admits. Split the account into smaller folder scopes, or obtain evidence another way and accept the difference explicitly."
             }
             Self::BodyHashMessageCount => {
-                "Body-hash verification admits at most 100,000 messages per endpoint. Disable body-hash verification to obtain metadata evidence for this mailbox, then rerun."
+                "Ephemeral body-hash verification is limited to 100,000 messages per endpoint; use a durable SQLite-backed run for body proof up to the general 1,000,000-message limit, or use metadata-only verification."
             }
             Self::BodyHashMessageSize => {
                 "A message exceeded the body-hash per-message bound. Raise the bound (up to 64 MiB) or disable body-hash verification, then rerun."
@@ -117,6 +121,9 @@ impl VerificationLimit {
             }
             Self::ReconciliationState => {
                 "Reconciliation found more differences than it can record, which usually means the destination differs substantially. Inspect the transfer, run another delta pass, then rerun."
+            }
+            Self::StagingDiskSpace => {
+                "Verification stopped before another staging write because free space could not be confirmed or fell below the 512 MiB reserve. Free space on the stage filesystem, then retry; this reserve does not estimate total verification capacity."
             }
             Self::Deadline => {
                 "Verification ran past the migration timeout. Rerun for a fresh folder scan, or raise the migration timeout."
@@ -175,6 +182,22 @@ mod tests {
             VerificationLimit::from_detail("[verification_limit=bogus] x"),
             None
         );
+    }
+
+    #[test]
+    fn staging_disk_space_limit_has_actionable_non_capacity_claim() {
+        let detail = VerificationLimit::StagingDiskSpace.guidance();
+        assert!(detail.contains("512 MiB reserve"));
+        assert!(detail.contains("does not estimate total verification capacity"));
+    }
+
+    #[test]
+    fn body_hash_count_guidance_names_ephemeral_and_durable_limits() {
+        let guidance = VerificationLimit::BodyHashMessageCount.guidance();
+        assert!(guidance.contains("Ephemeral body-hash verification"));
+        assert!(guidance.contains("100,000 messages per endpoint"));
+        assert!(guidance.contains("durable SQLite-backed run"));
+        assert!(guidance.contains("1,000,000-message limit"));
     }
 
     #[test]

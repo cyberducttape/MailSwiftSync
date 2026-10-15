@@ -240,6 +240,44 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Canonical v2 HMAC input. Length-prefixing each value prevents ambiguous
+/// concatenations and signs the exact serialized body bytes transmitted.
+#[cfg(test)]
+fn webhook_signature_input(
+    event_id: &str,
+    event_type: &str,
+    idempotency_key: &str,
+    timestamp: &str,
+    body: &[u8],
+) -> Vec<u8> {
+    const DOMAIN: &[u8] = b"mailswiftsync:webhook-signature:v2\0";
+    let mut input = Vec::with_capacity(
+        DOMAIN.len()
+            + [
+                event_id.len(),
+                event_type.len(),
+                idempotency_key.len(),
+                timestamp.len(),
+                body.len(),
+            ]
+            .into_iter()
+            .sum::<usize>()
+            + 5 * std::mem::size_of::<u64>(),
+    );
+    input.extend_from_slice(DOMAIN);
+    for field in [
+        event_id.as_bytes(),
+        event_type.as_bytes(),
+        idempotency_key.as_bytes(),
+        timestamp.as_bytes(),
+        body,
+    ] {
+        input.extend_from_slice(&(field.len() as u64).to_be_bytes());
+        input.extend_from_slice(field);
+    }
+    input
+}
+
 fn read_bounded_response(response: &mut Response) -> Result<(), String> {
     let mut raw = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -665,6 +703,70 @@ mod tests {
         );
         assert_ne!(id, snapshot_event_id(&"b".repeat(64), "project", "{}"));
         assert_ne!(id, snapshot_event_id(&endpoint, "all-projects", "{}"));
+    }
+
+    #[test]
+    fn webhook_v2_signature_authenticates_identity_timestamp_and_exact_body() {
+        let key = hmac::Key::new(hmac::HMAC_SHA256, b"test-secret");
+        let input = webhook_signature_input(
+            "event-1",
+            "migration.completed",
+            "event-1",
+            "1792000000",
+            br#"{"phase":"complete"}"#,
+        );
+        let signature = hmac::sign(&key, &input);
+        hmac::verify(
+            &key,
+            &webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            signature.as_ref(),
+        )
+        .unwrap();
+        for changed in [
+            webhook_signature_input(
+                "event-2",
+                "migration.completed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.failed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-2",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-1",
+                "1792000001",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"failed"}"#,
+            ),
+        ] {
+            assert!(hmac::verify(&key, &changed, signature.as_ref()).is_err());
+        }
     }
 
     #[test]

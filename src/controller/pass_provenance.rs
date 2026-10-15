@@ -159,6 +159,8 @@ pub(crate) fn verified_folders(
             complete: cursor.completed,
             scan_started_at: cursor.scan_started_at.clone(),
             scan_completed_at: cursor.scan_completed_at.clone(),
+            source_revalidated_at: cursor.source_revalidated_at.clone(),
+            destination_revalidated_at: cursor.destination_revalidated_at.clone(),
         })
         .collect()
 }

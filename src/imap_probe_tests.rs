@@ -1,12 +1,14 @@
 use super::fetch_parser::{canonical_flag_set, parse_message_fetch_body_hashes_response_bytes};
 use super::{
-    ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
-    MailboxFetchError, MessageFetchBudget, MessageSink, MessageStateBudget, StageMessageSink,
-    StateReservation, TaggedResponseScanner, authenticated_list_command,
-    classify_mailbox_fetch_error, format_folder_failures, parse_list_delimiter,
-    parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes, parse_message_id_header,
-    read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
-    record_list_entry, tagged_response_outside_literals, write_imap_command,
+    DestinationQuotaObservation, ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES,
+    MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageSink,
+    MessageStateBudget, QUOTA_PROBE_COMMAND, StageMessageSink, StateReservation,
+    TaggedResponseScanner, authenticated_list_command, classify_mailbox_fetch_error,
+    format_folder_failures, inbox_quota_observation, parse_list_delimiter, parse_list_mailbox_name,
+    parse_message_fetch_metadata_response_bytes, parse_message_id_header,
+    quota_response_has_successful_root, read_imap_list_response,
+    read_imap_list_response_with_mailboxes, read_with_deadline, record_list_entry,
+    source_snapshot_matches, tagged_response_outside_literals, write_imap_command,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Cursor, Read, Write};
@@ -88,12 +90,16 @@ fn budgeted_write_honors_cancellation_before_writing() {
 #[test]
 fn list_request_asks_for_rfc6154_attributes_when_supported() {
     assert_eq!(
-        authenticated_list_command(true),
-        b"a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
+        authenticated_list_command("a005", true),
+        "a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
     );
     assert_eq!(
-        authenticated_list_command(false),
-        b"a005 LIST \"\" \"*\"\r\n"
+        authenticated_list_command("a005", false),
+        "a005 LIST \"\" \"*\"\r\n"
+    );
+    assert_eq!(
+        authenticated_list_command("r000", true),
+        "r000 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
     );
 }
 
@@ -522,6 +528,72 @@ fn list_parser_preserves_nil_delimiter_as_absent() {
         parse_list_delimiter(r#"* LIST (\HasNoChildren) NIL "INBOX""#),
         None
     );
+}
+
+#[test]
+fn quota_observation_requires_success_and_a_matching_inbox_root() {
+    assert!(quota_response_has_successful_root(
+        "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n",
+        "a006",
+        "INBOX"
+    ));
+    assert!(quota_response_has_successful_root(
+        "* QUOTAROOT \"INBOX\" \"\"\r\na006 OK quota completed\r\n",
+        "a006",
+        "inbox"
+    ));
+    assert!(!quota_response_has_successful_root(
+        "* QUOTAROOT Archive \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n",
+        "a006",
+        "INBOX"
+    ));
+    assert!(!quota_response_has_successful_root(
+        "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 NO quota lookup denied\r\n",
+        "a006",
+        "INBOX"
+    ));
+    let capabilities = "* CAPABILITY IMAP4rev1 QUOTA\r\n";
+    assert_eq!(
+        inbox_quota_observation(
+            capabilities,
+            Some(
+                "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::NotExhausted
+    );
+    assert_eq!(
+        inbox_quota_observation(
+            capabilities,
+            Some(
+                "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::Exhausted
+    );
+    assert_eq!(
+        inbox_quota_observation(
+            "* CAPABILITY IMAP4rev1\r\n",
+            Some(
+                "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::Unknown
+    );
+    assert_eq!(
+        inbox_quota_observation(
+            capabilities,
+            Some(
+                "* QUOTAROOT Archive \"\"\r\n* QUOTA \"\" (STORAGE 100 100)\r\na006 OK quota completed\r\n"
+            ),
+        ),
+        DestinationQuotaObservation::Unknown
+    );
+}
+
+#[test]
+fn quota_probe_uses_mailbox_argument_to_get_its_quota_roots() {
+    assert_eq!(QUOTA_PROBE_COMMAND, b"a006 GETQUOTAROOT INBOX\r\n");
 }
 
 #[test]
@@ -1328,6 +1400,7 @@ fn resumed_stage_budget_counts_only_current_attempt_pages() {
         uidvalidity: 42,
         uidnext: 8,
         exists: 1,
+        highest_modseq: None,
     };
     let stale = crate::core::ExtractedMessages::from([(
         crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 42, "7"),
@@ -1359,6 +1432,7 @@ fn resumed_stage_budget_counts_only_current_attempt_pages() {
                 uidvalidity: 9,
                 uidnext: 4,
                 exists: 1,
+                highest_modseq: None,
             },
         )
         .unwrap();
@@ -1398,4 +1472,50 @@ fn resumed_stage_budget_counts_only_current_attempt_pages() {
     sink.rollback_mailbox("INBOX").unwrap();
     assert_eq!(sink.len(), 0);
     assert_eq!(sink.stage.count(side).unwrap(), 1);
+}
+
+#[test]
+fn source_snapshot_revalidation_detects_uid_and_condstore_drift() {
+    let baseline = crate::core::FolderSnapshot {
+        uidvalidity: 7,
+        uidnext: 101,
+        exists: 100,
+        highest_modseq: Some(900),
+    };
+    assert!(source_snapshot_matches(&baseline, &baseline));
+    assert!(!source_snapshot_matches(
+        &baseline,
+        &crate::core::FolderSnapshot {
+            uidnext: 102,
+            ..baseline
+        }
+    ));
+    assert!(!source_snapshot_matches(
+        &baseline,
+        &crate::core::FolderSnapshot {
+            highest_modseq: Some(901),
+            ..baseline
+        }
+    ));
+    assert!(!source_snapshot_matches(
+        &baseline,
+        &crate::core::FolderSnapshot {
+            highest_modseq: None,
+            ..baseline
+        }
+    ));
+
+    // Servers that do not advertise a tracked MODSEQ can only be compared on
+    // the inventory fields; flag coverage is independently marked incomplete.
+    let without_modseq = crate::core::FolderSnapshot {
+        highest_modseq: None,
+        ..baseline
+    };
+    assert!(source_snapshot_matches(
+        &without_modseq,
+        &crate::core::FolderSnapshot {
+            highest_modseq: Some(901),
+            ..without_modseq
+        }
+    ));
 }

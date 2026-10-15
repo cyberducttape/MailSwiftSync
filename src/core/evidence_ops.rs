@@ -668,17 +668,10 @@ impl StateStore {
         operator: &str,
         reason: &str,
     ) -> rusqlite::Result<()> {
-        let operator = operator.trim();
-        let reason = reason.trim();
-        if operator.is_empty()
-            || operator.len() > 256
-            || reason.is_empty()
-            || reason.len() > 4096
-            || operator.chars().any(|character| character.is_control())
-            || reason.chars().any(|character| character.is_control())
-        {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let operator = crate::storage::single_line_audit_text(operator, 256)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
+        let reason = crate::storage::single_line_audit_text(reason, 4096)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let (state, phase): (String, String) = tx.query_row(
             "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
@@ -723,12 +716,22 @@ impl StateStore {
         if changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
+        super::cutover::maybe_emit_cutover_ready(&tx, project_id)?;
         let (total, verified): (i64, i64) = tx.query_row(
             "SELECT COUNT(*), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
             [project_id],
             |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
         )?;
-        if phase == Phase::Verification.as_str() && total > 0 && total == verified {
+        let has_cutover_workflow: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        if phase == Phase::Verification.as_str()
+            && !has_cutover_workflow
+            && total > 0
+            && total == verified
+        {
             let completed = tx.execute(
                 "UPDATE projects SET phase='complete' WHERE id=?1 AND phase='verification'",
                 [project_id],

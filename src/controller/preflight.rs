@@ -8,6 +8,19 @@ pub(crate) struct CapabilityProbeResult {
     pub(crate) result: Result<(core::ServerCapabilities, core::ServerCapabilities), String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreflightCheckStatus {
+    Passed,
+    Blocked,
+    Unknown,
+}
+
+impl PreflightCheckStatus {
+    fn from_condition(passed: bool) -> Self {
+        if passed { Self::Passed } else { Self::Blocked }
+    }
+}
+
 pub(crate) fn capability_observation_matches(
     observed_plan_fingerprint: Option<&str>,
     current_plan_fingerprint: &str,
@@ -30,7 +43,7 @@ pub(crate) fn assess_plan(
     form: &Form,
     source_capabilities: Option<&core::ServerCapabilities>,
     destination_capabilities: Option<&core::ServerCapabilities>,
-) -> Vec<(String, String, bool)> {
+) -> Vec<(String, String, PreflightCheckStatus)> {
     let organization_policy = crate::organization_policy::OrganizationPolicy::load();
     let mut checks = vec![
         (
@@ -40,7 +53,7 @@ pub(crate) fn assess_plan(
             } else {
                 form.profile.source_host.clone()
             },
-            !form.profile.source_host.is_empty(),
+            PreflightCheckStatus::from_condition(!form.profile.source_host.is_empty()),
         ),
         (
             "Destination endpoint".into(),
@@ -49,7 +62,7 @@ pub(crate) fn assess_plan(
             } else {
                 form.profile.destination_host.clone()
             },
-            !form.profile.destination_host.is_empty(),
+            PreflightCheckStatus::from_condition(!form.profile.destination_host.is_empty()),
         ),
         (
             "Execution mode".into(),
@@ -58,7 +71,7 @@ pub(crate) fn assess_plan(
             } else {
                 "Live migration enabled — destination may be changed".into()
             },
-            form.dry_run,
+            PreflightCheckStatus::from_condition(form.dry_run),
         ),
         (
             "Engine execution profile".into(),
@@ -70,8 +83,10 @@ pub(crate) fn assess_plan(
                     "Compatibility — weaker executable/environment boundary; production policy rejects live admission".into()
                 }
             },
-            crate::process::engine_execution_profile()
-                == crate::process::EngineExecutionProfile::Hardened,
+            PreflightCheckStatus::from_condition(
+                crate::process::engine_execution_profile()
+                    == crate::process::EngineExecutionProfile::Hardened,
+            ),
         ),
         // One derived policy for both engines: Dovecot backup mirrors,
         // imapsync --delete2 deletes, everything else keeps destination state.
@@ -80,13 +95,13 @@ pub(crate) fn assess_plan(
             (
                 "Destination mutation policy".into(),
                 policy.warning().into(),
-                !policy.may_remove_destination_state(),
+                PreflightCheckStatus::from_condition(!policy.may_remove_destination_state()),
             )
         },
         (
             "Credential persistence".into(),
             "Passwords are excluded from saved profiles and the SQLite ledger".into(),
-            true,
+            PreflightCheckStatus::Passed,
         ),
         (
             "Organization policy".into(),
@@ -97,7 +112,10 @@ pub(crate) fn assess_plan(
                 },
                 Err(error) => error.clone(),
             },
-            matches!(&organization_policy, Ok(policy) if policy.check_form(form).is_ok()),
+            PreflightCheckStatus::from_condition(matches!(
+                &organization_policy,
+                Ok(policy) if policy.check_form(form).is_ok()
+            )),
         ),
         (
             "Body-content verification bounds".into(),
@@ -112,8 +130,10 @@ pub(crate) fn assess_plan(
             } else {
                 "Disabled; metadata reconciliation remains the verification method".into()
             },
-            !form.profile.body_hash_verification
-                || crate::runner::validate_body_hash_limits(form).is_ok(),
+            PreflightCheckStatus::from_condition(
+                !form.profile.body_hash_verification
+                    || crate::runner::validate_body_hash_limits(form).is_ok(),
+            ),
         ),
     ];
     if form.engine() == core::Engine::Dovecot {
@@ -127,12 +147,13 @@ pub(crate) fn assess_plan(
                     form.profile.dovecot_strategy.label(),
                     form.profile.dovecot_strategy.description()
                 ),
-                true,
+                PreflightCheckStatus::Passed,
             ),
         );
     }
     append_capability_check(&mut checks, "Source", source_capabilities, false);
     append_capability_check(&mut checks, "Destination", destination_capabilities, true);
+    checks.push(destination_capacity_check(destination_capabilities));
     if let (Some(source), Some(destination)) = (source_capabilities, destination_capabilities)
         && let (Some(source_ns), Some(destination_ns)) = (&source.namespace, &destination.namespace)
     {
@@ -161,7 +182,11 @@ pub(crate) fn assess_plan(
                 " · Personal namespace prefixes or delimiters differ; review mailbox mapping before migration.",
             );
         }
-        checks.push(("Namespace mapping".into(), detail, !incompatible));
+        checks.push((
+            "Namespace mapping".into(),
+            detail,
+            PreflightCheckStatus::from_condition(!incompatible),
+        ));
     }
     if form.engine() == core::Engine::ImapSync {
         checks.push((
@@ -175,14 +200,14 @@ pub(crate) fn assess_plan(
                 }
                 _ => "WARNING: source cleartext is explicitly configured; destination TLS remains required".into(),
             },
-            form.profile.source_tls != "plain",
+            PreflightCheckStatus::from_condition(form.profile.source_tls != "plain"),
         ));
     }
     checks
 }
 
 fn append_capability_check(
-    checks: &mut Vec<(String, String, bool)>,
+    checks: &mut Vec<(String, String, PreflightCheckStatus)>,
     side: &str,
     capabilities: Option<&core::ServerCapabilities>,
     quota_is_blocking: bool,
@@ -206,8 +231,42 @@ fn append_capability_check(
             },
             quota_summary(capabilities, quota_is_blocking),
         ),
-        capabilities.inventory_complete && (!quota_is_blocking || !capabilities.quota_exceeded),
+        PreflightCheckStatus::from_condition(
+            capabilities.inventory_complete && (!quota_is_blocking || !capabilities.quota_exceeded),
+        ),
     ));
+}
+
+fn destination_capacity_check(
+    capabilities: Option<&core::ServerCapabilities>,
+) -> (String, String, PreflightCheckStatus) {
+    let Some(capabilities) = capabilities else {
+        return (
+            "Destination capacity".into(),
+            "Unknown: test the destination account; no provider capacity observation is available"
+                .into(),
+            PreflightCheckStatus::Unknown,
+        );
+    };
+    if capabilities.quota_exceeded {
+        return (
+            "Destination capacity".into(),
+            "Blocked: provider reports an exhausted INBOX-root quota".into(),
+            PreflightCheckStatus::Blocked,
+        );
+    }
+    if !capabilities.quota_observed {
+        return (
+            "Destination capacity".into(),
+            "Unknown: provider did not report usable quota headroom; verify capacity with the provider".into(),
+            PreflightCheckStatus::Unknown,
+        );
+    }
+    (
+        "Destination capacity".into(),
+        "Unknown: quota was observed and is not exhausted, but projected transfer headroom and account-wide capacity are not established".into(),
+        PreflightCheckStatus::Unknown,
+    )
 }
 
 fn quota_summary(capabilities: &core::ServerCapabilities, quota_is_blocking: bool) -> String {
@@ -215,21 +274,21 @@ fn quota_summary(capabilities: &core::ServerCapabilities, quota_is_blocking: boo
         "quota not advertised".into()
     } else if capabilities.quota_exceeded {
         if quota_is_blocking {
-            "quota exceeded; destination capacity check blocked".into()
+            "INBOX quota exceeded; destination capacity check blocked".into()
         } else {
-            "quota full; source remains readable and is advisory".into()
+            "INBOX quota full; source remains readable and is advisory".into()
         }
     } else if capabilities.quota_observed {
         let storage = capabilities.quota_resources.get("STORAGE");
         match storage {
             Some(quota) => format!(
-                "quota reported within limit (usage {} / limit {} provider units)",
+                "INBOX-root quota reported (usage {} / limit {} provider units)",
                 quota.used, quota.limit
             ),
-            None => "quota reported within limit".into(),
+            None => "INBOX-root quota reported; storage headroom unknown".into(),
         }
     } else {
-        "quota status unavailable; verify capacity with the provider".into()
+        "INBOX-root quota status unavailable; verify account capacity with the provider".into()
     }
 }
 
@@ -253,8 +312,8 @@ fn namespace_entries(entries: &[core::NamespaceEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CapabilityProbeResult, assess_plan, capability_observation_matches,
-        capability_probe_result_matches,
+        CapabilityProbeResult, PreflightCheckStatus, assess_plan, capability_observation_matches,
+        capability_probe_result_matches, destination_capacity_check,
     };
     use crate::{Form, core};
 
@@ -292,13 +351,13 @@ mod tests {
     fn assessment_keeps_local_checks_separate_from_network_readiness() {
         let form = Form::default();
         let checks = assess_plan(&form, None, None);
-        assert_eq!(checks.len(), 9);
+        assert_eq!(checks.len(), 10);
         assert_eq!(checks[0].0, "Source endpoint");
         assert_eq!(checks[1].0, "Destination endpoint");
         assert_eq!(checks[2].0, "Execution mode");
-        assert!(!checks[0].2);
-        assert!(!checks[1].2);
-        assert!(checks[4].2);
+        assert_eq!(checks[0].2, PreflightCheckStatus::Blocked);
+        assert_eq!(checks[1].2, PreflightCheckStatus::Blocked);
+        assert_eq!(checks[4].2, PreflightCheckStatus::Passed);
     }
 
     #[test]
@@ -313,7 +372,37 @@ mod tests {
             checks.last().map(|check| check.0.as_str()),
             Some("Transport security")
         );
-        assert!(!checks.last().expect("transport check").2);
-        assert!(checks[2].2);
+        assert_eq!(
+            checks.last().expect("transport check").2,
+            PreflightCheckStatus::Blocked
+        );
+        assert_eq!(checks[2].2, PreflightCheckStatus::Passed);
+    }
+
+    #[test]
+    fn destination_capacity_is_unknown_unless_exhaustion_is_observed() {
+        assert_eq!(
+            destination_capacity_check(None).2,
+            PreflightCheckStatus::Unknown
+        );
+        let mut capabilities = core::ServerCapabilities::from_inventory_summary(
+            "* CAPABILITY IMAP4rev1 QUOTA\r\n",
+            1,
+            0,
+        );
+        assert_eq!(
+            destination_capacity_check(Some(&capabilities)).2,
+            PreflightCheckStatus::Unknown
+        );
+        capabilities.record_quota_response("* QUOTA INBOX (STORAGE 100 1000)\r\n");
+        let (name, detail, status) = destination_capacity_check(Some(&capabilities));
+        assert_eq!(name, "Destination capacity");
+        assert_eq!(status, PreflightCheckStatus::Unknown);
+        assert!(detail.contains("projected transfer headroom"));
+        capabilities.record_quota_response("* QUOTA INBOX (STORAGE 1000 1000)\r\n");
+        assert_eq!(
+            destination_capacity_check(Some(&capabilities)).2,
+            PreflightCheckStatus::Blocked
+        );
     }
 }

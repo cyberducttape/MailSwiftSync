@@ -455,7 +455,13 @@ impl StateStore {
         // trigger-maintained run and acceptance counts on queue facts, version
         // 31 adds real/synthetic identity match counters to evidence, and
         // version 32 records UTC scan intervals for transfer-pass folders,
-        // and version 33 persists folder observations for standalone reverification.
+        // version 33 persists folder observations for standalone reverification,
+        // version 34 records operator-attested source quiescence for cutover,
+        // version 35 persists post-destination source cursor revalidation, and
+        // version 36 separates final-delta-started from cutover-ready webhook
+        // events and repairs queued legacy classifications; version 37 delays
+        // cutover-ready until final Verification evidence is durable, and
+        // version 38 records post-scan destination cursor revalidation.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -498,7 +504,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS wave_members (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), wave_id TEXT NOT NULL REFERENCES waves(id));
                  CREATE TABLE IF NOT EXISTS evidence_flag_verification (job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), compared_messages INTEGER NOT NULL CHECK(compared_messages >= 0), mismatched_messages INTEGER NOT NULL CHECK(mismatched_messages >= 0), excepted_messages INTEGER NOT NULL CHECK(excepted_messages >= 0), CHECK(mismatched_messages + excepted_messages <= compared_messages), PRIMARY KEY(job_id, run_id));
                  CREATE INDEX IF NOT EXISTS idx_wave_members_wave ON wave_members(wave_id);
-                 CREATE TABLE IF NOT EXISTS cutover_workflows (project_id TEXT PRIMARY KEY REFERENCES projects(id), stage TEXT NOT NULL CHECK(stage IN ('seed','catch_up','final_delta','verification','completed')), scheduled_at TEXT NOT NULL, maintenance_window TEXT, approved_by TEXT, approved_at TEXT, external_confirmation TEXT);
+                 CREATE TABLE IF NOT EXISTS cutover_workflows (project_id TEXT PRIMARY KEY REFERENCES projects(id), stage TEXT NOT NULL CHECK(stage IN ('seed','catch_up','final_delta','verification','completed')), scheduled_at TEXT NOT NULL, maintenance_window TEXT, approved_by TEXT, approved_at TEXT, external_confirmation TEXT, source_quiescence_operator TEXT, source_quiescence_evidence TEXT, source_quiescence_at TEXT);
                  CREATE TABLE IF NOT EXISTS batch_plans (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), config TEXT NOT NULL);
                  CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT, batch_plan_id TEXT REFERENCES batch_plans(id), row_overrides TEXT);
                  CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL DEFAULT 0 CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL DEFAULT 0 CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), rfc_message_id_matches INTEGER NOT NULL DEFAULT 0 CHECK(rfc_message_id_matches >= 0), synthetic_identity_matches INTEGER NOT NULL DEFAULT 0 CHECK(synthetic_identity_matches >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -521,8 +527,8 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_mailbox_queue_facts_project ON mailbox_queue_facts(project_id, job_rowid);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_queue ON mailbox_jobs(project_id, id, state);
                  CREATE INDEX IF NOT EXISTS idx_batch_plans_project ON batch_plans(project_id);
-                 CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
-                 CREATE TABLE IF NOT EXISTS verification_run_folders (run_id TEXT NOT NULL REFERENCES runs(id), side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, PRIMARY KEY(run_id, side, folder_digest));
+                 CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, destination_revalidated_at TEXT, PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
+                 CREATE TABLE IF NOT EXISTS verification_run_folders (run_id TEXT NOT NULL REFERENCES runs(id), side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), scan_started_at TEXT, scan_completed_at TEXT, source_revalidated_at TEXT, destination_revalidated_at TEXT, PRIMARY KEY(run_id, side, folder_digest));
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
                  CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_due ON webhook_deliveries(endpoint_digest, status, next_attempt_at, created_at);
@@ -531,6 +537,25 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);",
             )?;
         Self::migrate_webhook_delivery_leases(&tx)?;
+        let cutover_columns = tx
+            .prepare("PRAGMA table_info(cutover_workflows)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for column in [
+            ("source_quiescence_operator", "TEXT"),
+            ("source_quiescence_evidence", "TEXT"),
+            ("source_quiescence_at", "TEXT"),
+        ] {
+            if !cutover_columns.iter().any(|existing| existing == column.0) {
+                tx.execute(
+                    &format!(
+                        "ALTER TABLE cutover_workflows ADD COLUMN {} {}",
+                        column.0, column.1
+                    ),
+                    [],
+                )?;
+            }
+        }
         if stored_schema_version < 25 {
             Self::migrate_queue_search_index(&tx)?;
         }
@@ -559,37 +584,84 @@ impl StateStore {
         tx.execute_batch(
             "DROP TRIGGER IF EXISTS events_webhook_outbox;
              CREATE TRIGGER events_webhook_outbox AFTER INSERT ON events
-             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted','proof_ready')
-                 OR (NEW.kind='phase_changed' AND NEW.detail IN ('complete','final_delta'))
+             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted','proof_ready','cutover_final_delta_started','cutover_verification_started','cutover_ready')
+                 OR (NEW.kind='phase_changed' AND NEW.detail='complete')
              BEGIN
                  INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest)
                  SELECT printf('ledger-event-%lld',NEW.id),NEW.project_id,
                      CASE
                          WHEN NEW.kind='run_started' THEN 'migration.started'
                          WHEN NEW.kind='proof_ready' THEN 'migration.proof_ready'
+                         WHEN NEW.kind='cutover_final_delta_started' THEN 'migration.final_delta_started'
+                         WHEN NEW.kind='cutover_verification_started' THEN 'migration.cutover_verification_started'
+                         WHEN NEW.kind='cutover_ready' THEN 'migration.cutover_ready'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL AND r.phase_at_start='preflight' AND r.status='failed') THEN 'mailbox.preflight_failed'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state IN ('failed','cancelled','attention')) THEN 'mailbox.failed'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL) THEN 'mailbox.completed'
                          WHEN NEW.kind='run_finished' THEN 'migration.completed'
                          WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
-                         WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
                          ELSE 'mailbox.verification_accepted'
                      END,
                      json_object('format','mailswiftsync-webhook-event','event_id',printf('ledger-event-%lld',NEW.id),'event_type',
                          CASE
                              WHEN NEW.kind='run_started' THEN 'migration.started'
                              WHEN NEW.kind='proof_ready' THEN 'migration.proof_ready'
+                             WHEN NEW.kind='cutover_final_delta_started' THEN 'migration.final_delta_started'
+                             WHEN NEW.kind='cutover_verification_started' THEN 'migration.cutover_verification_started'
+                             WHEN NEW.kind='cutover_ready' THEN 'migration.cutover_ready'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL AND r.phase_at_start='preflight' AND r.status='failed') THEN 'mailbox.preflight_failed'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state IN ('failed','cancelled','attention')) THEN 'mailbox.failed'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL) THEN 'mailbox.completed'
                              WHEN NEW.kind='run_finished' THEN 'migration.completed'
                              WHEN NEW.kind='phase_changed' AND NEW.detail='complete' THEN 'migration.completed'
-                             WHEN NEW.kind='phase_changed' AND NEW.detail='final_delta' THEN 'migration.cutover_ready'
                              ELSE 'mailbox.verification_accepted'
                          END,'project_id',NEW.project_id,'run_id',NEW.run_id,'detail',NEW.detail),'';
              END;",
+        )?;
+        // Older versions called entry into Final Delta `cutover_ready`, before
+        // the final pass had run. Repair queued events transactionally so an
+        // upgrade cannot deliver that stale, premature signal. Managed
+        // cutovers receive the truthful started event; generic projects have
+        // no equivalent approval workflow, so their false event is retained
+        // only as a dead-letter audit record.
+        tx.execute(
+            "UPDATE webhook_deliveries
+             SET event_type='migration.final_delta_started',
+                 payload=json_set(payload,'$.event_type','migration.final_delta_started','$.detail','legacy notification: final delta began; completion was not established')
+             WHERE status='queued' AND event_type='migration.cutover_ready'
+               AND event_id IN (
+                   SELECT printf('ledger-event-%lld',id) FROM events
+                   WHERE kind='phase_changed' AND detail='final_delta'
+               )
+               AND EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=webhook_deliveries.project_id)",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE webhook_deliveries
+             SET event_type='migration.cutover_verification_started',
+                 payload=json_set(payload,'$.event_type','migration.cutover_verification_started','$.detail','legacy notification: final verification began; completion was not established')
+             WHERE status='queued' AND event_type='migration.cutover_ready'
+               AND event_id IN (
+                   SELECT printf('ledger-event-%lld',id) FROM events
+                   WHERE kind='phase_changed' AND detail='verification'
+               )
+               AND EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=webhook_deliveries.project_id)",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE webhook_deliveries
+             SET status='dead_letter',
+                 last_error='Superseded legacy cutover-ready notification: no managed cutover workflow exists',
+                 lease_owner=NULL,lease_until=NULL
+             WHERE status='queued' AND event_type='migration.cutover_ready'
+               AND event_id IN (
+                   SELECT printf('ledger-event-%lld',id) FROM events
+                   WHERE kind='phase_changed' AND detail='final_delta'
+               )
+               AND NOT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=webhook_deliveries.project_id)",
+            [],
         )?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = tx
@@ -926,6 +998,17 @@ impl StateStore {
                     &format!("ALTER TABLE transfer_pass_folders ADD COLUMN {column} TEXT"),
                     [],
                 )?;
+            }
+        }
+        for table in ["transfer_pass_folders", "verification_run_folders"] {
+            let columns = tx
+                .prepare(&format!("PRAGMA table_info({table})"))?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for column in ["source_revalidated_at", "destination_revalidated_at"] {
+                if !columns.iter().any(|existing| existing == column) {
+                    tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT"), [])?;
+                }
             }
         }
         Self::ensure_runtime_numeric_constraints(&tx)?;

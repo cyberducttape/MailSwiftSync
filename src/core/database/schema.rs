@@ -69,6 +69,9 @@ impl StateStore {
                     ("approved_by", "TEXT", false, 0),
                     ("approved_at", "TEXT", false, 0),
                     ("external_confirmation", "TEXT", false, 0),
+                    ("source_quiescence_operator", "TEXT", false, 0),
+                    ("source_quiescence_evidence", "TEXT", false, 0),
+                    ("source_quiescence_at", "TEXT", false, 0),
                 ],
             ),
             (
@@ -294,6 +297,8 @@ impl StateStore {
                     ("complete", "INTEGER", true, 0),
                     ("scan_started_at", "TEXT", false, 0),
                     ("scan_completed_at", "TEXT", false, 0),
+                    ("source_revalidated_at", "TEXT", false, 0),
+                    ("destination_revalidated_at", "TEXT", false, 0),
                 ],
             ),
             (
@@ -310,6 +315,8 @@ impl StateStore {
                     ("complete", "INTEGER", true, 0),
                     ("scan_started_at", "TEXT", false, 0),
                     ("scan_completed_at", "TEXT", false, 0),
+                    ("source_revalidated_at", "TEXT", false, 0),
+                    ("destination_revalidated_at", "TEXT", false, 0),
                 ],
             ),
         ];

@@ -18,6 +18,7 @@ impl App {
                 return;
             };
             let mut succeeded = r.is_ok();
+            let mut preserved_cutover_stage = None;
             let terminal_failure_class = |error: &str| {
                 let provider = crate::controller::failure::provider_for_sided_error(
                     &run_context.source_provider,
@@ -349,8 +350,17 @@ impl App {
                         }
                     }
                 } else if terminal_write_ok && !succeeded && !self.durability_error {
-                    let result = self.store.transition(project, core::Phase::Attention);
-                    self.report_store_error("move project to Attention", result);
+                    match self.store.cutover_stage(project) {
+                        Ok(Some(stage)) => preserved_cutover_stage = Some(stage),
+                        Ok(None) => {
+                            let result = self.store.transition(project, core::Phase::Attention);
+                            self.report_store_error("move project to Attention", result);
+                        }
+                        Err(error) => self.report_store_error(
+                            "read cutover workflow before handling failed pass",
+                            Err(error),
+                        ),
+                    }
                 }
             }
             if retry_terminal_commit {
@@ -392,12 +402,19 @@ impl App {
                             verification_method,
                         ),
                     ),
-                    Err(e) => (
-                        self.language
+                    Err(e) => {
+                        let mut message = self
+                            .language
                             .text("Migration failed: {error}")
-                            .replace("{error}", &e),
-                        StatusSeverity::Error,
-                    ),
+                            .replace("{error}", &e);
+                        if let Some(stage) = preserved_cutover_stage {
+                            message.push_str(&format!(
+                                " Managed cutover remains at {} for operator review and recovery.",
+                                stage.as_str()
+                            ));
+                        }
+                        (message, StatusSeverity::Error)
+                    }
                 }
             };
             self.set_status(completion_status, completion_severity);
@@ -571,6 +588,77 @@ mod tests {
     }
 
     #[test]
+    fn failed_managed_cutover_pass_preserves_its_stage_without_durability_error() {
+        with_app(|app| {
+            let (project, job) = app
+                .store
+                .create_project_with_mailbox(
+                    "failed-managed-cutover",
+                    "source",
+                    "destination",
+                    "source@example.test",
+                    "destination@example.test",
+                )
+                .unwrap();
+            app.store
+                .transition(&project.id, core::Phase::Preflight)
+                .unwrap();
+            app.store
+                .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
+                .unwrap();
+            app.store
+                .approve_cutover(&project.id, "test operator")
+                .unwrap();
+            app.store
+                .begin_run(&project.id, &job, "failed-cutover-run", "imapsync")
+                .unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "failed-cutover-run".into(),
+                project_id: project.id.clone(),
+                job_id: Some(job.clone()),
+                batch_job_ids: Vec::new(),
+                batch_child_run_ids: Vec::new(),
+                batch_child_indices: Default::default(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Single,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: None,
+            });
+            app.run_id = Some("failed-cutover-run".into());
+            let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+            sender
+                .send(Event::Finished(Err("connection reset by peer".into())))
+                .unwrap();
+            drop(sender);
+            app.receiver = Some(receiver);
+            for _ in 0..10 {
+                app.poll();
+            }
+
+            let snapshot = app
+                .store
+                .project_report_snapshot(&project.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.project.phase, core::Phase::Seed);
+            assert_eq!(snapshot.mailboxes[0].job.state, "failed");
+            assert_eq!(
+                snapshot.runs[0].run.status, "failed",
+                "the failed engine attempt remains durable"
+            );
+            assert!(
+                !app.durability_error,
+                "an expected managed-stage preservation must not look like a ledger failure"
+            );
+            assert!(app.status.text.contains("Managed cutover remains at seed"));
+        });
+    }
+
+    #[test]
     fn a_ledger_rejected_result_goes_to_review_instead_of_retrying_forever() {
         with_app(|app| {
             let project = app
@@ -733,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn cutover_lookup_error_preserves_phase_after_evidence_commit() {
+    fn cutover_lookup_error_prevents_terminal_evidence_commit() {
         with_app(|app| {
             let project = app
                 .store
@@ -753,6 +841,9 @@ mod tests {
             app.store
                 .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
                 .unwrap();
+            app.store
+                .approve_cutover(&project.id, "test operator")
+                .unwrap();
             let phase_before_completion = app
                 .store
                 .project_report_snapshot(&project.id)
@@ -763,9 +854,9 @@ mod tests {
             app.store
                 .begin_run(&project.id, &job, "cutover-read-error-run", "imapsync")
                 .unwrap();
-            // Make only the cutover-stage SELECT fail. SQLite can still write
-            // the evidence, terminal run, and ordinary project phase, so the
-            // assertion catches the former .ok().flatten() fail-open path.
+            // Remove the cutover relation after run admission. The terminal
+            // evidence transaction must fail closed because it cannot prove
+            // whether this result completes a cutover verification epoch.
             app.store.drop_cutover_table_for_test().unwrap();
             app.active_run = Some(ActiveRunContext {
                 run_id: "cutover-read-error-run".into(),
@@ -802,12 +893,14 @@ mod tests {
                 .project_report_snapshot(&project.id)
                 .unwrap()
                 .unwrap();
-            assert_eq!(snapshot.mailboxes[0].job.state, "verified");
+            assert_eq!(snapshot.mailboxes[0].job.state, "running");
             assert_eq!(snapshot.project.phase, phase_before_completion);
             assert!(app.durability_error);
-            assert!(app.output.iter().any(|line| {
-                line.contains("read cutover workflow before phase advancement failed")
-            }));
+            assert!(
+                app.output
+                    .iter()
+                    .any(|line| { line.contains("Could not persist terminal state") })
+            );
         });
     }
 }

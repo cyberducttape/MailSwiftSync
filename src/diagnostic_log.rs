@@ -651,7 +651,7 @@ fn is_uri_authority_at(line: &str, at: usize) -> bool {
 /// transcripts without attempting to parse or mutate the semantic engine
 /// stream used by verification.
 fn redact_sensitive_fields(line: &str) -> String {
-    const KEYS: [&str; 22] = [
+    const KEYS: [&str; 44] = [
         "client_secret",
         "client-secret",
         "clientsecret",
@@ -674,6 +674,28 @@ fn redact_sensitive_fields(line: &str) -> String {
         "token",
         "credential",
         "bearer",
+        "source_mailbox",
+        "destination_mailbox",
+        "source-mailbox",
+        "destination-mailbox",
+        "sourcemailbox",
+        "destinationmailbox",
+        "mailbox_name",
+        "mailbox-name",
+        "mailboxname",
+        "mailbox name",
+        "source_folder",
+        "destination_folder",
+        "source-folder",
+        "destination-folder",
+        "sourcefolder",
+        "destinationfolder",
+        "folder_name",
+        "folder-name",
+        "foldername",
+        "folder name",
+        "mailbox",
+        "folder",
     ];
     let lower = line.to_ascii_lowercase();
     let bytes = lower.as_bytes();
@@ -1085,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_lines_redact_unknown_secret_fields_and_preserve_safe_metadata() {
+    fn diagnostic_lines_redact_secret_mailbox_and_folder_fields() {
         let line = "access_token=access-123 refresh_token:'refresh value' Authorization: Bearer bearer-456 folder=Archive";
         let sanitized = sanitize_private_metadata(line);
         assert!(!sanitized.contains("access-123"));
@@ -1094,7 +1116,26 @@ mod tests {
         assert!(sanitized.contains("access_token=[REDACTED]"));
         assert!(sanitized.contains("refresh_token:'[REDACTED]'"));
         assert!(sanitized.contains("Authorization: Bearer [REDACTED]"));
-        assert!(sanitized.contains("folder=Archive"));
+        assert!(sanitized.contains("folder=[REDACTED]"));
+        assert!(!sanitized.contains("Archive"));
+
+        let structured = sanitize_private_metadata(
+            r#"{"source_mailbox":"alice@example.test","destination_folder":"Customer Archive/Legal","mailbox-name":"support"}"#,
+        );
+        assert!(!structured.contains("alice@example.test"));
+        assert!(!structured.contains("Customer Archive/Legal"));
+        assert!(!structured.contains("support"));
+        assert!(structured.contains(r#""destination_folder":"[REDACTED]""#));
+
+        let variant_keys = sanitize_private_metadata(
+            "source-mailbox=alice@example.test destination-folder='Private/Archive' sourceFolder=Sent destinationMailbox=support",
+        );
+        for private_value in ["alice@example.test", "Private/Archive", "Sent", "support"] {
+            assert!(
+                !variant_keys.contains(private_value),
+                "private structured value {private_value:?} remained in {variant_keys}"
+            );
+        }
     }
 
     #[test]
@@ -1124,7 +1165,8 @@ mod tests {
         assert!(!sanitized.contains("prefix"));
         assert!(!sanitized.contains("suffix"));
         assert!(sanitized.contains(r#""password":"[REDACTED]""#));
-        assert!(sanitized.contains(r#""folder":"Archive""#));
+        assert!(sanitized.contains(r#""folder":"[REDACTED]""#));
+        assert!(!sanitized.contains("Archive"));
     }
 
     #[test]

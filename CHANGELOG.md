@@ -2,10 +2,135 @@
 
 ## Unreleased
 
-- Disable ambient system proxies for DNS-policy-pinned webhook and OAuth
-  requests. Upgrade webhook HMAC to version 2, authenticating event identity,
-  idempotency key, per-attempt timestamp, and exact body bytes; document
-  receiver replay-window and durable-deduplication requirements.
+- Allow standalone reverification to select a specific completed transfer
+  baseline with `--baseline-run`; include the baseline run ID in the versioned
+  JSON result so historical audits retain explicit provenance. Bump the
+  reverification and batch-result schema versions.
+- Re-emit managed cutover readiness with a new event identity when its prior
+  source-quiescence validity window has expired and the operator reconfirms;
+  active readiness windows remain deduplicated.
+- Allow operators to refresh an expired source-quiescence attestation during
+  Catch-up, so it can authorize the transition to Final Delta without reopening
+  or recreating the managed cutover workflow.
+- Add a fresh pre-launch IMAP readiness check that blocks single and batch live
+  runs when the destination reports an exhausted INBOX-root quota. Unsupported,
+  failed, or incomplete quota observations remain unknown; non-exhausted INBOX
+  quota does not imply projected or account-wide capacity.
+- Require operators to reconfirm source quiescence after Final Delta before
+  admitting final-verification workers or standalone re-verification. Clear
+  the prior-stage attestation at the Verification transition and emit
+  `migration.cutover_verification_started` only after the new attestation;
+  retain the earlier assertion in audit history.
+- Publish `migration.cutover_ready` only while the source-quiescence
+  attestation is fresh, include its expiry in the event detail, and allow a
+  refreshed attestation to publish readiness after verification without a
+  redundant mailbox rescan.
+- Keep exact UIDVALIDITY, UIDNEXT, message-count, and MODSEQ values out of
+  verification revalidation errors; retain the names of changed fields for
+  useful diagnosis without logging raw mailbox cursor state.
+- Redact structured mailbox and folder values from opt-in diagnostic
+  transcripts, alongside credentials, email addresses, and message IDs; retain
+  the documented warning that arbitrary engine prose can still expose metadata.
+- Return actionable cutover refusal reasons (including missing or stale source-
+  quiescence attestations and missing operator confirmation) instead of
+  presenting safety-gate refusals as generic SQLite errors.
+- Represent plan checks as passed, blocked, or unknown. Show destination
+  capacity as unknown unless exhaustion is observed: even a non-exhausted
+  INBOX-root quota does not prove that the projected transfer fits or establish
+  account-wide headroom. Keep unresolved capacity visible in the readiness
+  summary and direct operators to confirm it with the provider.
+- Revalidate the freshness of source-quiescence attestations when advancing
+  out of Final Delta and before cutover completion. Allow audited refreshes
+  during Verification so a long final scan does not force use of stale
+  operator confirmation.
+- Recheck verification-stage filesystem headroom before materialized SQLite
+  reconciliation phases and every 256 persisted mismatch rows, so detected
+  low-space conditions stop further stage work while preserving the durable
+  stage for recovery. This is still a high-watermark, not a disk reservation
+  or an aggregate stage-size bound.
+- Serialize cutover approval/attestation/advancement and migration-wave approval
+  with the exclusive ledger owner lock. Make cutover/wave status reads use a
+  read-only connection, and revalidate the approved cutover stage after the
+  headless worker acquires the lock so a stale pre-lock read cannot launch a
+  later stage.
+- Share one cutover admission validator between the CLI precheck and the
+  lock-held headless launch check, with regression coverage for stale stages,
+  missing source-quiescence evidence, and future schedules.
+- Enforce managed cutover approval, stage/phase pairing, and fresh
+  source-quiescence evidence inside single-run, batch-run, and child-claim
+  SQLite transactions, so GUI/batch callers cannot bypass the headless gate or
+  launch delayed Final Delta workers using an old pause assertion. Generic
+  project transitions cannot advance a managed workflow. Allow an audited
+  attestation refresh during Final Delta after the operator reconfirms
+  quiescence.
+- Preserve managed cutover phase when a transfer pass fails; keep the failed
+  mailbox and run durable for review without attempting an invalid generic
+  Attention transition or misreporting that blocked transition as a ledger
+  durability failure.
+- Hold the exclusive ledger owner lock for certificate export and its durable
+  `proof_ready` event, preventing that state transition from racing an active
+  controller.
+- Use the caller's IMAP tag in LIST commands during source snapshot
+  revalidation; the previous hard-coded tag caused the verifier to ignore
+  Dovecot's tagged LIST completion and time out after a successful inventory.
+- Emit `migration.final_delta_started` when a managed cutover enters its final
+  delta, emit `migration.cutover_verification_started` when that pass enters
+  final verification, and delay `migration.cutover_ready` until all final
+  Verification-stage evidence is durable or differences are explicitly
+  accepted. Include separate clean and exception counts in readiness events;
+  generic non-cutover phase changes no longer emit cutover lifecycle events.
+  The ledger migration repairs queued legacy notifications and moves readiness
+  publication to the final verification commit.
+- Keep approved cutover workflows in Verification after exception acceptance;
+  only the cutover transition with its external confirmation can mark them
+  Complete.
+- Invalidate mailbox terminal states when reopening a standalone completed
+  project, and refuse reopening completed cutover workflows until repeat
+  cutover epochs are modeled.
+- Version migration-wave list output as `mailswiftsync-wave-list` v2 and
+  distinguish clean verification from accepted exceptions; wave completion no
+  longer claims cutover readiness.
+- Bound and reject multiline/control-character cutover, migration-wave,
+  project-reopen, and verification-exception audit inputs so operator-provided
+  values cannot forge additional-looking durable audit events.
+- After independent destination scanning, re-LIST the source and read-only
+  EXAMINE each scanned folder. Refuse message-level verification if the
+  selectable folder set, UIDVALIDITY, UIDNEXT, EXISTS, or a previously tracked
+  HIGHESTMODSEQ changed. Persist each matching source revalidation timestamp
+  through the stage, transfer-pass ledger, verification ledger, and customer
+  proof v5. This narrows the observation gap but does not claim an atomic
+  cross-server snapshot or continued quiescence after the check. Migrate the
+  ledger to persist the new source revalidation cursor and timestamp.
+- Query RFC 2087 quota roots using the mandatory INBOX mailbox name, require a
+  successful tagged response with a matching QUOTAROOT, and label the result as
+  INBOX-root scope instead of implying account-wide capacity.
+- Disable implicit Reqwest proxy discovery for policy-controlled OAuth token
+  and webhook requests, so environment proxy variables cannot bypass locally
+  resolved-address policy. Version webhook HMAC as v2 and authenticate the
+  event ID, type, idempotency key, delivery timestamp, and exact body bytes
+  using an unambiguous length-prefixed canonical envelope; document receiver
+  replay-window and durable-deduplication responsibilities.
+- Bump customer-proof artifacts to v5. In addition to endpoint scan intervals,
+  proofs record whether the source folder set and per-folder cursors remained
+  unchanged during a post-destination recheck. This is still a sequential,
+  non-atomic observation and does not establish continued source quiescence or
+  cutover readiness. Preserve fail-closed behavior for unsupported migration
+  transformations.
+- Recheck source folder inventories and tracked cursors after destination
+  revalidation as well as before it, refusing exact evidence if the source
+  changes during the destination check. The final source observation narrows
+  the consistency window; it is not an atomic snapshot or proof of continued
+  mail-flow quiescence.
+- Require an audited source-quiescence operator attestation before the final
+  delta stage can run or advance. The durable cutover status records who
+  attested, when, and the change reference/evidence; it is explicitly a manual
+  operational assertion, not automatic IMAP cursor revalidation. The ledger
+  also persists post-destination source-cursor revalidation. Older ledgers
+  cannot complete a newly gated final delta without this attestation.
+- Check available space on the verification-stage filesystem before scanning
+  and before each SQLite page write; stop verification below a 512 MiB free
+  reserve and report an explicit verification limit. This is a best-effort
+  high-watermark, not a universal stage-size estimate or reservation.
 - Add the missing cPanel/Dovecot-to-Google Workspace and Fastmail-to-Google
   Workspace routes to the generated qualification summaries, and test that every
   release-required signed-evidence route appears in the capability manifest.

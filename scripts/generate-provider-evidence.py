@@ -86,7 +86,7 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
     if proof.get("format") != "mailswiftsync-customer-proof":
         raise ValueError("Invalid customer-proof format")
     proof_version = proof.get("format_version")
-    if type(proof_version) is not int or proof_version not in {1, 2, 3}:
+    if type(proof_version) is not int or proof_version not in {1, 2, 3, 4, 5, 6}:
         raise ValueError(f"unsupported customer-proof format_version: {proof_version!r}")
 
     expected_digest = proof.get("proof_digest")

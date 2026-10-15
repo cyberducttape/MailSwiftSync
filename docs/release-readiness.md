@@ -145,7 +145,10 @@ reconciliation as successful.
   secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB per
   file / 128 MiB per directory, with
   retention capped at 20 completed files. These plaintext logs can still
-  contain provider, mailbox, folder, and message metadata; transcript contents
+  contain provider, mailbox, folder, and message metadata in free-form engine
+  prose; email/Message-ID values and structured mailbox/folder key-value
+  fields are pseudonymized or redacted, but this is not complete semantic
+  anonymization. Transcript contents
   are not account-pseudonymized, encrypted, or compressed, and support bundles
   do not collect them. Operators must select and handle logs explicitly.
   Logging is disabled by default. Newly created directories are restricted;
@@ -187,12 +190,16 @@ reconciliation as successful.
   operational concerns.
 - Ledger transitions now generate lifecycle events transactionally in the
   outbox (`migration.started`, `migration.completed`,
+  `migration.final_delta_started`, `migration.cutover_verification_started`,
   `migration.cutover_ready`, `mailbox.completed`,
   `mailbox.preflight_failed`, `mailbox.verification_difference`,
   `migration.proof_ready`, and verification acceptance). Proof-ready events
   carry the SHA-256 of the successfully signed certificate. Events are
   endpoint-unbound until delivery configuration is supplied, so credentials
-  and URLs remain outside durable state.
+  and URLs remain outside durable state. `migration.cutover_ready` is emitted
+  only after all final Verification-stage evidence is durable (including any
+  explicit exception acceptances), not when Final Delta or Verification starts;
+  clean and accepted-exception counts are distinct in its detail.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy

@@ -895,6 +895,25 @@ fn webhook_contract_documents_signed_identity_and_replay_requirements() {
 }
 
 #[test]
+fn psa_cutover_ready_contract_is_time_bounded_by_source_quiescence() {
+    let contract =
+        fs::read_to_string("docs/psa-event-contract.md").expect("PSA event contract should exist");
+    for required in [
+        "source-quiescence attestation expiry",
+        "15 minutes",
+        "refreshing the attestation during",
+        "without rescanning",
+        "clears the prior attestation",
+        "until the operator records a new, fresh attestation",
+    ] {
+        assert!(
+            contract.contains(required),
+            "cutover readiness contract is missing {required:?}"
+        );
+    }
+}
+
+#[test]
 fn provider_qualification_manifest_covers_every_release_required_route() {
     let capabilities: toml::Value = toml::from_str(
         &fs::read_to_string("capabilities.toml").expect("capabilities.toml should exist"),

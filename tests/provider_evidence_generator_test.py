@@ -60,7 +60,7 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
     identity_destination = destination_provider or "microsoft365"
     value = {
         "format": "mailswiftsync-customer-proof",
-        "format_version": 3,
+        "format_version": 6,
         "application_version": "0.1.0-alpha.1",
         "artifact_role": "customer_evidence",
         "completion_claim": {"status": claim_status},
@@ -215,7 +215,7 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
             self.generate(value)
 
     def test_customer_proof_version_is_required_and_unknown_versions_fail_closed(self):
-        for version in (None, 0, 4, True, "3"):
+        for version in (None, 0, 7, True, "6"):
             value = proof()
             if version is None:
                 value.pop("format_version")

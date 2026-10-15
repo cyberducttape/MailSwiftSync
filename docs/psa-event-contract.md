@@ -62,10 +62,31 @@ endpoints, or mailbox content is present.
 | `migration.started` | Create or link the migration ticket | In progress |
 | `mailbox.preflight_failed` | Add affected mailbox and remediation | Waiting on technician |
 | `mailbox.failed` | Add classified failure and affected mailbox | Waiting on customer/technician |
-| `migration.cutover_ready` | Request external approval/action | Pending customer approval |
+| `migration.final_delta_started` | Begin the approved final-delta window; keep source delivery paused | In progress |
+| `migration.cutover_verification_started` | Final Delta is complete and source quiescence has been reconfirmed; begin final independent verification | Verification in progress |
+| `migration.cutover_ready` | Final Verification-stage evidence is complete; request external cutover approval/action | Pending customer approval |
 | `migration.completed` | Update totals and link evidence | Ready for review |
 | `migration.proof_ready` | Attach or link signed proof artifact | Customer signoff pending |
 | `migration.status_snapshot` | Reconcile current aggregate projection | Set current status |
+
+`migration.cutover_ready` is emitted only after every mailbox's final
+Verification-stage evidence is durable, or its difference has an explicit
+acceptance. Its detail includes separate `clean_verified` and
+`accepted_exceptions` counts and the source-quiescence attestation expiry.
+The event is published only while that attestation is fresh (15 minutes); if
+verification finishes after expiry, refreshing the attestation during
+Verification can publish readiness without rescanning. Receivers must treat
+readiness as time-bounded and keep the source paused until external cutover
+approval. If a previously published readiness window expires, a later fresh
+attestation emits a new `migration.cutover_ready` event with a new event ID;
+receivers should use the latest event and its expiry rather than treating an
+older event as current. Entering Final Delta emits
+`migration.final_delta_started`. Transitioning from Final Delta to the
+Verification stage clears the prior attestation; no verification worker can
+be admitted until the operator records a new, fresh attestation. Only then is
+`migration.cutover_verification_started` emitted. This is not a readiness
+signal. The source-quiescence attestation remains an operator claim, not
+machine-verified source stability.
 
 Ticket correlation is intentionally receiver-owned. A future control plane may
 add an opaque `external_ticket_ref` and project-scoped mapping, but must make

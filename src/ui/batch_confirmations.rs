@@ -340,7 +340,7 @@ crate::ui::name_modal(ui, &modal_heading);
                 }
                 ui.label(
                     RichText::new(self.language.text(
-                        "Destination capacity is not checked per mailbox in batch mode; confirm quota headroom with each provider before the final delta.",
+                        "Each live worker probes its destination for an observed exhausted INBOX-root quota and stops if found. Unknown quota or a non-exhausted INBOX root does not establish projected or account-wide capacity; confirm headroom with each provider before the final delta.",
                     ))
                     .color(self.theme_colors().text_secondary),
                 );
