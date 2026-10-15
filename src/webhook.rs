@@ -38,7 +38,7 @@ use ring::hmac;
 use std::{
     io::Read,
     net::{IpAddr, SocketAddr},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use zeroize::Zeroizing;
 
@@ -51,6 +51,9 @@ fn webhook_client(
 ) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .use_rustls_tls()
+        // DNS pinning only governs the direct socket target. Never silently
+        // route policy-controlled webhook data through ambient proxy config.
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
         .timeout(WEBHOOK_TOTAL_BUDGET)
@@ -122,6 +125,12 @@ pub(crate) fn post_json(
         .ok_or_else(|| "the webhook URL is missing a host".to_owned())?;
     let client = webhook_client(host, &addresses)?;
 
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock is before the Unix epoch; webhook was not sent".to_owned())?
+        .as_secs()
+        .to_string();
+
     let mut request = client
         .post(parsed_url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -129,15 +138,19 @@ pub(crate) fn post_json(
         .header(reqwest::header::USER_AGENT, "mailswiftsync-notify-webhook")
         .header("X-MailSwiftSync-Event-Id", event_id)
         .header("X-MailSwiftSync-Event-Type", event_type)
+        .header("X-MailSwiftSync-Timestamp", &timestamp)
         .header("Idempotency-Key", event_id)
         .body(body.to_owned());
     if let Some(secret) = signing_secret {
         let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_str().as_bytes());
-        let signature = hmac::sign(&key, body.as_bytes());
+        let signature_input =
+            webhook_signature_input(event_id, event_type, event_id, &timestamp, body.as_bytes());
+        let signature = hmac::sign(&key, &signature_input);
         request = request.header(
             "X-MailSwiftSync-Signature",
-            format!("sha256={}", hex_encode(signature.as_ref())),
+            format!("hmac-sha256-v2={}", hex_encode(signature.as_ref())),
         );
+        request = request.header("X-MailSwiftSync-Signature-Version", "2");
     }
     if let Some(token) = bearer_token {
         let authorization = Zeroizing::new(format!("Bearer {}", token.as_str()));
@@ -194,6 +207,43 @@ fn hash_hex(bytes: &[u8]) -> String {
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Canonical v2 HMAC input. Length-prefixing each value prevents ambiguous
+/// concatenations and signs the exact serialized body bytes transmitted.
+fn webhook_signature_input(
+    event_id: &str,
+    event_type: &str,
+    idempotency_key: &str,
+    timestamp: &str,
+    body: &[u8],
+) -> Vec<u8> {
+    const DOMAIN: &[u8] = b"mailswiftsync:webhook-signature:v2\0";
+    let mut input = Vec::with_capacity(
+        DOMAIN.len()
+            + [
+                event_id.len(),
+                event_type.len(),
+                idempotency_key.len(),
+                timestamp.len(),
+                body.len(),
+            ]
+            .into_iter()
+            .sum::<usize>()
+            + 5 * std::mem::size_of::<u64>(),
+    );
+    input.extend_from_slice(DOMAIN);
+    for field in [
+        event_id.as_bytes(),
+        event_type.as_bytes(),
+        idempotency_key.as_bytes(),
+        timestamp.as_bytes(),
+        body,
+    ] {
+        input.extend_from_slice(&(field.len() as u64).to_be_bytes());
+        input.extend_from_slice(field);
+    }
+    input
 }
 
 fn read_bounded_response(response: &mut Response) -> Result<(), String> {
@@ -537,6 +587,70 @@ mod tests {
         );
         assert_ne!(id, snapshot_event_id(&"b".repeat(64), "project", "{}"));
         assert_ne!(id, snapshot_event_id(&endpoint, "all-projects", "{}"));
+    }
+
+    #[test]
+    fn webhook_v2_signature_authenticates_identity_timestamp_and_exact_body() {
+        let key = hmac::Key::new(hmac::HMAC_SHA256, b"test-secret");
+        let input = webhook_signature_input(
+            "event-1",
+            "migration.completed",
+            "event-1",
+            "1792000000",
+            br#"{"phase":"complete"}"#,
+        );
+        let signature = hmac::sign(&key, &input);
+        hmac::verify(
+            &key,
+            &webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            signature.as_ref(),
+        )
+        .unwrap();
+        for changed in [
+            webhook_signature_input(
+                "event-2",
+                "migration.completed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.failed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-2",
+                "1792000000",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-1",
+                "1792000001",
+                br#"{"phase":"complete"}"#,
+            ),
+            webhook_signature_input(
+                "event-1",
+                "migration.completed",
+                "event-1",
+                "1792000000",
+                br#"{"phase":"failed"}"#,
+            ),
+        ] {
+            assert!(hmac::verify(&key, &changed, signature.as_ref()).is_err());
+        }
     }
 
     #[test]

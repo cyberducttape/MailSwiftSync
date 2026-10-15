@@ -13,14 +13,32 @@ Every delivery uses JSON and these headers:
 ```text
 X-MailSwiftSync-Event-Id: <stable event id>
 X-MailSwiftSync-Event-Type: <event type>
+X-MailSwiftSync-Timestamp: <Unix timestamp in seconds>
 Idempotency-Key: <same stable event id>
-X-MailSwiftSync-Signature: sha256=<HMAC-SHA256 over the exact body>
 ```
 
-The signature is required by the production organization policy. Receivers
-must verify it before parsing the body, deduplicate by event ID, and retain the
-event ID with the ticket link. Delivery order is not a contract; receivers use
-the event timestamp and current status to handle retries and late delivery.
+When HMAC signing is configured, the request also includes
+`X-MailSwiftSync-Signature-Version: 2` and
+`X-MailSwiftSync-Signature: hmac-sha256-v2=<lowercase hex HMAC>`. Production
+organization policy requires signing; unsigned delivery is limited to explicit
+compatibility/lab policy.
+
+The v2 signature is HMAC-SHA256 over a canonical byte sequence. Begin with
+`mailswiftsync:webhook-signature:v2\0`; then, in order, append each of the
+following fields as an unsigned 64-bit big-endian byte length followed by the
+field's exact UTF-8/body bytes: event ID, event type, idempotency key, timestamp,
+and exact HTTP body bytes. The signature therefore authenticates the event
+identity headers as well as the payload. The signature is required by the
+production organization policy. Receivers must verify the signature before
+parsing the body, reject timestamps outside their configured replay window
+(five minutes is a reasonable starting policy), and durably deduplicate event
+IDs before performing ticket side effects. Keep deduplication records at least
+as long as the sender can retry or an operator can replay the outbox. Delivery
+order is not a contract; receivers use the timestamp and current status to
+handle retries and late delivery. v2 is not wire-compatible with the earlier
+body-only `sha256=` signature; update receiver verification before enabling
+this sender version. When the JSON body contains `event_id` or `event_type`,
+receivers should also require those values to equal the signed headers.
 
 The JSON envelope has the form:
 

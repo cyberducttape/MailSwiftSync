@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Disable implicit Reqwest proxy discovery for policy-controlled OAuth token
+  and webhook requests, so environment proxy variables cannot bypass locally
+  resolved-address policy. Version webhook HMAC as v2 and authenticate the
+  event ID, type, idempotency key, delivery timestamp, and exact body bytes
+  using an unambiguous length-prefixed canonical envelope; document receiver
+  replay-window and durable-deduplication responsibilities.
 - Bump customer-proof artifacts to v4 and include per-run source/destination
   verification intervals plus an explicit non-atomic snapshot model and
   `not_revalidated` source status. Separate evidence tier/result from cutover
