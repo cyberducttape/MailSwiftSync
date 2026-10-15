@@ -7,6 +7,9 @@
   read-only connection, and revalidate the approved cutover stage after the
   headless worker acquires the lock so a stale pre-lock read cannot launch a
   later stage.
+- Share one cutover admission validator between the CLI precheck and the
+  lock-held headless launch check, with regression coverage for stale stages,
+  missing source-quiescence evidence, and future schedules.
 - Emit `migration.final_delta_started` when a managed cutover enters its final
   delta, emit `migration.cutover_verification_started` when that pass enters
   final verification, and delay `migration.cutover_ready` until all final

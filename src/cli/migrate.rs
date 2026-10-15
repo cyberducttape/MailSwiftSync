@@ -120,45 +120,12 @@ pub(super) fn cutover_command(arguments: std::env::ArgsOs) -> eframe::Result<()>
                     std::process::exit(1);
                 }
             };
-            if workflow.approved_by.is_none() {
-                eprintln!("Cutover run refused: explicit operator approval is required");
+            if let Err(error) = crate::headless::validate_cutover_run_admission(
+                &workflow,
+                workflow.stage,
+            ) {
+                eprintln!("Cutover run refused: {error}");
                 std::process::exit(1);
-            }
-            if workflow.stage == crate::core::CutoverStage::Completed {
-                eprintln!("Cutover run refused: workflow is already complete");
-                std::process::exit(1);
-            }
-            if workflow.stage == crate::core::CutoverStage::FinalDelta
-                && workflow.source_quiescence_at.is_none()
-            {
-                eprintln!("Cutover run refused: source-quiescence attestation is missing; record it before entering the Final Delta stage (cutover ... attest-source-quiescence <project-id> <operator> <evidence>)");
-                std::process::exit(1);
-            }
-            let scheduled_at = match chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at) {
-                Ok(value) => value.with_timezone(&chrono::Utc),
-                Err(_) => {
-                    eprintln!("Cutover run refused: scheduled_at is not RFC 3339");
-                    std::process::exit(1);
-                }
-            };
-            if scheduled_at > chrono::Utc::now() {
-                eprintln!("Cutover run refused: scheduled time has not arrived");
-                std::process::exit(1);
-            }
-            if let Some(window) = workflow.maintenance_window.as_deref() {
-                let window = match MaintenanceWindow::parse(window) {
-                    Ok(window) => window,
-                    Err(_) => {
-                        eprintln!("Cutover run refused: durable maintenance window is invalid");
-                        std::process::exit(1);
-                    }
-                };
-                if !window.contains_now() {
-                    eprintln!(
-                        "Cutover run refused: current time is outside the approved maintenance window"
-                    );
-                    std::process::exit(1);
-                }
             }
             crate::headless::headless_cutover_batch_execute(
                 std::path::Path::new(state),

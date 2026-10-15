@@ -884,6 +884,42 @@ pub(crate) fn headless_cutover_batch_execute(
     )
 }
 
+/// Validate the durable cutover conditions required before launching a
+/// mailbox pass. Both the CLI's diagnostic check and the worker's
+/// lock-held admission check use this function so their safety rules cannot
+/// drift apart.
+pub(crate) fn validate_cutover_run_admission(
+    workflow: &core::CutoverWorkflow,
+    expected_stage: core::CutoverStage,
+) -> Result<(), String> {
+    if workflow.stage != expected_stage {
+        return Err("workflow stage changed since cutover admission".into());
+    }
+    if workflow.approved_by.is_none() {
+        return Err("explicit operator approval is required".into());
+    }
+    if workflow.stage == core::CutoverStage::Completed {
+        return Err("workflow is already complete".into());
+    }
+    if workflow.stage == core::CutoverStage::FinalDelta && workflow.source_quiescence_at.is_none() {
+        return Err("source-quiescence attestation is missing; record it before entering the Final Delta stage".into());
+    }
+    let scheduled_at = chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at)
+        .map_err(|_| "scheduled_at is not RFC 3339".to_owned())?
+        .with_timezone(&chrono::Utc);
+    if scheduled_at > chrono::Utc::now() {
+        return Err("scheduled time has not arrived".into());
+    }
+    if let Some(window) = workflow.maintenance_window.as_deref() {
+        let window = MaintenanceWindow::parse(window)
+            .map_err(|_| "durable maintenance window is invalid".to_owned())?;
+        if !window.contains_now() {
+            return Err("current time is outside the approved maintenance window".into());
+        }
+    }
+    Ok(())
+}
+
 fn headless_batch_execute_selected_inner(
     state_path: &std::path::Path,
     live: bool,
@@ -935,31 +971,8 @@ fn headless_batch_execute_selected_inner(
             .ok_or_else(|| {
                 "cutover run refused: workflow disappeared before locked admission".to_owned()
             })?;
-        if workflow.stage != expected_stage
-            || workflow.approved_by.is_none()
-            || workflow.stage == core::CutoverStage::Completed
-            || (workflow.stage == core::CutoverStage::FinalDelta
-                && workflow.source_quiescence_at.is_none())
-        {
-            return Err("cutover run refused: workflow stage, approval, or source-quiescence evidence changed before locked admission".into());
-        }
-        let scheduled_at = chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at)
-            .map_err(|_| "cutover run refused: scheduled_at is not RFC 3339".to_owned())?
-            .with_timezone(&chrono::Utc);
-        if scheduled_at > chrono::Utc::now() {
-            return Err("cutover run refused: scheduled time has not arrived".into());
-        }
-        if let Some(window) = workflow.maintenance_window.as_deref() {
-            let window = MaintenanceWindow::parse(window).map_err(|_| {
-                "cutover run refused: durable maintenance window is invalid".to_owned()
-            })?;
-            if !window.contains_now() {
-                return Err(
-                    "cutover run refused: current time is outside the approved maintenance window"
-                        .into(),
-                );
-            }
-        }
+        validate_cutover_run_admission(&workflow, expected_stage)
+            .map_err(|error| format!("cutover run refused: {error}"))?;
     }
     if requested_ids.is_some_and(HashSet::is_empty) {
         return Err("selective remediation requested zero mailbox IDs; refusing success".into());
@@ -1312,8 +1325,52 @@ fn last_durability_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_durability_detail, last_verification_detail};
+    use super::{last_durability_detail, last_verification_detail, validate_cutover_run_admission};
     use crate::BoundedLineBuffer;
+
+    fn approved_cutover(stage: crate::core::CutoverStage) -> crate::core::CutoverWorkflow {
+        crate::core::CutoverWorkflow {
+            project_id: "project".into(),
+            stage,
+            scheduled_at: (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
+            maintenance_window: None,
+            approved_by: Some("operator".into()),
+            approved_at: Some(chrono::Utc::now().to_rfc3339()),
+            external_confirmation: None,
+            source_quiescence_operator: Some("operator".into()),
+            source_quiescence_evidence: Some("source delivery paused".into()),
+            source_quiescence_at: Some("2026-10-14 00:00:00".into()),
+        }
+    }
+
+    #[test]
+    fn locked_cutover_admission_rejects_a_stage_changed_after_the_cli_read() {
+        let workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        let error = validate_cutover_run_admission(&workflow, crate::core::CutoverStage::CatchUp)
+            .expect_err("a stale pre-lock stage must not authorize execution");
+        assert!(error.contains("workflow stage"));
+    }
+
+    #[test]
+    fn final_delta_admission_requires_source_quiescence_evidence() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
+        workflow.source_quiescence_at = None;
+        let error =
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::FinalDelta)
+                .expect_err("final delta must not run without a quiescence attestation");
+        assert!(error.contains("source-quiescence"));
+    }
+
+    #[test]
+    fn cutover_admission_rejects_a_future_schedule() {
+        let mut workflow = approved_cutover(crate::core::CutoverStage::Seed);
+        workflow.scheduled_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert!(
+            validate_cutover_run_admission(&workflow, crate::core::CutoverStage::Seed)
+                .expect_err("future cutover must be refused")
+                .contains("scheduled time")
+        );
+    }
 
     #[test]
     fn support_references_are_stable_and_namespace_separated() {
