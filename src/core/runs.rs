@@ -154,14 +154,17 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
-        let cutover: Option<(String, Option<String>)> = tx
+        let cutover: Option<(String, Option<String>, bool)> = tx
             .query_row(
-                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                "SELECT stage,source_quiescence_at,approved_by IS NOT NULL FROM cutover_workflows WHERE project_id=?1",
                 [project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        if let Some((stage, source_quiescence_at)) = cutover {
+        if let Some((stage, source_quiescence_at, approved)) = cutover {
+            if !approved {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             super::cutover::validate_cutover_run_stage(
                 &stage,
                 &phase_at_start,
@@ -281,14 +284,17 @@ impl StateStore {
             [project_id],
             |row| row.get(0),
         )?;
-        let cutover: Option<(String, Option<String>)> = tx
+        let cutover: Option<(String, Option<String>, bool)> = tx
             .query_row(
-                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                "SELECT stage,source_quiescence_at,approved_by IS NOT NULL FROM cutover_workflows WHERE project_id=?1",
                 [project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        if let Some((stage, source_quiescence_at)) = cutover {
+        if let Some((stage, source_quiescence_at, approved)) = cutover {
+            if !approved {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             super::cutover::validate_cutover_run_stage(
                 &stage,
                 &phase_at_start,
@@ -434,14 +440,17 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let cutover: Option<(String, Option<String>)> = tx
+        let cutover: Option<(String, Option<String>, bool)> = tx
             .query_row(
-                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                "SELECT stage,source_quiescence_at,approved_by IS NOT NULL FROM cutover_workflows WHERE project_id=?1",
                 [project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        if let Some((stage, source_quiescence_at)) = cutover {
+        if let Some((stage, source_quiescence_at, approved)) = cutover {
+            if !approved {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             super::cutover::validate_cutover_run_stage(
                 &stage,
                 &phase,
@@ -501,14 +510,17 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let cutover: Option<(String, Option<String>)> = tx
+        let cutover: Option<(String, Option<String>, bool)> = tx
             .query_row(
-                "SELECT stage,source_quiescence_at FROM cutover_workflows WHERE project_id=?1",
+                "SELECT stage,source_quiescence_at,approved_by IS NOT NULL FROM cutover_workflows WHERE project_id=?1",
                 [project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        if let Some((stage, source_quiescence_at)) = cutover {
+        if let Some((stage, source_quiescence_at, approved)) = cutover {
+            if !approved {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             super::cutover::validate_cutover_run_stage(
                 &stage,
                 &phase,

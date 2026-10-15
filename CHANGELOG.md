@@ -10,11 +10,13 @@
 - Share one cutover admission validator between the CLI precheck and the
   lock-held headless launch check, with regression coverage for stale stages,
   missing source-quiescence evidence, and future schedules.
-- Enforce managed cutover stage and fresh source-quiescence evidence inside
-  single-run, batch-run, and child-claim SQLite transactions, so GUI/batch
-  callers cannot bypass the headless gate or launch delayed Final Delta workers
-  using an old pause assertion. Allow an audited attestation refresh during the
-  Final Delta stage after the operator reconfirms quiescence.
+- Enforce managed cutover approval, stage/phase pairing, and fresh
+  source-quiescence evidence inside single-run, batch-run, and child-claim
+  SQLite transactions, so GUI/batch callers cannot bypass the headless gate or
+  launch delayed Final Delta workers using an old pause assertion. Generic
+  project transitions cannot advance a managed workflow. Allow an audited
+  attestation refresh during Final Delta after the operator reconfirms
+  quiescence.
 - Hold the exclusive ledger owner lock for certificate export and its durable
   `proof_ready` event, preventing that state transition from racing an active
   controller.

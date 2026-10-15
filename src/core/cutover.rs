@@ -425,6 +425,52 @@ mod tests {
     }
 
     #[test]
+    fn unapproved_cutover_cannot_be_advanced_or_used_to_admit_runs() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox("unapproved-cutover", "source", "destination", "a", "a")
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-15T23:00:00Z", None)
+            .unwrap();
+        assert!(store.transition(&project.id, Phase::Seed).is_err());
+
+        // Simulate legacy/corrupt phase drift: the durable run boundary must
+        // still require the workflow's explicit approval.
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET phase='seed' WHERE id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        assert!(
+            store
+                .begin_run(&project.id, &job, "unapproved-cutover-run", "imapsync")
+                .is_err()
+        );
+        assert!(
+            store
+                .begin_batch_run_with_children(
+                    &project.id,
+                    std::slice::from_ref(&job),
+                    "unapproved-cutover-batch",
+                    "imapsync",
+                    &[],
+                    "",
+                    &[],
+                )
+                .is_err()
+        );
+        let run_count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(run_count, 0);
+    }
+
+    #[test]
     fn delayed_batch_child_claim_rechecks_and_can_refresh_final_delta_attestation() {
         let store = StateStore::in_memory().unwrap();
         let (project, job) = store

@@ -9,6 +9,18 @@ impl StateStore {
                 row.get(0)
             })?;
         let current = Phase::parse(&current_name)?;
+        if current != phase {
+            let has_cutover_workflow: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
+                [id],
+                |row| row.get(0),
+            )?;
+            if has_cutover_workflow {
+                // Managed cutover transitions must atomically update both the
+                // workflow stage and project phase through approve/advance.
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         let backwards_transition = current != Phase::Attention
             && phase != Phase::Attention
             && phase_rank(phase) < phase_rank(current);
