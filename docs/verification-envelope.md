@@ -235,14 +235,19 @@ filesystem. Each one-million-message-per-endpoint shape passed the benchmark's
 | Typical | 868,818,944 B | 22.053 s / 45,345/s | 682,254,336 B | 22 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 980,000 | 20,000 changed |
 | Mismatch-heavy | 930,971,648 B | 38.035 s / 26,291/s | 955,047,936 B | 20 MiB | 668,516,352 B | 1,035,998,416 B / 100,893,904 B | 500,000 | 600,000 (100,000 missing, 100,000 extra, 400,000 changed) |
 | Duplicate IDs | 938,643,456 B | 26.188 s / 38,185/s | 688,828,416 B | 20 MiB | 672,989,184 B | 1,094,813,856 B / 101,443,744 B | 980,000 | 20,000 changed |
+| Missing IDs | 799,596,544 B | 23.610 s / 42,354/s | 587,673,600 B | 20 MiB | 567,128,064 B | 807,295,472 B / 73,832,944 B | 500,000 | 100,000 (50,000 missing, 50,000 extra); 450,000 probable |
 
-Restart reconciliation took 22.783 s / 33.431 s / 26.068 s and wrote
-702,701,568 B / 873,095,168 B / 693,465,088 B, respectively; flag comparison
-took 6.710 s / 6.595 s / 7.136 s. The synthetic benchmark ran with Rust
-1.92.0 and measured the controller process's peak RSS. These are
-repeatability datapoints for three generated message distributions and one
-workstation, not an end-to-end IMAP migration, not full-process measurements,
-and not a universal disk-space estimate or production capacity qualification.
+Restart reconciliation took 22.783 s / 33.431 s / 26.068 s / 20.606 s and
+wrote 702,701,568 B / 873,095,168 B / 693,465,088 B / 537,120,768 B,
+respectively; flag comparison took 6.710 s / 6.595 s / 7.136 s / 3.698 s.
+The missing-ID shape stages 500,000 messages per side without a real Message-ID;
+450,000 source messages are classed probable rather than exact, so this is not
+evidence that synthetic or absent identities can support exact certification.
+The synthetic benchmark ran with Rust 1.92.0 and measured the controller
+process's peak RSS. These are repeatability datapoints for four generated
+message distributions and one workstation, not end-to-end IMAP migrations,
+not full-process measurements, and not a universal disk-space estimate or
+production capacity qualification.
 
 ## Report-export memory boundary
 
