@@ -1148,6 +1148,18 @@ fn project_cannot_complete_without_verified_mailboxes() {
         )
         .is_err()
     );
+    assert!(
+        db.reopen_project(&project.id, "approved\nproject_reopened")
+            .is_err()
+    );
+    assert!(
+        db.reopen_project(&project.id, "approved\u{2028}project_reopened")
+            .is_err()
+    );
+    assert!(
+        db.reopen_project(&project.id, "approved\u{2029}project_reopened")
+            .is_err()
+    );
     db.reopen_project(&project.id, "customer requested a post-cutover correction")
         .unwrap();
     assert_eq!(

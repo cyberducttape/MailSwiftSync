@@ -56,10 +56,8 @@ impl StateStore {
     /// operation. This preserves the meaning of Complete while allowing an
     /// operator to document a legitimate post-cutover correction.
     pub fn reopen_project(&self, id: &str, reason: &str) -> rusqlite::Result<()> {
-        let reason = reason.trim();
-        if reason.is_empty() || reason.len() > 4096 {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let reason = crate::storage::single_line_audit_text(reason, 4096)
+            .ok_or(rusqlite::Error::InvalidQuery)?;
         let tx = self.connection.unchecked_transaction()?;
         let current: String =
             tx.query_row("SELECT phase FROM projects WHERE id=?1", [id], |row| {
