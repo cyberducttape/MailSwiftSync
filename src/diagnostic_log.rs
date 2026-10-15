@@ -651,7 +651,7 @@ fn is_uri_authority_at(line: &str, at: usize) -> bool {
 /// transcripts without attempting to parse or mutate the semantic engine
 /// stream used by verification.
 fn redact_sensitive_fields(line: &str) -> String {
-    const KEYS: [&str; 34] = [
+    const KEYS: [&str; 44] = [
         "client_secret",
         "client-secret",
         "clientsecret",
@@ -676,14 +676,24 @@ fn redact_sensitive_fields(line: &str) -> String {
         "bearer",
         "source_mailbox",
         "destination_mailbox",
+        "source-mailbox",
+        "destination-mailbox",
+        "sourcemailbox",
+        "destinationmailbox",
         "mailbox_name",
         "mailbox-name",
         "mailboxname",
+        "mailbox name",
         "source_folder",
         "destination_folder",
+        "source-folder",
+        "destination-folder",
+        "sourcefolder",
+        "destinationfolder",
         "folder_name",
         "folder-name",
         "foldername",
+        "folder name",
         "mailbox",
         "folder",
     ];
@@ -1116,6 +1126,16 @@ mod tests {
         assert!(!structured.contains("Customer Archive/Legal"));
         assert!(!structured.contains("support"));
         assert!(structured.contains(r#""destination_folder":"[REDACTED]""#));
+
+        let variant_keys = sanitize_private_metadata(
+            "source-mailbox=alice@example.test destination-folder='Private/Archive' sourceFolder=Sent destinationMailbox=support",
+        );
+        for private_value in ["alice@example.test", "Private/Archive", "Sent", "support"] {
+            assert!(
+                !variant_keys.contains(private_value),
+                "private structured value {private_value:?} remained in {variant_keys}"
+            );
+        }
     }
 
     #[test]
