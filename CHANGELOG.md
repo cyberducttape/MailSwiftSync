@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Record the exact packaged imapsync and native Dovecot integration evidence,
+  including its metadata-versus-aggregate assurance levels and explicit
+  cutover/provider-qualification limitations.
 - Keep secret-shaped diagnostic redaction fixtures out of assertion failure
   messages so a failing test cannot echo the fixture into CI logs.
 - Align the Fedora RPM install smoke test and service deployment guide with the
