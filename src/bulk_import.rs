@@ -10,7 +10,7 @@ use calamine::{Reader, Sheets, Xlsx, open_workbook_from_rs};
 use quick_xml::Reader as XmlReader;
 use quick_xml::events::Event as XmlEvent;
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -462,11 +462,28 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
                 crate::MAX_BULK_IMPORT_STYLES_BYTES
             ));
         }
-        if !entry_name.starts_with("xl/worksheets/") || !entry_name.ends_with(".xml") {
+        // Worksheet parts are discovered through OPC relationships; their
+        // package path is not required to use the conventional
+        // `xl/worksheets/` directory. Inspect the XML root rather than
+        // trusting the archive filename, so every sheet Calamine can follow
+        // receives the same resource and value preflight.
+        drop(entry);
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
+        if !is_xml_part(&mut entry)? {
+            continue;
+        }
+        drop(entry);
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
+        let is_worksheet = validate_xlsx_sheet_entry_dimensions(&mut entry)
+            .map_err(|error| format!("XLSX part {entry_name:?}: {error}"))?;
+        if !is_worksheet {
             continue;
         }
         worksheet_found = true;
-        validate_xlsx_sheet_entry_dimensions(&mut entry)?;
         drop(entry);
         let mut entry = archive
             .by_index(index)
@@ -477,6 +494,44 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
         return Err("The XLSX archive contains no worksheets.".into());
     }
     Ok(())
+}
+
+/// Quickly identify XML package parts without relying on their file names or
+/// extensions. OPC relationships may target worksheet parts at arbitrary
+/// paths. A non-XML binary ZIP entry is skipped; unusually long leading
+/// whitespace is rejected rather than allowing a worksheet to evade probing.
+fn is_xml_part<R: Read>(entry: &mut R) -> Result<bool, String> {
+    const MAX_XML_PREAMBLE_BYTES: usize = 128 * 1024;
+    let mut input = BufReader::new(entry);
+    let mut consumed = 0_usize;
+    let mut initial = true;
+    loop {
+        let available = input
+            .fill_buf()
+            .map_err(|error| format!("Could not inspect XLSX package part: {error}"))?;
+        if available.is_empty() {
+            return Ok(false);
+        }
+        if initial && available.starts_with(b"\xEF\xBB\xBF") {
+            input.consume(3);
+            consumed += 3;
+            initial = false;
+            continue;
+        }
+        initial = false;
+        let whitespace = available
+            .iter()
+            .take_while(|byte| byte.is_ascii_whitespace())
+            .count();
+        if whitespace == 0 {
+            return Ok(available[0] == b'<');
+        }
+        consumed = consumed.saturating_add(whitespace);
+        if consumed > MAX_XML_PREAMBLE_BYTES {
+            return Err("An XLSX XML part has an excessive leading preamble.".into());
+        }
+        input.consume(whitespace);
+    }
 }
 
 /// Calamine treats every XLSX boolean value other than the exact string `0`
@@ -699,13 +754,14 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), String> {
+fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<bool, String> {
     const MAX_DIMENSION_PREFIX_BYTES: usize = 128 * 1024;
     let mut bounded = entry.take(MAX_DIMENSION_PREFIX_BYTES as u64 + 1);
     let mut xml = XmlReader::from_reader(BufReader::new(&mut bounded));
     xml.config_mut().trim_text(false);
     let mut buffer = Vec::with_capacity(1024);
     let mut consumed_dimension = None;
+    let mut root_seen = false;
     loop {
         buffer.clear();
         let event = xml
@@ -721,6 +777,16 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
             return Err("The worksheet contains no early sheetData element; refusing to materialize an unbounded sheet.".into());
         };
         let local_name = element.local_name();
+        if !root_seen {
+            root_seen = true;
+            if local_name.as_ref() != "worksheet" {
+                return Ok(false);
+            }
+            if empty {
+                return Ok(true);
+            }
+            continue;
+        }
         if local_name.as_ref() == "dimension" {
             if consumed_dimension.is_some() {
                 return Err("The worksheet contains duplicate dimension elements.".into());
@@ -746,13 +812,13 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
                 if let Some(reference) = consumed_dimension.as_deref() {
                     validate_xlsx_dimension_reference(reference)?;
                 }
-                return Ok(());
+                return Ok(true);
             }
             let reference = consumed_dimension.as_deref().ok_or_else(|| {
                 "The worksheet does not declare a bounded early dimension; refusing to materialize it.".to_owned()
             })?;
             validate_xlsx_dimension_reference(reference)?;
-            return Ok(());
+            return Ok(true);
         }
     }
 }
@@ -967,14 +1033,26 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     fn write_minimal_xlsx(path: &std::path::Path, worksheet_xml: &str) {
+        write_minimal_xlsx_at(path, worksheet_xml, "worksheets/sheet1.xml");
+    }
+
+    fn write_minimal_xlsx_at(
+        path: &std::path::Path,
+        worksheet_xml: &str,
+        worksheet_part_path: &str,
+    ) {
         let file = std::fs::File::create(path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
         let options = SimpleFileOptions::default();
+        let content_types = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/{worksheet_part_path}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#
+        );
+        let workbook_relationship = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="{worksheet_part_path}"/></Relationships>"#
+        );
+        let worksheet_entry = format!("xl/{worksheet_part_path}");
         for (name, contents) in [
-            (
-                "[Content_Types].xml",
-                r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
-            ),
+            ("[Content_Types].xml", content_types.as_str()),
             (
                 "_rels/.rels",
                 r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
@@ -983,11 +1061,12 @@ mod tests {
                 "xl/workbook.xml",
                 r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Mailboxes" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
             ),
+            ("xl/_rels/workbook.xml.rels", workbook_relationship.as_str()),
             (
-                "xl/_rels/workbook.xml.rels",
-                r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+                "xl/sharedStrings.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>unused fixture value</t></si></sst>"#,
             ),
-            ("xl/worksheets/sheet1.xml", worksheet_xml),
+            (worksheet_entry.as_str(), worksheet_xml),
         ] {
             archive.start_file(name, options).unwrap();
             std::io::Write::write_all(&mut archive, contents.as_bytes()).unwrap();
@@ -1260,7 +1339,45 @@ mod tests {
         let error = open_import_workbook(&path)
             .err()
             .expect("invalid boolean cell must fail during raw XLSX preflight");
-        assert!(error.contains("exactly 0 or 1"));
+        assert!(
+            error.contains("exactly 0 or 1"),
+            "unexpected preflight error: {error}"
+        );
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_boolean_preflight_follows_nonstandard_worksheet_part_paths() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-nonstandard-sheet-path-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        write_minimal_xlsx_at(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="b"><v>banana</v></c></row></sheetData></worksheet>"#,
+            "custom/migration-data.sheet",
+        );
+        let error = open_import_workbook(&path)
+            .err()
+            .expect("malformed boolean must be rejected regardless of worksheet part path");
+        assert!(
+            error.contains("exactly 0 or 1"),
+            "unexpected preflight error: {error}"
+        );
+
+        write_minimal_xlsx_at(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="b"><v>1</v></c></row></sheetData></worksheet>"#,
+            "custom/migration-data.sheet",
+        );
+        let mut workbook = open_import_workbook(&path)
+            .expect("a valid relationship-targeted worksheet part must remain importable");
+        let worksheet = workbook.worksheet_range_at(0).unwrap().unwrap();
+        assert_eq!(
+            worksheet.get((0, 0)).and_then(|cell| cell.get_bool()),
+            Some(true)
+        );
         std::fs::remove_file(path).unwrap();
     }
 
