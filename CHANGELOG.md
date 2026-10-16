@@ -7,7 +7,8 @@
   owner-only staged password files; this is not provider qualification.
 - Reject provider smoke configurations that identify the same source and
   destination mailbox, and require the recovery destination to differ from
-  both, preventing recovery writes to either protected account.
+  both after canonicalizing endpoint hostnames, ports, IPv6 literals, and
+  usernames, preventing recovery writes to either protected account.
 - Validate IMAP endpoint syntax and safely quote generated profile strings;
   invoke packaged binary paths with spaces as single executable paths.
 - Sanitize provider labels when forming smoke-proof artifact paths while
