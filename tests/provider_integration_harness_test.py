@@ -67,24 +67,35 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
             "MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT": "imap.example.test:993",
             "MAILSWIFTSYNC_PROVIDER_SOURCE_USER": "LAB@example.test",
             "MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET": "/unused/source",
-            "MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT": "IMAP.example.test:993",
-            "MAILSWIFTSYNC_PROVIDER_DEST_USER": "lab@example.test",
+            "MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT": "destination.example.test:993",
+            "MAILSWIFTSYNC_PROVIDER_DEST_USER": "destination@example.test",
             "MAILSWIFTSYNC_PROVIDER_DEST_SECRET": "/unused/destination",
             "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT": "recovery.example.test:993",
             "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER": "recovery@example.test",
             "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET": "/unused/recovery",
         }
-        result = subprocess.run(
-            ["bash", "-c", SCRIPT, "provider-smoke-test", "cpanel_dovecot"],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+        collision_cases = (
+            ("destination", "IMAP.example.test:993", "lab@example.test", "source and destination must be different"),
+            ("recovery", "imap.example.test:993", "LAB@example.test", "recovery destination must not be the source"),
+            ("recovery", "destination.example.test:993", "destination@example.test", "recovery destination must not be the normal live destination"),
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("source and destination must be different mailbox identities", result.stderr)
-        self.assertNotIn("ERROR: /unused is not executable", result.stderr)
+        for role, endpoint, user, expected_error in collision_cases:
+            with self.subTest(role=role, endpoint=endpoint, user=user):
+                case_env = env.copy()
+                prefix = "MAILSWIFTSYNC_PROVIDER_DEST" if role == "destination" else "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST"
+                case_env[f"{prefix}_ENDPOINT"] = endpoint
+                case_env[f"{prefix}_USER"] = user
+                result = subprocess.run(
+                    ["bash", "-c", SCRIPT, "provider-smoke-test", "cpanel_dovecot"],
+                    cwd=ROOT,
+                    env=case_env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+                self.assertNotIn("ERROR: /unused is not executable", result.stderr)
 
     def test_artifact_path_labels_are_sanitized_without_changing_provider_identity(self):
         self.assertIn('source_provider_path="$(safe_path_component "$source_provider")"', SCRIPT)
