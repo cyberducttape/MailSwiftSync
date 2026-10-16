@@ -104,13 +104,19 @@ jobs:
               source_endpoint=; dest_endpoint= ;;
             gmail-to-microsoft365)
               provider=gmail
+              # shellcheck disable=SC2034 # Consumed through indirect expansion below.
               source_prefix=GOOGLE_PRIMARY; source_endpoint=imap.gmail.com:993
+              # shellcheck disable=SC2034 # Consumed through indirect expansion below.
               dest_prefix=M365_PRIMARY; dest_endpoint=outlook.office365.com:993
+              # shellcheck disable=SC2034 # Consumed through indirect expansion below.
               recovery_prefix=M365_RECOVERY ;;
             microsoft365-to-gmail)
               provider=m365
+              # shellcheck disable=SC2034 # Consumed through indirect expansion below.
               source_prefix=M365_PRIMARY; source_endpoint=outlook.office365.com:993
+              # shellcheck disable=SC2034 # Consumed through indirect expansion below.
               dest_prefix=GOOGLE_PRIMARY; dest_endpoint=imap.gmail.com:993
+              # shellcheck disable=SC2034 # Consumed through indirect expansion below.
               recovery_prefix=GOOGLE_RECOVERY ;;
             *) echo "Unknown direction: $DIRECTION" >&2; exit 2 ;;
           esac
