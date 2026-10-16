@@ -489,7 +489,7 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("Could not inspect worksheet cell types: {error}"))?;
-        validate_xlsx_boolean_cells(&mut entry)?;
+        validate_xlsx_cells(&mut entry)?;
     }
     if !worksheet_found {
         return Err("The XLSX archive contains no worksheets.".into());
@@ -569,10 +569,10 @@ fn looks_like_utf16_xml(bytes: &[u8]) -> bool {
     false
 }
 
-/// Calamine treats every XLSX boolean value other than the exact string `0`
-/// as true. Reject malformed boolean cells before opening the workbook so an
-/// invalid value cannot silently become a migration field such as `true`.
-fn validate_xlsx_boolean_cells<R: Read>(entry: &mut R) -> Result<(), String> {
+/// Validate worksheet cell coordinates and boolean values before Calamine
+/// parses them. Calamine 0.36.1 performs unchecked arithmetic on row and cell
+/// references, and malformed boolean values can otherwise be coerced to true.
+fn validate_xlsx_cells<R: Read>(entry: &mut R) -> Result<(), String> {
     let mut xml = XmlReader::from_reader(DecodingReader::new(BufReader::new(entry)));
     xml.config_mut().trim_text(false);
     let mut buffer = Vec::with_capacity(1024);
@@ -588,37 +588,22 @@ fn validate_xlsx_boolean_cells<R: Read>(entry: &mut R) -> Result<(), String> {
             .read_event_into(&mut buffer)
             .map_err(|error| format!("The worksheet XML is malformed: {error}"))?
         {
+            XmlEvent::Start(element) if element.local_name().as_ref() == "row" => {
+                validate_xlsx_row_attributes(&element)?;
+            }
             XmlEvent::Start(element) if element.local_name().as_ref() == "c" => {
                 if in_boolean_cell {
                     return Err("The worksheet contains nested cells.".into());
                 }
-                let mut cell_type = None;
-                for attribute in element.attributes() {
-                    let attribute = attribute.map_err(|error| {
-                        format!("The worksheet cell has a malformed attribute: {error}")
-                    })?;
-                    if attribute.key.local_name().as_ref() == "t" {
-                        if cell_type.is_some() {
-                            return Err("The worksheet cell has duplicate type attributes.".into());
-                        }
-                        cell_type = Some(attribute.value.as_ref() == "b");
-                    }
-                }
-                in_boolean_cell = cell_type == Some(true);
+                in_boolean_cell = validate_xlsx_cell_attributes(&element)?;
                 value_started = false;
                 in_value = false;
                 value_valid = false;
                 value.clear();
             }
             XmlEvent::Empty(element) if element.local_name().as_ref() == "c" => {
-                for attribute in element.attributes() {
-                    let attribute = attribute.map_err(|error| {
-                        format!("The worksheet cell has a malformed attribute: {error}")
-                    })?;
-                    if attribute.key.local_name().as_ref() == "t" && attribute.value.as_ref() == "b"
-                    {
-                        return Err("A boolean-typed worksheet cell has no valid 0/1 value.".into());
-                    }
+                if validate_xlsx_cell_attributes(&element)? {
+                    return Err("A boolean-typed worksheet cell has no valid 0/1 value.".into());
                 }
             }
             XmlEvent::Start(element) if in_boolean_cell && element.local_name().as_ref() == "v" => {
@@ -668,6 +653,80 @@ fn validate_xlsx_boolean_cells<R: Read>(entry: &mut R) -> Result<(), String> {
     }
     if in_boolean_cell {
         return Err("A boolean-typed worksheet cell is incomplete.".into());
+    }
+    Ok(())
+}
+
+fn validate_xlsx_cell_attributes(
+    element: &quick_xml::events::BytesStart<'_>,
+) -> Result<bool, String> {
+    let mut cell_type = None;
+    let mut has_reference = false;
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| format!("The worksheet cell has a malformed attribute: {error}"))?;
+        match attribute.key.local_name().as_ref() {
+            "t" => {
+                if cell_type.is_some() {
+                    return Err("The worksheet cell has duplicate type attributes.".into());
+                }
+                cell_type = Some(attribute.value.as_ref() == "b");
+            }
+            "r" => {
+                if has_reference {
+                    return Err("The worksheet cell has duplicate reference attributes.".into());
+                }
+                has_reference = true;
+                let reference = attribute.value.as_ref();
+                validate_xlsx_cell_reference(reference)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(cell_type == Some(true))
+}
+
+fn validate_xlsx_row_attributes(element: &quick_xml::events::BytesStart<'_>) -> Result<(), String> {
+    let mut has_reference = false;
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| format!("The worksheet row has a malformed attribute: {error}"))?;
+        if attribute.key.local_name().as_ref() != "r" {
+            continue;
+        }
+        if has_reference {
+            return Err("The worksheet row has duplicate reference attributes.".into());
+        }
+        has_reference = true;
+        let reference = attribute.value.as_ref();
+        let row = reference
+            .parse::<u32>()
+            .ok()
+            .filter(|row| *row > 0)
+            .ok_or_else(|| "The worksheet row reference is invalid.".to_owned())?;
+        if row > crate::MAX_BULK_IMPORT_ROWS as u32 + 1 {
+            return Err(format!(
+                "The worksheet contains a row beyond the {}-row import limit.",
+                crate::MAX_BULK_IMPORT_ROWS
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_xlsx_cell_reference(reference: &str) -> Result<(), String> {
+    let (column, row) = xlsx_reference::parse_cell_reference(reference)?;
+    if column > crate::MAX_BULK_IMPORT_COLUMNS {
+        return Err(format!(
+            "The worksheet contains a cell beyond the {}-column import limit.",
+            crate::MAX_BULK_IMPORT_COLUMNS
+        ));
+    }
+    if row > crate::MAX_BULK_IMPORT_ROWS as u32 + 1 {
+        return Err(format!(
+            "The worksheet contains a cell beyond the {}-row import limit.",
+            crate::MAX_BULK_IMPORT_ROWS
+        ));
     }
     Ok(())
 }
@@ -1054,10 +1113,12 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
 
 #[cfg(test)]
 mod tests {
-    use super::xlsx_reference::parse_cell_reference as parse_xlsx_cell_reference;
+    use super::xlsx_reference::{
+        parse_cell_reference as parse_xlsx_cell_reference, validate_dimension_reference,
+    };
     use super::{
         BulkJob, is_xml_part, job_from_values, open_import_workbook, plaintext_import_allowed,
-        plaintext_secrets_allowed, validate_xlsx_boolean_cells, validate_xlsx_shared_strings,
+        plaintext_secrets_allowed, validate_xlsx_cells, validate_xlsx_shared_strings,
         validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
@@ -1187,6 +1248,28 @@ mod tests {
         assert!(parse_xlsx_cell_reference("XFD1048576").is_ok());
         assert!(parse_xlsx_cell_reference("A").is_err());
         assert!(parse_xlsx_cell_reference(&format!("{}1", "X".repeat(256))).is_err());
+        validate_dimension_reference("A1:D2", 64, 100_000).unwrap();
+        assert!(validate_dimension_reference("D2:A1", 64, 100_000).is_err());
+        assert!(validate_dimension_reference("A2:D1", 64, 100_000).is_err());
+        assert!(validate_dimension_reference("D1:A2", 64, 100_000).is_err());
+    }
+
+    #[test]
+    fn xlsx_import_rejects_reversed_dimensions_before_calamine() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-reversed-dimension-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        write_minimal_xlsx(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="D2:A1"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>source_host</t></is></c></row></sheetData></worksheet>"#,
+        );
+
+        let error = open_import_workbook(&path)
+            .err()
+            .expect("reversed dimensions must fail in preflight before Calamine parses them");
+        assert!(error.contains("top-left to bottom-right"), "{error}");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1354,7 +1437,7 @@ mod tests {
             let xml = format!(
                 "<worksheet><sheetData><row><c t=\"b\"><v>{value}</v></c></row></sheetData></worksheet>"
             );
-            validate_xlsx_boolean_cells(&mut Cursor::new(xml))
+            validate_xlsx_cells(&mut Cursor::new(xml))
                 .expect("OOXML boolean values 0 and 1 are valid");
         }
         for value in [
@@ -1364,10 +1447,47 @@ mod tests {
                 "<worksheet><sheetData><row><c t=\"b\"><v>{value}</v></c></row></sheetData></worksheet>"
             );
             assert!(
-                validate_xlsx_boolean_cells(&mut Cursor::new(xml)).is_err(),
+                validate_xlsx_cells(&mut Cursor::new(xml)).is_err(),
                 "invalid boolean-typed cell value {value:?} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn xlsx_cell_and_row_references_are_bounded_before_calamine() {
+        for xml in [
+            r#"<worksheet><sheetData><row r="99999999999"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
+            r#"<worksheet><sheetData><row r="100002"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
+            r#"<worksheet><sheetData><row r="1"><c r="A99999999999"><v>1</v></c></row></sheetData></worksheet>"#,
+            r#"<worksheet><sheetData><row r="1"><c r="ZZZZZZZ1"><v>1</v></c></row></sheetData></worksheet>"#,
+        ] {
+            assert!(
+                validate_xlsx_cells(&mut Cursor::new(xml)).is_err(),
+                "out-of-range references must be rejected before Calamine sees them: {xml}"
+            );
+        }
+    }
+
+    #[test]
+    fn xlsx_import_rejects_overflowing_cell_and_row_references_before_calamine() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-overflowing-reference-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        for worksheet in [
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="99999999999"><c r="A1" t="inlineStr"><is><t>source_host</t></is></c></row></sheetData></worksheet>"#,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A99999999999" t="inlineStr"><is><t>source_host</t></is></c></row></sheetData></worksheet>"#,
+        ] {
+            write_minimal_xlsx(&path, worksheet);
+            let error = open_import_workbook(&path).err().expect(
+                "overflowing references must fail in preflight before Calamine parses them",
+            );
+            assert!(
+                error.contains("row") || error.contains("limit"),
+                "unexpected preflight error: {error}"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
