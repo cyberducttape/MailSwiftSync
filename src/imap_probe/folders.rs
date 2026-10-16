@@ -81,6 +81,9 @@ fn read_imap_list_response_inner<S: Read>(
     let mut literal_remaining = 0_usize;
     let mut literal_header: Option<String> = None;
     let mut literal_value = Vec::new();
+    let mut literal_is_mailbox = false;
+    let mut mailbox_literal_seen = false;
+    let mut ignored_literal_bytes = 0_usize;
     let mut summary = ListInventorySummary::default();
     let mut inventory_bytes = 0_usize;
     const MAX_INTER_READ_STALL: Duration = Duration::from_secs(15);
@@ -113,7 +116,9 @@ fn read_imap_list_response_inner<S: Read>(
         while offset < count {
             if literal_remaining > 0 {
                 let consumed = literal_remaining.min(count - offset);
-                literal_value.extend_from_slice(&buffer[offset..offset + consumed]);
+                if literal_is_mailbox {
+                    literal_value.extend_from_slice(&buffer[offset..offset + consumed]);
+                }
                 literal_remaining -= consumed;
                 offset += consumed;
                 continue;
@@ -143,11 +148,6 @@ fn read_imap_list_response_inner<S: Read>(
             // the response. Consume and validate the actual CRLF (and any
             // trailing extension fields) before committing the mailbox entry.
             if let Some(header) = literal_header.take() {
-                if list_literal_size(text).is_some() {
-                    return Err(
-                        "IMAP LIST literal in trailing extension data is unsupported".into(),
-                    );
-                }
                 if text.bytes().any(|byte| byte.is_ascii_control()) {
                     return Err(
                         "IMAP LIST data after mailbox literal contained a control octet".into(),
@@ -156,14 +156,36 @@ fn read_imap_list_response_inner<S: Read>(
                 if !text.is_empty() && !text.chars().next().is_some_and(char::is_whitespace) {
                     return Err("malformed data after IMAP LIST mailbox literal".into());
                 }
+                let mut header = header;
+                if let Some(size) = list_literal_size(text) {
+                    if size > MAX_IMAP_LIST_LITERAL_BYTES {
+                        return Err("IMAP LIST literal exceeded 1 MiB".into());
+                    }
+                    ignored_literal_bytes = ignored_literal_bytes
+                        .checked_add(size)
+                        .filter(|total| *total <= MAX_IMAP_LIST_INVENTORY_BYTES)
+                        .ok_or_else(|| {
+                            "IMAP LIST extension literals exceeded the inventory byte limit"
+                                .to_owned()
+                        })?;
+                    header.push_str(text);
+                    literal_header = Some(header);
+                    literal_is_mailbox = false;
+                    literal_remaining = size;
+                    line.clear();
+                    continue;
+                }
+                header.push_str(text);
                 record_list_entry(
                     &header,
-                    Some(&literal_value),
+                    mailbox_literal_seen.then_some(literal_value.as_slice()),
                     &mut summary,
                     &mut mailbox_details,
                     &mut inventory_bytes,
                 )?;
                 literal_value.clear();
+                literal_is_mailbox = false;
+                mailbox_literal_seen = false;
                 line.clear();
                 continue;
             }
@@ -215,13 +237,23 @@ fn read_imap_list_response_inner<S: Read>(
                             }
                             literal_header = Some(text.to_owned());
                             literal_value.clear();
+                            literal_is_mailbox = true;
+                            mailbox_literal_seen = true;
                             literal_remaining = literal_size;
                         }
                         Some(false) => {
-                            return Err(
-                                "IMAP LIST literal in trailing extension data is unsupported"
-                                    .into(),
-                            );
+                            ignored_literal_bytes = ignored_literal_bytes
+                                .checked_add(literal_size)
+                                .filter(|total| *total <= MAX_IMAP_LIST_INVENTORY_BYTES)
+                                .ok_or_else(|| {
+                                    "IMAP LIST extension literals exceeded the inventory byte limit"
+                                        .to_owned()
+                                })?;
+                            literal_header = Some(text.to_owned());
+                            literal_value.clear();
+                            literal_is_mailbox = false;
+                            mailbox_literal_seen = false;
+                            literal_remaining = literal_size;
                         }
                         None => {
                             return Err("malformed IMAP LIST literal placement".into());

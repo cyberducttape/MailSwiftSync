@@ -108,10 +108,7 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
             uidvalidity,
             uid.to_string(),
         );
-        let fingerprint = digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let fingerprint = hex_encode(&digest);
         if fingerprints.insert(key, fingerprint).is_some() {
             return Err(format!("duplicate body FETCH UID {uid}"));
         }
@@ -155,17 +152,31 @@ fn fetch_records(response: &[u8]) -> impl Iterator<Item = Result<FetchRecord<'_>
         if !is_fetch_record_line(&first) {
             return Some(Err("malformed IMAP FETCH response record".to_owned()));
         }
-        let protocol_text = frame
-            .protocol
-            .iter()
-            .map(|segment| String::from_utf8_lossy(segment))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let capacity = frame.protocol.iter().fold(0_usize, |size, segment| {
+            size.saturating_add(segment.len()).saturating_add(1)
+        });
+        let mut protocol_text = String::with_capacity(capacity);
+        for segment in &frame.protocol {
+            if !protocol_text.is_empty() && !segment.is_empty() {
+                protocol_text.push(' ');
+            }
+            protocol_text.push_str(&String::from_utf8_lossy(segment));
+        }
         Some(Ok(FetchRecord {
             frame,
             protocol_text,
         }))
     })
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 fn is_fetch_record_candidate(line: &str) -> bool {

@@ -148,6 +148,12 @@ fn body_hash_message_limit_exceeded(existing: usize, incoming: usize) -> bool {
     existing.saturating_add(incoming) > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
 }
 
+fn message_fetch_limit_exceeded(existing: usize, incoming: usize) -> bool {
+    existing
+        .checked_add(incoming)
+        .is_none_or(|total| total > MAX_MESSAGE_FETCH_RECORDS)
+}
+
 pub(crate) struct MessageFetchBudget<'a> {
     pub(super) deadline: Instant,
     pub(super) cancel: &'a AtomicBool,
@@ -1086,6 +1092,11 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         },
         |stream, buffer, uid_page, uid_set| {
             budget.check()?;
+            if message_fetch_limit_exceeded(sink.len(), uid_page.len()) {
+                return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
+                    "{host}: account would exceed the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
+                )));
+            }
             if body_hash.is_some()
                 && !sink.has_durable_stage()
                 && body_hash_message_limit_exceeded(sink.len(), uid_page.len())
@@ -1222,11 +1233,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                     })
                     .sum(),
             );
-            if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
-                return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
-                    "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
-                )));
-            }
             Ok(response_bytes)
         },
     )?;
