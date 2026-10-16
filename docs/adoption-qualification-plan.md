@@ -38,7 +38,7 @@ provider qualification, or signed-result acceptance criteria.
 | GitHub Actions run / commit | [38335597359](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38335597359) / `d4f440dbdebe8ca8ada4f2487c2c57ba164633be` |
 | Runner / runtime | `ubuntu-24.04`; Debian Bookworm runtime container; packaged release build |
 | Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)`; 10,000 generated messages with 1,073,741,824 bytes aggregate body payload plus 16 baseline messages |
-| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875` |
 | Plan SHA-256 | `3fe97ec011c5d699d8d9c0ea41590a8f185224c8423d10f0c0c19907aea58826` |
 | Harness wall time | 84 seconds, including fixture setup, transfer, verification, delta, and evidence exports; not a direct-imapsync A/B measurement |
 | Initial proof | 10,016 source/destination messages and 1,075,944,871 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
@@ -59,7 +59,7 @@ This run does not qualify hosted-provider behavior, a single 1 GiB message,
 | GitHub Actions run / commit | [38242243581](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38242243581) / `ac0caed27db8fe4f5130d4f4b9ab1022ecd5f5c4` |
 | Runner / runtime | `ubuntu-24.04`; Debian Bookworm container; Rust `1.92` release build |
 | Fixture | Disposable generic IMAP backed by Dovecot `2.3.19.1 (9b53102964)`; seeded 16 messages and one idempotent-delta message |
-| Packaged imapsync | `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| Packaged imapsync | `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875` |
 | `doveadm` transfer executable | SHA-256 `170ac4879a7ad4784f7a5dcd30ff44ab35635710c071f06d937ad084c3827a98` |
 | Packaged imapsync evidence | Initial 16/16 and post-delta 17/17; Level 2 metadata reconciliation; 100% FLAGS coverage; zero missing, extra, or modified messages. Top-level engine is `imapsync 2.314`. |
 | Native Dovecot evidence | Initial 16/16 and post-delta 17/17; Level 1 aggregate evidence (not independent message-level reconciliation). Top-level engine is `Dovecot native`. |
@@ -83,7 +83,7 @@ hosted-provider qualification.
 | GitHub Actions run / commit | [38215860881](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38215860881) / `55242c879118610b7d54043743c549e8197201ef` |
 | Runner / runtime | `ubuntu-24.04`; Debian Bookworm container; Rust `1.92` release build |
 | Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)`; deterministic sequential message IDs, 100,000 generated small messages plus 16 baseline messages |
-| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875` |
 | Plan SHA-256 | `15f41abf60ee19a9100a281a16b4466a898ebe8ddc2c9b3eb6174ba02141b2dd` |
 | Harness wall time | 813 seconds, including fixture setup, seed transfer, verification, re-verification, delta, and proof export; no direct-imapsync A/B baseline |
 | Initial proof | 100,016 source/destination messages and 28,681,943 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
@@ -104,7 +104,7 @@ seed. It is not a 1/10/50/100-GiB qualification.
 | GitHub Actions run / commit | [38218024314](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38218024314) / `4a75c0682a7aa3907d3a7a597c7923a1dde510a9` |
 | Runner / runtime | `ubuntu-24.04`; Debian Bookworm container; Rust `1.92` release build |
 | Fixture | Disposable generic IMAP / Dovecot `2.3.19.1 (9b53102964)`; 10,000 generated messages with 1,073,741,824 bytes aggregate generated body payload plus 16 baseline messages |
-| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab7a158c041b1ef78ca559f47dc1fa377d0870` |
+| Packaged engine | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875` |
 | Plan SHA-256 | `d4ced1c31c066f5cd30c19f850d667f5d827335ea921dfdb9d0fea1d0446e103` |
 | Harness wall time | 92 seconds, including fixture setup, transfer, verification, delta, and proof export; no direct-imapsync A/B baseline |
 | Initial proof | 10,016 source/destination messages and 1,075,944,871 bytes; zero missing, extra, modified, failed, or unmatched; 100% FLAGS coverage; Level 2 metadata only, bodies not compared |
