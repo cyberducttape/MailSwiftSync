@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject malformed XLSX boolean-typed cells during raw archive preflight so
+  noncanonical values cannot be silently coerced into migration booleans by
+  the workbook parser.
 - Run live provider smoke jobs as the packaged unprivileged UID 10001, including
   ownership of staged secrets and smoke evidence.
 - Limit live-provider smoke proof artifact retention to 14 days because the
