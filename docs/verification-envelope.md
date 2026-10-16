@@ -249,6 +249,29 @@ message distributions and one workstation, not end-to-end IMAP migrations,
 not full-process measurements, and not a universal disk-space estimate or
 production capacity qualification.
 
+A further current-branch repeat at `db4ea004671b5d07669a923636cf63b6739fafda`
+on 2026-10-15 exercised the 500,000- and 1,000,000-message-per-endpoint
+duplicate-ID and mismatch-heavy shapes with the checked-in
+`scripts/benchmark-verification-scale.sh`. The host was the same shared Ryzen
+7 7735U / Ubuntu 26.04.1 x86_64 / Linux 7.0.0-38-generic / Rust 1.92.0 system;
+the stage lived on ext4 over NVMe. All cases passed the harness's 64 MiB RSS
+and 20,000 messages/s gates:
+
+| Messages/endpoint | Shape | Stage / reconcile | Reconcile rate | Stage / reconcile writes | Peak RSS | Peak stage / journal | FLAGS compared | Mismatch rows | Restart reconcile |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 500,000 | Duplicate IDs | 13.532 s / 13.111 s | 38,135/s | 463,572,992 B / 334,381,056 B | 22 MiB | 544,850,744 B / 50,438,968 B | 490,000 | 10,000 changed | 12.040 s |
+| 500,000 | Mismatch-heavy | 10.239 s / 16.553 s | 30,206/s | 458,797,056 B / 351,039,488 B | 21 MiB | 515,990,016 B / 50,233,856 B | 250,000 | 300,000 (50,000 missing, 50,000 extra, 200,000 changed) | 15.856 s |
+| 1,000,000 | Duplicate IDs | 25.240 s / 24.588 s | 40,670/s | 938,643,456 B / 679,956,480 B | 22 MiB | 1,094,813,856 B / 101,443,744 B | 980,000 | 20,000 changed | 26.146 s |
+| 1,000,000 | Mismatch-heavy | 20.987 s / 32.020 s | 31,230/s | 926,822,400 B / 882,282,496 B | 22 MiB | 1,035,998,416 B / 100,893,904 B | 500,000 | 600,000 (100,000 missing, 100,000 extra, 400,000 changed) | 32.390 s |
+
+Each reopened-stage reconciliation returned the same result as its first pass.
+The largest single measured directory peak was 1,094,813,856 B (including a
+101,443,744 B rollback journal). This repeat supports reproducibility of the
+synthetic durable-stage path on this host only; it excludes remote IMAP fetch,
+message transfer, terminal evidence commit, provider behavior, and real-world
+mailbox distributions. It is not a target-host disk reservation or GA capacity
+qualification.
+
 ## Report-export memory boundary
 
 Project JSON and customer proof exports now traverse mailbox rows in pages of
