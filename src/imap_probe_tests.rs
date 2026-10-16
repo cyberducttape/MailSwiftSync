@@ -766,6 +766,16 @@ fn malformed_message_id_cannot_spoof_synthetic_identity_namespace() {
         None
     );
     assert_eq!(parse_message_id_header("Message-ID: <>\r\n"), None);
+    assert_eq!(parse_message_id_header("Message-ID: <not-an-id>\r\n"), None);
+    assert_eq!(
+        parse_message_id_header("Message-ID: <@example.test>\r\n"),
+        None
+    );
+    assert_eq!(parse_message_id_header("Message-ID: <user@>\r\n"), None);
+    assert_eq!(
+        parse_message_id_header("Message-ID: <user @example.test>\r\n"),
+        None
+    );
     assert_eq!(
         parse_message_id_header("Message-ID: <valid@example.test>\r\n"),
         Some("<valid@example.test>".into())
