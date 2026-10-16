@@ -610,6 +610,9 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
         .expect("dependency audit workflow should exist");
     assert!(
         dependency_audit.contains("pip-audit==2.10.1")
+            && dependency_audit.contains(
+                "run: >-\n          \"$RUNNER_TEMP/pip-audit/bin/pip-audit\""
+            )
             && dependency_audit.contains("pip-audit\" -r scripts/requirements-provider-qualification.txt -r tests/provider-evidence/requirements.txt"),
         "scheduled dependency audit must scan all pinned provider-qualification Python requirements"
     );
