@@ -116,6 +116,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         for invalid_endpoint, expected_error in (
             ("bad..host:993", "invalid DNS hostname"),
             ("-bad.example.test:993", "invalid DNS hostname"),
+            ("host.example.test..:993", "invalid DNS hostname"),
             ("127.000.000.001:993", "ambiguous numeric IPv4"),
             ("2130706433:993", "ambiguous numeric IPv4"),
             ("[abcd:1234]:993", "invalid IPv6 literal"),

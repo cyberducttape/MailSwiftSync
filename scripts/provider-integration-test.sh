@@ -168,7 +168,12 @@ if host.startswith("["):
         raise SystemExit(1)
     host = f"[{address.compressed}]"
 else:
-    host = host.rstrip(".").casefold()
+    host = host.casefold()
+    if host.endswith("."):
+        host = host[:-1]
+        if host.endswith("."):
+            print("ERROR: invalid DNS hostname in IMAP endpoint", file=sys.stderr)
+            raise SystemExit(1)
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
