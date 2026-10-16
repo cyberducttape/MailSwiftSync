@@ -5,6 +5,9 @@
 - Treat the yanked ZIP release required by Calamine 0.36.1, and Calamine's
   unresolved upstream parser-security report, as an explicit GA blocker; the
   cargo-deny exception is not a security waiver.
+- Remove the stale `ttf-parser` advisory claim from current release readiness;
+  the current lockfile no longer contains that crate after the Wayland
+  renderer dependency change.
 - Reject reversed XLSX worksheet dimensions and out-of-range explicit row/cell
   references before Calamine parsing, preventing malformed coordinates from
   reaching unchecked dependency arithmetic.
@@ -666,9 +669,6 @@
   permission failures.
 - Add regression coverage proving certificate pins fail closed for both
   transfer engines until connection-level enforcement is qualified.
-- Record the exact RustSec maintenance warning (`ttf-parser 0.25.1`,
-  `RUSTSEC-2026-0192`) and transitive desktop dependency path in release
-  readiness documentation.
 - Include overall assurance status, message coverage, and flag-coverage counters
   in standalone `reverify` JSON so partial fidelity cannot be mistaken for an
   unqualified verification result by automation.
