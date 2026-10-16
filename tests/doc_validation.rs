@@ -642,6 +642,11 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
         release.contains("shellcheck scripts/*.sh"),
         "tagged releases must enforce shell-script linting"
     );
+    assert!(
+        release.contains("if: ${{ steps.release-channel.outputs.value == 'stable' }}")
+            && release.contains("run: cargo audit --deny yanked"),
+        "stable releases must fail closed when the dependency graph contains yanked crates"
+    );
 
     let deny = fs::read_to_string("deny.toml").expect("dependency policy should exist");
     let readiness = fs::read_to_string("docs/release-readiness.md")

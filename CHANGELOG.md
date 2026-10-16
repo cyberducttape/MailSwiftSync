@@ -14,6 +14,9 @@
 - Treat the yanked ZIP release required by Calamine 0.36.1, and Calamine's
   unresolved upstream parser-security report, as an explicit GA blocker; the
   cargo-deny exception is not a security waiver.
+- Enforce the yanked-dependency blocker in the tagged stable-release workflow;
+  preview releases retain the existing audit behavior while stable publication
+  fails closed until the XLSX parser dependency is resolved.
 - Remove the stale `ttf-parser` advisory claim from current release readiness;
   the current lockfile no longer contains that crate after the Wayland
   renderer dependency change.
