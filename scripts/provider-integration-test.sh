@@ -179,9 +179,10 @@ if [[ ! -f "$recovery_dest_secret" ]]; then
   exit 1
 fi
 
-# Validate all secret files before invoking any executable or contacting a
-# provider. Recovery uses an independent destination credential and must get
-# the same owner-only protection as the normal source/destination pair.
+# Validate all secret files before invoking the packaged product or engine, or
+# contacting a provider. Recovery uses an independent destination credential
+# and must get the same owner-only protection as the normal source/destination
+# pair.
 for secret_file in "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" \
   "${MAILSWIFTSYNC_PROVIDER_DEST_SECRET}" "$recovery_dest_secret"; do
   if [[ ! -f "$secret_file" ]]; then
