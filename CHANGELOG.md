@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add a manually dispatched cPanel/Dovecot-to-cPanel/Dovecot smoke route using
+  separate disposable source, destination, and recovery mailboxes with
+  owner-only staged password files; this is not provider qualification.
+- Reject provider smoke configurations that identify the same source and
+  destination mailbox, preventing an accidental write to the source account.
 - Add a workload-specific measured-range projection for verification stage
   storage (including sampled rollback-journal peak) to the scale-only risk
   report; it is not a capacity bound, and worker disk capacity remains

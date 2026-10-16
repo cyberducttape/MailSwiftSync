@@ -20,7 +20,8 @@ set -euo pipefail
 #
 # Environment variables (required):
 #   MAILSWIFTSYNC_PROVIDER_BINARY  — path to packaged MailSwiftSync binary
-#   MAILSWIFTSYNC_PROVIDER         — provider name (gmail, m365, fastmail)
+#   MAILSWIFTSYNC_PROVIDER         — provider name (gmail, m365, fastmail,
+#                                    cpanel_dovecot)
 #   MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT  — source IMAP server (host:port)
 #   MAILSWIFTSYNC_PROVIDER_SOURCE_USER      — source account username
 #   MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET    — file containing source password/token
@@ -99,7 +100,6 @@ if [[ "$recovery_dest_endpoint" == "${MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT:-}" &
   echo "ERROR: recovery destination must not be the normal live destination account" >&2
   exit 1
 fi
-
 # Check required environment
 for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT \
   MAILSWIFTSYNC_PROVIDER_SOURCE_USER MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET \
@@ -110,6 +110,12 @@ for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT 
     exit 1
   fi
 done
+source_identity="$(printf '%s\n%s' "$MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT" "$MAILSWIFTSYNC_PROVIDER_SOURCE_USER" | tr '[:upper:]' '[:lower:]')"
+destination_identity="$(printf '%s\n%s' "$MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT" "$MAILSWIFTSYNC_PROVIDER_DEST_USER" | tr '[:upper:]' '[:lower:]')"
+if [[ "$source_identity" == "$destination_identity" ]]; then
+  echo "ERROR: source and destination must be different mailbox identities; the harness writes to the destination" >&2
+  exit 1
+fi
 if [[ ! -f "$recovery_dest_secret" ]]; then
   echo "ERROR: recovery destination secret file $recovery_dest_secret does not exist" >&2
   exit 1

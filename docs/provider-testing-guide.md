@@ -259,24 +259,33 @@ For each tested provider, maintain:
 The **Live provider smoke** workflow (`.github/workflows/provider-smoke.yml`,
 manual dispatch) runs this guide's dry pilot, interruption/recovery, and live
 pilot against Google Workspace and Microsoft 365 test tenants in the packaged
-runtime image. Its proofs are smoke artifacts, not release qualification.
+runtime image. It also supports a manually configured cPanel/Dovecot pair.
+Its proofs are smoke artifacts, not release qualification.
 
 ### One-time setup
 
-1. **Test mailboxes.** Create four dedicated mailboxes that hold no real data:
+1. **Test mailboxes.** For Google/Microsoft routes, create four dedicated
+   mailboxes that hold no real data:
    two in Google Workspace (`primary`, `recovery`) and two in Microsoft 365
    (`primary`, `recovery`). Each direction migrates from one tenant's
    `primary` into the other tenant's `primary`, and the recovery phase writes
    into the destination tenant's `recovery` mailbox. Enable IMAP for all four.
-2. **Seed the source mailboxes.** Put at least a few messages in two or three
-   folders (labels on Google) in both `primary` mailboxes; the harness migrates
-   whatever is present and does not seed.
-3. **OAuth clients.** Register one OAuth client per tenant as described in
-   [OAUTH_SETUP.md](../OAUTH_SETUP.md) (Google: `https://mail.google.com/`
+   For `cpanel-dovecot-to-cpanel-dovecot`, create three disposable mailboxes:
+   a read-only source, a writable destination, and a separate writable recovery
+   destination. Never use customer accounts. Configure endpoints as
+   `hostname:port` using implicit TLS and valid server certificates. The
+   workflow uses mailbox passwords; do not provide WHM or root credentials.
+2. **Seed source mailboxes.** Put a few messages in two or three folders
+   (labels on Google) in the hosted-provider primary mailboxes, or in the
+   cPanel/Dovecot source mailbox. The harness migrates whatever is present and
+   does not seed.
+3. **OAuth clients (hosted-provider routes only).** Register one OAuth client
+   per tenant as described in [OAUTH_SETUP.md](../OAUTH_SETUP.md) (Google:
+   `https://mail.google.com/`
    scope, desktop client; Microsoft: delegated `IMAP.AccessAsUser.All` and
    `offline_access`, public client with an `http://localhost` redirect).
-4. **Authorize and export each mailbox** on a workstation with an OS keyring,
-   signing in as that mailbox:
+4. **Authorize and export each hosted-provider mailbox** on a workstation
+   with an OS keyring, signing in as that mailbox:
 
    ```bash
    mailswiftsync oauth-authorize google ci-google-primary --client-id <id> \
@@ -289,9 +298,9 @@ runtime image. Its proofs are smoke artifacts, not release qualification.
    ```
 
 5. **GitHub environment.** Create a repository environment named
-   `live-providers` (optionally with required reviewers) and add eight
-   secrets; paste each exported JSON file's contents as its `_REFRESH_CONFIG`
-   value, then delete the files:
+   `live-providers` (optionally with required reviewers). For Google/Microsoft
+   routes, add eight secrets; paste each exported JSON file's contents as its
+   `_REFRESH_CONFIG` value, then delete the files:
 
    | Secret | Value |
    |---|---|
@@ -300,11 +309,20 @@ runtime image. Its proofs are smoke artifacts, not release qualification.
    | `M365_PRIMARY_USER` / `M365_PRIMARY_REFRESH_CONFIG` | Microsoft primary address / its exported JSON |
    | `M365_RECOVERY_USER` / `M365_RECOVERY_REFRESH_CONFIG` | Microsoft recovery address / its exported JSON |
 
-6. **Run** *Actions → Live provider smoke → Run workflow* for
-   `gmail-to-microsoft365` and `microsoft365-to-gmail`. The job exchanges each
+   For the cPanel/Dovecot route, configure these nine secrets instead:
+
+   | Secret | Value |
+   |---|---|
+   | `CPANEL_SOURCE_ENDPOINT`, `CPANEL_SOURCE_USER`, `CPANEL_SOURCE_PASSWORD` | Source IMAP `host:port`, username, mailbox password |
+   | `CPANEL_DESTINATION_ENDPOINT`, `CPANEL_DESTINATION_USER`, `CPANEL_DESTINATION_PASSWORD` | Writable destination endpoint, username, mailbox password |
+   | `CPANEL_RECOVERY_ENDPOINT`, `CPANEL_RECOVERY_USER`, `CPANEL_RECOVERY_PASSWORD` | Separate writable recovery endpoint, username, mailbox password |
+
+6. **Run** *Actions → Live provider smoke → Run workflow* for the selected
+   route (`gmail-to-microsoft365`, `microsoft365-to-gmail`, or
+   `cpanel-dovecot-to-cpanel-dovecot`). Hosted-provider jobs exchange each
    refresh configuration for a short-lived access token with
-   `mailswiftsync oauth-access-token` (never printed), runs the harness, deletes
-   the staged credentials, and uploads credential-free smoke proofs. This
+   `mailswiftsync oauth-access-token` (never printed), run the harness, delete
+   staged credentials, and upload credential-free smoke proofs. This
    validates the product's one-shot token-exchange path and provider IMAP
    access, but the harness supplies static access-token files to the migration
    profile. Separately, the packaged integration lab uses a credential-free
@@ -315,6 +333,11 @@ runtime image. Its proofs are smoke artifacts, not release qualification.
    rotation, or long-lived transfers. Those remain open until a short-lived-token
    scenario is exercised during migration against real disposable provider
    mailboxes.
+
+   The cPanel/Dovecot route uses the supplied mailbox passwords and the same
+   bounded smoke scenarios. It does not test cPanel provisioning, WHM discovery,
+   quotas, or qualify the provider pair for release; those require the full
+   evidence plan below.
 
 Microsoft rotates refresh tokens on use and expires unused ones after about
 90 days; the job can only rewrite its temporary copy, so re-export and update

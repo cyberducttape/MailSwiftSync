@@ -19,10 +19,24 @@ CONTROLLER_CHAOS_SCRIPT = (ROOT / "scripts" / "controller-chaos-smoke.sh").read_
 PROCESS_SUPERVISION_SCRIPT = (ROOT / "scripts" / "process-supervision-chaos-smoke.sh").read_text(encoding="utf-8")
 SCALE_WORKFLOW = (ROOT / ".github" / "workflows" / "scale-qualification.yml").read_text(encoding="utf-8")
 INTEGRATION_WORKFLOW = (ROOT / ".github" / "workflows" / "integration.yml").read_text(encoding="utf-8")
+PROVIDER_WORKFLOW = (ROOT / ".github" / "workflows" / "provider-smoke.yml").read_text(encoding="utf-8")
+PROVIDER_GUIDE = (ROOT / "docs" / "provider-testing-guide.md").read_text(encoding="utf-8")
 OAUTH_IMAPSYNC_SMOKE = (ROOT / "scripts" / "oauth-imapsync-refresh-smoke.py").read_text(encoding="utf-8")
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
+    def test_cpanel_dovecot_smoke_route_uses_isolated_password_files(self):
+        self.assertIn("cpanel-dovecot-to-cpanel-dovecot", PROVIDER_WORKFLOW)
+        self.assertIn("CPANEL_SOURCE_PASSWORD", PROVIDER_WORKFLOW)
+        self.assertIn("CPANEL_DESTINATION_PASSWORD", PROVIDER_WORKFLOW)
+        self.assertIn("CPANEL_RECOVERY_PASSWORD", PROVIDER_WORKFLOW)
+        self.assertIn('printf \'%s\' "${!password_var}" > "$secrets/${role}-password"', PROVIDER_WORKFLOW)
+        self.assertIn("MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET=/secrets/source-password", PROVIDER_WORKFLOW)
+        self.assertIn("MAILSWIFTSYNC_PROVIDER_DEST_SECRET=/secrets/destination-password", PROVIDER_WORKFLOW)
+        self.assertIn("MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET=/secrets/recovery-password", PROVIDER_WORKFLOW)
+        self.assertIn("does not test cPanel provisioning", PROVIDER_GUIDE)
+        self.assertIn("not release qualification", PROVIDER_WORKFLOW.lower())
+
     def test_packaged_engine_oauth_callback_contract_is_exercised_without_provider_secrets(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("oauth-imapsync-refresh-smoke.py", dockerfile)
@@ -42,6 +56,34 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertNotIn("generate-provider-evidence.py", SCRIPT)
         self.assertIn("NOT PROVIDER QUALIFICATION", SCRIPT)
         self.assertIn("mkdir -m 0700 \"$proof_bundle\"", SCRIPT)
+
+    def test_smoke_harness_refuses_same_source_and_destination_identity(self):
+        self.assertIn("source and destination must be different mailbox identities", SCRIPT)
+        self.assertIn('"$source_identity" == "$destination_identity"', SCRIPT)
+        env = {
+            "PATH": str(Path(shutil.which("bash")).parent) + ":/usr/bin:/bin",
+            "MAILSWIFTSYNC_PROVIDER_BINARY": "/unused",
+            "MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT": "imap.example.test:993",
+            "MAILSWIFTSYNC_PROVIDER_SOURCE_USER": "LAB@example.test",
+            "MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET": "/unused/source",
+            "MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT": "IMAP.example.test:993",
+            "MAILSWIFTSYNC_PROVIDER_DEST_USER": "lab@example.test",
+            "MAILSWIFTSYNC_PROVIDER_DEST_SECRET": "/unused/destination",
+            "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT": "recovery.example.test:993",
+            "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER": "recovery@example.test",
+            "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET": "/unused/recovery",
+        }
+        result = subprocess.run(
+            ["bash", "-c", SCRIPT, "provider-smoke-test", "cpanel_dovecot"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source and destination must be different mailbox identities", result.stderr)
+        self.assertNotIn("ERROR: /unused is not executable", result.stderr)
 
     def test_scenario_claims_are_phase_specific_and_match_execution_order(self):
         self.assertIn('dry_scenario_ids="basic-small"', SCRIPT)
