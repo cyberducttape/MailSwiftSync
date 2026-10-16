@@ -760,6 +760,19 @@ fn message_id_header_parser_unfolds_continuations() {
 }
 
 #[test]
+fn malformed_message_id_cannot_spoof_synthetic_identity_namespace() {
+    assert_eq!(
+        parse_message_id_header("Message-ID: header-fingerprint:deadbeef\r\n"),
+        None
+    );
+    assert_eq!(parse_message_id_header("Message-ID: <>\r\n"), None);
+    assert_eq!(
+        parse_message_id_header("Message-ID: <valid@example.test>\r\n"),
+        Some("<valid@example.test>".into())
+    );
+}
+
+#[test]
 fn header_fingerprint_normalizes_selected_headers_and_is_distinct_from_message_id() {
     let first = super::fetch_parser::header_fingerprint(
         "From: sender@example.test\r\nSubject:  A   report\r\nDate: Tue, 01 Jan 2030 00:00:00 +0000\r\n",
