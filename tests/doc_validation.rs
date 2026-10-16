@@ -619,6 +619,19 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
 }
 
 #[test]
+fn ci_lints_github_actions_workflows_with_a_pinned_actionlint_binary() {
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
+    assert!(
+        ci.contains("Lint GitHub Actions workflows")
+            && ci.contains("version=1.7.12")
+            && ci.contains("actionlint_${version}_linux_amd64.tar.gz")
+            && ci.contains("ACTIONLINT_SHA256")
+            && ci.contains("\"$install_dir/actionlint\" .github/workflows/*.yml"),
+        "pull-request CI must syntax- and shell-lint every workflow with the checksum-pinned actionlint binary"
+    );
+}
+
+#[test]
 fn native_runtime_failures_retain_logs_for_every_platform() {
     let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
     let upload_step = ci
