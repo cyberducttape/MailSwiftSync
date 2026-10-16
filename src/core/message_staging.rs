@@ -105,6 +105,27 @@ fn secure_stage_file(file: &fs::File) -> std::io::Result<FileIdentity> {
     }
 }
 
+fn stage_file_options(create_new: bool) -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    if create_new {
+        options.create_new(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+}
+
 /// Apply the stage's owner-only contract to a sidecar left by an earlier
 /// process. SQLite creates new sidecars with the database file's mode.
 fn secure_existing_sidecar(path: &std::path::Path) -> std::io::Result<()> {
@@ -275,30 +296,28 @@ impl MessageMetadataStage {
             .ok_or_else(|| "verification stage path has no parent directory".to_owned())?;
         crate::credentials::ensure_private_directory(parent)
             .map_err(|error| format!("could not secure verification stage directory: {error}"))?;
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options
-                .mode(0o600)
-                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            options.custom_flags(
-                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-            );
-        }
         if let Ok(metadata) = fs::symlink_metadata(&path)
             && metadata.file_type().is_symlink()
         {
             return Err("verification stage path is a symbolic link".to_owned());
         }
-        let file = options
-            .open(&path)
-            .map_err(|error| format!("could not create durable verification stage: {error}"))?;
+        // `create_new` tells us atomically whether this invocation owns a new
+        // file. A stage that existed before this attempt must survive every
+        // schema/identity initialization error for recovery or inspection.
+        let (file, created_new) = match stage_file_options(true).open(&path) {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let file = stage_file_options(false).open(&path).map_err(|error| {
+                    format!("could not open durable verification stage: {error}")
+                })?;
+                (file, false)
+            }
+            Err(error) => {
+                return Err(format!(
+                    "could not create durable verification stage: {error}"
+                ));
+            }
+        };
         // The stage holds mail-derived metadata and optional body
         // fingerprints. `mode(0o600)` only applies at creation, and the
         // directory contract allows readable bits on an existing directory,
@@ -336,12 +355,11 @@ impl MessageMetadataStage {
                     .map_err(|error| format!("identity binding: {error}"))
             })
         {
-            let path = stage.path.take();
             if let Some(connection) = stage.connection.take() {
                 let _ = connection.close();
             }
-            if let Some(path) = path {
-                let _ = fs::remove_file(path);
+            if created_new && let Some(path) = stage.path.take() {
+                let _ = cleanup_stage_files(&path, false);
             }
             return Err(format!(
                 "could not initialize durable verification stage: {error}"
@@ -582,6 +600,16 @@ impl MessageMetadataStage {
         messages: &ExtractedMessages,
         fingerprints: &HashMap<MailboxMessageKey, String>,
     ) -> Result<(), String> {
+        self.insert_page_with_fingerprints(side, messages, fingerprints, None)
+    }
+
+    pub(crate) fn insert_page_with_fingerprints(
+        &mut self,
+        side: StagedMessageSide,
+        messages: &ExtractedMessages,
+        fingerprints: &HashMap<MailboxMessageKey, String>,
+        checkpoint: Option<(&str, FolderSnapshot, u64)>,
+    ) -> Result<(), String> {
         self.ensure_free_space()?;
         if fingerprints.keys().any(|key| !messages.contains_key(key)) {
             return Err("body fingerprint did not have a matching staged message".to_owned());
@@ -648,6 +676,29 @@ impl MessageMetadataStage {
                         fingerprint
                     ])
                     .map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some((mailbox, snapshot, last_uid)) = checkpoint {
+            let (uidvalidity, uidnext, exists, highest_modseq) =
+                snapshot.to_sql().map_err(|error| error.to_string())?;
+            let updated = tx
+                .execute(
+                    "UPDATE stage_cursors SET last_uid=?7,completed=0 WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uidnext=?4 AND exists_count=?5 AND highest_modseq IS ?6",
+                    params![
+                        side.as_i64(),
+                        mailbox,
+                        uidvalidity,
+                        uidnext,
+                        exists,
+                        highest_modseq,
+                        sqlite_i64(last_uid).map_err(|error| error.to_string())?
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+            if updated != 1 {
+                return Err(format!(
+                    "folder {mailbox}: verification cursor does not belong to the current snapshot"
+                ));
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
@@ -1585,6 +1636,84 @@ mod tests {
         assert_eq!(stage.count(side).unwrap(), 0);
         stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
         drop(stage);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn initialization_failure_preserves_a_preexisting_stage_for_recovery() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let side = StagedMessageSide::Source;
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+        stage
+            .begin_mailbox_scan(side, "INBOX", snapshot(42, 8, 1))
+            .unwrap();
+        stage.insert_messages(side, &page(42, [7])).unwrap();
+        drop(stage);
+
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_identity_rebind
+                 BEFORE INSERT ON stage_metadata
+                 BEGIN SELECT RAISE(FAIL, 'injected identity binding failure'); END;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = MessageMetadataStage::open_durable(path.clone(), "plan-b")
+            .err()
+            .expect("injected identity failure should reject the stage");
+        assert!(error.contains("identity binding"));
+        assert!(path.exists(), "failed reopen must preserve the old stage");
+
+        let connection = Connection::open(&path).unwrap();
+        let identity: String = connection
+            .query_row(
+                "SELECT value FROM stage_metadata WHERE key='identity'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM staged_messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(identity, "plan-a");
+        assert_eq!(rows, 1);
+        drop(connection);
+        let _ = cleanup_stage_files(&path, true);
+    }
+
+    #[test]
+    fn page_rows_and_progress_cursor_roll_back_together() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let mut stage = MessageMetadataStage::open_durable(path, "plan").unwrap();
+        let side = StagedMessageSide::Source;
+        let folder = snapshot(42, 8, 1);
+        stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
+        stage
+            .connection_ref()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_page_cursor
+                 BEFORE UPDATE ON stage_cursors
+                 BEGIN SELECT RAISE(ROLLBACK, 'injected cursor failure'); END;",
+            )
+            .unwrap();
+
+        let error = stage
+            .insert_page_with_fingerprints(
+                side,
+                &page(42, [7]),
+                &HashMap::new(),
+                Some(("INBOX", folder, 7)),
+            )
+            .unwrap_err();
+        assert!(error.contains("injected cursor failure"));
+        assert_eq!(stage.count_mailbox(side, "INBOX", 42).unwrap(), 0);
+        assert_eq!(stage.folder_cursors().unwrap()[0].last_uid, 0);
+        stage.finish().unwrap();
         let _ = std::fs::remove_dir_all(directory);
     }
 

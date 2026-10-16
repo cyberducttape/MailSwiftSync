@@ -165,12 +165,28 @@ fn complete_tls_handshake(
     host: &str,
     budget: Option<&MessageFetchBudget<'_>>,
 ) -> Result<(), String> {
+    let deadline = budget
+        .map(|budget| budget.deadline)
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(8))
+        .min(Instant::now() + Duration::from_secs(8));
+    complete_tls_handshake_until(stream, host, budget, deadline)
+}
+
+fn complete_tls_handshake_until(
+    stream: &mut StreamOwned<ClientConnection, TcpStream>,
+    host: &str,
+    budget: Option<&MessageFetchBudget<'_>>,
+    deadline: Instant,
+) -> Result<(), String> {
     loop {
+        if Instant::now() >= deadline {
+            return Err(format!("{host}: TLS handshake deadline exceeded"));
+        }
         if let Some(budget) = budget {
             budget.check()?;
-            refresh_socket_timeout(&stream.sock, Some(budget))
-                .map_err(|error| format!("{host}: could not set TLS handshake timeout: {error}"))?;
         }
+        refresh_handshake_socket_timeout(&stream.sock, deadline, budget.is_some())
+            .map_err(|error| format!("{host}: could not set TLS handshake timeout: {error}"))?;
         match stream.conn.complete_io(&mut stream.sock) {
             Ok(_) if !stream.conn.is_handshaking() => return Ok(()),
             Ok(_) => continue,
@@ -181,13 +197,35 @@ fn complete_tls_handshake(
                         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                     ) =>
             {
-                if let Some(budget) = budget {
-                    super::wait_for_io_retry(budget.deadline, Some(budget.cancel));
-                }
+                super::wait_for_io_retry(deadline, budget.map(|budget| budget.cancel));
             }
             Err(error) => return Err(format!("{host}: TLS handshake failed: {error}")),
         }
     }
+}
+
+fn refresh_handshake_socket_timeout(
+    stream: &TcpStream,
+    deadline: Instant,
+    budgeted: bool,
+) -> std::io::Result<()> {
+    let slice = if budgeted {
+        BUDGETED_IMAP_IO_SLICE
+    } else {
+        Duration::from_secs(8)
+    };
+    let timeout = deadline
+        .saturating_duration_since(Instant::now())
+        .min(slice);
+    if timeout.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "TLS handshake deadline exceeded",
+        ));
+    }
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    Ok(())
 }
 
 fn refresh_socket_timeout(
@@ -243,7 +281,12 @@ fn certificate_matches_pin(certificate: &[u8], expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::certificate_matches_pin;
+    use super::{certificate_matches_pin, complete_tls_handshake_until};
+    use rustls::pki_types::ServerName;
+    use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn certificate_pin_matches_exact_der_digest_case_insensitively() {
@@ -257,5 +300,32 @@ mod tests {
             b"certificate",
             "13d66dd08835c1ca3f128cceacd1f31ac94163096b20f445ae84285bc0832d72"
         ));
+    }
+
+    #[test]
+    fn unbudgeted_tls_handshake_obeys_an_absolute_deadline_during_partial_io() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let socket = TcpStream::connect(address).unwrap();
+        let config = ClientConfig::builder()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+        let name = ServerName::try_from("example.com").unwrap();
+        let connection = ClientConnection::new(Arc::new(config), name).unwrap();
+        let mut stream = StreamOwned::new(connection, socket);
+        let start = Instant::now();
+        let result = complete_tls_handshake_until(
+            &mut stream,
+            "example.com",
+            None,
+            start + Duration::from_millis(40),
+        );
+        assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_millis(150));
+        server.join().unwrap();
     }
 }
