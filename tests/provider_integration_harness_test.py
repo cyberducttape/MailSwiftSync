@@ -4,6 +4,7 @@
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -84,6 +85,62 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("source and destination must be different mailbox identities", result.stderr)
         self.assertNotIn("ERROR: /unused is not executable", result.stderr)
+
+    def test_profile_toml_escapes_usernames_and_engine_paths(self):
+        with tempfile.TemporaryDirectory(prefix="provider-smoke-") as temp:
+            root = Path(temp)
+            tool_dir = root / 'tools "with spaces"'
+            tool_dir.mkdir()
+            binary = tool_dir / "mailswiftsync"
+            binary.write_text(
+                '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "MailSwiftSync 0.1.0"; exit 0; fi\nif [ "$1" = "headless" ]; then cp "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" "$PROFILE_CAPTURE"; fi\nexit 1\n',
+                encoding="utf-8",
+            )
+            imapsync = tool_dir / "imapsync"
+            imapsync.write_text(
+                '#!/bin/sh\necho "imapsync 2.314"\n', encoding="utf-8"
+            )
+            binary.chmod(0o700)
+            imapsync.chmod(0o700)
+            secrets = {}
+            for name in ("source", "destination", "recovery"):
+                secret = root / f"{name}.secret"
+                secret.write_text("test-only", encoding="utf-8")
+                secret.chmod(0o600)
+                secrets[name] = secret
+
+            config_dir = root / "config"
+            env = {
+                "PATH": f"{tool_dir}:/usr/bin:/bin",
+                "XDG_CONFIG_HOME": str(config_dir),
+                "TMPDIR": str(root),
+                "PROFILE_CAPTURE": str(root / "profile-captured.toml"),
+                "MAILSWIFTSYNC_PROVIDER_BINARY": str(binary),
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT": "source.example.test:993",
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_USER": 'src "quoted"\\name@example.test',
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET": str(secrets["source"]),
+                "MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT": "destination.example.test:993",
+                "MAILSWIFTSYNC_PROVIDER_DEST_USER": 'dest "quoted"\\name@example.test',
+                "MAILSWIFTSYNC_PROVIDER_DEST_SECRET": str(secrets["destination"]),
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT": "recovery.example.test:993",
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER": "recovery@example.test",
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET": str(secrets["recovery"]),
+            }
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "provider-integration-test.sh"), "cpanel_dovecot"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)  # fake product stops at preflight
+            self.assertIn("Dry pilot preflight failed", result.stderr, result.stderr)
+            profile = root / "profile-captured.toml"
+            parsed = tomllib.loads(profile.read_text(encoding="utf-8"))
+            self.assertEqual(parsed["source_user"], env["MAILSWIFTSYNC_PROVIDER_SOURCE_USER"])
+            self.assertEqual(parsed["destination_user"], env["MAILSWIFTSYNC_PROVIDER_DEST_USER"])
+            self.assertEqual(parsed["imapsync_path"], str(imapsync))
 
     def test_scenario_claims_are_phase_specific_and_match_execution_order(self):
         self.assertIn('dry_scenario_ids="basic-small"', SCRIPT)

@@ -151,7 +151,7 @@ sha256_file() {
   fi
 }
 
-mailswiftsync_version_output="$($binary --version 2>&1)" || {
+mailswiftsync_version_output="$("$binary" --version 2>&1)" || {
   echo "ERROR: could not query the packaged MailSwiftSync binary version" >&2
   exit 1
 }
@@ -171,12 +171,23 @@ source_host="${source_endpoint%:*}"
 source_port="${source_endpoint##*:}"
 dest_host="${dest_endpoint%:*}"
 dest_port="${dest_endpoint##*:}"
+valid_imap_endpoint() {
+  local host="$1" port="$2"
+  [[ "$host" =~ ^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$ ]] || return 1
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
+  (( 10#$port > 0 && 10#$port <= 65535 ))
+}
+if ! valid_imap_endpoint "$source_host" "$source_port" \
+  || ! valid_imap_endpoint "$dest_host" "$dest_port"; then
+  echo "ERROR: IMAP endpoints must be host:port values with a valid DNS/IP host and port 1–65535" >&2
+  exit 1
+fi
 if ! command -v imapsync >/dev/null 2>&1; then
   echo "ERROR: imapsync is required for provider smoke testing; install the qualified engine or set up the packaged test image" >&2
   exit 1
 fi
 imapsync_binary="$(command -v imapsync)"
-imapsync_version_output="$($imapsync_binary --version 2>&1)" || {
+imapsync_version_output="$("$imapsync_binary" --version 2>&1)" || {
   echo "ERROR: could not query the imapsync binary version" >&2
   exit 1
 }
@@ -207,28 +218,49 @@ export XDG_CONFIG_HOME="$workspace/config"
 mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
 chmod 0700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/mailswiftsync"
 
+toml_quote() {
+  local LC_ALL=C value="$1"
+  if [[ "$value" =~ [[:cntrl:]] ]]; then
+    echo "ERROR: provider smoke profile values must not contain control characters" >&2
+    return 1
+  fi
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
+profile_name_toml="$(toml_quote "Provider test: $provider")"
+source_host_toml="$(toml_quote "$source_host")"
+source_user_toml="$(toml_quote "$MAILSWIFTSYNC_PROVIDER_SOURCE_USER")"
+source_auth_toml="$(toml_quote "$source_auth")"
+dest_host_toml="$(toml_quote "$dest_host")"
+dest_user_toml="$(toml_quote "$MAILSWIFTSYNC_PROVIDER_DEST_USER")"
+dest_auth_toml="$(toml_quote "$destination_auth")"
+imapsync_path_toml="$(toml_quote "$imapsync_binary")"
+doveadm_path_toml="$(toml_quote "$doveadm_binary")"
+
 cat > "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" <<PROFILE
-name = "Provider test: $provider"
-source_host = "$source_host"
+name = $profile_name_toml
+source_host = $source_host_toml
 source_port = "$source_port"
-source_user = "${MAILSWIFTSYNC_PROVIDER_SOURCE_USER}"
+source_user = $source_user_toml
 source_tls = "implicit"
-source_auth = "$source_auth"
+source_auth = $source_auth_toml
 source_credential_id = ""
 source_ca_bundle = ""
 source_certificate_pin_sha256 = ""
 allow_insecure_source_transport = false
-destination_host = "$dest_host"
+destination_host = $dest_host_toml
 destination_port = "$dest_port"
-destination_user = "${MAILSWIFTSYNC_PROVIDER_DEST_USER}"
+destination_user = $dest_user_toml
 destination_tls = "implicit"
-destination_auth = "$destination_auth"
+destination_auth = $dest_auth_toml
 destination_credential_id = ""
 destination_ca_bundle = ""
 destination_certificate_pin_sha256 = ""
-imapsync_path = "$imapsync_binary"
+imapsync_path = $imapsync_path_toml
 engine = "ImapSync"
-doveadm_path = "$doveadm_binary"
+doveadm_path = $doveadm_path_toml
 dovecot_config = ""
 batch_concurrency = 1
 batch_retry_count = 0
