@@ -51,8 +51,8 @@ establishes cutover readiness; the cutover workflow and its separate approvals
 remain authoritative. Consumers must check the format and version before
 using this output.
 
-`mailswiftsync risk <source-messages> <source-folders> <source-bytes>` emits the versioned
-`mailswiftsync-pre-migration-risk` format, version `4`. The inventory inputs
+`mailswiftsync risk <source-messages> <source-folders> <source-bytes> [--state <state.db>]` emits the versioned
+`mailswiftsync-pre-migration-risk` format, version `5`. The inventory inputs
 describe the source endpoint only. The report exposes that scope and an
 equal-size source-plus-destination body-hash byte projection; destination size
 and actual fetched RFC822 bytes remain unknown, so this projection is advisory
@@ -72,9 +72,18 @@ synthetic mismatch-heavy through missing-ID profiles. The directory total
 includes the sampled rollback-journal peak. This is a workload-specific
 measured range, not a capacity bound; extra destination messages or different
 mailbox shapes can increase actual storage. `verification_stage_capacity_status`
-therefore remains `unknown_not_measured`: this command receives no destination
-inventory and does not inspect the worker filesystem. Consumers must handle
-the new fields and enum before accepting this report.
+therefore remains `unknown_not_measured` unless `--state` is supplied. With
+`--state`, the command read-only checks currently free bytes on the filesystem
+that contains the durable verification-stage directory; it neither opens nor
+creates the ledger or stage directory. Version 5 adds
+`verification_stage_filesystem_available_bytes` and permits
+`verification_stage_capacity_status` values `below_observed_projection_with_reserve`,
+`within_observed_projection_not_a_guarantee`, and `projection_unavailable`.
+The comparison uses the synthetic high projection plus the runtime free-space
+reserve; it does not reserve space, include destination-only messages, or
+establish a safe upper bound. Available space can change immediately after the
+observation. Consumers must handle the new fields and enum before accepting
+this report.
 
 The JSON contains project identity, durable lifecycle state, mailbox state
 counts, attention reasons, and bounded project summaries. Each fixture lists

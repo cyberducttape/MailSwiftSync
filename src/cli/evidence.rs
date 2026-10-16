@@ -960,11 +960,25 @@ pub(super) fn risk_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()
     let (Some(messages), Some(folders), Some(bytes)) =
         (arguments.next(), arguments.next(), arguments.next())
     else {
-        eprintln!("Usage: mailswiftsync risk <source-messages> <source-folders> <source-bytes>");
+        eprintln!(
+            "Usage: mailswiftsync risk <source-messages> <source-folders> <source-bytes> [--state <state.db>]"
+        );
         std::process::exit(2);
     };
+    let state_path = match (arguments.next(), arguments.next()) {
+        (None, None) => None,
+        (Some(option), Some(path)) if option == "--state" => Some(std::path::PathBuf::from(path)),
+        _ => {
+            eprintln!(
+                "Usage: mailswiftsync risk <source-messages> <source-folders> <source-bytes> [--state <state.db>]"
+            );
+            std::process::exit(2);
+        }
+    };
     if arguments.next().is_some() {
-        eprintln!("Usage: mailswiftsync risk <source-messages> <source-folders> <source-bytes>");
+        eprintln!(
+            "Usage: mailswiftsync risk <source-messages> <source-folders> <source-bytes> [--state <state.db>]"
+        );
         std::process::exit(2);
     }
     let parsed = messages
@@ -979,8 +993,33 @@ pub(super) fn risk_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()
         );
         std::process::exit(2);
     };
-    let report =
+    let mut report =
         crate::core::pre_migration_report::PreMigrationRisk::assess(messages, folders, bytes, "");
+    if let Some(state_path) = state_path {
+        let state_directory = state_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let stage_directory = state_directory.join("verification-stages");
+        let filesystem = match existing_directory_for_capacity_probe(&stage_directory) {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("Risk assessment could not inspect the stage filesystem: {error}");
+                std::process::exit(1);
+            }
+        };
+        let available_bytes = match fs2::available_space(&filesystem) {
+            Ok(available) => available,
+            Err(error) => {
+                eprintln!(
+                    "Risk assessment could not determine free space for {}: {error}",
+                    filesystem.display()
+                );
+                std::process::exit(1);
+            }
+        };
+        report = report.with_stage_filesystem_capacity(available_bytes);
+    }
     match serde_json::to_string_pretty(&report) {
         Ok(report) => {
             out!("{report}");
@@ -989,6 +1028,29 @@ pub(super) fn risk_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()
         Err(error) => {
             eprintln!("Risk report serialization failed: {error}");
             std::process::exit(1);
+        }
+    }
+}
+
+fn existing_directory_for_capacity_probe(
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let mut candidate = path;
+    loop {
+        match std::fs::metadata(candidate) {
+            Ok(metadata) if metadata.is_dir() => return Ok(candidate.to_path_buf()),
+            Ok(_) => return Err(format!("{} is not a directory", candidate.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                candidate = candidate.parent().ok_or_else(|| {
+                    "could not find an existing parent directory for the ledger path".to_owned()
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "could not inspect {}: {error}",
+                    candidate.display()
+                ));
+            }
         }
     }
 }
