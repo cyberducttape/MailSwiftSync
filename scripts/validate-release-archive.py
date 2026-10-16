@@ -119,17 +119,31 @@ def validate_zip(path: str) -> None:
         validate_members((member.filename, member.file_size) for member in members)
 
 
-def bounded_snapshot(source: str, destination: str) -> None:
+def bounded_snapshot(
+    source: str, destination: str, max_bytes: int = MAX_ARCHIVE_BYTES
+) -> None:
+    if max_bytes < 0:
+        raise ValueError("archive snapshot byte limit must not be negative")
     copied = 0
-    with open(source, "rb") as input_file, open(destination, "xb") as output_file:
-        while True:
-            chunk = input_file.read(min(1024 * 1024, MAX_ARCHIVE_BYTES + 1 - copied))
-            if not chunk:
-                return
-            copied += len(chunk)
-            if copied > MAX_ARCHIVE_BYTES:
-                raise ValueError(f"compressed archive exceeds {MAX_ARCHIVE_BYTES}-byte limit")
-            output_file.write(chunk)
+    created = False
+    try:
+        with open(source, "rb") as input_file, open(destination, "xb") as output_file:
+            created = True
+            while True:
+                chunk = input_file.read(min(1024 * 1024, max_bytes + 1 - copied))
+                if not chunk:
+                    return
+                copied += len(chunk)
+                if copied > max_bytes:
+                    raise ValueError(f"compressed archive exceeds {max_bytes}-byte limit")
+                output_file.write(chunk)
+    except BaseException:
+        if created:
+            try:
+                os.unlink(destination)
+            except FileNotFoundError:
+                pass
+        raise
 
 
 def main() -> int:
