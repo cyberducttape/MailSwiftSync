@@ -909,6 +909,8 @@ fn uid_fetch_enumeration_parser_validates_sequence_pages() {
         "* 1 FETCH (UID 10)\r\n* 1 FETCH (UID 11)\r\nv002 OK FETCH completed\r\n",
         "* 1 FETCH (UID 10)\r\nv002 OK FETCH completed\r\n",
         "* invalid FETCH (UID 10)\r\nv002 OK FETCH completed\r\n",
+        "* 1 FETCH (UID 10)\r\n* FETCH (UID 11)\r\nv002 OK FETCH completed\r\n",
+        "* 1 FETCH (UID 10)\r\n* 2\r\nv002 OK FETCH completed\r\n",
     ] {
         assert!(
             super::fetch_pages::parse_uid_fetch_response(response, "imap.example", "INBOX", 1, 2)
