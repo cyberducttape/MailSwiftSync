@@ -49,7 +49,10 @@ if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
   mkdir -p -- "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
 fi
 
-required_tools=(dovecot doveadm doveconf imapsync mailswiftsync openssl ps timeout)
+required_tools=(dovecot doveadm doveconf mailswiftsync openssl ps timeout)
+if [[ "$test_engine" == "ImapSync" ]]; then
+  required_tools+=(imapsync)
+fi
 if (( scale_messages > 0 )); then
   required_tools+=(python3)
 fi
@@ -91,24 +94,27 @@ if [[ -z "$dovecot_version" ]]; then
   exit 1
 fi
 dovecot_semver="${dovecot_version%% *}"
-imapsync_version_output="$(imapsync --version 2>&1 || true)"
-imapsync_version="$(sed -n -e 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' \
-  -e 's/^[[:space:]]*v\?\([0-9][0-9.]*\)[[:space:]]*$/\1/p' \
-  <<<"$imapsync_version_output" | head -1)"
-if [[ "$imapsync_version" != "2.314" ]]; then
-  if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
-    {
-      printf 'engine=%s\n' "$test_engine"
-      printf 'dovecot_version=%s\n' "$dovecot_version"
-      printf 'imapsync_parsed_version=%s\n' "${imapsync_version:-unknown}"
-      printf 'imapsync_version_output=%s\n' "$imapsync_version_output"
-    } > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt"
-    chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt" 2>/dev/null || true
+imapsync_version="not-required"
+if [[ "$test_engine" == "ImapSync" ]]; then
+  imapsync_version_output="$(imapsync --version 2>&1 || true)"
+  imapsync_version="$(sed -n -e 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' \
+    -e 's/^[[:space:]]*v\?\([0-9][0-9.]*\)[[:space:]]*$/\1/p' \
+    <<<"$imapsync_version_output" | head -1)"
+  if [[ "$imapsync_version" != "2.314" ]]; then
+    if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+      {
+        printf 'engine=%s\n' "$test_engine"
+        printf 'dovecot_version=%s\n' "$dovecot_version"
+        printf 'imapsync_parsed_version=%s\n' "${imapsync_version:-unknown}"
+        printf 'imapsync_version_output=%s\n' "$imapsync_version_output"
+      } > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt"
+      chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt" 2>/dev/null || true
+    fi
+    echo "FAIL: imapsync product integration requires packaged imapsync 2.314; found ${imapsync_version:-unknown}" >&2
+    exit 1
   fi
-  echo "FAIL: product integration requires packaged imapsync 2.314; found ${imapsync_version:-unknown}" >&2
-  exit 1
 fi
-echo "Using migration engine ${test_engine}, Dovecot ${dovecot_version}, and imapsync ${imapsync_version}"
+echo "Using migration engine ${test_engine}, Dovecot ${dovecot_version}, imapsync ${imapsync_version}"
 if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
   {
     printf 'engine=%s\n' "$test_engine"
@@ -598,7 +604,10 @@ if [[ "$sparse_owner" != "$mail_uid" ]] || (( (8#$sparse_mode & 0200) == 0 )); t
 fi
 
 binary="$(command -v mailswiftsync)"
-imapsync_path="$(command -v imapsync)"
+imapsync_path=""
+if [[ "$test_engine" == "ImapSync" ]]; then
+  imapsync_path="$(command -v imapsync)"
+fi
 doveadm_path="$(command -v doveadm)"
 dovecot_config=""
 if [[ "$test_engine" == "Dovecot" ]]; then

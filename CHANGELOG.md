@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Decouple the native Dovecot integration path from the pinned imapsync
+  prerequisite, allowing that path to run and be qualified independently; the
+  native Dovecot product flow passed in the isolated Dovecot 2.3.19.1 lab.
 - Prefix generated Dovecot 2.4 runtime configurations with the required
   `dovecot_config_version` setting; qualify the native path against Dovecot
   2.4.2 and imapsync 2.314 in the disposable IMAP lab.
