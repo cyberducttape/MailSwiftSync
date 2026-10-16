@@ -184,4 +184,5 @@ jobs:
         with:
           name: live-provider-smoke-${{ github.event.inputs.direction }}
           path: provider-smoke-evidence
+          retention-days: 14
           if-no-files-found: warn
