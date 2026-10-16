@@ -26,6 +26,34 @@ fn doc_files_exist() {
 }
 
 #[test]
+fn adoption_qualification_engine_digests_are_well_formed_sha256() {
+    let plan = fs::read_to_string("docs/adoption-qualification-plan.md")
+        .expect("adoption qualification plan should exist");
+    let engine_rows = plan
+        .lines()
+        .filter(|line| {
+            line.contains("| Packaged engine |") || line.contains("| Packaged imapsync |")
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        !engine_rows.is_empty(),
+        "qualification plan should record packaged engine identity"
+    );
+    for line in engine_rows {
+        let digest = line
+            .split_once("SHA-256 `")
+            .map(|(_, suffix)| suffix.split('`').next().unwrap_or_default())
+            .expect("packaged engine row should include its SHA-256 digest");
+        assert_eq!(digest.len(), 64, "invalid SHA-256 length in {line}");
+        assert!(
+            digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "non-hex SHA-256 digest in {line}"
+        );
+    }
+}
+
+#[test]
 fn systemd_service_example_uses_a_restricted_worker_sandbox() {
     let service = fs::read_to_string("docs/distribution/mailswiftsync-supervise.service")
         .expect("canonical systemd service example should exist");
