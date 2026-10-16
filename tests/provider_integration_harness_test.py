@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guard the distinction between provider smoke runs and release evidence."""
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -30,33 +31,38 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         if not shutil.which("setsid"):
             self.skipTest("setsid is required to exercise detached process-group cleanup")
         start = SCRIPT.index("terminate_recovery_group() {")
-        end = SCRIPT.index("\n}\ncleanup()", start) + 2
-        terminate_function = SCRIPT[start:end]
-        command = "\n".join(
-            (
-                terminate_function,
-                "setsid sleep 60 &",
-                "recovery_pid=$!",
-                "process_group=$recovery_pid",
-                "for _ in {1..50}; do",
-                '  kill -0 -- "-$process_group" 2>/dev/null && break',
-                "  sleep 0.02",
-                "done",
-                'kill -0 -- "-$process_group" 2>/dev/null || exit 41',
-                "terminate_recovery_group",
-                '[[ -z "$recovery_pid" ]] || exit 42',
-                'if kill -0 -- "-$process_group" 2>/dev/null; then exit 43; fi',
-                "exit 0",
+        end = SCRIPT.index("\ntrap cleanup EXIT", start)
+        cleanup_functions = SCRIPT[start:end]
+        self.assertIn("trap 'exit 130' INT", SCRIPT)
+        self.assertIn("trap 'exit 143' TERM", SCRIPT)
+        with tempfile.TemporaryDirectory(prefix="provider-process-cleanup-") as temp:
+            workspace = Path(temp) / "workspace"
+            workspace.mkdir()
+            pid_file = Path(temp) / "recovery-pid"
+            command = "\n".join(
+                (
+                    cleanup_functions,
+                    'workspace="$1"',
+                    'state=""',
+                    "trap cleanup EXIT",
+                    "setsid sleep 60 &",
+                    "recovery_pid=$!",
+                    'printf "%s" "$recovery_pid" > "$2"',
+                    "exit 0",
+                )
             )
-        )
-        result = subprocess.run(
-            ["bash", "-c", command],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=5,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(
+                ["bash", "-c", command, "provider-cleanup-test", str(workspace), str(pid_file)],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(workspace.exists(), "cleanup must remove its private workspace")
+            process_group = int(pid_file.read_text(encoding="ascii"))
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(process_group, 0)
 
     def test_usage_lists_the_implemented_cpanel_smoke_route(self):
         result = subprocess.run(
