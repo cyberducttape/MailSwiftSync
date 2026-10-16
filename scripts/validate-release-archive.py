@@ -119,12 +119,36 @@ def validate_zip(path: str) -> None:
         validate_members((member.filename, member.file_size) for member in members)
 
 
+def bounded_snapshot(source: str, destination: str) -> None:
+    copied = 0
+    with open(source, "rb") as input_file, open(destination, "xb") as output_file:
+        while True:
+            chunk = input_file.read(min(1024 * 1024, MAX_ARCHIVE_BYTES + 1 - copied))
+            if not chunk:
+                return
+            copied += len(chunk)
+            if copied > MAX_ARCHIVE_BYTES:
+                raise ValueError(f"compressed archive exceeds {MAX_ARCHIVE_BYTES}-byte limit")
+            output_file.write(chunk)
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: validate-release-archive.py ARCHIVE", file=sys.stderr)
+    if len(sys.argv) == 4 and sys.argv[1] == "--snapshot":
+        source, snapshot = sys.argv[2:]
+        path = snapshot
+        create_snapshot = True
+    elif len(sys.argv) == 2:
+        path = sys.argv[1]
+        create_snapshot = False
+    else:
+        print(
+            "usage: validate-release-archive.py ARCHIVE | --snapshot SOURCE DESTINATION",
+            file=sys.stderr,
+        )
         return 2
-    path = sys.argv[1]
     try:
+        if create_snapshot:
+            bounded_snapshot(source, snapshot)
         archive_size = os.path.getsize(path)
         if archive_size > MAX_ARCHIVE_BYTES:
             raise ValueError(f"compressed archive exceeds {MAX_ARCHIVE_BYTES}-byte limit")
@@ -132,7 +156,7 @@ def main() -> int:
             validate_zip(path)
         else:
             validate_tar(path)
-    except (OSError, tarfile.TarError, zipfile.BadZipFile, ValueError) as error:
+    except (EOFError, OSError, tarfile.TarError, zipfile.BadZipFile, ValueError) as error:
         print(f"FAIL: release archive metadata rejected: {error}", file=sys.stderr)
         return 1
     print("PASS: release archive metadata is safe to extract")
