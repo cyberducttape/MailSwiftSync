@@ -134,7 +134,17 @@ pub(super) fn parse_uid_fetch_response(
         let Some(sequence_token) = tokens.next() else {
             continue;
         };
+        if sequence_token.eq_ignore_ascii_case("FETCH") {
+            return Err(format!(
+                "{host}: FETCH {mailbox} returned a FETCH record without a sequence number"
+            ));
+        }
         let Some(response_type) = tokens.next() else {
+            if sequence_token.parse::<u64>().is_ok() {
+                return Err(format!(
+                    "{host}: FETCH {mailbox} returned a malformed untagged response"
+                ));
+            }
             continue;
         };
         if !response_type.eq_ignore_ascii_case("FETCH") {
