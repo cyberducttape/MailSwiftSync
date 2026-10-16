@@ -773,6 +773,22 @@ fn malformed_message_id_cannot_spoof_synthetic_identity_namespace() {
 }
 
 #[test]
+fn duplicate_message_id_headers_are_not_used_as_exact_identity() {
+    assert_eq!(
+        parse_message_id_header(
+            "Message-ID: <first@example.test>\r\nMessage-ID: <second@example.test>\r\n"
+        ),
+        None
+    );
+    assert_eq!(
+        parse_message_id_header(
+            "Message-ID: <same@example.test>\r\nMessage-ID: <same@example.test>\r\n"
+        ),
+        None
+    );
+}
+
+#[test]
 fn header_fingerprint_normalizes_selected_headers_and_is_distinct_from_message_id() {
     let first = super::fetch_parser::header_fingerprint(
         "From: sender@example.test\r\nSubject:  A   report\r\nDate: Tue, 01 Jan 2030 00:00:00 +0000\r\n",

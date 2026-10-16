@@ -268,6 +268,12 @@ pub(super) fn parse_message_id_header(body: &str) -> Option<String> {
             continue;
         };
         if name.trim().eq_ignore_ascii_case("message-id") {
+            // RFC 5322 defines Message-ID as a singleton field. Choosing one
+            // of multiple values would create a parser-dependent identity
+            // and could promote an ambiguous message into an exact match.
+            if message_id.is_some() {
+                return None;
+            }
             message_id = Some(value.trim().to_owned());
         }
     }
