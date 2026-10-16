@@ -123,11 +123,13 @@ jobs:
             printf 'dest_endpoint=%s\n' "$dest_endpoint"
           } > "$secrets/pair.env"
           mkdir -p provider-smoke-evidence
-          sudo chown -R 0:0 "$secrets" provider-smoke-evidence
+          # The packaged runtime owns UID 10001; keep OAuth/password files and
+          # exported evidence inaccessible to container root and unrelated users.
+          sudo chown -R 10001:10001 "$secrets" provider-smoke-evidence
       - name: Run provider smoke harness in the packaged image
         run: |
           set -euo pipefail
-          docker run --rm --user 0:0 \
+          docker run --rm --user 10001:10001 \
             --volume "$PWD:/work:ro" \
             --volume "$RUNNER_TEMP/provider-secrets:/secrets" \
             --volume "$PWD/provider-smoke-evidence:/evidence" \
