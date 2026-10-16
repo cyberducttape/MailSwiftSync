@@ -16,7 +16,9 @@ fi
 output_dir="${1:-dist}"
 binary="${MAILSWIFTSYNC_PACKAGE_BINARY:-target/release/mailswiftsync}"
 if [[ ! -x "$binary" ]]; then
-  cargo build --locked --release
+  source_revision="${MAILSWIFTSYNC_GIT_SHA:-$(git rev-parse --verify HEAD)}"
+  MAILSWIFTSYNC_GIT_SHA="$source_revision" \
+    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --locked --release
 fi
 [[ -x "$binary" ]] || { echo "release binary is not executable: $binary" >&2; exit 1; }
 
@@ -43,10 +45,17 @@ install -d -m 0755 "$stage/usr/bin" "$stage/usr/share/doc/mailswiftsync" \
 install -m 0755 "$binary" "$stage/usr/bin/mailswiftsync"
 install -m 0644 README.md LICENSE PRODUCTION_STATUS.md \
   "$stage/usr/share/doc/mailswiftsync/"
+install -d -m 0755 "$stage/usr/share/doc/mailswiftsync/docs/distribution"
+install -m 0644 docs/container.md \
+  "$stage/usr/share/doc/mailswiftsync/docs/container.md"
 install -m 0644 docs/distribution/INSTALL.md \
-  "$stage/usr/share/doc/mailswiftsync/INSTALL.md"
+  "$stage/usr/share/doc/mailswiftsync/docs/distribution/INSTALL.md"
+install -m 0644 docs/distribution/SERVICE.md \
+  "$stage/usr/share/doc/mailswiftsync/docs/distribution/SERVICE.md"
+install -m 0644 docs/distribution/CREDENTIAL-LIFECYCLE.md \
+  "$stage/usr/share/doc/mailswiftsync/docs/distribution/CREDENTIAL-LIFECYCLE.md"
 install -m 0644 docs/distribution/mailswiftsync-supervise.service \
-  "$stage/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service"
+  "$stage/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service"
 install -m 0644 assets/fonts/OFL.txt \
   "$stage/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt"
 install -m 0644 docs/distribution/mailswiftsync.1 \

@@ -51,6 +51,19 @@ def verify_portable_packaging_script() -> None:
         )
 
 
+def verify_source_builds_embed_revision() -> None:
+    for name in ("package.sh", "package-deb.sh", "package-rpm.sh"):
+        script = Path("scripts", name).read_text(encoding="utf-8")
+        if 'MAILSWIFTSYNC_GIT_SHA:-$(git rev-parse --verify HEAD)' not in script:
+            raise AssertionError(
+                f"{name} must default source-built package identity to the checked-out commit"
+            )
+        if 'MAILSWIFTSYNC_GIT_SHA="$source_revision"' not in script:
+            raise AssertionError(
+                f"{name} must pass the resolved revision into the release binary build"
+            )
+
+
 def make_bundle(root: Path) -> None:
     for document in DOCUMENTS:
         path = root / document
@@ -98,6 +111,7 @@ with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temp
     workspace = Path(temporary)
     verify_workflow_packaging_commands()
     verify_portable_packaging_script()
+    verify_source_builds_embed_revision()
 
     links = workspace / "links"
     (links / "docs").mkdir(parents=True)

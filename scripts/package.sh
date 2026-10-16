@@ -7,7 +7,9 @@ script_dir="$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)"
 project_root="$(CDPATH="" cd -- "$script_dir/.." && pwd)"
 cd "$project_root"
 
-CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --locked --release
+source_revision="${MAILSWIFTSYNC_GIT_SHA:-$(git rev-parse --verify HEAD)}"
+MAILSWIFTSYNC_GIT_SHA="$source_revision" \
+  CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --locked --release
 target_name="mailswiftsync-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 package_dir="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-package.XXXXXX")"
 cleanup() {
