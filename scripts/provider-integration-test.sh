@@ -407,10 +407,22 @@ replacements = {
     "destination_port": endpoint.rsplit(":", 1)[1],
     "destination_user": user,
 }
+replaced = {key: 0 for key in replacements}
 for index, line in enumerate(lines):
-    key = line.split(" = ", 1)[0]
+    key = line.partition("=")[0].strip()
     if key in replacements:
+        replaced[key] += 1
         lines[index] = f"{key} = {json.dumps(replacements[key])}"
+if any(count != 1 for count in replaced.values()):
+    missing_or_duplicate = ", ".join(
+        f"{key} ({count} occurrences)"
+        for key, count in replaced.items()
+        if count != 1
+    )
+    raise SystemExit(
+        "recovery profile must contain each destination identity field exactly once: "
+        + missing_or_duplicate
+    )
 Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 export XDG_CONFIG_HOME="$recovery_xdg_config"

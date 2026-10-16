@@ -26,6 +26,69 @@ OAUTH_IMAPSYNC_SMOKE = (ROOT / "scripts" / "oauth-imapsync-refresh-smoke.py").re
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
+    def test_recovery_profile_rewrite_requires_each_destination_field_once(self):
+        command = (
+            'python3 - "$recovery_xdg_config/mailswiftsync/profile.toml" '
+            '"$recovery_dest_endpoint" "$recovery_dest_user" <<\'PY\'\n'
+        )
+        start = SCRIPT.index(command) + len(command)
+        end = SCRIPT.index('\nPY\nexport XDG_CONFIG_HOME="$recovery_xdg_config"', start)
+        rewrite = SCRIPT[start:end]
+        complete_profile = (
+            'source_host = "source.example.test"\n'
+            'source_user = "source@example.test"\n'
+            'destination_host = "destination.example.test"\n'
+            'destination_port = "993"\n'
+            'destination_user = "destination@example.test"\n'
+        )
+        with tempfile.TemporaryDirectory(prefix="provider-recovery-profile-") as temp:
+            profile = Path(temp) / "profile.toml"
+            profile.write_text(complete_profile, encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "python3",
+                    "-c",
+                    rewrite,
+                    str(profile),
+                    "recovery.example.test:2143",
+                    "recovery@example.test",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            parsed = tomllib.loads(profile.read_text(encoding="utf-8"))
+            self.assertEqual(parsed["source_host"], "source.example.test")
+            self.assertEqual(parsed["source_user"], "source@example.test")
+            self.assertEqual(parsed["destination_host"], "recovery.example.test")
+            self.assertEqual(parsed["destination_port"], "2143")
+            self.assertEqual(parsed["destination_user"], "recovery@example.test")
+
+            for invalid_profile in (
+                complete_profile.replace('destination_user = "destination@example.test"\n', ""),
+                complete_profile + 'destination_user = "duplicate@example.test"\n',
+            ):
+                with self.subTest(invalid_profile=invalid_profile):
+                    profile.write_text(invalid_profile, encoding="utf-8")
+                    original = profile.read_bytes()
+                    failed = subprocess.run(
+                        [
+                            "python3",
+                            "-c",
+                            rewrite,
+                            str(profile),
+                            "recovery.example.test:2143",
+                            "recovery@example.test",
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(failed.returncode, 0)
+                    self.assertIn("exactly once", failed.stderr)
+                    self.assertEqual(profile.read_bytes(), original)
+
     def test_cpanel_dovecot_smoke_route_uses_isolated_password_files(self):
         self.assertIn("cpanel-dovecot-to-cpanel-dovecot", PROVIDER_WORKFLOW)
         self.assertIn("CPANEL_SOURCE_PASSWORD", PROVIDER_WORKFLOW)
