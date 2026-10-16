@@ -64,7 +64,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         env = {
             "PATH": str(Path(shutil.which("bash")).parent) + ":/usr/bin:/bin",
             "MAILSWIFTSYNC_PROVIDER_BINARY": "/unused",
-            "MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT": "imap.example.test:993",
+            "MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT": "imap.example.test:0993",
             "MAILSWIFTSYNC_PROVIDER_SOURCE_USER": "LAB@example.test",
             "MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET": "/unused/source",
             "MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT": "destination.example.test:993",
@@ -75,13 +75,15 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
             "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET": "/unused/recovery",
         }
         collision_cases = (
-            ("destination", "IMAP.example.test:993", "lab@example.test", "source and destination must be different"),
-            ("recovery", "imap.example.test:993", "LAB@example.test", "recovery destination must not be the source"),
-            ("recovery", "destination.example.test:993", "destination@example.test", "recovery destination must not be the normal live destination"),
+            ("destination", "IMAP.EXAMPLE.TEST.:993", "lab@example.test", "source and destination must be different", "imap.example.test:0993"),
+            ("recovery", "IMAP.EXAMPLE.TEST.:993", "LAB@example.test", "recovery destination must not be the source", "imap.example.test:0993"),
+            ("recovery", "DESTINATION.EXAMPLE.TEST.:0993", "DESTINATION@example.test", "recovery destination must not be the normal live destination", "imap.example.test:0993"),
+            ("destination", "[::1]:0993", "lab@example.test", "source and destination must be different", "[0:0:0:0:0:0:0:1]:993"),
         )
-        for role, endpoint, user, expected_error in collision_cases:
+        for role, endpoint, user, expected_error, source_endpoint in collision_cases:
             with self.subTest(role=role, endpoint=endpoint, user=user):
                 case_env = env.copy()
+                case_env["MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT"] = source_endpoint
                 prefix = "MAILSWIFTSYNC_PROVIDER_DEST" if role == "destination" else "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST"
                 case_env[f"{prefix}_ENDPOINT"] = endpoint
                 case_env[f"{prefix}_USER"] = user

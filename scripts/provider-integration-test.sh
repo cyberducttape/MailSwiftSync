@@ -113,13 +113,59 @@ for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT 
     exit 1
   fi
 done
-source_identity="$(printf '%s\n%s' "$MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT" "$MAILSWIFTSYNC_PROVIDER_SOURCE_USER" | tr '[:upper:]' '[:lower:]')"
-destination_identity="$(printf '%s\n%s' "$MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT" "$MAILSWIFTSYNC_PROVIDER_DEST_USER" | tr '[:upper:]' '[:lower:]')"
+
+# Validate all endpoints and compare canonical identities before launching any
+# executable. This catches equivalent host casing, DNS trailing dots, decimal
+# port variants, and compressed/expanded IPv6 spellings.
+source_endpoint="$MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT"
+dest_endpoint="$MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT"
+source_host="${source_endpoint%:*}"
+source_port="${source_endpoint##*:}"
+dest_host="${dest_endpoint%:*}"
+dest_port="${dest_endpoint##*:}"
+recovery_host="${recovery_dest_endpoint%:*}"
+recovery_port="${recovery_dest_endpoint##*:}"
+valid_imap_endpoint() {
+  local host="$1" port="$2"
+  [[ "$host" =~ ^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$ ]] || return 1
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
+  (( 10#$port > 0 && 10#$port <= 65535 ))
+}
+for endpoint_fields in \
+  "$source_host $source_port" \
+  "$dest_host $dest_port" \
+  "$recovery_host $recovery_port"; do
+  read -r endpoint_host endpoint_port <<<"$endpoint_fields"
+  if ! valid_imap_endpoint "$endpoint_host" "$endpoint_port"; then
+    echo "ERROR: IMAP endpoints must be host:port values with a valid DNS/IP host and port 1–65535" >&2
+    exit 1
+  fi
+done
+normalize_mailbox_identity() {
+  python3 - "$1" "$2" <<'PY'
+import ipaddress
+import sys
+
+endpoint, user = sys.argv[1:]
+host, port = endpoint.rsplit(":", 1)
+if host.startswith("["):
+    try:
+        host = f"[{ipaddress.ip_address(host[1:-1]).compressed}]"
+    except ValueError:
+        print("ERROR: invalid IPv6 literal IMAP endpoint", file=sys.stderr)
+        raise SystemExit(1)
+else:
+    host = host.rstrip(".").casefold()
+print(f"{host}:{int(port)}\n{user.casefold()}")
+PY
+}
+source_identity="$(normalize_mailbox_identity "$source_endpoint" "$MAILSWIFTSYNC_PROVIDER_SOURCE_USER")"
+destination_identity="$(normalize_mailbox_identity "$dest_endpoint" "$MAILSWIFTSYNC_PROVIDER_DEST_USER")"
 if [[ "$source_identity" == "$destination_identity" ]]; then
   echo "ERROR: source and destination must be different mailbox identities; the harness writes to the destination" >&2
   exit 1
 fi
-recovery_identity="$(printf '%s\n%s' "$recovery_dest_endpoint" "$recovery_dest_user" | tr '[:upper:]' '[:lower:]')"
+recovery_identity="$(normalize_mailbox_identity "$recovery_dest_endpoint" "$recovery_dest_user")"
 if [[ "$recovery_identity" == "$destination_identity" ]]; then
   echo "ERROR: recovery destination must not be the normal live destination account" >&2
   exit 1
@@ -176,24 +222,6 @@ fi
 [[ -n "$mailswiftsync_commit" ]] || mailswiftsync_commit="unknown"
 mailswiftsync_binary_sha256="$(sha256_file "$binary")"
 
-# Parse endpoints (format: host:port)
-source_endpoint="${MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT}"
-dest_endpoint="${MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT}"
-source_host="${source_endpoint%:*}"
-source_port="${source_endpoint##*:}"
-dest_host="${dest_endpoint%:*}"
-dest_port="${dest_endpoint##*:}"
-valid_imap_endpoint() {
-  local host="$1" port="$2"
-  [[ "$host" =~ ^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$ ]] || return 1
-  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
-  (( 10#$port > 0 && 10#$port <= 65535 ))
-}
-if ! valid_imap_endpoint "$source_host" "$source_port" \
-  || ! valid_imap_endpoint "$dest_host" "$dest_port"; then
-  echo "ERROR: IMAP endpoints must be host:port values with a valid DNS/IP host and port 1–65535" >&2
-  exit 1
-fi
 if ! command -v imapsync >/dev/null 2>&1; then
   echo "ERROR: imapsync is required for provider smoke testing; install the qualified engine or set up the packaged test image" >&2
   exit 1
