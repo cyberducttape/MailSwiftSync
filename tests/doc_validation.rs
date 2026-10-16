@@ -57,8 +57,19 @@ fn systemd_service_example_uses_a_restricted_worker_sandbox() {
         .expect("canonical systemd service example should exist");
     let guide = fs::read_to_string("docs/distribution/SERVICE.md")
         .expect("service deployment guide should exist");
+    let rpm_package =
+        fs::read_to_string("scripts/package-rpm.sh").expect("RPM package definition should exist");
+    let workflow =
+        fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
     assert!(guide.contains("mailswiftsync-supervise.service"));
-    assert!(guide.contains("/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service"));
+    let packaged_service_path =
+        "/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service";
+    let packaged_install_guide_path = "/usr/share/doc/mailswiftsync/docs/distribution/INSTALL.md";
+    assert!(guide.contains(packaged_service_path));
+    assert!(rpm_package.contains(&format!("%doc {packaged_service_path}")));
+    assert!(rpm_package.contains(&format!("%doc {packaged_install_guide_path}")));
+    assert!(workflow.contains(&format!("test -f {packaged_service_path}")));
+    assert!(workflow.contains(&format!("test -f {packaged_install_guide_path}")));
     assert!(guide.contains("it is not a D-Bus session bus"));
     assert!(guide.contains("DBUS_SESSION_BUS_ADDRESS"));
     assert!(guide.contains("Do not copy a desktop operator's bus address"));

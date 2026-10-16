@@ -26,7 +26,7 @@ for your deployment. Do not run the service as root.
 The canonical, syntax-checkable unit is
 [`mailswiftsync-supervise.service`](mailswiftsync-supervise.service). Debian
 and RPM packages install it as documentation at
-`/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service`; inspect and
+`/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service`; inspect and
 copy it to `/etc/systemd/system/mailswiftsync-supervise.service`, adjusting
 the paths and service identity if needed. The unit drops all Linux
 capabilities, restricts address families to Unix and IP networking, makes
