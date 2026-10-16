@@ -284,7 +284,13 @@ pub(super) fn parse_message_id_header(body: &str) -> Option<String> {
     // Message-ID must not be able to spoof the provenance marker used by
     // ExtractedMessage::identity_provenance.
     let inner = value.strip_prefix('<')?.strip_suffix('>')?;
-    if inner.is_empty() || inner.chars().any(char::is_control) {
+    let (left, right) = inner.split_once('@')?;
+    if left.is_empty()
+        || right.is_empty()
+        || inner.chars().any(|character| {
+            character.is_control() || character.is_whitespace() || matches!(character, '<' | '>')
+        })
+    {
         return None;
     }
     Some(value)
