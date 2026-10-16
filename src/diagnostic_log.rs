@@ -10,7 +10,7 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
@@ -49,6 +49,7 @@ pub(crate) struct DiagnosticLogger {
     sender: Option<SyncSender<Command>>,
     worker: Option<JoinHandle<()>>,
     queued_bytes: Arc<AtomicUsize>,
+    field_continuations: Mutex<HashMap<(String, String), SensitiveFieldContinuation>>,
 }
 
 enum Command {
@@ -87,6 +88,7 @@ impl DiagnosticLogger {
             sender: Some(sender),
             worker: Some(worker),
             queued_bytes,
+            field_continuations: Mutex::new(HashMap::new()),
         })
     }
 
@@ -104,10 +106,19 @@ impl DiagnosticLogger {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
-        let rendered = format!(
-            "{timestamp} [{stream}] {}\n",
-            sanitize_private_metadata(&truncate_line(line))
-        );
+        let sanitized = self
+            .field_continuations
+            .lock()
+            .map(|mut continuations| {
+                sanitize_private_metadata_with_continuation(
+                    &truncate_line(line),
+                    continuations
+                        .entry((run_id.to_owned(), stream.to_owned()))
+                        .or_default(),
+                )
+            })
+            .unwrap_or_else(|_| "[REDACTED]".to_owned());
+        let rendered = format!("{timestamp} [{stream}] {sanitized}\n");
         let length = rendered.len();
         if self
             .queued_bytes
@@ -172,9 +183,13 @@ impl DiagnosticLogger {
                 }
             }
         }
-        response
+        let result = response
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| "diagnostic log writer did not drain in time".to_owned())?
+            .map_err(|_| "diagnostic log writer did not drain in time".to_owned())?;
+        if let Ok(mut continuations) = self.field_continuations.lock() {
+            continuations.retain(|(active_run, _), _| active_run != run_id);
+        }
+        result
     }
 }
 
@@ -536,6 +551,39 @@ fn pseudonym_hash(value: &str) -> String {
 /// pass is deliberately limited to diagnostic persistence so evidence remains
 /// semantically complete while support logs avoid retaining identifiers.
 pub(crate) fn sanitize_private_metadata(line: &str) -> String {
+    sanitize_private_metadata_with_continuation(line, &mut SensitiveFieldContinuation::default())
+}
+
+#[derive(Default)]
+struct SensitiveFieldContinuation {
+    quote: Option<u8>,
+    escaped: bool,
+}
+
+fn sanitize_private_metadata_with_continuation(
+    line: &str,
+    continuation: &mut SensitiveFieldContinuation,
+) -> String {
+    if let Some(quote) = continuation.quote {
+        let bytes = line.as_bytes();
+        let mut escaped = continuation.escaped;
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == quote {
+                continuation.quote = None;
+                continuation.escaped = false;
+                let rest =
+                    sanitize_private_metadata_with_continuation(&line[index + 1..], continuation);
+                return format!("[REDACTED]{}{}", char::from(quote), rest);
+            }
+        }
+        continuation.escaped = escaped;
+        return "[REDACTED]".to_owned();
+    }
+
     let url_redacted = redact_url_userinfo(line);
     let line = url_redacted.as_str();
     let bytes = line.as_bytes();
@@ -597,7 +645,7 @@ pub(crate) fn sanitize_private_metadata(line: &str) -> String {
     }
     // URI userinfo was already removed above, and pseudonymization never
     // introduces it, so the field pass runs once on the final text.
-    redact_sensitive_fields(&output)
+    redact_sensitive_fields(&output, continuation)
 }
 
 /// Remove userinfo from URI authorities before persisting an opt-in
@@ -647,10 +695,11 @@ fn is_uri_authority_at(line: &str, at: usize) -> bool {
 
 /// Redact secret-shaped key/value fields that may be emitted by an external
 /// engine even when the exact credential is not present in the controller's
-/// known-secret set. This is intentionally line-bounded: it protects support
-/// transcripts without attempting to parse or mutate the semantic engine
-/// stream used by verification.
-fn redact_sensitive_fields(line: &str) -> String {
+/// known-secret set. Field parsing is line-bounded except that an unterminated
+/// quoted sensitive value remains redacted through its closing quote on later
+/// lines. This protects support transcripts without mutating the semantic
+/// engine stream used by verification.
+fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinuation) -> String {
     const KEYS: [&str; 44] = [
         "client_secret",
         "client-secret",
@@ -765,6 +814,10 @@ fn redact_sensitive_fields(line: &str) -> String {
                     break;
                 }
                 end += 1;
+            }
+            if bytes.get(end) != Some(&quote) {
+                continuation.quote = Some(quote);
+                continuation.escaped = escaped;
             }
             (begin, end)
         } else if key == "authorization"
@@ -1203,6 +1256,79 @@ mod tests {
             );
         }
         assert_eq!(sanitized.matches("[REDACTED]").count(), 5);
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_multiline_quoted_secret_values() {
+        let mut continuation = SensitiveFieldContinuation::default();
+        let first = sanitize_private_metadata_with_continuation(
+            r#"{"access_token":"first-secret-fragment"#,
+            &mut continuation,
+        );
+        assert!(!first.contains("first-secret-fragment"));
+        assert!(continuation.quote.is_some());
+
+        let second = sanitize_private_metadata_with_continuation(
+            r#"second-secret-fragment","status":"safe"}"#,
+            &mut continuation,
+        );
+        assert!(!second.contains("second-secret-fragment"));
+        assert!(second.contains("status"));
+        assert!(second.contains("safe"));
+        assert!(continuation.quote.is_none());
+    }
+
+    #[test]
+    fn diagnostic_logger_keeps_multiline_secret_redaction_stream_scoped() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-diagnostic-continuation-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        logger
+            .write_line(
+                "project",
+                "run",
+                "job",
+                "stdout",
+                r#"{"access_token":"stdout-secret-start"#,
+            )
+            .unwrap();
+        logger
+            .write_line("project", "run", "job", "stderr", "independent stderr line")
+            .unwrap();
+        logger
+            .write_line(
+                "project",
+                "run",
+                "job",
+                "stdout",
+                r#"stdout-secret-end","status":"preserved"}"#,
+            )
+            .unwrap();
+        logger.finish_run("run").unwrap();
+        drop(logger);
+
+        let content = fs::read_to_string(
+            fs::read_dir(&directory)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path(),
+        )
+        .unwrap();
+        assert!(!content.contains("stdout-secret-start"));
+        assert!(!content.contains("stdout-secret-end"));
+        assert!(content.contains("independent stderr line"));
+        assert!(content.contains("preserved"));
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
