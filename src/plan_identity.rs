@@ -58,7 +58,11 @@ pub(crate) fn resolve_executable(executable: &str) -> Option<PathBuf> {
             .and_then(|()| std::fs::canonicalize(executable).ok());
     }
     let path = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&path) {
+    resolve_executable_from_path(executable, &path)
+}
+
+fn resolve_executable_from_path(executable: &Path, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    for directory in std::env::split_paths(path) {
         let candidate = directory.join(executable);
         if candidate.is_file() && is_executable_file(&candidate).is_some() {
             return std::fs::canonicalize(candidate).ok();
@@ -298,5 +302,32 @@ mod tests {
             "unresolved"
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_lookup_skips_non_executable_shadow_and_uses_later_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "mailswiftsync-path-shadow-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let shadow = first.join("mail-engine");
+        let executable = second.join("mail-engine");
+        std::fs::write(&shadow, b"not executable").unwrap();
+        std::fs::write(&executable, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&shadow, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+
+        let resolved = resolve_executable_from_path(Path::new("mail-engine"), &path).unwrap();
+
+        assert_eq!(resolved, std::fs::canonicalize(executable).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
