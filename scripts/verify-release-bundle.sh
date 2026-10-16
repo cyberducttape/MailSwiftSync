@@ -18,6 +18,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+case "$archive" in
+  *.tar.gz) snapshot="$workspace/release.tar.gz" ;;
+  *.zip) snapshot="$workspace/release.zip" ;;
+  *)
+    echo "FAIL: unsupported release archive: $archive" >&2
+    exit 1
+    ;;
+esac
+# Validate and extract a private snapshot of the input so another process
+# cannot replace the archive between metadata validation and extraction.
+cp -- "$archive" "$snapshot"
+chmod 0600 "$snapshot"
+python3 "$script_dir/validate-release-archive.py" "$snapshot"
+
 validate_member_path() {
   local member="$1"
   case "$member" in
@@ -32,8 +47,8 @@ case "$archive" in
   *.tar.gz)
     while IFS= read -r member; do
       validate_member_path "$member"
-    done < <(tar -tzf "$archive")
-    tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$workspace"
+    done < <(tar -tzf "$snapshot")
+    tar --no-same-owner --no-same-permissions -xzf "$snapshot" -C "$workspace"
     ;;
   *.zip)
     if ! command -v unzip >/dev/null 2>&1; then
@@ -42,8 +57,8 @@ case "$archive" in
     fi
     while IFS= read -r member; do
       validate_member_path "$member"
-    done < <(unzip -Z1 "$archive")
-    unzip -q "$archive" -d "$workspace"
+    done < <(unzip -Z1 "$snapshot")
+    unzip -q "$snapshot" -d "$workspace"
     ;;
   *)
     echo "FAIL: unsupported release archive: $archive" >&2
@@ -95,7 +110,6 @@ if [[ "$binary_count" -ne 1 ]]; then
   exit 1
 fi
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 python3 "$script_dir/verify-markdown-links.py" "$workspace"
 
 echo "PASS: release archive contains all bundled documentation references"

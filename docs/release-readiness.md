@@ -31,6 +31,13 @@ contract with a nonzero exit status. The Debian package installs the
 control plane and documentation only; do not present it as verification-
 qualified merely because a transfer can run with it.
 
+The portable-archive verifier inspects member metadata before extraction. It
+rejects traversal/absolute paths, duplicate normalized names, symbolic or hard
+links, special files, encrypted ZIP members, and archives or unpacked contents
+over 512 MiB or 60,000 members. ZIP64 and multi-disk ZIP archives are not
+supported. These bounds are verifier limits; they do not alter the archive
+producer or installed application.
+
 The container build uses immutable OCI digests for its Debian and Rust base
 images. The imapsync package is independently SHA-256 verified before
 installation. Base-image digest updates are deliberate supply-chain changes

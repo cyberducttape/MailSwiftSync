@@ -5,6 +5,7 @@ from pathlib import Path
 import io
 import re
 import stat
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -142,6 +143,18 @@ with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temp
                     archive.write(entry, entry.relative_to(bundle).as_posix())
         run_verifier(archive_path, True)
 
+    oversized_directory = workspace / "oversized-directory.zip"
+    with zipfile.ZipFile(oversized_directory, "w") as archive:
+        archive.writestr("README.md", "fixture\n")
+    encoded = bytearray(oversized_directory.read_bytes())
+    end_record = encoded.rfind(b"PK\x05\x06")
+    if end_record < 0:
+        raise AssertionError("ZIP fixture has no end-of-central-directory record")
+    struct.pack_into("<H", encoded, end_record + 8, 60_001)
+    struct.pack_into("<H", encoded, end_record + 10, 60_001)
+    oversized_directory.write_bytes(encoded)
+    run_verifier(oversized_directory, False)
+
     nested_archive = workspace / "nested.zip"
     with zipfile.ZipFile(nested_archive, "w") as archive:
         for entry in bundle.rglob("*"):
@@ -170,6 +183,22 @@ with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temp
         archive.writestr(info, "/etc/passwd")
     run_verifier(symlink_zip, False)
 
+    # A symlink followed by a child is the archive-ordering case that could
+    # escape a temporary extraction root if validation happened only after
+    # extraction. The external target must remain untouched.
+    outside = workspace / "outside"
+    outside.mkdir()
+    symlink_child_zip = workspace / "symlink-child.zip"
+    with zipfile.ZipFile(symlink_child_zip, "w") as archive:
+        info = zipfile.ZipInfo("escape")
+        info.create_system = 3
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(info, str(outside))
+        archive.writestr("escape/probe.txt", "must not escape\n")
+    run_verifier(symlink_child_zip, False)
+    if (outside / "probe.txt").exists():
+        raise AssertionError("ZIP symlink child escaped the extraction workspace")
+
     symlink_tar = workspace / "symlink.tar.gz"
     with tarfile.open(symlink_tar, "w:gz") as archive:
         entry = tarfile.TarInfo("README.md")
@@ -177,5 +206,19 @@ with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temp
         entry.linkname = "/etc/passwd"
         archive.addfile(entry)
     run_verifier(symlink_tar, False)
+
+    symlink_child_tar = workspace / "symlink-child.tar.gz"
+    with tarfile.open(symlink_child_tar, "w:gz") as archive:
+        entry = tarfile.TarInfo("escape")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = str(outside)
+        archive.addfile(entry)
+        entry = tarfile.TarInfo("escape/probe.txt")
+        payload = b"must not escape\n"
+        entry.size = len(payload)
+        archive.addfile(entry, fileobj=io.BytesIO(payload))
+    run_verifier(symlink_child_tar, False)
+    if (outside / "probe.txt").exists():
+        raise AssertionError("tar symlink child escaped the extraction workspace")
 
 print("PASS: release archive layouts are consistent across tar.gz and ZIP formats")
