@@ -86,6 +86,21 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn("source and destination must be different mailbox identities", result.stderr)
         self.assertNotIn("ERROR: /unused is not executable", result.stderr)
 
+    def test_artifact_path_labels_are_sanitized_without_changing_provider_identity(self):
+        self.assertIn('source_provider_path="$(safe_path_component "$source_provider")"', SCRIPT)
+        self.assertIn('destination_provider_path="$(safe_path_component "$destination_provider")"', SCRIPT)
+        self.assertIn('--source-provider "$source_provider" --destination-provider "$destination_provider"', SCRIPT)
+        start = SCRIPT.index("safe_path_component() {")
+        end = SCRIPT.index("\n}", start) + 2
+        helper = SCRIPT[start:end]
+        result = subprocess.run(
+            ["bash", "-c", helper + '; safe_path_component "$1"', "test", "../../outside/name"],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout, ".._.._outside_name")
+
     def test_profile_toml_escapes_usernames_and_engine_paths(self):
         with tempfile.TemporaryDirectory(prefix="provider-smoke-") as temp:
             root = Path(temp)
