@@ -164,14 +164,20 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 .to_owned(),
         );
     }
-    let mut command = execution_command(executable, args, env)?;
+    let expected_executable_identity = transfer_pass.map(|pass| pass.executable_identity.as_str());
+    let mut command = execution_command(executable, args, env, expected_executable_identity)?;
     let launch_executable = if let Some(transfer_pass) = transfer_pass {
         crate::plan_identity::revalidate_executable(executable, &transfer_pass.executable_identity)?
     } else {
         std::path::PathBuf::from(executable)
     };
     if launch_executable.to_string_lossy() != executable {
-        command = execution_command(&launch_executable.to_string_lossy(), args, env)?;
+        command = execution_command(
+            &launch_executable.to_string_lossy(),
+            args,
+            env,
+            expected_executable_identity,
+        )?;
     }
     let mut child = if let Some((limiter, path)) = launch_limiter {
         limiter
