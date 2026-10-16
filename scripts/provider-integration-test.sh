@@ -168,10 +168,16 @@ if host.startswith("["):
         raise SystemExit(1)
     host = f"[{address.compressed}]"
 else:
+    host = host.rstrip(".").casefold()
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        host = host.rstrip(".").casefold()
+        # Some system resolvers accept abbreviated, octal, or integer IPv4
+        # forms that Python's strict parser rejects. Treating one as a DNS
+        # name could make two spellings of the same endpoint compare unequal.
+        if re.fullmatch(r"[0-9.]+", host):
+            print("ERROR: ambiguous numeric IPv4 host in IMAP endpoint", file=sys.stderr)
+            raise SystemExit(1)
         labels = host.split(".")
         valid_label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
         if len(host) > 253 or not host or any(not valid_label.fullmatch(label) for label in labels):
