@@ -647,6 +647,14 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
             && release.contains("run: cargo audit --deny yanked"),
         "stable releases must fail closed when the dependency graph contains yanked crates"
     );
+    let publish = release
+        .split("  publish:")
+        .nth(1)
+        .expect("release workflow must define publication");
+    assert!(
+        publish.contains("needs.verify.result == 'success'"),
+        "a failed stable dependency gate must prevent release publication"
+    );
 
     let deny = fs::read_to_string("deny.toml").expect("dependency policy should exist");
     let readiness = fs::read_to_string("docs/release-readiness.md")
