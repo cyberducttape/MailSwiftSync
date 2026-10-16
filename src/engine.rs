@@ -44,6 +44,10 @@ pub(crate) fn imapsync_preview_args(
     ))
 }
 
+/// Validate rates against the batch's fixed maximum concurrency, not its
+/// current active-worker count. Each imapsync child keeps its launch-time rate
+/// for its lifetime, so using a changing active count could oversubscribe the
+/// configured aggregate target when more workers are admitted later.
 fn validate_throttle_divisor(profile: &Profile, throttle_divisor: usize) -> Result<(), String> {
     let divisor = throttle_divisor.max(1);
     if profile.max_messages_per_second > 0
@@ -232,4 +236,65 @@ fn command_endpoint_parts(host: &str, default_port: u16) -> (String, u16) {
 
 pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> {
     crate::extra_options::canonical(extra_options).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{imapsync_args, validate_throttle_divisor};
+    use crate::migration_plan::Profile;
+
+    fn argument_value<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
+        arguments
+            .windows(2)
+            .find(|pair| pair[0] == option)
+            .map(|pair| pair[1].as_str())
+    }
+
+    #[test]
+    fn divided_child_rates_never_exceed_run_level_budget() {
+        let profile = Profile {
+            max_messages_per_second: 10,
+            max_bytes_per_second: 1_000,
+            ..Profile::default()
+        };
+
+        let arguments = imapsync_args(&profile, false, 3).unwrap();
+        let per_child_messages = argument_value(&arguments, "--maxmessagespersecond")
+            .unwrap()
+            .parse::<u32>()
+            .unwrap();
+        let per_child_bytes = argument_value(&arguments, "--maxbytespersecond")
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+
+        // Even if every configured worker is active, integer division rounds
+        // down, so the sum of child limits cannot exceed the run-level target.
+        assert!(per_child_messages * 3 <= profile.max_messages_per_second);
+        assert!(per_child_bytes * 3 <= profile.max_bytes_per_second);
+        assert_eq!(per_child_messages, 3);
+        assert_eq!(per_child_bytes, 333);
+    }
+
+    #[test]
+    fn rates_below_fixed_batch_concurrency_fail_closed() {
+        let profile = Profile {
+            max_messages_per_second: 1,
+            max_bytes_per_second: 15,
+            ..Profile::default()
+        };
+
+        let error = validate_throttle_divisor(&profile, 16).unwrap_err();
+        assert!(error.contains("cannot be divided across 16 active workers"));
+    }
+
+    #[test]
+    fn zero_throughput_limits_remain_unset_for_any_worker_count() {
+        let profile = Profile::default();
+
+        assert!(validate_throttle_divisor(&profile, usize::MAX).is_ok());
+        let arguments = imapsync_args(&profile, false, usize::MAX).unwrap();
+        assert!(argument_value(&arguments, "--maxmessagespersecond").is_none());
+        assert!(argument_value(&arguments, "--maxbytespersecond").is_none());
+    }
 }
