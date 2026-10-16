@@ -728,6 +728,30 @@ fn redact_sensitive_fields(line: &str) -> String {
             // `"access_token":"..."`.
             value_start += 1;
         }
+        // Some tools serialize credentials after encoding them and label the
+        // field with a suffix (for example, `access_token_b64`). The base key
+        // is still sensitive; recognize only explicit encoding suffixes so
+        // the value is redacted without treating arbitrary key extensions as
+        // part of the field name.
+        if bytes
+            .get(value_start)
+            .is_some_and(|byte| matches!(*byte, b'_' | b'-'))
+        {
+            let suffix_start = value_start + 1;
+            let suffix_end = bytes[suffix_start..]
+                .iter()
+                .position(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_' && *byte != b'-')
+                .map(|offset| suffix_start + offset)
+                .unwrap_or(bytes.len());
+            let suffix = lower[suffix_start..suffix_end]
+                .bytes()
+                .filter(|byte| *byte != b'_' && *byte != b'-')
+                .map(char::from)
+                .collect::<String>();
+            if matches!(suffix.as_str(), "b64" | "base64" | "encoded") {
+                value_start = suffix_end;
+            }
+        }
         while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
             value_start += 1;
         }
@@ -1156,6 +1180,19 @@ mod tests {
             );
         }
         assert_eq!(sanitized.matches("[REDACTED]").count(), 6);
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_explicitly_encoded_secret_fields() {
+        let line = "access_token_b64=YWNjZXNz refresh-token-base64:cmVmcmVzaA api_key_encoded=YXBp password_b64='cGFzcw=='";
+        let sanitized = sanitize_private_metadata(line);
+        for secret in ["YWNjZXNz", "cmVmcmVzaA", "YXBp", "cGFzcw=="] {
+            assert!(
+                !sanitized.contains(secret),
+                "encoded credential value {secret:?} remained in diagnostic output: {sanitized}"
+            );
+        }
+        assert_eq!(sanitized.matches("[REDACTED]").count(), 4);
     }
 
     #[test]
