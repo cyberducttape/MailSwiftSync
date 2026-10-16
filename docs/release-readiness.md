@@ -372,9 +372,13 @@ reconciliation as successful.
 - Live batch waves with mailbox-specific child runs, claim-before-launch, selective retry scopes, transactional plan checks, and per-mailbox evidence: independent message-level verification for encrypted imapsync children whose plan the verifier can reproduce, aggregate or engine evidence otherwise.
 - Aggregate source/destination folder, message, and virtual-size evidence.
 - The pre-migration risk report exposes an advisory 0–100 scale-only score
-  derived only from supplied message, folder, and size facts. It never clears
-  authentication, TLS, capacity, verification, policy, or provider-qualification
-  gates; those remain explicit pass/warning/block outcomes in preflight.
+  derived from supplied source message, folder, and size facts. With an
+  explicit `--state` path it also observes free space on the durable stage
+  filesystem and compares it with the observed synthetic projection plus the
+  runtime reserve. This is not a safe upper bound or a reservation. The report
+  never clears authentication, TLS, capacity, verification, policy, or
+  provider-qualification gates; those remain separate pass/warning/block
+  outcomes in preflight.
 - The [adoption qualification plan](adoption-qualification-plan.md) defines
   the required mailbox shapes, interruptions, mutations, exact engine versions,
   direct-imapsync baselines, and performance measurements. The
