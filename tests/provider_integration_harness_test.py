@@ -26,6 +26,38 @@ OAUTH_IMAPSYNC_SMOKE = (ROOT / "scripts" / "oauth-imapsync-refresh-smoke.py").re
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
+    def test_harness_termination_kills_and_reaps_detached_recovery_group(self):
+        if not shutil.which("setsid"):
+            self.skipTest("setsid is required to exercise detached process-group cleanup")
+        start = SCRIPT.index("terminate_recovery_group() {")
+        end = SCRIPT.index("\n}\ncleanup()", start) + 2
+        terminate_function = SCRIPT[start:end]
+        command = "\n".join(
+            (
+                terminate_function,
+                "setsid sleep 60 &",
+                "recovery_pid=$!",
+                "process_group=$recovery_pid",
+                "for _ in {1..50}; do",
+                '  kill -0 -- "-$process_group" 2>/dev/null && break',
+                "  sleep 0.02",
+                "done",
+                'kill -0 -- "-$process_group" 2>/dev/null || exit 41',
+                "terminate_recovery_group",
+                '[[ -z "$recovery_pid" ]] || exit 42',
+                'if kill -0 -- "-$process_group" 2>/dev/null; then exit 43; fi',
+                "exit 0",
+            )
+        )
+        result = subprocess.run(
+            ["bash", "-c", command],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_usage_lists_the_implemented_cpanel_smoke_route(self):
         result = subprocess.run(
             ["bash", str(ROOT / "scripts" / "provider-integration-test.sh")],
