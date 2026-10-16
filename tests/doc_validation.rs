@@ -660,10 +660,14 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
     let readiness = fs::read_to_string("docs/release-readiness.md")
         .expect("release-readiness document should exist");
     let lockfile = fs::read_to_string("Cargo.lock").expect("Cargo lockfile should exist");
-    assert!(deny.contains("not a security waiver"));
-    assert!(readiness.contains("zip 8.6.0"));
+    assert!(!deny.contains("zip@8.6.0"));
+    assert!(!lockfile.contains("version = \"8.6.0\""));
+    assert!(!lockfile.contains("name = \"calamine\""));
+    assert!(readiness.contains("no longer depends on Calamine"));
     assert!(readiness.contains("Calamine security report"));
-    assert!(readiness.contains("remains a GA blocker"));
+    assert!(
+        readiness.contains("Stable release CI continues to require `cargo audit --deny yanked`")
+    );
     assert!(!lockfile.contains("name = \"ttf-parser\""));
     assert!(!readiness.contains("ttf-parser 0.25.1` warning remains tracked"));
 

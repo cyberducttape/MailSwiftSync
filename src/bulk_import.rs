@@ -6,12 +6,11 @@
 //! result application.
 
 use crate::{Form, SecretString};
-use calamine::{Reader, Sheets, Xlsx, open_workbook_from_rs};
 use quick_xml::Reader as XmlReader;
 use quick_xml::encoding::DecodingReader;
 use quick_xml::events::Event as XmlEvent;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -20,9 +19,11 @@ use std::sync::{
 use std::thread;
 
 mod rows;
+mod xlsx;
 mod xlsx_reference;
 pub(crate) use rows::validate_headers;
 use rows::{normalize_headers, record_values};
+use xlsx::Workbook as XlsxWorkbook;
 
 fn plaintext_secrets_allowed(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
@@ -287,7 +288,7 @@ fn read_csv_with_ack(
 
 pub(crate) fn workbook_sheets(path: &Path) -> Result<Vec<String>, String> {
     let book = open_import_workbook(path)?;
-    let sheets = book.sheet_names().to_vec();
+    let sheets = book.sheet_names();
     if sheets.is_empty() {
         Err("The workbook has no worksheets.".into())
     } else {
@@ -311,20 +312,10 @@ fn read_sheet_with_ack(
     plaintext_acknowledged: bool,
 ) -> Result<Vec<BulkJob>, String> {
     let mut book = open_import_workbook(path)?;
-    validate_xlsx_sheet_layout(&mut book, sheet_index)?;
-    let range = book
-        .worksheet_range_at(sheet_index)
-        .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?
-        .map_err(|error| error.to_string())?;
-    // Calamine ranges start at the first used cell, so report worksheet row
-    // numbers relative to that row rather than assuming headers are on row 1.
-    let header_row_number = range.start().map_or(1, |(row, _)| row as usize + 1);
-    let mut rows = range.rows();
+    let (header_row_number, rows) = book.read_sheet(sheet_index)?;
+    let mut rows = rows.into_iter();
     let headers = normalize_headers(
-        rows.next()
-            .ok_or("The worksheet is empty.")?
-            .iter()
-            .map(ToString::to_string),
+        rows.next().ok_or("The worksheet is empty.")?,
         crate::MAX_BULK_IMPORT_COLUMNS,
         "worksheet",
     )?;
@@ -340,16 +331,11 @@ fn read_sheet_with_ack(
                 crate::MAX_BULK_IMPORT_ROWS
             ));
         }
-        if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
+        if row.iter().all(|cell| cell.trim().is_empty()) {
             continue;
         }
         let row_number = header_row_number + index + 1;
-        let values = record_values(
-            &headers,
-            row.iter().map(|value| value.to_string()),
-            row_number,
-            crate::MAX_BULK_IMPORT_CELL_BYTES,
-        )?;
+        let values = record_values(&headers, row, row_number, crate::MAX_BULK_IMPORT_CELL_BYTES)?;
         jobs.push(job_from_values_with_defaults(
             values,
             base,
@@ -364,73 +350,8 @@ fn read_sheet_with_ack(
     Ok(jobs)
 }
 
-fn validate_xlsx_sheet_layout(
-    book: &mut Sheets<BufReader<std::fs::File>>,
-    sheet_index: usize,
-) -> Result<(), String> {
-    let Sheets::Xlsx(book) = book else {
-        return Ok(());
-    };
-    let sheet_name = book
-        .sheet_names()
-        .get(sheet_index)
-        .cloned()
-        .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?;
-    let mut cells = book
-        .worksheet_cells_reader(&sheet_name)
-        .map_err(|error| format!("Could not inspect worksheet cells: {error}"))?;
-    let mut cell_count = 0_usize;
-    let mut min_row = u32::MAX;
-    let mut min_column = u32::MAX;
-    let mut max_row = 0_u32;
-    let mut max_column = 0_u32;
-    while let Some(cell) = cells
-        .next_cell()
-        .map_err(|error| format!("Could not inspect worksheet cells: {error}"))?
-    {
-        let (row, column) = cell.get_position();
-        if row > crate::MAX_BULK_IMPORT_ROWS as u32 {
-            return Err(format!(
-                "The worksheet contains a cell beyond the {}-row import limit.",
-                crate::MAX_BULK_IMPORT_ROWS
-            ));
-        }
-        if column > crate::MAX_BULK_IMPORT_COLUMNS as u32 {
-            return Err(format!(
-                "The worksheet contains a cell beyond the {}-column import limit.",
-                crate::MAX_BULK_IMPORT_COLUMNS
-            ));
-        }
-        cell_count = cell_count.saturating_add(1);
-        if cell_count > crate::MAX_BULK_IMPORT_WORKSHEET_CELLS {
-            return Err(format!(
-                "The worksheet exceeds the {}-cell import limit.",
-                crate::MAX_BULK_IMPORT_WORKSHEET_CELLS
-            ));
-        }
-        min_row = min_row.min(row);
-        min_column = min_column.min(column);
-        max_row = max_row.max(row);
-        max_column = max_column.max(column);
-    }
-    if cell_count > 0 {
-        let rows = (max_row - min_row + 1) as usize;
-        let columns = (max_column - min_column + 1) as usize;
-        let area = rows.checked_mul(columns).ok_or_else(|| {
-            "The worksheet's used cell range exceeds the supported import size.".to_owned()
-        })?;
-        if area > crate::MAX_BULK_IMPORT_WORKSHEET_CELLS {
-            return Err(format!(
-                "The worksheet's used cell range exceeds the {}-cell import limit.",
-                crate::MAX_BULK_IMPORT_WORKSHEET_CELLS
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Reject obviously oversized XLSX worksheets before Calamine expands the
-/// sheet into a cell matrix. The worksheet dimension is near the start of the
+/// Reject oversized XLSX worksheets before the bounded reader constructs the
+/// selected sheet's dense cell matrix. The dimension is near the start of the
 /// XML part, so this bounded probe does not materialize the workbook entry.
 fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<(), String> {
     let entry_count = archive.len();
@@ -466,8 +387,8 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
         // Worksheet parts are discovered through OPC relationships; their
         // package path is not required to use the conventional
         // `xl/worksheets/` directory. Inspect the XML root rather than
-        // trusting the archive filename, so every sheet Calamine can follow
-        // receives the same resource and value preflight.
+        // trusting the archive filename, so every worksheet receives the same
+        // resource and value preflight.
         drop(entry);
         let mut entry = archive
             .by_index(index)
@@ -541,7 +462,7 @@ fn is_xml_part<R: Read>(entry: &mut R) -> Result<bool, String> {
 /// XML processors can identify UTF-16 from its BOM or the byte pattern of the
 /// first markup character. Recognize these signatures before the UTF-8
 /// whitespace probe so the encoding-aware XML parser validates the same
-/// worksheet parts Calamine can consume.
+/// worksheet parts in the package.
 fn looks_like_utf16_xml(bytes: &[u8]) -> bool {
     let (little_endian, mut offset) = if bytes.starts_with(b"\xFF\xFE") {
         (true, 2)
@@ -569,9 +490,9 @@ fn looks_like_utf16_xml(bytes: &[u8]) -> bool {
     false
 }
 
-/// Validate worksheet cell coordinates and boolean values before Calamine
-/// parses them. Calamine 0.36.1 performs unchecked arithmetic on row and cell
-/// references, and malformed boolean values can otherwise be coerced to true.
+/// Validate worksheet cell coordinates and boolean values before the selected
+/// sheet is materialized. This applies to every worksheet part, including
+/// sheets the operator does not select.
 fn validate_xlsx_cells<R: Read>(entry: &mut R) -> Result<(), String> {
     let mut xml = XmlReader::from_reader(DecodingReader::new(BufReader::new(entry)));
     xml.config_mut().trim_text(false);
@@ -1076,7 +997,7 @@ pub(crate) fn validate_workbook_container_limits(
     Ok(())
 }
 
-fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>, String> {
+fn open_import_workbook(path: &Path) -> Result<XlsxWorkbook, String> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -1085,28 +1006,11 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
     let file = open_import_file(path)?;
     match extension.as_str() {
         "xlsx" => {
-            let mut archive = zip::ZipArchive::new(file)
+            let archive = zip::ZipArchive::new(file)
                 .map_err(|error| format!("The XLSX archive is invalid: {error}"))?;
-            validate_xlsx_archive(&mut archive)?;
-            let mut file = archive.into_inner();
-            if file
-                .metadata()
-                .map_err(|error| format!("Could not inspect XLSX import file: {error}"))?
-                .len()
-                > crate::MAX_BULK_IMPORT_BYTES
-            {
-                return Err(format!(
-                    "The XLSX import file exceeds the {}-byte limit.",
-                    crate::MAX_BULK_IMPORT_BYTES
-                ));
-            }
-            file.seek(SeekFrom::Start(0))
-                .map_err(|error| format!("Could not rewind XLSX import: {error}"))?;
-            open_workbook_from_rs::<Xlsx<_>, _>(BufReader::new(file))
-                .map(Sheets::Xlsx)
-                .map_err(|error| format!("The XLSX workbook could not be parsed: {error}"))
+            XlsxWorkbook::new(archive)
         }
-        "xls" => Err("Legacy .xls imports are disabled because their parser materializes worksheet ranges before MailSwiftSync can enforce memory bounds. Convert the workbook to .xlsx or CSV.".into()),
+        "xls" => Err("Legacy .xls imports are disabled because MailSwiftSync supports only bounded OOXML XLSX and CSV import formats. Convert the workbook to .xlsx or CSV.".into()),
         _ => Err("Choose a .xlsx workbook.".into()),
     }
 }
@@ -1122,7 +1026,6 @@ mod tests {
         validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
-    use calamine::{DataType, Reader};
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::sync::Arc;
@@ -1152,7 +1055,7 @@ mod tests {
             r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/{worksheet_part_path}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#
         );
         let workbook_relationship = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="{worksheet_part_path}"/></Relationships>"#
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="{worksheet_part_path}"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>"#
         );
         let worksheet_entry = format!("xl/{worksheet_part_path}");
         for (name, contents) in [
@@ -1255,7 +1158,29 @@ mod tests {
     }
 
     #[test]
-    fn xlsx_import_rejects_reversed_dimensions_before_calamine() {
+    fn xlsx_relationship_paths_are_normalized_and_cannot_escape_package_root() {
+        assert_eq!(
+            super::xlsx::resolve_part_path("xl", "worksheets/sheet1.xml").unwrap(),
+            "xl/worksheets/sheet1.xml"
+        );
+        assert_eq!(
+            super::xlsx::resolve_part_path("xl", "../custom/sheet.xml").unwrap(),
+            "custom/sheet.xml"
+        );
+        assert_eq!(
+            super::xlsx::resolve_part_path("xl", "/custom/sheet.xml").unwrap(),
+            "custom/sheet.xml"
+        );
+        for target in ["../../../outside.xml", "bad%Q0.xml", "folder\\sheet.xml"] {
+            assert!(
+                super::xlsx::resolve_part_path("xl", target).is_err(),
+                "invalid relationship target {target:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn xlsx_import_rejects_reversed_dimensions_before_cell_materialization() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-import-reversed-dimension-{}.xlsx",
             uuid::Uuid::new_v4()
@@ -1267,7 +1192,7 @@ mod tests {
 
         let error = open_import_workbook(&path)
             .err()
-            .expect("reversed dimensions must fail in preflight before Calamine parses them");
+            .expect("reversed dimensions must fail during bounded XLSX preflight");
         assert!(error.contains("top-left to bottom-right"), "{error}");
         std::fs::remove_file(path).unwrap();
     }
@@ -1313,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn xlsx_shared_string_reservations_and_values_are_bounded_before_calamine() {
+    fn xlsx_shared_string_reservations_and_values_are_bounded() {
         let error =
             validate_xlsx_shared_strings(&mut Cursor::new(br#"<sst uniqueCount="1000001"></sst>"#))
                 .unwrap_err();
@@ -1395,7 +1320,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_xls_import_fails_closed_before_calamine_parsing() {
+    fn legacy_xls_import_fails_closed() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-legacy-xls-header-{}-{}.xls",
             std::process::id(),
@@ -1412,7 +1337,7 @@ mod tests {
     }
 
     #[test]
-    fn xlsx_validation_and_calamine_reads_the_same_open_file() {
+    fn xlsx_validation_and_bounded_reader_use_the_same_open_file() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-import-snapshot-{}.xlsx",
             uuid::Uuid::new_v4()
@@ -1423,16 +1348,72 @@ mod tests {
         );
         assert_eq!(super::workbook_sheets(&path).unwrap(), vec!["Mailboxes"]);
         let mut workbook = super::open_import_workbook(&path).unwrap();
-        let worksheet = workbook.worksheet_range_at(0).unwrap().unwrap();
-        assert_eq!(
-            worksheet.get((0, 0)).and_then(|cell| cell.get_string()),
-            Some("source_host")
-        );
+        let (row, worksheet) = workbook.read_sheet(0).unwrap();
+        assert_eq!(row, 1);
+        assert_eq!(worksheet[0][0], "source_host");
         std::fs::remove_file(path).unwrap();
     }
 
     #[test]
-    fn xlsx_boolean_cell_values_are_strictly_validated_before_calamine() {
+    fn xlsx_reader_handles_shared_inline_numeric_boolean_and_sparse_cells() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-values-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        write_minimal_xlsx(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A2:D3"/><sheetData><row r="2"><c r="A2" t="s"><v>0</v></c><c r="B2" t="inlineStr"><is><r><t>A &amp; </t></r><r><t>B</t></r></is></c><c r="D2"><v>42.5</v></c></row><row r="3"><c r="A3" t="b"><v>1</v></c></row></sheetData></worksheet>"#,
+        );
+        let mut workbook = open_import_workbook(&path).unwrap();
+        let (start_row, rows) = workbook.read_sheet(0).unwrap();
+        assert_eq!(start_row, 2);
+        assert_eq!(rows[0], ["unused fixture value", "A & B", "", "42.5"]);
+        assert_eq!(rows[1], ["TRUE", "", "", ""]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_reader_rejects_duplicate_values_and_cells_outside_rows() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-malformed-worksheet-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        for worksheet in [
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1"><v>1</v><v>2</v></c></row></sheetData></worksheet>"#,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><c r="A1"><v>1</v></c><sheetData/></worksheet>"#,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A2"><v>1</v></c></row></sheetData></worksheet>"#,
+        ] {
+            write_minimal_xlsx(&path, worksheet);
+            let mut workbook = open_import_workbook(&path).unwrap();
+            assert!(
+                workbook.read_sheet(0).is_err(),
+                "malformed worksheet should be rejected: {worksheet}"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_reader_builds_import_jobs_from_the_selected_sheet() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-jobs-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        write_minimal_xlsx(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A2:D3"/><sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>source_host</t></is></c><c r="B2" t="inlineStr"><is><t>source_user</t></is></c><c r="C2" t="inlineStr"><is><t>destination_host</t></is></c><c r="D2" t="inlineStr"><is><t>destination_user</t></is></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>imap.old.example</t></is></c><c r="B3" t="inlineStr"><is><t>user@old.example</t></is></c><c r="C3" t="inlineStr"><is><t>imap.new.example</t></is></c><c r="D3" t="inlineStr"><is><t>user@new.example</t></is></c></row></sheetData></worksheet>"#,
+        );
+        let jobs = super::read_sheet(&path, &Form::default(), 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].source_host, "imap.old.example");
+        assert_eq!(jobs[0].source_user, "user@old.example");
+        assert_eq!(jobs[0].destination_host, "imap.new.example");
+        assert_eq!(jobs[0].destination_user, "user@new.example");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_boolean_cell_values_are_strictly_validated() {
         for value in ["0", "1"] {
             let xml = format!(
                 "<worksheet><sheetData><row><c t=\"b\"><v>{value}</v></c></row></sheetData></worksheet>"
@@ -1454,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn xlsx_cell_and_row_references_are_bounded_before_calamine() {
+    fn xlsx_cell_and_row_references_are_bounded() {
         for xml in [
             r#"<worksheet><sheetData><row r="99999999999"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
             r#"<worksheet><sheetData><row r="100002"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
@@ -1463,13 +1444,13 @@ mod tests {
         ] {
             assert!(
                 validate_xlsx_cells(&mut Cursor::new(xml)).is_err(),
-                "out-of-range references must be rejected before Calamine sees them: {xml}"
+                "out-of-range references must be rejected by XLSX preflight: {xml}"
             );
         }
     }
 
     #[test]
-    fn xlsx_import_rejects_overflowing_cell_and_row_references_before_calamine() {
+    fn xlsx_import_rejects_overflowing_cell_and_row_references() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-import-overflowing-reference-{}.xlsx",
             uuid::Uuid::new_v4()
@@ -1479,9 +1460,9 @@ mod tests {
             r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A99999999999" t="inlineStr"><is><t>source_host</t></is></c></row></sheetData></worksheet>"#,
         ] {
             write_minimal_xlsx(&path, worksheet);
-            let error = open_import_workbook(&path).err().expect(
-                "overflowing references must fail in preflight before Calamine parses them",
-            );
+            let error = open_import_workbook(&path)
+                .err()
+                .expect("overflowing references must fail in bounded XLSX preflight");
             assert!(
                 error.contains("row") || error.contains("limit"),
                 "unexpected preflight error: {error}"
@@ -1491,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn xlsx_import_rejects_malformed_boolean_cells_before_calamine_reads_them() {
+    fn xlsx_import_rejects_malformed_boolean_cells() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-import-malformed-boolean-{}.xlsx",
             uuid::Uuid::new_v4()
@@ -1537,11 +1518,8 @@ mod tests {
         );
         let mut workbook = open_import_workbook(&path)
             .expect("a valid relationship-targeted worksheet part must remain importable");
-        let worksheet = workbook.worksheet_range_at(0).unwrap().unwrap();
-        assert_eq!(
-            worksheet.get((0, 0)).and_then(|cell| cell.get_bool()),
-            Some(true)
-        );
+        let (_, worksheet) = workbook.read_sheet(0).unwrap();
+        assert_eq!(worksheet[0][0], "TRUE");
         std::fs::remove_file(path).unwrap();
     }
 

@@ -362,7 +362,7 @@ reconciliation as successful.
 - Explicit Dovecot-native and imapsync engine paths.
 - Dry-run default and explicit confirmation before destination changes.
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
-- CSV/XLSX validation queue with bounded 1–32 worker concurrency (higher values require a separately qualified fleet runner) and a conservative default of 2. Legacy XLS is rejected because Calamine materializes it before application resource checks.
+- CSV/XLSX validation queue with bounded 1–32 worker concurrency (higher values require a separately qualified fleet runner) and a conservative default of 2. XLSX uses MailSwiftSync's bounded OOXML reader; legacy binary XLS remains unsupported.
 - Bounded transient retries for validation and live work; the Activity view
   reports retry attempt/max-retry budget, and exhaustion is recorded as an
   explicit terminal reason. Authentication and configuration failures stop
@@ -656,7 +656,7 @@ reconciliation as successful.
 - Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is covered by `scripts/engine-storage-fault-smoke.sh`.
 - Production gatekeeper handshake qualification is covered by `scripts/process-supervision-chaos-smoke.sh`: a launcher with no durable release token or an invalid token never starts the engine, while the exact `GO\n` release token does. Live transfers also pass the planned executable digest through the gatekeeper, which re-hashes the engine after the release acknowledgement and refuses a changed binary; a Unix binary-level regression test replaces the engine while the launcher is waiting and verifies that the replacement never runs. This narrows the post-admission replacement window but does not provide kernel-level fd-based execution or substitute for the required hypervisor power-cut campaign.
 - **Dovecot 2.4.x probe stall safeguard (resolved in the controller):** the LIST/discovery reader now retries transient socket `TimedOut`/`WouldBlock` reads only within its 60-second total deadline, instead of checking the deadline only after a successful read. A regression test covers a timeout during LIST followed by a valid response. Dovecot 2.4.x remains a compatibility-matrix qualification target until a disposable live pilot is recorded; the controller will now fail with bounded discovery evidence rather than hang for the external 300-second watchdog.
-- A release-reviewed dependency graph: unmaintained transitive dependencies must be tracked, and yanked dependencies require explicit assessment rather than being treated as clean audit results. The current `calamine 0.36.1` XLSX import path pulls the yanked `zip 8.6.0`; an open [upstream Calamine security report](https://github.com/tafia/calamine/issues/723) describes independently reproduced denial-of-service and data-integrity findings affecting that release, with details withheld. This remains a GA blocker until a fixed/reviewed parser is adopted or XLSX parsing is removed from the shipped product. The bounded workbook preflight does not establish safety against these broader parser findings.
+- The XLSX import path no longer uses Calamine or the yanked `zip 8.6.0`; it reads the mailbox-list OOXML subset with the already locked `zip` 9 and `quick-xml` dependencies, after bounded archive, relationship, dimension, cell, and text validation. This removes the affected Calamine parser from the application dependency graph; it does not claim Calamine's upstream report is resolved or that MailSwiftSync's custom parser is exempt from future review. Fuzz and adversarial workbook coverage remains a release gate for this parser.
 - CI and release workflows should keep third-party GitHub Actions pinned to reviewed commit SHAs; update pins deliberately with the corresponding release version documented in a comment.
 
 The test-gate template is [compatibility-matrix.md](compatibility-matrix.md).
@@ -683,17 +683,16 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 Pull-request CI, release verification, and the scheduled dependency workflow run
 both `cargo audit` and `cargo deny check advisories bans licenses sources`.
 RustSec currently reports no published vulnerability advisory for the
-dependency graph, but `cargo audit` warns that `zip 8.6.0` is yanked; this is
-required by `calamine 0.36.1` for XLSX import and is explicitly excepted in
-`deny.toml` only so the audit can complete. Separately, the open upstream
+dependency graph. MailSwiftSync no longer depends on Calamine, and the lockfile
+no longer contains the yanked `zip 8.6.0`; the mailbox importer uses `zip 9` and
+`quick-xml` directly for its bounded OOXML subset. The open upstream
 [Calamine security report](https://github.com/tafia/calamine/issues/723)
 describes independently reproduced denial-of-service and data-integrity
-findings in 0.36.1 whose details are withheld. This unresolved parser exposure
-is a GA blocker; bounded XLSX preflight does not mitigate every parser path.
-The tagged-release workflow additionally runs `cargo audit --deny yanked` for
-stable releases, so the current dependency graph cannot pass the stable release
-gate until the XLSX parser dependency is replaced or updated and reviewed.
+findings in Calamine 0.36.1 whose details are withheld. Removing Calamine
+removes that reported parser from our dependency graph, but does not constitute
+upstream remediation or replace ongoing review and fuzzing of our own parser.
+Stable release CI continues to require `cargo audit --deny yanked`.
 The previous unmaintained `ttf-parser 0.25.1` warning is resolved: the current
 Linux Wayland configuration disables winit's default `ab_glyph` renderer and
 the lockfile no longer contains `ttf-parser`. Release qualification must
-recheck the Calamine/ZIP path before publishing artifacts.
+recheck the XLSX ZIP/XML path before publishing artifacts.

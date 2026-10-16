@@ -15,23 +15,24 @@
   stage-filesystem capacity observation; warn when available headroom is below
   the observed synthetic projection while explicitly avoiding a fit guarantee,
   and refuse symlinked or untrusted stage-directory paths.
-- Treat the yanked ZIP release required by Calamine 0.36.1, and Calamine's
-  unresolved upstream parser-security report, as an explicit GA blocker; the
-  cargo-deny exception is not a security waiver.
-- Enforce the yanked-dependency blocker in the tagged stable-release workflow;
-  preview releases retain the existing audit behavior while stable publication
-  fails closed until the XLSX parser dependency is resolved.
+- Replace Calamine-based XLSX parsing with a bounded OOXML reader for the
+  mailbox-list import subset, remove the yanked ZIP 8.6.0 exception, and add a
+  dedicated parser fuzz target. This removes the reported Calamine parser from
+  the dependency graph without claiming the upstream report is remediated; the
+  custom parser remains subject to adversarial review and fuzz qualification.
+- Require `cargo audit --deny yanked` for stable releases and retain that gate
+  after removing the yanked dependency.
 - Remove the stale `ttf-parser` advisory claim from current release readiness;
   the current lockfile no longer contains that crate after the Wayland
   renderer dependency change.
 - Reject reversed XLSX worksheet dimensions and out-of-range explicit row/cell
-  references before Calamine parsing, preventing malformed coordinates from
-  reaching unchecked dependency arithmetic.
+  references before worksheet materialization, preventing malformed
+  coordinates from reaching unchecked arithmetic.
 - Reject malformed XLSX boolean-typed cells during raw archive preflight so
   noncanonical values cannot be silently coerced into migration booleans by
   the workbook parser; discover worksheet parts from XML roots rather than
   conventional ZIP paths, including relationship-targeted custom paths, and
-  detect UTF-16 XML parts before Calamine parsing.
+  detect UTF-16 XML parts before worksheet materialization.
 - Run live provider smoke jobs as the packaged unprivileged UID 10001, including
   ownership of staged secrets and smoke evidence.
 - Limit live-provider smoke proof artifact retention to 14 days because the
