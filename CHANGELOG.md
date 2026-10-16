@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Prefix generated Dovecot 2.4 runtime configurations with the required
+  `dovecot_config_version` setting; qualify the native path against Dovecot
+  2.4.2 and imapsync 2.314 in the disposable IMAP lab.
+- Make the disposable Dovecot fixture work with unprivileged local accounts;
+  disabling its login chroot remains an explicit option for already-isolated
+  sandboxes only.
 - Fuzz the production streaming IMAP LIST response parser, including literal
   mailbox names and trailing extended data, in addition to its field helpers.
 - Add a manually dispatched cPanel/Dovecot-to-cPanel/Dovecot smoke route using

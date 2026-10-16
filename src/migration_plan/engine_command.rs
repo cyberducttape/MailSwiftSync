@@ -150,13 +150,20 @@ pub(super) fn write_dovecot_runtime_config(
     directory: &Path,
     configured_base: &str,
     password_file: &Path,
+    dialect: DovecotConfigDialect,
 ) -> Result<PathBuf, String> {
     let base = resolve_dovecot_base_config(configured_base)?;
     let base = dovecot_config_path(&base)?;
     let password = dovecot_config_path(password_file)?;
     let runtime_config = directory.join("mailswiftsync-doveadm.conf");
     let _runtime_config_path = dovecot_config_path(&runtime_config)?;
-    let contents = format!("!include {base}\nimapc_password = <{password}\n");
+    let version_header = match dialect {
+        DovecotConfigDialect::Legacy23 => "",
+        // Dovecot 2.4 requires this setting before even an !include directive.
+        // The included operator config may repeat the same version setting.
+        DovecotConfigDialect::Modern24 => "dovecot_config_version = 2.4.0\n",
+    };
+    let contents = format!("{version_header}!include {base}\nimapc_password = <{password}\n");
     write_secret_file(&runtime_config, &contents)
         .map_err(|error| format!("could not prepare private Dovecot runtime config: {error}"))?;
     Ok(runtime_config)
@@ -212,6 +219,7 @@ impl ValidatedPlan<'_> {
                     &secret_dir,
                     &form.profile.dovecot_config,
                     &source_file,
+                    dovecot_dialect,
                 )?;
                 let config_path = runtime_config.to_string_lossy();
                 let (executable, args) = form.command_with_checkpoint_and_mode_and_config(
@@ -655,6 +663,46 @@ impl Form {
         // The userdb lookup validates the local destination identity without
         // touching the mailbox store.
         vec![(self.profile.doveadm_path.clone(), user)]
+    }
+}
+
+#[cfg(test)]
+mod dovecot_runtime_config_tests {
+    use super::{DovecotConfigDialect, write_dovecot_runtime_config};
+    use std::fs;
+
+    fn runtime_config(dialect: DovecotConfigDialect) -> String {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-doveadm-config-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let base = directory.join("dovecot.conf");
+        fs::write(&base, "dovecot_config_version = 2.4.0\n").unwrap();
+        let password = directory.join("source.secret");
+        fs::write(&password, "fixture-secret").unwrap();
+
+        let runtime =
+            write_dovecot_runtime_config(&directory, base.to_str().unwrap(), &password, dialect)
+                .unwrap();
+        let contents = fs::read_to_string(runtime).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+        contents
+    }
+
+    #[test]
+    fn modern_runtime_config_declares_version_before_include() {
+        let contents = runtime_config(DovecotConfigDialect::Modern24);
+        assert!(contents.starts_with("dovecot_config_version = 2.4.0\n!include "));
+        assert!(contents.contains("\nimapc_password = <"));
+    }
+
+    #[test]
+    fn legacy_runtime_config_does_not_add_modern_version_setting() {
+        let contents = runtime_config(DovecotConfigDialect::Legacy23);
+        assert!(contents.starts_with("!include "));
+        assert!(!contents.contains("dovecot_config_version = 2.4.0"));
     }
 }
 
