@@ -27,11 +27,10 @@ case "$archive" in
     exit 1
     ;;
 esac
-# Validate and extract a private snapshot of the input so another process
-# cannot replace the archive between metadata validation and extraction.
-cp -- "$archive" "$snapshot"
+# Bounded-copy and validate a private snapshot so another process cannot
+# replace the archive between metadata validation and extraction.
+python3 "$script_dir/validate-release-archive.py" --snapshot "$archive" "$snapshot"
 chmod 0600 "$snapshot"
-python3 "$script_dir/validate-release-archive.py" "$snapshot"
 
 validate_member_path() {
   local member="$1"
