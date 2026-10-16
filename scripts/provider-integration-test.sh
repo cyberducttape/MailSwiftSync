@@ -285,8 +285,20 @@ imapsync_binary_sha256="$(sha256_file "$imapsync_binary")"
 doveadm_binary="$(command -v doveadm || true)"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-provider-test.XXXXXX")"
+recovery_pid=""
+terminate_recovery_group() {
+  [[ -n "${recovery_pid:-}" ]] || return 0
+  if kill -0 -- "-$recovery_pid" 2>/dev/null; then
+    kill -KILL -- "-$recovery_pid" 2>/dev/null || true
+  fi
+  wait "$recovery_pid" 2>/dev/null || true
+  recovery_pid=""
+}
 cleanup() {
   local status=$?
+  # Recovery runs in a separate session so a harness interruption cannot
+  # leave a migration running against a workspace that cleanup is deleting.
+  terminate_recovery_group
   if [[ "$status" -ne 0 && -f "${state:-}" ]]; then
     echo "--- MailSwiftSync provider test diagnostics (exit $status) ---" >&2
     "$binary" status "$state" --summary >&2 || true
@@ -295,6 +307,8 @@ cleanup() {
   return "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 state="$workspace/state.db"
 export XDG_CONFIG_HOME="$workspace/config"
@@ -458,8 +472,7 @@ while kill -0 "$recovery_pid" 2>/dev/null; do
   sleep 1
 done
 if [[ "$recovery_started" -ne 1 ]]; then
-  kill -KILL -- "-$recovery_pid" 2>/dev/null || true
-  wait "$recovery_pid" 2>/dev/null || true
+  terminate_recovery_group
   set -e
   echo "FAIL: recovery run did not reach observable running state before deadline" >&2
   tail -50 "$workspace/recovery-interrupted.log" >&2 || true
@@ -469,6 +482,7 @@ echo "✓ Durable running state observed; interrupting process group"
 kill -KILL -- "-$recovery_pid"
 wait "$recovery_pid"
 recovery_exit=$?
+recovery_pid=""
 set -e
 if [[ "$recovery_exit" -ne 137 ]]; then
   echo "FAIL: recovery run was not interrupted by SIGKILL (exit $recovery_exit)" >&2

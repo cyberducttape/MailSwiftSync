@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Terminate and reap the detached recovery-test process group before provider-
+  smoke cleanup removes its ledger and credential workspace, including on
+  interrupt or termination signals.
 - Include the implemented cPanel/Dovecot route in provider-smoke usage output.
 - Decouple the native Dovecot integration path from the pinned imapsync
   prerequisite, allowing that path to run and be qualified independently; the
