@@ -96,6 +96,12 @@
 - Re-emit managed cutover readiness with a new event identity when its prior
   source-quiescence validity window has expired and the operator reconfirms;
   active readiness windows remain deduplicated.
+- Preserve preexisting verification-stage databases when schema or identity
+  initialization fails; newly created partial stages are cleaned up, while
+  existing recovery evidence is retained for inspection.
+- Bound unbudgeted STARTTLS handshakes with an absolute deadline, and commit
+  each durable verification page together with its progress cursor to avoid an
+  extra SQLite synchronization and inconsistent intermediate checkpoint.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.

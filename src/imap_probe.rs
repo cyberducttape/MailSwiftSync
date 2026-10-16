@@ -288,6 +288,17 @@ trait MessageSink {
             Err("body fingerprints are not supported by this message sink".to_owned())
         }
     }
+    fn insert_page_and_checkpoint(
+        &mut self,
+        mailbox: &str,
+        snapshot: crate::core::FolderSnapshot,
+        last_uid: u64,
+        messages: &crate::core::ExtractedMessages,
+        fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
+    ) -> Result<(), String> {
+        self.insert_batch_with_fingerprints(messages, fingerprints)?;
+        self.checkpoint_page(mailbox, snapshot, last_uid)
+    }
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
     /// A durable SQLite stage can reconcile body hashes without constructing
@@ -362,6 +373,23 @@ impl MessageSink for StageMessageSink<'_> {
             .insert_messages_with_fingerprints(self.side, messages, fingerprints)?;
         self.add_current_attempt_messages(messages.len())?;
         Ok(())
+    }
+
+    fn insert_page_and_checkpoint(
+        &mut self,
+        mailbox: &str,
+        snapshot: crate::core::FolderSnapshot,
+        last_uid: u64,
+        messages: &crate::core::ExtractedMessages,
+        fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
+    ) -> Result<(), String> {
+        self.stage.insert_page_with_fingerprints(
+            self.side,
+            messages,
+            fingerprints,
+            Some((mailbox, snapshot, last_uid)),
+        )?;
+        self.add_current_attempt_messages(messages.len())
     }
 
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String> {
@@ -1155,7 +1183,25 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                     fingerprint,
                 ))?;
             }
-            if let Some(body_page) = body_page.as_ref() {
+            if let Some(last_uid) = uid_page.last().copied() {
+                if let Some(body_page) = body_page.as_ref() {
+                    sink.insert_page_and_checkpoint(
+                        mailbox,
+                        snapshot,
+                        last_uid,
+                        &page_messages,
+                        &body_page.fingerprints,
+                    )?;
+                } else {
+                    sink.insert_page_and_checkpoint(
+                        mailbox,
+                        snapshot,
+                        last_uid,
+                        &page_messages,
+                        &HashMap::new(),
+                    )?;
+                }
+            } else if let Some(body_page) = body_page.as_ref() {
                 sink.insert_batch_with_fingerprints(&page_messages, &body_page.fingerprints)?;
             } else {
                 sink.insert_batch(&page_messages)?;
@@ -1180,9 +1226,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
                     "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
                 )));
-            }
-            if let Some(last_uid) = uid_page.last().copied() {
-                sink.checkpoint_page(mailbox, snapshot, last_uid)?;
             }
             Ok(response_bytes)
         },
