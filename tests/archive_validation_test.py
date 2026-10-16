@@ -2,7 +2,9 @@
 
 import importlib.util
 import stat
+import struct
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -60,4 +62,28 @@ def test_zip_symlink_metadata_is_rejected(tmp_path):
         archive.writestr(link, "target")
 
     with pytest.raises(ValueError, match="links and special files are forbidden"):
+        validator.validate_zip(archive_path)
+
+
+def test_zip_unicode_path_extra_field_is_checked_before_extraction(tmp_path):
+    archive_path = tmp_path / "unicode-traversal.zip"
+    stored_name = b"safe.txt"
+    unicode_name = b"../outside"
+    extra = struct.pack(
+        "<HHBI",
+        0x7075,  # Info-ZIP Unicode Path extra field
+        1 + 4 + len(unicode_name),
+        1,
+        zlib.crc32(stored_name),
+    ) + unicode_name
+    member = zipfile.ZipInfo(stored_name.decode("ascii"))
+    member.extra = extra
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(member, b"payload")
+
+    # Both Python's ZIP reader and the system unzip honor this alternate name;
+    # validating only the raw central-directory filename would miss traversal.
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.infolist()[0].filename == "../outside"
+    with pytest.raises(ValueError, match="unsafe archive member path"):
         validator.validate_zip(archive_path)
