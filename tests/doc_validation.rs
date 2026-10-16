@@ -632,6 +632,14 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
         "tagged releases must enforce shell-script linting"
     );
 
+    let deny = fs::read_to_string("deny.toml").expect("dependency policy should exist");
+    let readiness = fs::read_to_string("docs/release-readiness.md")
+        .expect("release-readiness document should exist");
+    assert!(deny.contains("not a security waiver"));
+    assert!(readiness.contains("zip 8.6.0"));
+    assert!(readiness.contains("Calamine security report"));
+    assert!(readiness.contains("remains a GA blocker"));
+
     let dependency_audit = fs::read_to_string(".github/workflows/dependency-audit.yml")
         .expect("dependency audit workflow should exist");
     assert!(

@@ -652,7 +652,7 @@ reconciliation as successful.
 - Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is covered by `scripts/engine-storage-fault-smoke.sh`.
 - Production gatekeeper handshake qualification is covered by `scripts/process-supervision-chaos-smoke.sh`: a launcher with no durable release token or an invalid token never starts the engine, while the exact `GO\n` release token does. Live transfers also pass the planned executable digest through the gatekeeper, which re-hashes the engine after the release acknowledgement and refuses a changed binary; a Unix binary-level regression test replaces the engine while the launcher is waiting and verifies that the replacement never runs. This narrows the post-admission replacement window but does not provide kernel-level fd-based execution or substitute for the required hypervisor power-cut campaign.
 - **Dovecot 2.4.x probe stall safeguard (resolved in the controller):** the LIST/discovery reader now retries transient socket `TimedOut`/`WouldBlock` reads only within its 60-second total deadline, instead of checking the deadline only after a successful read. A regression test covers a timeout during LIST followed by a valid response. Dovecot 2.4.x remains a compatibility-matrix qualification target until a disposable live pilot is recorded; the controller will now fail with bounded discovery evidence rather than hang for the external 300-second watchdog.
-- A clean `cargo audit` result for vulnerabilities; unmaintained transitive dependencies must be tracked and reviewed before each release.
+- A release-reviewed dependency graph: unmaintained transitive dependencies must be tracked, and yanked dependencies require explicit assessment rather than being treated as clean audit results. The current `calamine 0.36.1` XLSX import path pulls the yanked `zip 8.6.0`; an open [upstream Calamine security report](https://github.com/tafia/calamine/issues/723) describes independently reproduced denial-of-service and data-integrity findings affecting that release, with details withheld. This remains a GA blocker until a fixed/reviewed parser is adopted or XLSX parsing is removed from the shipped product. The bounded workbook preflight does not establish safety against these broader parser findings.
 - CI and release workflows should keep third-party GitHub Actions pinned to reviewed commit SHAs; update pins deliberately with the corresponding release version documented in a comment.
 
 The test-gate template is [compatibility-matrix.md](compatibility-matrix.md).
@@ -678,9 +678,16 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 
 Pull-request CI, release verification, and the scheduled dependency workflow run
 both `cargo audit` and `cargo deny check advisories bans licenses sources`.
-The current dependency graph has no reported vulnerabilities; RustSec reports
-only unmaintained `ttf-parser 0.25.1` (`RUSTSEC-2026-0192`), reached through
-`owned_ttf_parser` → `ab_glyph` → `sctk-adwaita` → the desktop `eframe`
-stack. It remains tracked for an upstream replacement or GUI-stack upgrade;
-the advisory is not suppressed by the policy. Release qualification must
-recheck this path and record any version change before publishing artifacts.
+RustSec currently reports no published vulnerability advisory for the
+dependency graph, but `cargo audit` warns that `zip 8.6.0` is yanked; this is
+required by `calamine 0.36.1` for XLSX import and is explicitly excepted in
+`deny.toml` only so the audit can complete. Separately, the open upstream
+[Calamine security report](https://github.com/tafia/calamine/issues/723)
+describes independently reproduced denial-of-service and data-integrity
+findings in 0.36.1 whose details are withheld. This unresolved parser exposure
+is a GA blocker; bounded XLSX preflight does not mitigate every parser path.
+The graph also includes unmaintained `ttf-parser 0.25.1`
+(`RUSTSEC-2026-0192`), reached through `owned_ttf_parser` → `ab_glyph` →
+`sctk-adwaita` → the desktop `eframe` stack. It remains tracked for an upstream
+replacement or GUI-stack upgrade. Release qualification must recheck both
+paths and record changes before publishing artifacts.

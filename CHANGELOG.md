@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Treat the yanked ZIP release required by Calamine 0.36.1, and Calamine's
+  unresolved upstream parser-security report, as an explicit GA blocker; the
+  cargo-deny exception is not a security waiver.
 - Reject reversed XLSX worksheet dimensions and out-of-range explicit row/cell
   references before Calamine parsing, preventing malformed coordinates from
   reaching unchecked dependency arithmetic.
