@@ -113,8 +113,8 @@ jobs:
               dnf -y -q install --setopt=install_weak_deps=False --setopt=tsflags= /packages/*.rpm
               mailswiftsync --version
               test -f /usr/share/man/man1/mailswiftsync.1.gz
-              test -f /usr/share/doc/mailswiftsync/INSTALL.md
-              test -f /usr/share/doc/mailswiftsync/mailswiftsync-supervise.service
+              test -f /usr/share/doc/mailswiftsync/docs/distribution/INSTALL.md
+              test -f /usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service
               test -f /usr/share/bash-completion/completions/mailswiftsync
               dnf -y -q remove mailswiftsync
               test ! -e /usr/bin/mailswiftsync

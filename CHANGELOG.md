@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Align the Fedora RPM install smoke test and service deployment guide with the
+  package's nested `docs/distribution` paths, and assert the RPM, workflow, and
+  operator guide agree.
 - Extend the versioned pre-migration risk report with an optional read-only
   stage-filesystem capacity observation; warn when available headroom is below
   the observed synthetic projection while explicitly avoiding a fit guarantee,
