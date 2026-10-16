@@ -4,9 +4,9 @@ use super::{
     MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageSink,
     MessageStateBudget, QUOTA_PROBE_COMMAND, StageMessageSink, StateReservation,
     TaggedResponseScanner, authenticated_list_command, classify_mailbox_fetch_error,
-    format_folder_failures, inbox_quota_observation, parse_list_delimiter, parse_list_mailbox_name,
-    parse_message_fetch_metadata_response_bytes, parse_message_id_header,
-    quota_response_has_successful_root, read_imap_list_response,
+    format_folder_failures, inbox_quota_observation, message_fetch_limit_exceeded,
+    parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes,
+    parse_message_id_header, quota_response_has_successful_root, read_imap_list_response,
     read_imap_list_response_with_mailboxes, read_with_deadline, record_list_entry,
     source_snapshot_matches, tagged_response_outside_literals, write_imap_command,
 };
@@ -636,16 +636,25 @@ fn list_literal_parsing_consumes_crlf_before_trailing_extension_fields() {
 }
 
 #[test]
-fn list_parser_does_not_treat_extension_literal_as_mailbox_name() {
-    let response = b"* LIST (\\HasChildren) \"/\" \"Projects\" X-TEST {3}\r\nxyz\r\na005 OK LIST completed\r\n";
+fn list_parser_ignores_bounded_trailing_extension_literals() {
+    let response = b"* LIST (\\HasChildren) \"/\" \"Projects\" X-TEST {3}\r\n\x00\xffx X-SECOND {4}\r\nmore\r\na005 OK LIST completed\r\n";
     let mut stream = Cursor::new(response);
     let mut buffer = [0_u8; 4096];
     let mut mailboxes = Vec::new();
-    let error =
-        read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
-            .unwrap_err();
-    assert!(error.contains("literal in trailing extension data"));
-    assert!(mailboxes.is_empty());
+    read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
+fn list_parser_preserves_a_literal_mailbox_name_before_extension_literals() {
+    let response = b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects X-TEST {3}\r\nxyz\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
 }
 
 #[test]
@@ -977,6 +986,13 @@ fn body_hash_message_envelope_is_enforced_before_the_next_fetch_page() {
         32
     ));
     assert!(super::body_hash_message_limit_exceeded(usize::MAX, 1));
+}
+
+#[test]
+fn metadata_limit_rejects_the_projected_page_before_fetch_and_staging() {
+    assert!(!message_fetch_limit_exceeded(999_872, 128));
+    assert!(message_fetch_limit_exceeded(999_873, 128));
+    assert!(message_fetch_limit_exceeded(usize::MAX, 1));
 }
 
 #[test]
