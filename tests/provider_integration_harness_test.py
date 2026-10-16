@@ -207,7 +207,12 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertNotIn("docker run --rm --user 0:0", PROVIDER_WORKFLOW)
 
     def test_live_provider_secrets_are_only_available_to_default_branch_code(self):
-        self.assertIn("if: github.ref == 'refs/heads/main'", PROVIDER_WORKFLOW)
+        self.assertIn(
+            "if: github.ref == 'refs/heads/main' && inputs.confirm_disposable_mailbox_writes",
+            PROVIDER_WORKFLOW,
+        )
+        self.assertIn("confirm_disposable_mailbox_writes:", PROVIDER_WORKFLOW)
+        self.assertIn("default: false", PROVIDER_WORKFLOW)
 
     def test_live_provider_proof_artifacts_have_bounded_retention(self):
         self.assertIn("retention-days: 14", PROVIDER_WORKFLOW)

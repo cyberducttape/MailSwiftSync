@@ -26,6 +26,11 @@ on:
           - gmail-to-microsoft365
           - microsoft365-to-gmail
           - cpanel-dovecot-to-cpanel-dovecot
+      confirm_disposable_mailbox_writes:
+        description: I confirm all configured mailboxes are disposable test accounts and destination writes are authorized
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -41,7 +46,7 @@ jobs:
     # This workflow receives live-provider credentials and executes the
     # Dockerfile plus harness from the dispatched ref. Only main-ref code may
     # cross that credential boundary; required main-branch CI checks apply.
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.confirm_disposable_mailbox_writes
     runs-on: ubuntu-24.04
     environment: live-providers
     timeout-minutes: 60
