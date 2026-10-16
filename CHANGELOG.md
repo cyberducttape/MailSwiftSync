@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fuzz the production streaming IMAP LIST response parser, including literal
+  mailbox names and trailing extended data, in addition to its field helpers.
 - Add a manually dispatched cPanel/Dovecot-to-cPanel/Dovecot smoke route using
   separate disposable source, destination, and recovery mailboxes with
   owner-only staged password files; this is not provider qualification.
