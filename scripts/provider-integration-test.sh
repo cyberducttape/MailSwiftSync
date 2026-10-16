@@ -103,10 +103,6 @@ if [[ -z "$recovery_dest_endpoint" || -z "$recovery_dest_user" || -z "$recovery_
   echo "Set MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT, _USER, and _SECRET." >&2
   exit 1
 fi
-if [[ "$recovery_dest_endpoint" == "${MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT:-}" && "$recovery_dest_user" == "${MAILSWIFTSYNC_PROVIDER_DEST_USER:-}" ]]; then
-  echo "ERROR: recovery destination must not be the normal live destination account" >&2
-  exit 1
-fi
 # Check required environment
 for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT \
   MAILSWIFTSYNC_PROVIDER_SOURCE_USER MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET \
@@ -121,6 +117,15 @@ source_identity="$(printf '%s\n%s' "$MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT" "$M
 destination_identity="$(printf '%s\n%s' "$MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT" "$MAILSWIFTSYNC_PROVIDER_DEST_USER" | tr '[:upper:]' '[:lower:]')"
 if [[ "$source_identity" == "$destination_identity" ]]; then
   echo "ERROR: source and destination must be different mailbox identities; the harness writes to the destination" >&2
+  exit 1
+fi
+recovery_identity="$(printf '%s\n%s' "$recovery_dest_endpoint" "$recovery_dest_user" | tr '[:upper:]' '[:lower:]')"
+if [[ "$recovery_identity" == "$destination_identity" ]]; then
+  echo "ERROR: recovery destination must not be the normal live destination account" >&2
+  exit 1
+fi
+if [[ "$recovery_identity" == "$source_identity" ]]; then
+  echo "ERROR: recovery destination must not be the source account; recovery writes to its destination" >&2
   exit 1
 fi
 if [[ ! -f "$recovery_dest_secret" ]]; then
