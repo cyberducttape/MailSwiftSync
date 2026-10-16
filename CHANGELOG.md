@@ -6,6 +6,7 @@
   ownership of staged secrets and smoke evidence.
 - Limit live-provider smoke proof artifact retention to 14 days because the
   reports contain test mailbox identity and operational metadata.
+- Restrict the live-provider secret workflow to reviewed `main` branch code.
 - Terminate and reap the detached recovery-test process group before provider-
   smoke cleanup removes its ledger and credential workspace, including on
   interrupt or termination signals.
