@@ -323,7 +323,10 @@ Its proofs are smoke artifacts, not release qualification.
 
 6. **Run** *Actions → Live provider smoke → Run workflow* for the selected
    route (`gmail-to-microsoft365`, `microsoft365-to-gmail`, or
-   `cpanel-dovecot-to-cpanel-dovecot`). Hosted-provider jobs exchange each
+   `cpanel-dovecot-to-cpanel-dovecot`) and explicitly confirm that all
+   configured mailboxes are disposable and destination writes are authorized.
+   The workflow defaults that confirmation to false and skips the credentialed
+   job unless it is enabled. Hosted-provider jobs exchange each
    refresh configuration for a short-lived access token with
    `mailswiftsync oauth-access-token` (never printed), run the harness, delete
    staged credentials, and upload credential-free smoke proofs. This
