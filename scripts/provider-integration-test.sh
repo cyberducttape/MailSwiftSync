@@ -290,6 +290,10 @@ terminate_recovery_group() {
   [[ -n "${recovery_pid:-}" ]] || return 0
   if kill -0 -- "-$recovery_pid" 2>/dev/null; then
     kill -KILL -- "-$recovery_pid" 2>/dev/null || true
+  elif kill -0 "$recovery_pid" 2>/dev/null; then
+    # The exit trap can race with setsid() itself. Before the child creates
+    # its new process group, kill its PID so it cannot detach after cleanup.
+    kill -KILL "$recovery_pid" 2>/dev/null || true
   fi
   wait "$recovery_pid" 2>/dev/null || true
   recovery_pid=""
