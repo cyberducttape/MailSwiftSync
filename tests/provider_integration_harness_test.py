@@ -99,6 +99,20 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
                 self.assertIn(expected_error, result.stderr)
                 self.assertNotIn("ERROR: /unused is not executable", result.stderr)
 
+        invalid_endpoint_env = env.copy()
+        invalid_endpoint_env["MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT"] = "bad\nhost:993"
+        result = subprocess.run(
+            ["bash", "-c", SCRIPT, "provider-smoke-test", "cpanel_dovecot"],
+            cwd=ROOT,
+            env=invalid_endpoint_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("IMAP endpoints must be host:port values", result.stderr)
+        self.assertNotIn("ERROR: /unused is not executable", result.stderr)
+
     def test_artifact_path_labels_are_sanitized_without_changing_provider_identity(self):
         self.assertIn('source_provider_path="$(safe_path_component "$source_provider")"', SCRIPT)
         self.assertIn('destination_provider_path="$(safe_path_component "$destination_provider")"', SCRIPT)
@@ -190,7 +204,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertEqual(after_message[1].strip(), 'exit 1')
 
     def test_every_secret_is_checked_before_running_the_binary(self):
-        start = SCRIPT.index("# Validate all secret files before invoking any executable")
+        start = SCRIPT.index("# Validate all secret files before invoking the packaged product or engine")
         end = SCRIPT.index('binary="${MAILSWIFTSYNC_PROVIDER_BINARY}"', start)
         validation = SCRIPT[start:end]
         for secret in (
