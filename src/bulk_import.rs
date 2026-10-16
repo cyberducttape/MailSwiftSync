@@ -467,9 +467,117 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
         }
         worksheet_found = true;
         validate_xlsx_sheet_entry_dimensions(&mut entry)?;
+        drop(entry);
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Could not inspect worksheet cell types: {error}"))?;
+        validate_xlsx_boolean_cells(&mut entry)?;
     }
     if !worksheet_found {
         return Err("The XLSX archive contains no worksheets.".into());
+    }
+    Ok(())
+}
+
+/// Calamine treats every XLSX boolean value other than the exact string `0`
+/// as true. Reject malformed boolean cells before opening the workbook so an
+/// invalid value cannot silently become a migration field such as `true`.
+fn validate_xlsx_boolean_cells<R: Read>(entry: &mut R) -> Result<(), String> {
+    let mut xml = XmlReader::from_reader(BufReader::new(entry));
+    xml.config_mut().trim_text(false);
+    let mut buffer = Vec::with_capacity(1024);
+    let mut in_boolean_cell = false;
+    let mut value_started = false;
+    let mut in_value = false;
+    let mut value_valid = false;
+    let mut value = String::with_capacity(2);
+
+    loop {
+        buffer.clear();
+        match xml
+            .read_event_into(&mut buffer)
+            .map_err(|error| format!("The worksheet XML is malformed: {error}"))?
+        {
+            XmlEvent::Start(element) if element.local_name().as_ref() == "c" => {
+                if in_boolean_cell {
+                    return Err("The worksheet contains nested cells.".into());
+                }
+                let mut cell_type = None;
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        format!("The worksheet cell has a malformed attribute: {error}")
+                    })?;
+                    if attribute.key.local_name().as_ref() == "t" {
+                        if cell_type.is_some() {
+                            return Err("The worksheet cell has duplicate type attributes.".into());
+                        }
+                        cell_type = Some(attribute.value.as_ref() == "b");
+                    }
+                }
+                in_boolean_cell = cell_type == Some(true);
+                value_started = false;
+                in_value = false;
+                value_valid = false;
+                value.clear();
+            }
+            XmlEvent::Empty(element) if element.local_name().as_ref() == "c" => {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        format!("The worksheet cell has a malformed attribute: {error}")
+                    })?;
+                    if attribute.key.local_name().as_ref() == "t" && attribute.value.as_ref() == "b"
+                    {
+                        return Err("A boolean-typed worksheet cell has no valid 0/1 value.".into());
+                    }
+                }
+            }
+            XmlEvent::Start(element) if in_boolean_cell && element.local_name().as_ref() == "v" => {
+                if value_started {
+                    return Err("A boolean-typed worksheet cell has duplicate values.".into());
+                }
+                value_started = true;
+                in_value = true;
+            }
+            XmlEvent::Empty(element) if in_boolean_cell && element.local_name().as_ref() == "v" => {
+                return Err("A boolean-typed worksheet cell has no valid 0/1 value.".into());
+            }
+            XmlEvent::Text(text) if in_boolean_cell && in_value => {
+                if value.len().saturating_add(text.as_ref().len()) > 1 {
+                    return Err(
+                        "A boolean-typed worksheet cell must contain exactly 0 or 1.".into(),
+                    );
+                }
+                value.push_str(text.as_ref());
+            }
+            XmlEvent::CData(text) if in_boolean_cell && in_value => {
+                if value.len().saturating_add(text.as_ref().len()) > 1 {
+                    return Err(
+                        "A boolean-typed worksheet cell must contain exactly 0 or 1.".into(),
+                    );
+                }
+                value.push_str(text.as_ref());
+            }
+            XmlEvent::End(element) if in_boolean_cell && element.local_name().as_ref() == "v" => {
+                in_value = false;
+                if value != "0" && value != "1" {
+                    return Err(
+                        "A boolean-typed worksheet cell must contain exactly 0 or 1.".into(),
+                    );
+                }
+                value_valid = true;
+            }
+            XmlEvent::End(element) if in_boolean_cell && element.local_name().as_ref() == "c" => {
+                if !value_valid {
+                    return Err("A boolean-typed worksheet cell has no valid 0/1 value.".into());
+                }
+                in_boolean_cell = false;
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    if in_boolean_cell {
+        return Err("A boolean-typed worksheet cell is incomplete.".into());
     }
     Ok(())
 }
@@ -848,7 +956,7 @@ mod tests {
     use super::xlsx_reference::parse_cell_reference as parse_xlsx_cell_reference;
     use super::{
         BulkJob, job_from_values, open_import_workbook, plaintext_import_allowed,
-        plaintext_secrets_allowed, validate_xlsx_shared_strings,
+        plaintext_secrets_allowed, validate_xlsx_boolean_cells, validate_xlsx_shared_strings,
         validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
@@ -1114,6 +1222,45 @@ mod tests {
             worksheet.get((0, 0)).and_then(|cell| cell.get_string()),
             Some("source_host")
         );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_boolean_cell_values_are_strictly_validated_before_calamine() {
+        for value in ["0", "1"] {
+            let xml = format!(
+                "<worksheet><sheetData><row><c t=\"b\"><v>{value}</v></c></row></sheetData></worksheet>"
+            );
+            validate_xlsx_boolean_cells(&mut Cursor::new(xml))
+                .expect("OOXML boolean values 0 and 1 are valid");
+        }
+        for value in [
+            "", "false", "TRUE", "00", "0.0", "-1", "2", "banana", "#REF!",
+        ] {
+            let xml = format!(
+                "<worksheet><sheetData><row><c t=\"b\"><v>{value}</v></c></row></sheetData></worksheet>"
+            );
+            assert!(
+                validate_xlsx_boolean_cells(&mut Cursor::new(xml)).is_err(),
+                "invalid boolean-typed cell value {value:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn xlsx_import_rejects_malformed_boolean_cells_before_calamine_reads_them() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-malformed-boolean-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        write_minimal_xlsx(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="b"><v>banana</v></c></row></sheetData></worksheet>"#,
+        );
+        let error = open_import_workbook(&path)
+            .err()
+            .expect("invalid boolean cell must fail during raw XLSX preflight");
+        assert!(error.contains("exactly 0 or 1"));
         std::fs::remove_file(path).unwrap();
     }
 
