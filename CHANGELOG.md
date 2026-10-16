@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run live provider smoke jobs as the packaged unprivileged UID 10001, including
+  ownership of staged secrets and smoke evidence.
 - Terminate and reap the detached recovery-test process group before provider-
   smoke cleanup removes its ledger and credential workspace, including on
   interrupt or termination signals.
