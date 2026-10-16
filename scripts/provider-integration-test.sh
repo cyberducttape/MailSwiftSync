@@ -119,27 +119,42 @@ done
 # port variants, and compressed/expanded IPv6 spellings.
 source_endpoint="$MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT"
 dest_endpoint="$MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT"
-source_host="${source_endpoint%:*}"
-source_port="${source_endpoint##*:}"
-dest_host="${dest_endpoint%:*}"
-dest_port="${dest_endpoint##*:}"
-recovery_host="${recovery_dest_endpoint%:*}"
-recovery_port="${recovery_dest_endpoint##*:}"
-valid_imap_endpoint() {
-  local host="$1" port="$2"
-  [[ "$host" =~ ^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$ ]] || return 1
-  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
-  (( 10#$port > 0 && 10#$port <= 65535 ))
+parse_imap_endpoint() {
+  local endpoint="$1" host port
+  if [[ "$endpoint" =~ ^(\[[0-9A-Fa-f:.]+\]):([0-9]{1,5})$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+  elif [[ "$endpoint" =~ ^([A-Za-z0-9.-]+):([0-9]{1,5})$ ]]; then
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+  else
+    return 1
+  fi
+  (( 10#$port > 0 && 10#$port <= 65535 )) || return 1
+  IMAP_ENDPOINT_HOST="$host"
+  IMAP_ENDPOINT_PORT="$port"
 }
-for endpoint_fields in \
-  "$source_host $source_port" \
-  "$dest_host $dest_port" \
-  "$recovery_host $recovery_port"; do
-  read -r endpoint_host endpoint_port <<<"$endpoint_fields"
-  if ! valid_imap_endpoint "$endpoint_host" "$endpoint_port"; then
+for endpoint_role in source destination recovery; do
+  case "$endpoint_role" in
+    source) endpoint="$source_endpoint" ;;
+    destination) endpoint="$dest_endpoint" ;;
+    recovery) endpoint="$recovery_dest_endpoint" ;;
+  esac
+  if ! parse_imap_endpoint "$endpoint"; then
     echo "ERROR: IMAP endpoints must be host:port values with a valid DNS/IP host and port 1–65535" >&2
     exit 1
   fi
+  case "$endpoint_role" in
+    source)
+      source_host="$IMAP_ENDPOINT_HOST"
+      source_port="$IMAP_ENDPOINT_PORT"
+      ;;
+    destination)
+      dest_host="$IMAP_ENDPOINT_HOST"
+      dest_port="$IMAP_ENDPOINT_PORT"
+      ;;
+    recovery) : ;;
+  esac
 done
 normalize_mailbox_identity() {
   python3 - "$1" "$2" <<'PY'

@@ -126,6 +126,68 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
             self.assertIn("requires qualified imapsync 2.314; found 2.229", result.stderr)
             self.assertFalse(invoked.exists(), "the harness must stop before starting a migration")
 
+    def test_bracketed_ipv6_endpoints_are_split_before_profile_generation(self):
+        with tempfile.TemporaryDirectory(prefix="provider-ipv6-endpoints-") as temp:
+            root = Path(temp)
+            tools = root / "tools"
+            tools.mkdir()
+            captured_profile = root / "profile.toml"
+            preflight_started = root / "preflight-started"
+            binary = tools / "mailswiftsync"
+            binary.write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = "--version" ]; then '
+                'echo "MailSwiftSync 0.1.0-alpha.1 (git test)"; exit 0; fi\n'
+                'if [ "$1" = "headless" ]; then '
+                'cp "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" "$CAPTURED_PROFILE"; '
+                ': > "$PREFLIGHT_STARTED"; exit 23; fi\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            binary.chmod(0o700)
+            imapsync = tools / "imapsync"
+            imapsync.write_text('#!/bin/sh\necho "imapsync 2.314"\n', encoding="utf-8")
+            imapsync.chmod(0o700)
+            secrets = []
+            for name in ("source", "destination", "recovery"):
+                secret = root / f"{name}.secret"
+                secret.write_text("test-only", encoding="utf-8")
+                secret.chmod(0o600)
+                secrets.append(secret)
+            env = {
+                "PATH": f"{tools}:/usr/bin:/bin",
+                "MAILSWIFTSYNC_PROVIDER_BINARY": str(binary),
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT": "[2001:db8::1]:993",
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_USER": "source@example.test",
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET": str(secrets[0]),
+                "MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT": "[2001:db8::2]:993",
+                "MAILSWIFTSYNC_PROVIDER_DEST_USER": "destination@example.test",
+                "MAILSWIFTSYNC_PROVIDER_DEST_SECRET": str(secrets[1]),
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT": "[2001:db8::3]:993",
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER": "recovery@example.test",
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET": str(secrets[2]),
+                "CAPTURED_PROFILE": str(captured_profile),
+                "PREFLIGHT_STARTED": str(preflight_started),
+                "TMPDIR": str(root),
+            }
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "provider-integration-test.sh"), "cpanel_dovecot"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(preflight_started.is_file(), result.stderr)
+            self.assertIn("Dry pilot preflight failed", result.stderr)
+            profile = tomllib.loads(captured_profile.read_text(encoding="utf-8"))
+            self.assertEqual(profile["source_host"], "[2001:db8::1]")
+            self.assertEqual(profile["source_port"], "993")
+            self.assertEqual(profile["destination_host"], "[2001:db8::2]")
+            self.assertEqual(profile["destination_port"], "993")
+
     def test_recovery_profile_rewrite_requires_each_destination_field_once(self):
         command = (
             'python3 - "$recovery_xdg_config/mailswiftsync/profile.toml" '
