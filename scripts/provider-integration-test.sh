@@ -144,19 +144,45 @@ done
 normalize_mailbox_identity() {
   python3 - "$1" "$2" <<'PY'
 import ipaddress
+import re
 import sys
 
 endpoint, user = sys.argv[1:]
 host, port = endpoint.rsplit(":", 1)
+try:
+    port_number = int(port, 10)
+except ValueError:
+    print("ERROR: invalid IMAP endpoint port", file=sys.stderr)
+    raise SystemExit(1)
+if not 1 <= port_number <= 65535:
+    print("ERROR: invalid IMAP endpoint port", file=sys.stderr)
+    raise SystemExit(1)
 if host.startswith("["):
     try:
-        host = f"[{ipaddress.ip_address(host[1:-1]).compressed}]"
+        address = ipaddress.ip_address(host[1:-1])
     except ValueError:
         print("ERROR: invalid IPv6 literal IMAP endpoint", file=sys.stderr)
         raise SystemExit(1)
+    if not isinstance(address, ipaddress.IPv6Address):
+        print("ERROR: bracketed IMAP endpoint must contain an IPv6 address", file=sys.stderr)
+        raise SystemExit(1)
+    host = f"[{address.compressed}]"
 else:
-    host = host.rstrip(".").casefold()
-print(f"{host}:{int(port)}\n{user.casefold()}")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        host = host.rstrip(".").casefold()
+        labels = host.split(".")
+        valid_label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+        if len(host) > 253 or not host or any(not valid_label.fullmatch(label) for label in labels):
+            print("ERROR: invalid DNS hostname in IMAP endpoint", file=sys.stderr)
+            raise SystemExit(1)
+    else:
+        if not isinstance(address, ipaddress.IPv4Address):
+            print("ERROR: IPv6 IMAP endpoints must use brackets", file=sys.stderr)
+            raise SystemExit(1)
+        host = str(address)
+print(f"{host}:{port_number}\n{user.casefold()}")
 PY
 }
 source_identity="$(normalize_mailbox_identity "$source_endpoint" "$MAILSWIFTSYNC_PROVIDER_SOURCE_USER")"

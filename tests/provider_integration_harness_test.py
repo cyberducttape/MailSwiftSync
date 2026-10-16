@@ -113,6 +113,27 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn("IMAP endpoints must be host:port values", result.stderr)
         self.assertNotIn("ERROR: /unused is not executable", result.stderr)
 
+        for invalid_endpoint, expected_error in (
+            ("bad..host:993", "invalid DNS hostname"),
+            ("-bad.example.test:993", "invalid DNS hostname"),
+            ("[abcd:1234]:993", "invalid IPv6 literal"),
+            ("[127.0.0.1]:993", "must contain an IPv6 address"),
+        ):
+            with self.subTest(endpoint=invalid_endpoint):
+                invalid_host_env = env.copy()
+                invalid_host_env["MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT"] = invalid_endpoint
+                result = subprocess.run(
+                    ["bash", "-c", SCRIPT, "provider-smoke-test", "cpanel_dovecot"],
+                    cwd=ROOT,
+                    env=invalid_host_env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+                self.assertNotIn("ERROR: /unused is not executable", result.stderr)
+
     def test_artifact_path_labels_are_sanitized_without_changing_provider_identity(self):
         self.assertIn('source_provider_path="$(safe_path_component "$source_provider")"', SCRIPT)
         self.assertIn('destination_provider_path="$(safe_path_component "$destination_provider")"', SCRIPT)
