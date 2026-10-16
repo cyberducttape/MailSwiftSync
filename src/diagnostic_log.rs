@@ -1252,7 +1252,7 @@ mod tests {
         for secret in ["YWNjZXNz", "cmVmcmVzaA", "cm90YXRlZA", "YXBp", "cGFzcw=="] {
             assert!(
                 !sanitized.contains(secret),
-                "encoded credential value {secret:?} remained in diagnostic output: {sanitized}"
+                "encoded credential fixture remained in sanitized diagnostic output"
             );
         }
         assert_eq!(sanitized.matches("[REDACTED]").count(), 5);
