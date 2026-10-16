@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Include the implemented cPanel/Dovecot route in provider-smoke usage output.
 - Decouple the native Dovecot integration path from the pinned imapsync
   prerequisite, allowing that path to run and be qualified independently; the
   native Dovecot product flow passed in the isolated Dovecot 2.3.19.1 lab.

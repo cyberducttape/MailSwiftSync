@@ -26,6 +26,19 @@ OAUTH_IMAPSYNC_SMOKE = (ROOT / "scripts" / "oauth-imapsync-refresh-smoke.py").re
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
+    def test_usage_lists_the_implemented_cpanel_smoke_route(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "provider-integration-test.sh")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "gmail|m365|microsoft365|fastmail|cpanel_dovecot", result.stderr
+        )
+
     def test_unqualified_imapsync_version_is_refused_before_migration(self):
         with tempfile.TemporaryDirectory(prefix="provider-engine-version-") as temp:
             root = Path(temp)

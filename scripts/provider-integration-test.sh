@@ -32,7 +32,7 @@ set -euo pipefail
 
 provider="${1:-}"
 if [[ -z "$provider" ]]; then
-  echo "Usage: $0 <provider> (gmail|m365|fastmail)" >&2
+  echo "Usage: $0 <provider> (gmail|m365|microsoft365|fastmail|cpanel_dovecot)" >&2
   exit 1
 fi
 case "$provider" in
