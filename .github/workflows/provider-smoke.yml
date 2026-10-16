@@ -39,8 +39,8 @@ jobs:
   provider-smoke:
     name: Live provider smoke (${{ github.event.inputs.direction }})
     # This workflow receives live-provider credentials and executes the
-    # Dockerfile plus harness from the dispatched ref. Only reviewed default-
-    # branch code may cross that credential boundary.
+    # Dockerfile plus harness from the dispatched ref. Only main-ref code may
+    # cross that credential boundary; required main-branch CI checks apply.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     environment: live-providers
