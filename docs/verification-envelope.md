@@ -558,6 +558,30 @@ proof that the original transfer lost mail. SQLite history and finalization
 errors are reported as storage failures rather than being collapsed into
 "no prior run" or a generic scan failure.
 
+A full current-head typical-shape rerun on 2026-10-15 at commit
+`97d3876a042b950f55b2c9ba787048d4fa3d3b30` used the same shared AMD Ryzen 7
+7735U workstation (Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, Rust
+1.92.0, ext4 on NVMe), with each benchmark in a separate process and its
+stage on the workspace filesystem. All five sizes passed the script's 64 MiB
+peak-RSS and 20,000 messages/s reconciliation gates:
+
+| Messages per endpoint | Stage / reconcile | Reconcile rate | FLAGS compared / time | Peak RSS | Stage after staging | Peak stage / journal | Reconciliation writes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 19 ms / 21 ms | 47,619/s | 980 / 9 ms | 13 MiB | 675,840 B | 1,118,928 B / 107,216 B | 557,056 B |
+| 10,000 | 168 ms / 201 ms | 49,751/s | 9,800 / 55 ms | 18 MiB | 6,242,304 B | 9,415,680 B / 949,248 B | 5,337,088 B |
+| 100,000 | 1.930 s / 2.123 s | 47,103/s | 98,000 / 634 ms | 22 MiB | 64,651,264 B | 105,372,120 B / 9,722,328 B | 64,884,736 B |
+| 500,000 | 9.864 s / 11.721 s | 42,658/s | 490,000 / 5.537 s | 22 MiB | 334,123,008 B | 544,121,344 B / 50,225,664 B | 334,880,768 B |
+| 1,000,000 | 20.380 s / 22.198 s | 45,049/s | 980,000 / 6.491 s | 22 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 741,371,904 B |
+
+At 1M, restart reconciliation took 22.095 s and the fixture recorded 20,000
+intentional changed-ID mismatches. Peak RSS and stage/journal measurements are
+process-observed synthetic results; they do not include the full application's
+IMAP fetch state, concurrent workers, final evidence commit, or report export.
+This current-head repeat confirms the bounded reconciliation path on this
+specific host; it is not an end-to-end or provider qualification, does not set
+a safe aggregate disk ceiling, and must not be generalized to 10/50/100 GiB
+mailboxes or other hardware.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the
