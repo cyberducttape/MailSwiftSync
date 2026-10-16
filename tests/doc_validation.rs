@@ -26,31 +26,29 @@ fn doc_files_exist() {
 }
 
 #[test]
-fn adoption_qualification_engine_digests_are_well_formed_sha256() {
+fn adoption_qualification_digests_are_well_formed_sha256() {
     let plan = fs::read_to_string("docs/adoption-qualification-plan.md")
         .expect("adoption qualification plan should exist");
-    let engine_rows = plan
-        .lines()
-        .filter(|line| {
-            line.contains("| Packaged engine |") || line.contains("| Packaged imapsync |")
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        !engine_rows.is_empty(),
-        "qualification plan should record packaged engine identity"
-    );
-    for line in engine_rows {
-        let digest = line
-            .split_once("SHA-256 `")
-            .map(|(_, suffix)| suffix.split('`').next().unwrap_or_default())
-            .expect("packaged engine row should include its SHA-256 digest");
-        assert_eq!(digest.len(), 64, "invalid SHA-256 length in {line}");
-        assert!(
-            digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "non-hex SHA-256 digest in {line}"
-        );
+    let mut digest_count = 0;
+    for line in plan.lines() {
+        let mut remaining = line;
+        while let Some((_, suffix)) = remaining.split_once("SHA-256 `") {
+            let (digest, rest) = suffix
+                .split_once('`')
+                .expect("SHA-256 digest should end with a backtick");
+            assert_eq!(digest.len(), 64, "invalid SHA-256 length in {line}");
+            assert!(
+                digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "non-hex SHA-256 digest in {line}"
+            );
+            digest_count += 1;
+            remaining = rest;
+        }
     }
+    assert!(
+        digest_count > 0,
+        "qualification plan should record SHA-256 digests"
+    );
 }
 
 #[test]
