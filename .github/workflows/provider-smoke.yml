@@ -1,7 +1,7 @@
 name: Live provider smoke
 
-# Manually dispatched smoke run against operator-owned Google Workspace and
-# Microsoft 365 test tenants: dry pilot, interruption + recovery into a
+# Manually dispatched smoke run against operator-owned disposable mailboxes:
+# dry pilot, interruption + recovery into a
 # separate destination mailbox, and a live pilot, using the packaged runtime
 # image (pinned imapsync 2.314). It exchanges supplied refresh configurations
 # for initial access tokens, then tests live transfer and recovery against real
@@ -10,8 +10,8 @@ name: Live provider smoke
 # rotation during reconnect. It is NOT release qualification: the smoke proofs
 # it retains cannot satisfy scripts/verify-evidence-gate.sh.
 #
-# Secrets live in the `live-providers` environment. Each *_REFRESH_CONFIG is
-# the JSON written by
+# Secrets live in the `live-providers` environment. For hosted providers, each
+# *_REFRESH_CONFIG is the JSON written by
 #   mailswiftsync oauth-authorize ... <keyring-id>
 #   mailswiftsync oauth-export-refresh-config <keyring-id> <file>
 # Use dedicated test mailboxes only; the destination mailboxes are written to.
@@ -25,6 +25,7 @@ on:
         options:
           - gmail-to-microsoft365
           - microsoft365-to-gmail
+          - cpanel-dovecot-to-cpanel-dovecot
 
 permissions:
   contents: read
@@ -55,12 +56,43 @@ jobs:
           M365_PRIMARY_REFRESH_CONFIG: ${{ secrets.M365_PRIMARY_REFRESH_CONFIG }}
           M365_RECOVERY_USER: ${{ secrets.M365_RECOVERY_USER }}
           M365_RECOVERY_REFRESH_CONFIG: ${{ secrets.M365_RECOVERY_REFRESH_CONFIG }}
+          CPANEL_SOURCE_ENDPOINT: ${{ secrets.CPANEL_SOURCE_ENDPOINT }}
+          CPANEL_SOURCE_USER: ${{ secrets.CPANEL_SOURCE_USER }}
+          CPANEL_SOURCE_PASSWORD: ${{ secrets.CPANEL_SOURCE_PASSWORD }}
+          CPANEL_DESTINATION_ENDPOINT: ${{ secrets.CPANEL_DESTINATION_ENDPOINT }}
+          CPANEL_DESTINATION_USER: ${{ secrets.CPANEL_DESTINATION_USER }}
+          CPANEL_DESTINATION_PASSWORD: ${{ secrets.CPANEL_DESTINATION_PASSWORD }}
+          CPANEL_RECOVERY_ENDPOINT: ${{ secrets.CPANEL_RECOVERY_ENDPOINT }}
+          CPANEL_RECOVERY_USER: ${{ secrets.CPANEL_RECOVERY_USER }}
+          CPANEL_RECOVERY_PASSWORD: ${{ secrets.CPANEL_RECOVERY_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
           secrets="$RUNNER_TEMP/provider-secrets"
           mkdir -p "$secrets"
           case "$DIRECTION" in
+            cpanel-dovecot-to-cpanel-dovecot)
+              provider=cpanel_dovecot
+              for role in source destination recovery; do
+                role_upper="$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
+                for field in ENDPOINT USER PASSWORD; do
+                  var="CPANEL_${role_upper}_${field}"
+                  if [[ -z "${!var:-}" ]]; then
+                    echo "Missing secret ${var} in the live-providers environment" >&2
+                    exit 1
+                  fi
+                done
+              done
+              for role in source destination recovery; do
+                role_upper="$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
+                endpoint_var="CPANEL_${role_upper}_ENDPOINT"
+                user_var="CPANEL_${role_upper}_USER"
+                password_var="CPANEL_${role_upper}_PASSWORD"
+                printf '%s' "${!endpoint_var}" > "$secrets/${role}-endpoint"
+                printf '%s' "${!user_var}" > "$secrets/${role}-user"
+                printf '%s' "${!password_var}" > "$secrets/${role}-password"
+              done
+              source_endpoint=; dest_endpoint= ;;
             gmail-to-microsoft365)
               provider=gmail
               source_prefix=GOOGLE_PRIMARY; source_endpoint=imap.gmail.com:993
@@ -73,16 +105,18 @@ jobs:
               recovery_prefix=GOOGLE_RECOVERY ;;
             *) echo "Unknown direction: $DIRECTION" >&2; exit 2 ;;
           esac
-          for role in source dest recovery; do
-            prefix_var="${role}_prefix"; prefix="${!prefix_var}"
-            user_var="${prefix}_USER"; config_var="${prefix}_REFRESH_CONFIG"
-            if [[ -z "${!user_var:-}" || -z "${!config_var:-}" ]]; then
-              echo "Missing secret ${user_var} or ${config_var} in the live-providers environment" >&2
-              exit 1
-            fi
-            printf '%s' "${!config_var}" > "$secrets/${role}-refresh.json"
-            printf '%s\n' "${!user_var}" > "$secrets/${role}-user"
-          done
+          if [[ "$DIRECTION" != cpanel-dovecot-to-cpanel-dovecot ]]; then
+            for role in source dest recovery; do
+              prefix_var="${role}_prefix"; prefix="${!prefix_var}"
+              user_var="${prefix}_USER"; config_var="${prefix}_REFRESH_CONFIG"
+              if [[ -z "${!user_var:-}" || -z "${!config_var:-}" ]]; then
+                echo "Missing secret ${user_var} or ${config_var} in the live-providers environment" >&2
+                exit 1
+              fi
+              printf '%s' "${!config_var}" > "$secrets/${role}-refresh.json"
+              printf '%s\n' "${!user_var}" > "$secrets/${role}-user"
+            done
+          fi
           {
             printf 'provider=%s\n' "$provider"
             printf 'source_endpoint=%s\n' "$source_endpoint"
@@ -99,22 +133,36 @@ jobs:
             --volume "$PWD/provider-smoke-evidence:/evidence" \
             --entrypoint /bin/bash mailswiftsync:provider -euo pipefail -c '
               source /secrets/pair.env
-              # Exchange each refresh configuration through the product refresh
-              # client. Tokens are written to owner-only files, never printed.
-              for role in source dest recovery; do
-                mailswiftsync oauth-access-token \
-                  "/secrets/${role}-refresh.json" "/secrets/${role}-token"
-              done
               export MAILSWIFTSYNC_PROVIDER_BINARY=/usr/local/bin/mailswiftsync
-              export MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT="$source_endpoint"
-              export MAILSWIFTSYNC_PROVIDER_SOURCE_USER="$(cat /secrets/source-user)"
-              export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET=/secrets/source-token
-              export MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT="$dest_endpoint"
-              export MAILSWIFTSYNC_PROVIDER_DEST_USER="$(cat /secrets/dest-user)"
-              export MAILSWIFTSYNC_PROVIDER_DEST_SECRET=/secrets/dest-token
-              export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT="$dest_endpoint"
-              export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER="$(cat /secrets/recovery-user)"
-              export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET=/secrets/recovery-token
+              if [ "$provider" = cpanel_dovecot ]; then
+                export MAILSWIFTSYNC_SOURCE_PROVIDER=cpanel_dovecot
+                export MAILSWIFTSYNC_DESTINATION_PROVIDER=cpanel_dovecot
+                export MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT="$(cat /secrets/source-endpoint)"
+                export MAILSWIFTSYNC_PROVIDER_SOURCE_USER="$(cat /secrets/source-user)"
+                export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET=/secrets/source-password
+                export MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT="$(cat /secrets/destination-endpoint)"
+                export MAILSWIFTSYNC_PROVIDER_DEST_USER="$(cat /secrets/destination-user)"
+                export MAILSWIFTSYNC_PROVIDER_DEST_SECRET=/secrets/destination-password
+                export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT="$(cat /secrets/recovery-endpoint)"
+                export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER="$(cat /secrets/recovery-user)"
+                export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET=/secrets/recovery-password
+              else
+                # Exchange refresh configurations through the product client;
+                # access tokens are written to owner-only files, never printed.
+                for role in source dest recovery; do
+                  mailswiftsync oauth-access-token \
+                    "/secrets/${role}-refresh.json" "/secrets/${role}-token"
+                done
+                export MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT="$source_endpoint"
+                export MAILSWIFTSYNC_PROVIDER_SOURCE_USER="$(cat /secrets/source-user)"
+                export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET=/secrets/source-token
+                export MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT="$dest_endpoint"
+                export MAILSWIFTSYNC_PROVIDER_DEST_USER="$(cat /secrets/dest-user)"
+                export MAILSWIFTSYNC_PROVIDER_DEST_SECRET=/secrets/dest-token
+                export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT="$dest_endpoint"
+                export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER="$(cat /secrets/recovery-user)"
+                export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET=/secrets/recovery-token
+              fi
               export MAILSWIFTSYNC_EVIDENCE_OUTPUT=/evidence
               bash /work/scripts/provider-integration-test.sh "$provider"
             '
