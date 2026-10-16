@@ -34,17 +34,26 @@ and repeatable, and a new journal would add its own failure states.
 
 ### Latest packaged integration evidence
 
-On 2026-10-16, packaged product integration jobs passed for commit
-[`bce333cb`](https://github.com/cyberducttape/MailSwiftSync/commit/bce333cb18043b67a6015767d380626e212320c3)
-in [CI run 38903674326](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38903674326).
-The imapsync path used imapsync 2.314 and Dovecot 2.3.19.1: the exported
-metadata evidence reconciled 16 messages after the initial pass and 17 after
-the final delta, with zero missing, extra, modified, failed, or unmatched
-messages in each exported summary. The packaged recovery and storage-fault
-steps also completed successfully. The independent native Dovecot path
-reconciled 16 and then 17 messages by aggregate counts; it did not produce
-per-message metadata or body evidence, and its engine version was recorded as
-unknown. Both paths correctly exported `cutover_readiness: not_established`.
+On 2026-10-16, packaged product integration jobs passed for current PR head
+[`7766f2c6`](https://github.com/cyberducttape/MailSwiftSync/commit/7766f2c6e6332f87fc0ebfb9fb00e69e65923a60)
+in [CI run 38906210211](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38906210211).
+Both jobs used Dovecot 2.3.19.1. The packaged imapsync path used imapsync
+2.314 (SHA-256
+`dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875`):
+the exported Level 2 metadata evidence reconciled 16 messages after the
+initial pass and 17 after the final delta, with 100% flag comparison and zero
+missing, extra, modified, failed, or unmatched messages. Its OAuth callback,
+controller crash/recovery, controller storage-fault/corruption, and engine-side
+destination storage-fault steps also passed. The native Dovecot path reconciled
+16 and then 17 messages by aggregate counts only; it produced no per-message
+metadata or body evidence, and its engine version was recorded as unknown.
+The customer-proof digests for all four initial/final exports were accepted by
+the application's `verify` command. Both paths correctly exported
+`cutover_readiness: not_established`.
+
+The earlier [CI run 38903674326](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38903674326)
+also passed these integration jobs for commit `bce333cb`; it is retained as
+the initial recorded evidence set.
 
 These artifacts demonstrate the stated disposable Dovecot fixture only. They
 are not real-provider qualification, do not prove content equality, do not
