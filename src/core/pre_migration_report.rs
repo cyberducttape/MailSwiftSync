@@ -4,7 +4,7 @@ const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
 const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
-pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 4;
+pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 5;
 const PROJECTED_ENDPOINTS: u64 = 2;
 /// Observed peak stage-directory bytes per staged record in the current
 /// synthetic profiles (mismatch-heavy and missing-ID shapes). The directory
@@ -43,8 +43,13 @@ pub struct PreMigrationRisk {
     pub estimated_verification_stage_and_journal_bytes_min: Option<u64>,
     pub estimated_verification_stage_and_journal_bytes_max: Option<u64>,
     pub verification_stage_projection_basis: String,
-    /// Always `unknown_not_measured` for this scale-only API: it has neither a
-    /// destination inventory nor a live filesystem-space observation.
+    /// Available bytes on the filesystem that will receive the durable stage,
+    /// when the caller supplied a ledger path. This is an observation, not a
+    /// reservation; concurrent writers can consume it.
+    pub verification_stage_filesystem_available_bytes: Option<u64>,
+    /// Capacity status compares the observed free space minus the normal
+    /// runtime reserve with the measured synthetic projection. It is never a
+    /// claim that the whole verification workload will fit.
     pub verification_stage_capacity_status: String,
     pub warnings: Vec<RiskWarning>,
     /// Advisory score for the scale facts supplied to `assess`. This is never
@@ -225,11 +230,52 @@ impl PreMigrationRisk {
             verification_stage_projection_basis: format!(
                 "source_messages × {PROJECTED_ENDPOINTS} endpoints (equal-count assumption) × observed synthetic range {OBSERVED_STAGE_BYTES_PER_RECORD_MIN}–{OBSERVED_STAGE_BYTES_PER_RECORD_MAX} bytes/staged record (mismatch-heavy through missing-ID shapes); workload projection, not a safe upper bound"
             ),
+            verification_stage_filesystem_available_bytes: None,
             verification_stage_capacity_status: "unknown_not_measured".to_owned(),
             warnings,
             readiness_score: score,
             scale_assessment,
         }
+    }
+
+    /// Attach a read-only filesystem observation for the directory that will
+    /// hold the durable verification stage. A positive result only means the
+    /// observed synthetic upper projection fits while preserving the runtime
+    /// free-space floor; it is not an admission guarantee or a reservation.
+    pub fn with_stage_filesystem_capacity(mut self, available_bytes: u64) -> Self {
+        self.verification_stage_filesystem_available_bytes = Some(available_bytes);
+        let usable_bytes = available_bytes
+            .saturating_sub(crate::core::message_staging::STAGE_FREE_SPACE_RESERVE_BYTES);
+        match self.estimated_verification_stage_and_journal_bytes_max {
+            None => {
+                self.verification_stage_capacity_status = "projection_unavailable".to_owned();
+            }
+            Some(estimate)
+                if available_bytes
+                    < crate::core::message_staging::STAGE_FREE_SPACE_RESERVE_BYTES
+                    || estimate > usable_bytes =>
+            {
+                self.verification_stage_capacity_status =
+                    "below_observed_projection_with_reserve".to_owned();
+                self.warnings.push(RiskWarning {
+                    severity: WarningSeverity::Warning,
+                    category: "verification_storage".to_owned(),
+                    message: format!(
+                        "Observed stage-filesystem free space ({available_bytes} bytes) does not cover the synthetic high projection ({estimate} bytes) plus the {}-byte runtime reserve; the projection is not a safe upper bound",
+                        crate::core::message_staging::STAGE_FREE_SPACE_RESERVE_BYTES
+                    ),
+                });
+                self.readiness_score = self.readiness_score.saturating_sub(15);
+                if self.scale_assessment == ScaleAssessment::ScaleClear {
+                    self.scale_assessment = ScaleAssessment::ReviewRequired;
+                }
+            }
+            Some(_) => {
+                self.verification_stage_capacity_status =
+                    "within_observed_projection_not_a_guarantee".to_owned();
+            }
+        }
+        self
     }
 
     #[allow(dead_code)]
@@ -423,6 +469,47 @@ mod tests {
         assert_eq!(
             overflow.verification_stage_capacity_status,
             "unknown_not_measured"
+        );
+    }
+
+    #[test]
+    fn observed_stage_capacity_warns_when_projection_and_reserve_do_not_fit() {
+        let report = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "")
+            .with_stage_filesystem_capacity(
+                crate::core::message_staging::STAGE_FREE_SPACE_RESERVE_BYTES + 1_000,
+            );
+        assert_eq!(
+            report.verification_stage_filesystem_available_bytes,
+            Some(crate::core::message_staging::STAGE_FREE_SPACE_RESERVE_BYTES + 1_000)
+        );
+        assert_eq!(
+            report.verification_stage_capacity_status,
+            "below_observed_projection_with_reserve"
+        );
+        assert_eq!(report.scale_assessment, ScaleAssessment::ReviewRequired);
+        assert!(report.warnings.iter().any(|warning| {
+            warning.category == "verification_storage"
+                && warning.message.contains("not a safe upper bound")
+        }));
+        assert_eq!(report.readiness_score, 55);
+    }
+
+    #[test]
+    fn observed_stage_capacity_fit_is_never_reported_as_a_guarantee() {
+        let projected_max = 1_616_000_000;
+        let report = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "")
+            .with_stage_filesystem_capacity(
+                projected_max + crate::core::message_staging::STAGE_FREE_SPACE_RESERVE_BYTES,
+            );
+        assert_eq!(
+            report.verification_stage_capacity_status,
+            "within_observed_projection_not_a_guarantee"
+        );
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|warning| { warning.category == "verification_storage" })
         );
     }
 }

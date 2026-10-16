@@ -260,7 +260,7 @@ fn risk_command_marks_its_readiness_score_as_scale_only_and_advisory() {
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["format"], "mailswiftsync-pre-migration-risk");
-    assert_eq!(report["format_version"], 4);
+    assert_eq!(report["format_version"], 5);
     assert_eq!(report["assessment_scope"], "scale_only");
     assert_eq!(report["size_input_scope"], "source_endpoint_inventory");
     assert_eq!(report["estimated_combined_body_hash_bytes"], 200_000_000);
@@ -302,6 +302,44 @@ fn risk_command_marks_its_readiness_score_as_scale_only_and_advisory() {
     ] {
         assert!(not_evaluated.iter().any(|value| value == gate));
     }
+}
+
+#[test]
+fn risk_command_can_observe_stage_filesystem_without_creating_state() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-risk-capacity-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir(&directory).expect("temporary directory should be created");
+    let state = directory.join("state.db");
+    let output = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
+        .args(["risk", "100", "5", "100000000", "--state"])
+        .arg(&state)
+        .output()
+        .expect("mailswiftsync should launch");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["format_version"], 5);
+    assert!(
+        report["verification_stage_filesystem_available_bytes"]
+            .as_u64()
+            .is_some()
+    );
+    assert_ne!(
+        report["verification_stage_capacity_status"],
+        "unknown_not_measured"
+    );
+    assert!(!state.exists(), "risk assessment must not create a ledger");
+    assert!(
+        !directory.join("verification-stages").exists(),
+        "risk assessment must not create a stage directory"
+    );
+    std::fs::remove_dir_all(&directory).expect("temporary directory should be removed");
 }
 
 #[test]
