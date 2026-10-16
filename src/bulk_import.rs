@@ -8,6 +8,7 @@
 use crate::{Form, SecretString};
 use calamine::{Reader, Sheets, Xlsx, open_workbook_from_rs};
 use quick_xml::Reader as XmlReader;
+use quick_xml::encoding::DecodingReader;
 use quick_xml::events::Event as XmlEvent;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -512,6 +513,9 @@ fn is_xml_part<R: Read>(entry: &mut R) -> Result<bool, String> {
         if available.is_empty() {
             return Ok(false);
         }
+        if initial && looks_like_utf16_xml(available) {
+            return Ok(true);
+        }
         if initial && available.starts_with(b"\xEF\xBB\xBF") {
             input.consume(3);
             consumed += 3;
@@ -534,11 +538,42 @@ fn is_xml_part<R: Read>(entry: &mut R) -> Result<bool, String> {
     }
 }
 
+/// XML processors can identify UTF-16 from its BOM or the byte pattern of the
+/// first markup character. Recognize these signatures before the UTF-8
+/// whitespace probe so the encoding-aware XML parser validates the same
+/// worksheet parts Calamine can consume.
+fn looks_like_utf16_xml(bytes: &[u8]) -> bool {
+    let (little_endian, mut offset) = if bytes.starts_with(b"\xFF\xFE") {
+        (true, 2)
+    } else if bytes.starts_with(b"\xFE\xFF") {
+        (false, 2)
+    } else if bytes.len() >= 4 && bytes[1] == 0 {
+        (true, 0)
+    } else if bytes.len() >= 4 && bytes[0] == 0 {
+        (false, 0)
+    } else {
+        return false;
+    };
+    while offset + 1 < bytes.len() {
+        let code_unit = if little_endian {
+            u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+        } else {
+            u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
+        };
+        match code_unit {
+            0x20 | 0x09 | 0x0A | 0x0D => offset += 2,
+            0x3C => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Calamine treats every XLSX boolean value other than the exact string `0`
 /// as true. Reject malformed boolean cells before opening the workbook so an
 /// invalid value cannot silently become a migration field such as `true`.
 fn validate_xlsx_boolean_cells<R: Read>(entry: &mut R) -> Result<(), String> {
-    let mut xml = XmlReader::from_reader(BufReader::new(entry));
+    let mut xml = XmlReader::from_reader(DecodingReader::new(BufReader::new(entry)));
     xml.config_mut().trim_text(false);
     let mut buffer = Vec::with_capacity(1024);
     let mut in_boolean_cell = false;
@@ -638,7 +673,7 @@ fn validate_xlsx_boolean_cells<R: Read>(entry: &mut R) -> Result<(), String> {
 }
 
 fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
-    let mut xml = XmlReader::from_reader(BufReader::new(entry));
+    let mut xml = XmlReader::from_reader(DecodingReader::new(BufReader::new(entry)));
     xml.config_mut().trim_text(false);
     let mut buffer = Vec::with_capacity(1024);
     let mut string_count = 0_usize;
@@ -756,8 +791,8 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
 
 fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<bool, String> {
     const MAX_DIMENSION_PREFIX_BYTES: usize = 128 * 1024;
-    let mut bounded = entry.take(MAX_DIMENSION_PREFIX_BYTES as u64 + 1);
-    let mut xml = XmlReader::from_reader(BufReader::new(&mut bounded));
+    let bounded = entry.take(MAX_DIMENSION_PREFIX_BYTES as u64 + 1);
+    let mut xml = XmlReader::from_reader(DecodingReader::new(BufReader::new(bounded)));
     xml.config_mut().trim_text(false);
     let mut buffer = Vec::with_capacity(1024);
     let mut consumed_dimension = None;
@@ -1021,7 +1056,7 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
 mod tests {
     use super::xlsx_reference::parse_cell_reference as parse_xlsx_cell_reference;
     use super::{
-        BulkJob, job_from_values, open_import_workbook, plaintext_import_allowed,
+        BulkJob, is_xml_part, job_from_values, open_import_workbook, plaintext_import_allowed,
         plaintext_secrets_allowed, validate_xlsx_boolean_cells, validate_xlsx_shared_strings,
         validate_xlsx_sheet_entry_dimensions,
     };
@@ -1039,6 +1074,14 @@ mod tests {
     fn write_minimal_xlsx_at(
         path: &std::path::Path,
         worksheet_xml: &str,
+        worksheet_part_path: &str,
+    ) {
+        write_minimal_xlsx_part(path, worksheet_xml.as_bytes(), worksheet_part_path);
+    }
+
+    fn write_minimal_xlsx_part(
+        path: &std::path::Path,
+        worksheet_xml: &[u8],
         worksheet_part_path: &str,
     ) {
         let file = std::fs::File::create(path).unwrap();
@@ -1066,11 +1109,12 @@ mod tests {
                 "xl/sharedStrings.xml",
                 r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>unused fixture value</t></si></sst>"#,
             ),
-            (worksheet_entry.as_str(), worksheet_xml),
         ] {
             archive.start_file(name, options).unwrap();
             std::io::Write::write_all(&mut archive, contents.as_bytes()).unwrap();
         }
+        archive.start_file(worksheet_entry, options).unwrap();
+        std::io::Write::write_all(&mut archive, worksheet_xml).unwrap();
         archive.finish().unwrap();
     }
 
@@ -1378,6 +1422,30 @@ mod tests {
             worksheet.get((0, 0)).and_then(|cell| cell.get_bool()),
             Some(true)
         );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_boolean_preflight_handles_utf16_worksheet_parts() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-utf16-sheet-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        let xml = r#"<?xml version="1.0" encoding="UTF-16"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="b"><v>banana</v></c></row></sheetData></worksheet>"#;
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
+        assert!(is_xml_part(&mut Cursor::new(bytes.clone())).unwrap());
+        assert!(validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(bytes.clone())).unwrap());
+        write_minimal_xlsx_part(&path, &bytes, "custom/migration-data.sheet");
+
+        let error = open_import_workbook(&path)
+            .err()
+            .expect("malformed UTF-16 boolean must be rejected by preflight");
+        assert!(
+            error.contains("exactly 0 or 1"),
+            "unexpected error: {error}"
+        );
+
         std::fs::remove_file(path).unwrap();
     }
 
