@@ -4,6 +4,10 @@ set -euo pipefail
 package="${1:?usage: verify-deb-package.sh PACKAGE.deb}"
 command -v dpkg-deb >/dev/null 2>&1 || { echo "dpkg-deb is required" >&2; exit 2; }
 [[ -f "$package" ]] || { echo "package not found: $package" >&2; exit 1; }
+script_dir="$(CDPATH="" cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+extracted="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-deb-check.XXXXXX")"
+cleanup() { rm -rf -- "$extracted"; }
+trap cleanup EXIT
 
 mapfile -t files < <(dpkg-deb --contents "$package" | awk '{print $NF}')
 for required in \
@@ -29,4 +33,7 @@ if printf '%s\n' "${files[@]}" | grep -Eq '(^|/)\.git(/|$)'; then
   exit 1
 fi
 dpkg-deb --info "$package" | grep -Fq 'Package: mailswiftsync'
+dpkg-deb --extract "$package" "$extracted"
+python3 "$script_dir/verify-markdown-links.py" \
+  "$extracted/usr/share/doc/mailswiftsync/docs"
 printf 'PASS: Debian package verified: %s\n' "$package"
