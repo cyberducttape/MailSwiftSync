@@ -62,13 +62,16 @@ pub(super) fn register_process(
 
 /// Start MailSwiftSync's internal gatekeeper instead of the external engine.
 /// The gatekeeper inherits the configured environment, waits for the durable
-/// ProcessStarted acknowledgement, and only then launches the engine. This
-/// closes the crash window between OS process creation and durable ownership.
+/// ProcessStarted acknowledgement, revalidates the transfer engine identity,
+/// and only then launches the engine. This closes the crash window between OS
+/// process creation and durable ownership without leaving a replacement window
+/// during the durable acknowledgement wait.
 #[cfg(not(test))]
 pub(super) fn execution_command(
     executable: &str,
     args: &[String],
     env: &[(String, SecretString)],
+    expected_identity: Option<&str>,
 ) -> Result<Command, String> {
     let current_executable = std::env::current_exe()
         .map_err(|error| format!("could not locate MailSwiftSync launcher: {error}"))?;
@@ -81,6 +84,7 @@ pub(super) fn execution_command(
     command
         .arg("--internal-launcher")
         .arg(&launch_executable)
+        .args(expected_identity.map(|identity| format!("--expected-identity={identity}")))
         .arg("--")
         .args(args)
         .envs(engine_env)
@@ -98,6 +102,7 @@ pub(super) fn execution_command(
     executable: &str,
     args: &[String],
     env: &[(String, SecretString)],
+    _expected_identity: Option<&str>,
 ) -> Result<Command, String> {
     let launch_executable = hardened_executable_path(executable)?;
     let mut command = Command::new(launch_executable);
@@ -159,9 +164,31 @@ pub(crate) fn run_internal_launcher(arguments: Vec<std::ffi::OsString>) -> i32 {
     let Some(separator) = remainder.iter().position(|argument| argument == "--") else {
         return 125;
     };
+    let expected_identity = match &remainder[..separator] {
+        [] => None,
+        [argument] => argument
+            .to_str()
+            .and_then(|value| value.strip_prefix("--expected-identity=")),
+        _ => return 125,
+    };
+    if !remainder[..separator].is_empty() && expected_identity.is_none() {
+        return 125;
+    }
     let mut release = [0_u8; 3];
     if std::io::stdin().read_exact(&mut release).is_err() || release != *b"GO\n" {
         return 125;
+    }
+    if let Some(expected_identity) = expected_identity {
+        let Some(executable_path) = executable.to_str() else {
+            eprintln!("refusing to launch an engine with a non-UTF-8 path");
+            return 125;
+        };
+        if let Err(error) =
+            crate::plan_identity::revalidate_executable(executable_path, expected_identity)
+        {
+            eprintln!("refusing to launch an engine whose identity changed: {error}");
+            return 125;
+        }
     }
     let mut command = Command::new(executable);
     // Re-apply the allowlist even though the controller already cleared the
@@ -256,7 +283,7 @@ pub(crate) fn run_capture_lines(
     observer: Option<OutputObserver>,
     durable: Option<(&mpsc::SyncSender<crate::Event>, &str, &str)>,
 ) -> Result<(ProcessOutcome, Vec<String>, bool), String> {
-    let mut command = execution_command(executable, args, env)?;
+    let mut command = execution_command(executable, args, env, None)?;
     let mut child = spawn_retrying_busy_executable(&mut command)
         .map_err(|error| format!("could not start {executable}: {error}"))?;
     let mut release_stdin = child.stdin.take();

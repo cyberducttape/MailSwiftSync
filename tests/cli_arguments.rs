@@ -528,6 +528,93 @@ fn engine_does_not_inherit_controller_environment_secrets() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn internal_launcher_rechecks_engine_identity_after_durable_release_gate() {
+    use sha2::{Digest, Sha256};
+    use std::{io::Write, os::unix::fs::PermissionsExt, process::Stdio};
+
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-engine-identity-gate-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let engine = directory.join("engine.sh");
+    let marker = directory.join("executed");
+    let original = format!(
+        "#!/bin/sh\nprintf original > '{}'\nexit 0\n",
+        marker.display()
+    );
+    std::fs::write(&engine, original.as_bytes()).unwrap();
+    std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let expected_identity = format!(
+        "sha256:{}",
+        Sha256::digest(original.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
+        .arg("--internal-launcher")
+        .arg(&engine)
+        .arg(format!("--expected-identity={expected_identity}"))
+        .arg("--")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("internal launcher should start and wait at its release gate");
+
+    let replacement = format!("#!/bin/sh\nprintf ran > '{}'\nexit 0\n", marker.display());
+    std::fs::write(&engine, replacement).unwrap();
+    std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"GO\n")
+        .expect("release gate should accept its acknowledgement");
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(125));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("identity changed before launch"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!marker.exists(), "replacement engine must not execute");
+
+    std::fs::write(&engine, original).unwrap();
+    std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
+        .arg("--internal-launcher")
+        .arg(&engine)
+        .arg(format!("--expected-identity={expected_identity}"))
+        .arg("--")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("internal launcher should start for an unchanged engine");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"GO\n")
+        .expect("release gate should accept its acknowledgement");
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "original");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 fn private_directory(name: &str) -> PathBuf {
     let directory =
         std::env::temp_dir().join(format!("mailswiftsync-cli-{name}-{}", std::process::id()));
