@@ -26,6 +26,55 @@ OAUTH_IMAPSYNC_SMOKE = (ROOT / "scripts" / "oauth-imapsync-refresh-smoke.py").re
 
 
 class ProviderIntegrationHarnessTests(unittest.TestCase):
+    def test_unqualified_imapsync_version_is_refused_before_migration(self):
+        with tempfile.TemporaryDirectory(prefix="provider-engine-version-") as temp:
+            root = Path(temp)
+            tools = root / "tools"
+            tools.mkdir()
+            invoked = root / "migration-invoked"
+            binary = tools / "mailswiftsync"
+            binary.write_text(
+                '#!/bin/sh\nif [ "$1" = "--version" ]; then '
+                'echo "MailSwiftSync 0.1.0-alpha.1 (git test)"; exit 0; fi\n'
+                f'printf invoked > "{invoked}"\nexit 0\n',
+                encoding="utf-8",
+            )
+            binary.chmod(0o700)
+            imapsync = tools / "imapsync"
+            imapsync.write_text('#!/bin/sh\necho "imapsync 2.229"\n', encoding="utf-8")
+            imapsync.chmod(0o700)
+            secrets = []
+            for name in ("source", "destination", "recovery"):
+                secret = root / f"{name}.secret"
+                secret.write_text("test-only", encoding="utf-8")
+                secret.chmod(0o600)
+                secrets.append(secret)
+            env = {
+                "PATH": f"{tools}:/usr/bin:/bin",
+                "MAILSWIFTSYNC_PROVIDER_BINARY": str(binary),
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT": "source.example.test:993",
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_USER": "source@example.test",
+                "MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET": str(secrets[0]),
+                "MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT": "destination.example.test:993",
+                "MAILSWIFTSYNC_PROVIDER_DEST_USER": "destination@example.test",
+                "MAILSWIFTSYNC_PROVIDER_DEST_SECRET": str(secrets[1]),
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT": "recovery.example.test:993",
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER": "recovery@example.test",
+                "MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET": str(secrets[2]),
+                "TMPDIR": str(root),
+            }
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "provider-integration-test.sh"), "cpanel_dovecot"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires qualified imapsync 2.314; found 2.229", result.stderr)
+            self.assertFalse(invoked.exists(), "the harness must stop before starting a migration")
+
     def test_recovery_profile_rewrite_requires_each_destination_field_once(self):
         command = (
             'python3 - "$recovery_xdg_config/mailswiftsync/profile.toml" '

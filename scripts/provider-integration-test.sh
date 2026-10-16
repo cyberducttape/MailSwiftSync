@@ -276,6 +276,11 @@ if [[ -z "$imapsync_version" ]]; then
   echo "ERROR: could not parse imapsync version: $imapsync_version_output" >&2
   exit 1
 fi
+expected_imapsync_version=2.314
+if [[ "$imapsync_version" != "$expected_imapsync_version" ]]; then
+  echo "ERROR: provider smoke requires qualified imapsync $expected_imapsync_version; found $imapsync_version" >&2
+  exit 1
+fi
 imapsync_binary_sha256="$(sha256_file "$imapsync_binary")"
 doveadm_binary="$(command -v doveadm || true)"
 
