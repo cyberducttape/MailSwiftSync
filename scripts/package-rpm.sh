@@ -16,7 +16,9 @@ fi
 output_dir="${1:-dist}"
 binary="${MAILSWIFTSYNC_PACKAGE_BINARY:-target/release/mailswiftsync}"
 if [[ ! -x "$binary" ]]; then
-  cargo build --locked --release
+  source_revision="${MAILSWIFTSYNC_GIT_SHA:-$(git rev-parse --verify HEAD)}"
+  MAILSWIFTSYNC_GIT_SHA="$source_revision" \
+    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --locked --release
 fi
 [[ -x "$binary" ]] || { echo "release binary is not executable: $binary" >&2; exit 1; }
 
@@ -54,10 +56,14 @@ install -d -m 0755 "$payload/usr/bin" "$payload/usr/share/doc/mailswiftsync" \
 install -m 0755 "$binary" "$payload/usr/bin/mailswiftsync"
 install -m 0644 README.md LICENSE PRODUCTION_STATUS.md \
   "$payload/usr/share/doc/mailswiftsync/"
-install -m 0644 docs/distribution/INSTALL.md \
-  "$payload/usr/share/doc/mailswiftsync/INSTALL.md"
+install -d -m 0755 "$payload/usr/share/doc/mailswiftsync/docs/distribution"
+install -m 0644 docs/container.md \
+  "$payload/usr/share/doc/mailswiftsync/docs/container.md"
+install -m 0644 docs/distribution/INSTALL.md docs/distribution/SERVICE.md \
+  docs/distribution/CREDENTIAL-LIFECYCLE.md \
+  "$payload/usr/share/doc/mailswiftsync/docs/distribution/"
 install -m 0644 docs/distribution/mailswiftsync-supervise.service \
-  "$payload/usr/share/doc/mailswiftsync/mailswiftsync-supervise.service"
+  "$payload/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service"
 install -m 0644 assets/fonts/OFL.txt \
   "$payload/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt"
 install -m 0644 docs/distribution/mailswiftsync.1 \
@@ -100,8 +106,11 @@ cp -a "$payload/." %{buildroot}/
 %files
 %attr(0755,root,root) /usr/bin/mailswiftsync
 %doc /usr/share/doc/mailswiftsync/README.md
-%doc /usr/share/doc/mailswiftsync/INSTALL.md
-%doc /usr/share/doc/mailswiftsync/mailswiftsync-supervise.service
+%doc /usr/share/doc/mailswiftsync/docs/container.md
+%doc /usr/share/doc/mailswiftsync/docs/distribution/INSTALL.md
+%doc /usr/share/doc/mailswiftsync/docs/distribution/SERVICE.md
+%doc /usr/share/doc/mailswiftsync/docs/distribution/CREDENTIAL-LIFECYCLE.md
+%doc /usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service
 %doc /usr/share/doc/mailswiftsync/PRODUCTION_STATUS.md
 %doc /usr/share/doc/mailswiftsync/LICENSE
 %doc /usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt

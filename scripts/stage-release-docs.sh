@@ -62,6 +62,8 @@ distribution_documents=(
   docs/bulk-migrations-template.csv
   docs/distribution/INSTALL.md
   docs/distribution/SERVICE.md
+  docs/distribution/CREDENTIAL-LIFECYCLE.md
+  docs/distribution/mailswiftsync-supervise.service
   docs/automation-contract.md
   docs/crash-recovery-validation.md
   docs/msp-operations-runbook.md
