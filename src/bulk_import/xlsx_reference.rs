@@ -16,7 +16,12 @@ pub(crate) fn validate_dimension_reference(
             return Err("The worksheet dimension contains too many range endpoints.".into());
         }
         let (end_columns, end_rows) = parse_cell_reference(end)?;
-        (start_columns.max(end_columns), start_rows.max(end_rows))
+        if end_columns < start_columns || end_rows < start_rows {
+            return Err(
+                "The worksheet dimension range must run from top-left to bottom-right.".into(),
+            );
+        }
+        (end_columns, end_rows)
     } else {
         (start_columns, start_rows)
     };
