@@ -4,7 +4,8 @@
 
 - Extend the versioned pre-migration risk report with an optional read-only
   stage-filesystem capacity observation; warn when available headroom is below
-  the observed synthetic projection while explicitly avoiding a fit guarantee.
+  the observed synthetic projection while explicitly avoiding a fit guarantee,
+  and refuse symlinked or untrusted stage-directory paths.
 - Treat the yanked ZIP release required by Calamine 0.36.1, and Calamine's
   unresolved upstream parser-security report, as an explicit GA blocker; the
   cargo-deny exception is not a security waiver.

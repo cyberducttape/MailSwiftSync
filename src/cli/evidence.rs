@@ -1037,8 +1037,22 @@ fn existing_directory_for_capacity_probe(
 ) -> Result<std::path::PathBuf, String> {
     let mut candidate = path;
     loop {
-        match std::fs::metadata(candidate) {
-            Ok(metadata) if metadata.is_dir() => return Ok(candidate.to_path_buf()),
+        match std::fs::symlink_metadata(candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "{} is a symbolic link; capacity probe refuses to follow it",
+                    candidate.display()
+                ));
+            }
+            Ok(metadata) if metadata.is_dir() => {
+                crate::credentials::verify_private_directory(candidate).map_err(|error| {
+                    format!(
+                        "{} is not a trusted stage directory: {error}",
+                        candidate.display()
+                    )
+                })?;
+                return Ok(candidate.to_path_buf());
+            }
             Ok(_) => return Err(format!("{} is not a directory", candidate.display())),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 candidate = candidate.parent().ok_or_else(|| {

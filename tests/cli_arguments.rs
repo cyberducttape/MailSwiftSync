@@ -312,6 +312,12 @@ fn risk_command_can_observe_stage_filesystem_without_creating_state() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir(&directory).expect("temporary directory should be created");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("temporary directory should be private");
+    }
     let state = directory.join("state.db");
     let output = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
         .args(["risk", "100", "5", "100000000", "--state"])
@@ -340,6 +346,33 @@ fn risk_command_can_observe_stage_filesystem_without_creating_state() {
         "risk assessment must not create a stage directory"
     );
     std::fs::remove_dir_all(&directory).expect("temporary directory should be removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn risk_command_refuses_a_symlinked_stage_directory() {
+    use std::os::unix::fs::symlink;
+
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-risk-symlink-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let target = directory.join("other-volume");
+    std::fs::create_dir_all(&target).expect("temporary target directory should be created");
+    symlink(&target, directory.join("verification-stages"))
+        .expect("stage path symlink should be created");
+
+    let state = directory.join("state.db");
+    let output = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
+        .args(["risk", "100", "5", "100000000", "--state"])
+        .arg(&state)
+        .output()
+        .expect("mailswiftsync should launch");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refuses to follow"));
+    assert!(!state.exists(), "risk assessment must not create a ledger");
+    std::fs::remove_dir_all(&directory).expect("temporary directories should be removed");
 }
 
 #[test]
