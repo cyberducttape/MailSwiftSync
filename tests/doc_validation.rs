@@ -644,7 +644,8 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
     assert!(!readiness.contains("ttf-parser 0.25.1` warning remains tracked"));
 
     let dependency_audit = fs::read_to_string(".github/workflows/dependency-audit.yml")
-        .expect("dependency audit workflow should exist");
+        .expect("dependency audit workflow should exist")
+        .replace("\r\n", "\n");
     assert!(
         dependency_audit.contains("pip-audit==2.10.1")
             && dependency_audit.contains(
