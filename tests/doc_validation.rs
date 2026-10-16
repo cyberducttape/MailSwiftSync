@@ -635,10 +635,13 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
     let deny = fs::read_to_string("deny.toml").expect("dependency policy should exist");
     let readiness = fs::read_to_string("docs/release-readiness.md")
         .expect("release-readiness document should exist");
+    let lockfile = fs::read_to_string("Cargo.lock").expect("Cargo lockfile should exist");
     assert!(deny.contains("not a security waiver"));
     assert!(readiness.contains("zip 8.6.0"));
     assert!(readiness.contains("Calamine security report"));
     assert!(readiness.contains("remains a GA blocker"));
+    assert!(!lockfile.contains("name = \"ttf-parser\""));
+    assert!(!readiness.contains("ttf-parser 0.25.1` warning remains tracked"));
 
     let dependency_audit = fs::read_to_string(".github/workflows/dependency-audit.yml")
         .expect("dependency audit workflow should exist");

@@ -686,8 +686,7 @@ required by `calamine 0.36.1` for XLSX import and is explicitly excepted in
 describes independently reproduced denial-of-service and data-integrity
 findings in 0.36.1 whose details are withheld. This unresolved parser exposure
 is a GA blocker; bounded XLSX preflight does not mitigate every parser path.
-The graph also includes unmaintained `ttf-parser 0.25.1`
-(`RUSTSEC-2026-0192`), reached through `owned_ttf_parser` → `ab_glyph` →
-`sctk-adwaita` → the desktop `eframe` stack. It remains tracked for an upstream
-replacement or GUI-stack upgrade. Release qualification must recheck both
-paths and record changes before publishing artifacts.
+The previous unmaintained `ttf-parser 0.25.1` warning is resolved: the current
+Linux Wayland configuration disables winit's default `ab_glyph` renderer and
+the lockfile no longer contains `ttf-parser`. Release qualification must
+recheck the Calamine/ZIP path before publishing artifacts.
