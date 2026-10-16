@@ -57,6 +57,13 @@ source_provider="${MAILSWIFTSYNC_SOURCE_PROVIDER:-$default_source_provider}"
 destination_provider="${MAILSWIFTSYNC_DESTINATION_PROVIDER:-$default_destination_provider}"
 [[ "$source_provider" == "m365" ]] && source_provider="microsoft365"
 [[ "$destination_provider" == "m365" ]] && destination_provider="microsoft365"
+safe_path_component() {
+  local LC_ALL=C value="$1"
+  value="${value//[!a-zA-Z0-9_.-]/_}"
+  printf '%s' "$value"
+}
+source_provider_path="$(safe_path_component "$source_provider")"
+destination_provider_path="$(safe_path_component "$destination_provider")"
 default_source_auth=password
 default_destination_auth=password
 [[ "$source_provider" == "gmail" || "$source_provider" == "microsoft365" ]] && default_source_auth=oauth2
@@ -291,7 +298,7 @@ echo "=== Starting dry pilot for $provider ==="
   exit 1
 }
 echo "✓ Dry pilot preflight succeeded"
-dry_proof="$workspace/${source_provider}-to-${destination_provider}-dry_pilot-proof.json"
+dry_proof="$workspace/${source_provider_path}-to-${destination_provider_path}-dry_pilot-proof.json"
 "$binary" customer-proof "$state" "$dry_proof" --allow-incomplete \
   --source-provider "$source_provider" --destination-provider "$destination_provider" \
   --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
@@ -423,7 +430,7 @@ echo "Running live migration again to complete recovery..."
   exit 1
 }
 echo "✓ Recovery continuation succeeded"
-recovery_proof="$workspace/${source_provider}-to-${destination_provider}-recovery_test-proof.json"
+recovery_proof="$workspace/${source_provider_path}-to-${destination_provider_path}-recovery_test-proof.json"
 "$binary" customer-proof "$recovery_state" "$recovery_proof" \
   --source-provider "$source_provider" --destination-provider "$destination_provider" \
   --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
@@ -447,7 +454,7 @@ echo "=== Starting live migration for $provider (live_pilot) ==="
   exit 1
 }
 echo "✓ Live migration succeeded"
-live_proof="$workspace/${source_provider}-to-${destination_provider}-live_pilot-proof.json"
+live_proof="$workspace/${source_provider_path}-to-${destination_provider_path}-live_pilot-proof.json"
 "$binary" customer-proof "$state" "$live_proof" \
   --source-provider "$source_provider" --destination-provider "$destination_provider" \
   --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
@@ -461,7 +468,7 @@ live_proof="$workspace/${source_provider}-to-${destination_provider}-live_pilot-
 # 4. VERIFY AND RETAIN SMOKE PROOFS (not qualification evidence)
 proof_output="${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-${TMPDIR:-/tmp}/mailswiftsync-provider-smoke}"
 mkdir -p "$proof_output"
-proof_bundle="$proof_output/${source_provider}-to-${destination_provider}-smoke-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+proof_bundle="$proof_output/${source_provider_path}-to-${destination_provider_path}-smoke-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
 for phase_proof in "$dry_proof" "$live_proof" "$recovery_proof"; do
   "$binary" verify "$phase_proof" >"$workspace/verify.log" 2>&1 || {
     cat "$workspace/verify.log" >&2
@@ -474,9 +481,9 @@ mkdir -m 0700 "$proof_bundle" || {
   echo "FAIL: could not create a unique private smoke-proof directory: $proof_bundle" >&2
   exit 1
 }
-cp -- "$dry_proof" "$proof_bundle/${source_provider}-to-${destination_provider}-dry_pilot-smoke-proof.json"
-cp -- "$live_proof" "$proof_bundle/${source_provider}-to-${destination_provider}-live_pilot-smoke-proof.json"
-cp -- "$recovery_proof" "$proof_bundle/${source_provider}-to-${destination_provider}-recovery_test-smoke-proof.json"
+cp -- "$dry_proof" "$proof_bundle/${source_provider_path}-to-${destination_provider_path}-dry_pilot-smoke-proof.json"
+cp -- "$live_proof" "$proof_bundle/${source_provider_path}-to-${destination_provider_path}-live_pilot-smoke-proof.json"
+cp -- "$recovery_proof" "$proof_bundle/${source_provider_path}-to-${destination_provider_path}-recovery_test-smoke-proof.json"
 
 # 5. PRINT SUMMARY
 echo "=== Test Summary for $provider ==="

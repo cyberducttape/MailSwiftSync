@@ -9,6 +9,8 @@
   destination mailbox, preventing an accidental write to the source account.
 - Validate IMAP endpoint syntax and safely quote generated profile strings;
   invoke packaged binary paths with spaces as single executable paths.
+- Sanitize provider labels when forming smoke-proof artifact paths while
+  retaining the original provider identity in proof metadata.
 - Add a workload-specific measured-range projection for verification stage
   storage (including sampled rollback-journal peak) to the scale-only risk
   report; it is not a capacity bound, and worker disk capacity remains
