@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject reversed XLSX worksheet dimensions and out-of-range explicit row/cell
+  references before Calamine parsing, preventing malformed coordinates from
+  reaching unchecked dependency arithmetic.
 - Reject malformed XLSX boolean-typed cells during raw archive preflight so
   noncanonical values cannot be silently coerced into migration booleans by
   the workbook parser; discover worksheet parts from XML roots rather than
