@@ -35,6 +35,11 @@ if [[ "$disposable_scale" == 1 ]] && (( scale_messages == 0 )); then
   echo "FAIL: MAILSWIFTSYNC_DISPOSABLE_SCALE=1 requires a scale message fixture" >&2
   exit 1
 fi
+disable_dovecot_chroot="${MAILSWIFTSYNC_TEST_DISABLE_DOVECOT_CHROOT:-0}"
+if [[ "$disable_dovecot_chroot" != 0 && "$disable_dovecot_chroot" != 1 ]]; then
+  echo "FAIL: MAILSWIFTSYNC_TEST_DISABLE_DOVECOT_CHROOT must be 0 or 1" >&2
+  exit 1
+fi
 if [[ "$test_engine" != "ImapSync" && "$test_engine" != "Dovecot" ]]; then
   echo "FAIL: MAILSWIFTSYNC_TEST_ENGINE must be ImapSync or Dovecot" >&2
   exit 1
@@ -280,6 +285,9 @@ trap cleanup EXIT
 
 uid="$(id -u)"
 gid="$(id -g)"
+login_user="$(id -un dovenull 2>/dev/null || id -un)"
+internal_user="$(id -un dovecot 2>/dev/null || id -un)"
+internal_group="$(id -gn dovecot 2>/dev/null || id -gn)"
 # Dovecot 2.4 rejects passwd-file entries that resolve to uid 0. Use the
 # service account for the disposable fixture when it exists; this also keeps
 # the test representative of an unprivileged mailbox service.
@@ -326,6 +334,12 @@ EOF
     -out "$root/tls.crt" -extfile "$root/tls.ext" >/dev/null 2>&1
   chmod 0600 "$root/ca.key" "$root/tls.key"
   local version_setting mail_settings auth_settings auth_cleartext_setting tls_settings
+  local login_chroot_setting=""
+  if [[ "$disable_dovecot_chroot" == 1 ]]; then
+    # Unprivileged sandboxes cannot chroot; use this only when the entire lab
+    # is already isolated by an outer container or user namespace.
+    login_chroot_setting="  chroot ="
+  fi
   case "$dovecot_version" in
     2.4.*)
       version_setting="dovecot_config_version = 2.4.0
@@ -393,6 +407,9 @@ base_dir = $root/run/
 state_dir = $root/run/
 protocols = imap
 listen = 127.0.0.1
+default_login_user = $login_user
+default_internal_user = $internal_user
+default_internal_group = $internal_group
 log_path = $root/log/dovecot.log
 info_log_path = $root/log/dovecot-info.log
 ssl = yes
@@ -410,6 +427,7 @@ namespace inbox {
 }
 $auth_settings
 service imap-login {
+${login_chroot_setting}
   inet_listener imap {
     port = $port
   }

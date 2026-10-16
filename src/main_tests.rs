@@ -609,7 +609,10 @@ fn local_dovecot_credentials_use_private_config_and_secret_files() {
     let canonical_base = std::path::PathBuf::from(&form.profile.dovecot_config)
         .canonicalize()
         .unwrap();
-    assert!(contents.starts_with(&format!("!include {}\n", canonical_base.display())));
+    assert!(contents.starts_with(&format!(
+        "dovecot_config_version = 2.4.0\n!include {}\n",
+        canonical_base.display()
+    )));
     assert!(contents.contains("imapc_password = <"));
     assert!(!contents.contains("top-secret-credential"));
     let source_file = contents
