@@ -271,7 +271,17 @@ pub(super) fn parse_message_id_header(body: &str) -> Option<String> {
             message_id = Some(value.trim().to_owned());
         }
     }
-    message_id.map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+    let value = message_id.map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))?;
+    // Only accept the required RFC message-id delimiters here. Besides
+    // rejecting malformed header values, this keeps generated
+    // `header-fingerprint:` identities in a disjoint namespace: an external
+    // Message-ID must not be able to spoof the provenance marker used by
+    // ExtractedMessage::identity_provenance.
+    let inner = value.strip_prefix('<')?.strip_suffix('>')?;
+    if inner.is_empty() || inner.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value)
 }
 
 /// Produce a deterministic fallback identity from selected RFC822 headers.
