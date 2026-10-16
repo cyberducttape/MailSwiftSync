@@ -33,4 +33,5 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/pip-audit"
           "$RUNNER_TEMP/pip-audit/bin/python" -m pip install --disable-pip-version-check pip-audit==2.10.1
       - name: Audit pinned Python dependencies
-        run: "$RUNNER_TEMP/pip-audit/bin/pip-audit" -r scripts/requirements-provider-qualification.txt -r tests/provider-evidence/requirements.txt
+        run: >-
+          "$RUNNER_TEMP/pip-audit/bin/pip-audit" -r scripts/requirements-provider-qualification.txt -r tests/provider-evidence/requirements.txt
