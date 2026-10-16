@@ -4,6 +4,12 @@
 version = 2
 yanked = "deny"
 unmaintained = "workspace"
+ignore = [
+    # Calamine 0.36.1 currently requires zip ^8.6; zip 8.6.0 is the only
+    # compatible published version and is yanked. Remove this exception as
+    # soon as Calamine releases a compatible non-yanked dependency.
+    { crate = "zip@8.6.0", reason = "Required by calamine 0.36.1; bounded XLSX prevalidation precedes parser use." },
+]
 
 [bans]
 multiple-versions = "warn"
