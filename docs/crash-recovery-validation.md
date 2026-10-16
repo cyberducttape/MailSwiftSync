@@ -32,6 +32,28 @@ and repeatable, and a new journal would add its own failure states.
 | 7 | Restore the ledger after a crash and resume a partially completed mailbox | `controller-chaos-smoke.sh` proves `restore` rejects a corrupt or truncated backup. The IMAP lab's default-plan interruption drill kills the controller mid-transfer, recovers the run, backs up and restores the ledger to a new path, resumes the mailbox, and requires exactly the source message count plus verified state. | Proven in CI (integration workflow) for the default header-matching plan; this does not establish per-message checkpoints or host power-loss durability. |
 | 8 | Verification staging reaches SQLite's page limit (`SQLITE_FULL`) | `core::message_staging::tests::sqlite_full_rolls_back_page_and_retains_durable_stage_for_recovery` caps the stage's SQLite page count, forces a staging write to fail with `SQLITE_FULL`, verifies the page transaction rolled back, reopens the retained stage, restores the page limit, and stages a later page. This is deterministic SQLite-level fault injection, not an actually full filesystem or an end-to-end controller/evidence-commit failure. | Proven by Rust unit test; real filesystem exhaustion and full-run recovery remain unqualified. |
 
+### Latest packaged integration evidence
+
+On 2026-10-16, packaged product integration jobs passed for commit
+[`bce333cb`](https://github.com/cyberducttape/MailSwiftSync/commit/bce333cb18043b67a6015767d380626e212320c3)
+in [CI run 38903674326](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38903674326).
+The imapsync path used imapsync 2.314 and Dovecot 2.3.19.1: the exported
+metadata evidence reconciled 16 messages after the initial pass and 17 after
+the final delta, with zero missing, extra, modified, failed, or unmatched
+messages in each exported summary. The packaged recovery and storage-fault
+steps also completed successfully. The independent native Dovecot path
+reconciled 16 and then 17 messages by aggregate counts; it did not produce
+per-message metadata or body evidence, and its engine version was recorded as
+unknown. Both paths correctly exported `cutover_readiness: not_established`.
+
+These artifacts demonstrate the stated disposable Dovecot fixture only. They
+are not real-provider qualification, do not prove content equality, do not
+establish a synchronized cross-server snapshot or cutover readiness, and do
+not cover host power loss or a physically full filesystem. The downloadable
+`imap-integration-evidence` and `native-dovecot-integration-evidence`
+artifacts in the linked run contain the raw customer-proof exports and
+environment summaries.
+
 ## Related protections
 
 - A ledger invariant rejection of a terminal result no longer retries forever:
