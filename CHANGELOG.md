@@ -7,6 +7,8 @@
 - Limit live-provider smoke proof artifact retention to 14 days because the
   reports contain test mailbox identity and operational metadata.
 - Restrict the live-provider secret workflow to `main` branch code.
+- Require the live-provider environment to be branch-restricted and reviewer-
+  approved before it releases credentials to workflow code.
 - Terminate and reap the detached recovery-test process group before provider-
   smoke cleanup removes its ledger and credential workspace, including on
   interrupt or termination signals.

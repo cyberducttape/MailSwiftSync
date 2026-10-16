@@ -298,8 +298,12 @@ Its proofs are smoke artifacts, not release qualification.
    ```
 
 5. **GitHub environment.** Create a repository environment named
-   `live-providers` (optionally with required reviewers). For Google/Microsoft
-   routes, add eight secrets; paste each exported JSON file's contents as its
+   `live-providers`. Restrict deployment branches to the selected `main` branch
+   and require at least one reviewer before a job receives its secrets. The
+   workflow itself also refuses to run against another ref. These controls
+   matter because the job builds and executes repository code while holding
+   credentials for writable test mailboxes. For Google/Microsoft routes, add
+   eight secrets; paste each exported JSON file's contents as its
    `_REFRESH_CONFIG` value, then delete the files:
 
    | Secret | Value |

@@ -1038,6 +1038,8 @@ fn provider_testing_guide_exists() {
 
     assert!(guide.contains("OAuth/XOAUTH2 preferred"));
     assert!(guide.contains("do not restore the removed Basic Authentication"));
+    assert!(guide.contains("Restrict deployment branches to the selected `main` branch"));
+    assert!(guide.contains("require at least one reviewer before a job receives its secrets"));
     assert!(
         guide.contains("this guide does not assert a")
             && guide.contains("fixed commands-per-second rate")
