@@ -541,12 +541,16 @@ fn list_parser_preserves_nil_delimiter_as_absent() {
 }
 
 #[test]
-fn list_parser_ignores_parentheses_inside_quoted_attribute_values() {
+fn list_parser_rejects_an_unclosed_quoted_attribute_list() {
     let malformed = r#"* LIST (\HasChildren "value)" "/" "INBOX""#;
     assert_eq!(parse_list_mailbox_name(malformed), None);
 
-    let valid = r#"* LIST (\HasChildren "value)") "/" "INBOX""#;
-    assert_eq!(parse_list_mailbox_name(valid), Some("INBOX".into()));
+    let valid_with_quoted_mailbox_and_extension =
+        r#"* LIST (\HasChildren) "/" "value)" ("CHILDINFO" ("SUBSCRIBED"))"#;
+    assert_eq!(
+        parse_list_mailbox_name(valid_with_quoted_mailbox_and_extension),
+        Some("value)".into())
+    );
 
     assert_eq!(
         parse_list_mailbox_name(r#"*LIST (\HasChildren) "/" "INBOX""#),
