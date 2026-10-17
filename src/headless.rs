@@ -270,6 +270,9 @@ pub(crate) fn headless_status(
     selected_project_id: Option<&str>,
 ) -> Result<HeadlessStatus, String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let snapshot = store
+        .begin_read_snapshot()
+        .map_err(|error| error.to_string())?;
     let total_projects = if let Some(project_id) = selected_project_id {
         usize::from(
             store
@@ -343,7 +346,7 @@ pub(crate) fn headless_status(
     let (active_processes, active_processes_truncated) = store
         .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
         .map_err(|error| error.to_string())?;
-    Ok(HeadlessStatus {
+    let status = HeadlessStatus {
         format: STATUS_FORMAT,
         format_version: AUTOMATION_FORMAT_VERSION,
         schema_version: core::CURRENT_SCHEMA_VERSION,
@@ -353,7 +356,9 @@ pub(crate) fn headless_status(
         total_projects,
         projects_truncated: result.len() < total_projects,
         projects: result,
-    })
+    };
+    snapshot.commit().map_err(|error| error.to_string())?;
+    Ok(status)
 }
 
 /// Emit a bounded status projection for large ledgers. Unlike detailed
@@ -364,6 +369,9 @@ pub(crate) fn headless_status_summary(
     selected_project_id: Option<&str>,
 ) -> Result<HeadlessStatusSummary, String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let snapshot = store
+        .begin_read_snapshot()
+        .map_err(|error| error.to_string())?;
     let total_projects = if let Some(project_id) = selected_project_id {
         usize::from(
             store
@@ -429,7 +437,7 @@ pub(crate) fn headless_status_summary(
     let (active_processes, active_processes_truncated) = store
         .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
         .map_err(|error| error.to_string())?;
-    Ok(HeadlessStatusSummary {
+    let summary = HeadlessStatusSummary {
         format: STATUS_SUMMARY_FORMAT,
         format_version: AUTOMATION_FORMAT_VERSION,
         schema_version: core::CURRENT_SCHEMA_VERSION,
@@ -440,7 +448,9 @@ pub(crate) fn headless_status_summary(
         projects_truncated: summaries.len() < total_projects,
         aggregate_mailbox_state_counts,
         projects: summaries,
-    })
+    };
+    snapshot.commit().map_err(|error| error.to_string())?;
+    Ok(summary)
 }
 
 const FLEET_MAX_LEDGER_CANDIDATES: usize = 10_000;

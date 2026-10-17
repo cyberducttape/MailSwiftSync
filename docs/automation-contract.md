@@ -133,7 +133,10 @@ five operator questions as follows:
 
 `mailswiftsync metrics <state.db>` emits a one-shot Prometheus text snapshot
 from one local ledger. It is a bounded projection, not a network listener or a
-distributed exporter. The command refuses to emit output if its project or
+distributed exporter. Each status and metrics projection reads its ledger
+inside one SQLite read transaction, so separate gauges in the same response
+reflect one committed ledger snapshot. A fleet response snapshots each ledger
+independently, not all ledgers atomically. The command refuses to emit output if its project or
 process projection is truncated. It emits no project, mailbox, run, customer,
 or endpoint labels. The metric contract is:
 

@@ -16,6 +16,9 @@
 - Export current durable verification finding counts by missing, extra,
   modified, and probable-match category; keep lower-confidence probable matches
   distinct from confirmed differences.
+- Read status projections from one SQLite transaction snapshot so concurrent
+  controller commits cannot mix ledger moments within a response; document
+  that fleet snapshots remain independent per ledger.
 - Map the five SRE operations questions to the versioned durable status fields,
   and explicitly distinguish current gauges from process-local telemetry,
   cumulative counters, and metrics not yet exported. Document the absence of a

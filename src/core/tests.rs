@@ -6726,6 +6726,35 @@ fn project_operation_metrics_report_current_message_findings_separately() {
 }
 
 #[test]
+fn read_snapshot_keeps_status_queries_on_one_wal_commit() {
+    let directory =
+        std::env::temp_dir().join(format!("mailswiftsync-read-snapshot-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let path = directory.join("state.db");
+    let writer = StateStore::open(&path).unwrap();
+    let project = writer
+        .create_project("snapshot", "source", "destination")
+        .unwrap();
+    writer
+        .add_mailbox(&project.id, "one@source", "one@destination")
+        .unwrap();
+    let reader = StateStore::open_readonly(&path).unwrap();
+    let snapshot = reader.begin_read_snapshot().unwrap();
+
+    assert_eq!(reader.mailbox_state_counts(&project.id).unwrap().total, 1);
+    writer
+        .add_mailbox(&project.id, "two@source", "two@destination")
+        .unwrap();
+    assert_eq!(reader.mailbox_state_counts(&project.id).unwrap().total, 1);
+
+    snapshot.commit().unwrap();
+    assert_eq!(reader.mailbox_state_counts(&project.id).unwrap().total, 2);
+    drop(reader);
+    drop(writer);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn difference_file_export_streams_every_row_across_pages_into_a_private_file() {
     use message_verification::MismatchType;
     let db = StateStore::in_memory().unwrap();
