@@ -6602,6 +6602,24 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
             )
             .unwrap();
     }
+    for (attempt, copied, bytes_copied) in [(2, 100, 1_000), (3, 5, 50), (3, 7, 70)] {
+        db.connection
+            .execute(
+                "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,'metrics-run','transfer_progress_checkpoint',?2)",
+                params![
+                    project.id,
+                    serde_json::json!({
+                        "attempt": attempt,
+                        "progress": {
+                            "messages_copied": copied,
+                            "bytes_copied": bytes_copied
+                        }
+                    })
+                    .to_string()
+                ],
+            )
+            .unwrap();
+    }
     db.record_evidence_for_run(
         &job,
         "metrics-run",
@@ -6640,6 +6658,8 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
     let metrics = db.project_operation_metrics(&project.id).unwrap();
     assert_eq!(metrics.transfer_attempts, 3);
     assert_eq!(metrics.retried_attempts, 2);
+    assert_eq!(metrics.unfinished_attempt_messages_copied, 7);
+    assert_eq!(metrics.unfinished_attempt_bytes_copied, 70);
     assert_eq!(
         metrics.attempt_outcomes,
         std::collections::BTreeMap::from([

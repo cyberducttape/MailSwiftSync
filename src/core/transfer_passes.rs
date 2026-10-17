@@ -769,6 +769,13 @@ pub struct ProjectOperationMetrics {
     /// `failed:<class>` such as `failed:capacity` for provider throttling,
     /// or `unfinished` for running or interrupted attempts).
     pub attempt_outcomes: std::collections::BTreeMap<String, usize>,
+    /// Sum of the latest durable engine progress snapshots for attempts that
+    /// do not yet have a terminal outcome. Retries may repeat work, so this is
+    /// attempt progress rather than unique mailbox coverage.
+    pub unfinished_attempt_messages_copied: u64,
+    /// Byte counterpart to `unfinished_attempt_messages_copied`; this is a
+    /// snapshot across unfinished attempts, not a rate or lifetime total.
+    pub unfinished_attempt_bytes_copied: u64,
     /// Current verification outcome per mailbox with evidence.
     pub verification_outcomes: std::collections::BTreeMap<String, usize>,
     /// Current outcome cross-tabulated by evidence method, so an aggregate
@@ -797,6 +804,36 @@ impl StateStore {
         })? {
             let (outcome, count) = row?;
             metrics.attempt_outcomes.insert(outcome, count);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT e.detail FROM transfer_passes p JOIN events e ON e.run_id=p.run_id AND e.kind='transfer_progress_checkpoint' WHERE p.project_id=?1 AND p.outcome IS NULL AND json_valid(e.detail) AND json_extract(e.detail,'$.attempt')=p.attempt AND e.id=(SELECT MAX(latest.id) FROM events latest WHERE latest.run_id=p.run_id AND latest.kind='transfer_progress_checkpoint' AND json_valid(latest.detail) AND json_extract(latest.detail,'$.attempt')=p.attempt)",
+        )?;
+        for row in statement.query_map([project_id], |row| row.get::<_, String>(0))? {
+            let detail = row?;
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&detail) else {
+                continue;
+            };
+            let Some(progress) = value.get("progress") else {
+                continue;
+            };
+            if let Some(copied) = progress
+                .get("messages_copied")
+                .and_then(serde_json::Value::as_u64)
+            {
+                metrics.unfinished_attempt_messages_copied = metrics
+                    .unfinished_attempt_messages_copied
+                    .checked_add(copied)
+                    .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+            }
+            if let Some(bytes_copied) = progress
+                .get("bytes_copied")
+                .and_then(serde_json::Value::as_u64)
+            {
+                metrics.unfinished_attempt_bytes_copied = metrics
+                    .unfinished_attempt_bytes_copied
+                    .checked_add(bytes_copied)
+                    .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+            }
         }
         let mut statement = self.connection.prepare(
             "SELECT e.verification_method,e.verification_outcome,COUNT(*) FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1 GROUP BY e.verification_method,e.verification_outcome",

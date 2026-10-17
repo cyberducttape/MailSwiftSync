@@ -106,6 +106,16 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         "mailswiftsync_registered_engine_processes {}",
         summary.active_processes.len()
     );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_unfinished_attempt_messages_copied",
+        "Latest durable copied-message progress summed across attempts without a terminal outcome; retries may repeat work.",
+    );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_unfinished_attempt_bytes_copied",
+        "Latest durable copied-byte progress summed across attempts without a terminal outcome; this is not a rate.",
+    );
 
     counter_header(
         &mut output,
@@ -130,6 +140,8 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
 
     let mut transfer_attempts = 0_usize;
     let mut transfer_retries = 0_usize;
+    let mut unfinished_attempt_messages_copied = 0_u64;
+    let mut unfinished_attempt_bytes_copied = 0_u64;
     let mut attempt_outcomes = std::collections::BTreeMap::<&str, usize>::new();
     let mut verification_outcomes = std::collections::BTreeMap::<(&str, &str), usize>::new();
 
@@ -138,6 +150,12 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
             checked_metric_sum(transfer_attempts, project.operations.transfer_attempts)?;
         transfer_retries =
             checked_metric_sum(transfer_retries, project.operations.retried_attempts)?;
+        unfinished_attempt_messages_copied = unfinished_attempt_messages_copied
+            .checked_add(project.operations.unfinished_attempt_messages_copied)
+            .ok_or_else(|| "unfinished attempt message progress overflowed".to_owned())?;
+        unfinished_attempt_bytes_copied = unfinished_attempt_bytes_copied
+            .checked_add(project.operations.unfinished_attempt_bytes_copied)
+            .ok_or_else(|| "unfinished attempt byte progress overflowed".to_owned())?;
         for (outcome, count) in &project.operations.attempt_outcomes {
             let outcome = allowlisted_label(outcome, ATTEMPT_OUTCOMES);
             let total = attempt_outcomes.entry(outcome).or_default();
@@ -161,6 +179,14 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
     let _ = writeln!(
         output,
         "mailswiftsync_transfer_retries_total {transfer_retries}"
+    );
+    let _ = writeln!(
+        output,
+        "mailswiftsync_unfinished_attempt_messages_copied {unfinished_attempt_messages_copied}"
+    );
+    let _ = writeln!(
+        output,
+        "mailswiftsync_unfinished_attempt_bytes_copied {unfinished_attempt_bytes_copied}"
     );
     for (outcome, count) in attempt_outcomes {
         let _ = writeln!(
@@ -239,6 +265,8 @@ mod tests {
                 operations: ProjectOperationMetrics {
                     transfer_attempts: 3,
                     retried_attempts: 1,
+                    unfinished_attempt_messages_copied: 4,
+                    unfinished_attempt_bytes_copied: 4096,
                     attempt_outcomes: [("completed".into(), 2), ("failed:capacity".into(), 1)]
                         .into(),
                     verification_outcomes: Default::default(),
@@ -257,6 +285,8 @@ mod tests {
         let output = render_metrics(&summary()).unwrap();
         assert!(output.contains("mailswiftsync_mailbox_jobs{state=\"queued\"} 1"));
         assert!(output.contains("mailswiftsync_transfer_retries_total 1"));
+        assert!(output.contains("mailswiftsync_unfinished_attempt_messages_copied 4"));
+        assert!(output.contains("mailswiftsync_unfinished_attempt_bytes_copied 4096"));
         assert!(output.contains("mailswiftsync_transfer_attempts_total 3"));
         assert!(output.contains(
             "mailswiftsync_transfer_attempt_outcomes_total{outcome=\"failed:capacity\"} 1"

@@ -99,7 +99,11 @@ outcome: `completed`, `delta_required`, `failed:<class>` such as
 `failed:capacity` for provider throttling or connection limits and
 `failed:transport` for network failures, or `unfinished` for running or
 interrupted attempts), and `verification_outcomes` (current outcome per
-mailbox with evidence). `verification_method_outcomes` provides the same
+mailbox with evidence). `unfinished_attempt_messages_copied` and
+`unfinished_attempt_bytes_copied` sum the last durable progress checkpoint
+for each attempt that lacks a terminal outcome. These snapshots can be stale
+and retries can repeat work; they are neither unique mailbox coverage nor a
+throughput measure. `verification_method_outcomes` provides the same
 current evidence counts as `method:outcome` keys (for example,
 `metadata_reconciliation:exact_metadata_match` versus
 `native_dovecot:exact_metadata_match`) so aggregate totals are not mistaken for
@@ -137,12 +141,17 @@ or endpoint labels. The metric contract is:
 | `mailswiftsync_registered_engine_processes` | Gauge | Durable process registrations, not a process-liveness check. Validate process ownership before acting on a PID. |
 | `mailswiftsync_transfer_attempts_total` | Counter | Cumulative transfer attempts recorded in the projected ledger. |
 | `mailswiftsync_transfer_retries_total` | Counter | Cumulative attempts after the first attempt of a pass. |
+| `mailswiftsync_unfinished_attempt_messages_copied` | Gauge | Latest durable copied-message snapshots summed across attempts without terminal outcomes. Retries can repeat work, so this is not unique mailbox coverage. |
+| `mailswiftsync_unfinished_attempt_bytes_copied` | Gauge | Byte counterpart, also a persisted snapshot rather than a transfer rate or lifetime total. |
 | `mailswiftsync_transfer_attempt_outcomes_total{outcome}` | Counter | Attempt outcomes with a fixed allowlist; unknown values collapse to `other`. `failed:capacity` is a capacity failure category, not a provider-throttle event counter. |
 | `mailswiftsync_verification_mailboxes{method,outcome}` | Gauge | Current persisted mailbox evidence counts, not message counts. Labels use fixed allowlists; unknown values collapse to `other`. |
 
-These metrics do not include process-local transfer throughput, adaptive
-cooldown state, reader-drain timeout totals, SQLite transaction latency, or
-host CPU/RSS/disk. Do not infer recent progress or liveness from these ledger
+Progress gauges reflect the last committed checkpoint for attempts still
+lacking a terminal outcome; they can be stale after a crash and do not prove
+recent activity. Compare successive snapshots to determine whether these
+gauges are moving. These metrics do not include process-local transfer rates,
+adaptive cooldown state, reader-drain timeout totals, SQLite transaction
+latency, or host CPU/RSS/disk. Do not infer process liveness from ledger
 counters. `fleet-status` aggregates local ledgers; it is not distributed worker
 discovery or a central control plane. The durable webhook outbox can deliver
 lifecycle/status events, but does not replace polling for current gauges or

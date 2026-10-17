@@ -10,6 +10,9 @@
   latency are not exported.
 - Add the queued mailbox-job count to status summary and fleet-status JSON as
   an additive field in the existing versioned contract.
+- Export last durable progress snapshots for unfinished transfer attempts as
+  gauges, explicitly distinguishing retryable attempt work from unique mailbox
+  coverage, throughput, and freshness.
 - Map the five SRE operations questions to the versioned durable status fields,
   and explicitly distinguish current gauges from process-local telemetry,
   cumulative counters, and metrics not yet exported. Document the absence of a

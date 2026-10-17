@@ -42,6 +42,8 @@
     "projects[].operations.attempt_outcomes{}": "integer",
     "projects[].operations.retried_attempts": "integer",
     "projects[].operations.transfer_attempts": "integer",
+    "projects[].operations.unfinished_attempt_bytes_copied": "integer",
+    "projects[].operations.unfinished_attempt_messages_copied": "integer",
     "projects[].operations.verification_outcomes": "map",
     "projects[].operations.verification_outcomes{}": "integer",
     "projects[].operations.verification_method_outcomes": "map",
