@@ -126,7 +126,7 @@ five operator questions as follows:
 | Operator question | Durable status evidence | Limitation |
 |---|---|---|
 | Which migrations are active? | `aggregate_mailbox_state_counts.running` and bounded `active_processes` records (`run_id`, `job_id`, PID and executable identity); per-project summaries also include mailbox-state counts | `active_processes_truncated` must be checked. A durable `running` row and a process record are distinct facts; validate ownership before acting on a PID |
-| Which are making useful progress? | `operations.attempt_outcomes.unfinished` and durable transfer-attempt/checkpoint history indicate unfinished work | These do not prove recent progress. Rolling throughput and recent per-job updates are process-local UI telemetry, not exported durable metrics; absence of a recent event is not by itself a stall diagnosis |
+| Which are making useful progress? | Durable transfer-attempt/checkpoint history; the metrics snapshot also includes unfinished-attempt copied-message and byte gauges | Gauges are last committed checkpoints, can be stale, and may count retry work more than once. They do not prove recent progress or a transfer rate; compare successive snapshots |
 | Which are blocked or retrying? | `operations.retried_attempts`, `attempt_outcomes` (including `failed:capacity`), mailbox states, and `attention_reason_counts` | `retried_attempts` is cumulative, not a current retry gauge. The status contract does not expose a complete retry timer queue or live provider cooldown state |
 | Which have unverified or inconsistent results? | `verification_outcomes`, `verification_method_outcomes`, mailbox states, and durable evidence/reverify outputs | Consumers must retain proof method and outcome separately; transfer completion is not verification |
 | Which require human intervention? | `aggregate_mailbox_state_counts.needs_review` and `attention_reason_counts`; detailed status provides bounded mailbox rows | Detail is bounded/truncated. Use the durable ledger and evidence workflow for case-level investigation |
@@ -136,9 +136,9 @@ from one local ledger. It is a bounded projection, not a network listener or a
 distributed exporter. Each status and metrics projection reads its ledger
 inside one SQLite read transaction, so separate gauges in the same response
 reflect one committed ledger snapshot. A fleet response snapshots each ledger
-independently, not all ledgers atomically. The command refuses to emit output if its project or
-process projection is truncated. It emits no project, mailbox, run, customer,
-or endpoint labels. The metric contract is:
+independently, not all ledgers atomically. The command refuses to emit output
+if its project or process projection is truncated. It emits no project,
+mailbox, run, customer, or endpoint labels. The metric contract is:
 
 | Metric | Type | Meaning and limits |
 |---|---|---|
