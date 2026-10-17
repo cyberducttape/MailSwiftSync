@@ -5,6 +5,10 @@
 - Exercise the LIST fuzz target through the production budgeted streaming
   reader, fixing a fuzz-only compile failure and ensuring the harness covers
   the same bounded parser path used by live verification.
+- Rerun process ownership, controller crash recovery, and ledger write/corrupt-
+  restore fault drills on the current commit; record the binary digest and
+  retain the explicit boundary between local fault fixtures and power-loss or
+  live-engine qualification.
 - Compile every nightly fuzz target locally and mark intentionally unused
   provider identity helpers in the provider-error fuzz harness, keeping the
   full parser/safety-target build warning-free.

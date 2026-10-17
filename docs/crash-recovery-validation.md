@@ -34,6 +34,23 @@ and repeatable, and a new journal would add its own failure states.
 
 ### Current-head local process and ledger fault drills
 
+On 2026-10-17 16:34 UTC, all three local drills below were rerun against
+MailSwiftSync 0.1.0-alpha.1 built from commit
+`16e007a5313843b34ba9f9ce21e9d84ef6e7fc34` with Rust 1.92.0. The binary
+reported that full revision and had SHA-256
+`483362bd8f0ef42bd85ff39ebf1f4412c8b8db75d3d18b15ce21c079b7039511`.
+On Ubuntu 26.04.1 x86_64 (Linux `7.0.0-38-generic`),
+`process-supervision-chaos-smoke.sh` rejected absent and invalid release
+tokens and ran the fake engine only after `GO`; `controller-recovery-smoke.sh`
+recovered controller- and engine-interrupted runs for operator review; and
+`controller-chaos-smoke.sh` rejected incomplete ledger writes, reopened the
+ledger after the file-size limit was lifted, rejected truncated/corrupt
+restores without changing live state, and restored a verified backup over a
+deliberately corrupted ledger. All three exited successfully. These are
+disposable local fixtures with a fake engine; the bounded `RLIMIT_FSIZE`
+failure is not a physically full filesystem and none of these runs simulates
+host reboot, power loss, or storage-controller cache loss.
+
 On 2026-10-17, the same three drills were rerun against a debug binary built
 from commit `c0bbd127b4912b97b3e09570fdf75cd2ca54916c` with Rust 1.92.0. The
 binary reported that full commit and had SHA-256
