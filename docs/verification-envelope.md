@@ -161,6 +161,38 @@ compared flags for 980,000 messages. This confirms the synthetic durable-stage
 measurement on the current revision only; it remains neither an IMAP
 integration nor a provider, large-transfer, or production-host qualification.
 
+A full current-head typical-shape repeat was run on 2026-10-17 from clean
+commit `2498e069ba0e48a08dc0f1273bd1a14b747f516b` on the shared AMD Ryzen 7
+7735U workstation (Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, Rust
+1.92.0, ext4 on NVMe). The release test harness was built from that clean
+checkout with `MAILSWIFTSYNC_GIT_SHA` set to the recorded commit; its SHA-256
+was `276647ccba2cd29d9bdff8d11555f9979c64c4f7cd6047a45d2fc174753dea03`.
+The separately built release application reported the full commit in
+`--version` output (`MailSwiftSync 0.1.0-alpha.1 (git
+2498e069ba0e48a08dc0f1273bd1a14b747f516b)`) and had SHA-256
+`3aca4454989fe41a3d5bfb26c6b60d85f25a784c094b48d5d1c337de4848e08a`.
+All matrix sizes passed the script's 64 MiB peak-RSS and 20,000 messages/s
+reconciliation thresholds:
+
+| Messages/endpoint | Staging | Reconciliation | Reconcile rate | Peak RSS | Peak stage directory | Peak journal |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 19 ms | 20 ms | 50,000/s | 13 MiB | 1,118,928 B | 107,216 B |
+| 10,000 | 288 ms | 333 ms | 30,030/s | 17 MiB | 9,415,680 B | 949,248 B |
+| 100,000 | 2.886 s | 2.446 s | 40,883/s | 22 MiB | 105,372,120 B | 9,722,328 B |
+| 500,000 | 10.498 s | 11.604 s | 43,088/s | 21 MiB | 544,121,344 B | 50,225,664 B |
+| 1,000,000 | 20.449 s | 26.152 s | 38,237/s | 20 MiB | 1,092,691,152 B | 100,893,904 B |
+
+At 1M, restart reconciliation took 26.607 s, FLAGS comparison took 8.716 s
+and covered 980,000 unambiguous messages, with 20,000 intentional changed-ID
+mismatches. Phase I/O accounting reported 868,814,848 B written during
+staging, then 359,477,248 B read and 742,207,488 B written during
+reconciliation; peak staged database size after staging was 670,916,608 B.
+The staging-plus-reconciliation peak was approximately 1.02 GiB, which is
+important operationally even though process RSS remained low. This is a
+synthetic durable SQLite benchmark, not an IMAP transfer or provider test; it
+does not include final evidence commit, concurrent workers, report exports,
+or establish a general disk-space reservation or capacity commitment.
+
 A duplicate-heavy current-head run at commit `6f714fb07ea2bb708cc61b69882aef1e2a8ae22a`
 on 2026-10-12 used the same shared Ryzen 7 7735U workstation (Ubuntu 26.04.1
 x86_64, Linux 7.0.0-38-generic, Rust 1.92.0, ext4 on NVMe). The synthetic

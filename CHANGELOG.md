@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Repeat the complete durable typical-shape verification benchmark matrix on
+  the current clean head through 1,000,000 messages per endpoint; record the
+  test-harness and release-binary digests, verify the binary embeds the full
+  source revision, and publish per-size reconciliation/RSS/stage/journal
+  metrics plus 1M phase I/O. Keep the result explicitly synthetic and separate
+  from provider, IMAP transfer, concurrent-worker, and final-evidence-commit
+  claims.
 - Add a bounded, privacy-preserving one-shot Prometheus text snapshot for
   durable local-ledger job, transfer-attempt, and verification counts. It
   refuses truncated projections and labels no customer-controlled identities;
