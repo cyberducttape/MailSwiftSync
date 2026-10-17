@@ -490,6 +490,22 @@ mod tests {
             engine
         }
 
+        /// Write a fake engine that records overlapping process starts. The
+        /// short active interval is well below the launch limiter's expected
+        /// spacing in the burst regression test, so a limiter bypass creates
+        /// a durable marker without relying on event-delivery timestamps.
+        pub(super) fn overlap_detecting_engine(directory: &std::path::Path) -> std::path::PathBuf {
+            let engine = directory.join("fake-imapsync-overlap-check");
+            let directory = directory.to_string_lossy();
+            let quoted_directory = format!("'{}'", directory.replace('\'', "'\\''"));
+            let script = format!(
+                "#!/bin/sh\ndir={quoted_directory}\nactive=\"$dir/active-engine\"\nburst=\"$dir/burst-detected\"\nif ! mkdir \"$active\" 2>/dev/null; then : > \"$burst\"; else sleep 0.05; rmdir \"$active\"; fi\nexit 0\n"
+            );
+            std::fs::write(&engine, script).unwrap();
+            std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+            engine
+        }
+
         pub(super) fn temp_directory() -> std::path::PathBuf {
             let directory = std::env::temp_dir()
                 .join(format!("mailswiftsync-schedule-{}", uuid::Uuid::new_v4()));
@@ -604,7 +620,7 @@ mod tests {
         const WORKERS: usize = 4;
         const STARTS_PER_SECOND: usize = 10;
         let directory = composed::temp_directory();
-        let engine = composed::engine(&directory);
+        let engine = composed::overlap_detecting_engine(&directory);
         let forms = (0..WORKERS)
             .map(|index| composed::form(&engine, &format!("user{index}@a.example")))
             .collect::<Vec<_>>();
@@ -618,9 +634,12 @@ mod tests {
         let run_started = std::time::Instant::now();
         let run = composed::run(forms, WORKERS, 0, limiters);
         let run_elapsed = run_started.elapsed();
-        let _ = std::fs::remove_dir_all(&directory);
 
         assert_eq!(run.starts.len(), WORKERS, "{:?}", run.finished);
+        assert!(
+            !directory.join("burst-detected").exists(),
+            "multiple fake engines overlapped, indicating an unpaced process-start burst"
+        );
         let cooldown = std::time::Duration::from_millis(800);
         let spacing = std::time::Duration::from_secs_f64(1.0 / STARTS_PER_SECOND as f64);
         // Measure until all fake engines have exited, not when the coordinator
@@ -632,6 +651,7 @@ mod tests {
             run_elapsed >= minimum_elapsed,
             "the completed launch burst took {run_elapsed:?}, below the rate-limited minimum {minimum_elapsed:?}"
         );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// A tenant in cooldown is parked, not held by workers: with every
