@@ -735,13 +735,18 @@ Linux Wayland configuration disables winit's default `ab_glyph` renderer and
 the lockfile no longer contains `ttf-parser`. Release qualification must
 recheck the XLSX ZIP/XML path before publishing artifacts.
 
-The 2026-10-17 local `cargo audit --deny yanked` run reported no vulnerabilities
-or yanked crates, but did emit three new informational unmaintained-crate
-warnings: `zvariant 5.15.0` ([RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html)),
-`zbus_names 4.3.4` ([RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html)),
-and `zvariant_derive 5.15.0` ([RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)).
-The current lockfile reaches these through both Linux Secret Service keyring
-support and the Linux accessibility stack. These are maintenance notices, not
+The 2026-10-17 `cargo audit --deny yanked` run over both `Cargo.lock` and
+`fuzz/Cargo.lock` reported no vulnerable or yanked crates. The application
+lockfile still emits three unmaintained-crate warnings at the refreshed
+versions: `zvariant 5.15.1`
+([RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html)),
+`zbus_names 4.3.5`
+([RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html)),
+and `zvariant_derive 5.15.1`
+([RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)).
+Updating to the newest compatible patches did not clear these notices. The
+current lockfile reaches them through both Linux Secret Service keyring support
+and the Linux accessibility stack. These are maintenance notices, not
 published vulnerability findings. Upstream states that this functionality was
 merged into `zbus` 6.0 and the standalone crates will receive no further
 releases ([upstream migration notice](https://github.com/z-galaxy/zbus/issues/2043)).
