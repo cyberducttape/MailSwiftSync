@@ -657,6 +657,20 @@ fn list_parser_ignores_bounded_trailing_extension_literals() {
 }
 
 #[test]
+fn list_parser_accepts_zero_length_trailing_extension_literal() {
+    // The first CRLF introduces the literal; the second terminates the LIST
+    // response after its zero octets. Keep both framing boundaries explicit.
+    let response =
+        b"* LIST (\\HasChildren) \"/\" \"Projects\" X-TEST {0}\r\n\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
 fn list_parser_accepts_extension_literal_followed_by_parenthesis_closers() {
     let response = b"* LIST (\\HasChildren) \"/\" \"Projects\" (X-TEST {3}\r\nxyz) X-SECOND \"ignored\"\r\na005 OK LIST completed\r\n";
     let mut stream = Cursor::new(response);
