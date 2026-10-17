@@ -54,23 +54,63 @@ fn list_fields(line: &str) -> Option<(Vec<String>, usize)> {
 }
 
 fn list_field_layout(line: &str) -> Option<(Vec<String>, usize)> {
-    let tokens = tokens(line)?;
-    if tokens.first()?.as_str() != "*" || !tokens.get(1)?.eq_ignore_ascii_case("LIST") {
+    let after_asterisk = line.trim_start_matches(' ').strip_prefix('*')?;
+    if !after_asterisk.starts_with(' ') {
         return None;
     }
-    let mut index = 2;
-    if tokens.get(index)?.starts_with('(') {
-        while !tokens.get(index)?.ends_with(')') {
-            index += 1;
-        }
-        index += 1;
+    let prefix = after_asterisk.trim_start_matches(' ');
+    if !prefix.get(..4)?.eq_ignore_ascii_case("LIST") {
+        return None;
     }
+    let after_list = prefix.get(4..)?;
+    if !after_list.starts_with(' ') {
+        return None;
+    }
+    let after_list = after_list.trim_start_matches(' ');
+    let bytes = after_list.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return None;
+    }
+
+    // Locate the end of the fixed attribute list from the wire syntax before
+    // tokenization removes quotes. Parentheses inside a quoted value are data,
+    // not the closing delimiter for the attribute list.
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut offset = 0usize;
+    let mut attributes_end = None;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'\\' if quoted => {
+                offset = offset.checked_add(2)?;
+                continue;
+            }
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth = depth.checked_add(1)?,
+            b')' if !quoted => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    attributes_end = Some(offset + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        offset += 1;
+    }
+    if quoted {
+        return None;
+    }
+    let attributes_end = attributes_end?;
+    let fields = tokens(after_list.get(attributes_end..)?)?;
     // The delimiter and mailbox name are the next two fields. The LIST
     // grammar requires an attribute list, so the mailbox cannot precede it.
-    if index < 3 {
+    // One field (the hierarchy delimiter) is also a valid incomplete prefix
+    // when the mailbox name is about to be supplied as an IMAP literal.
+    if fields.is_empty() {
         return None;
     }
-    Some((tokens, index + 1))
+    Some((fields, 1))
 }
 
 /// Tokenize the bounded, non-literal portion of a LIST response. Quoted

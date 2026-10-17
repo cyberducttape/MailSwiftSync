@@ -541,6 +541,24 @@ fn list_parser_preserves_nil_delimiter_as_absent() {
 }
 
 #[test]
+fn list_parser_ignores_parentheses_inside_quoted_attribute_values() {
+    let malformed = r#"* LIST (\HasChildren "value)" "/" "INBOX""#;
+    assert_eq!(parse_list_mailbox_name(malformed), None);
+
+    let valid = r#"* LIST (\HasChildren "value)") "/" "INBOX""#;
+    assert_eq!(parse_list_mailbox_name(valid), Some("INBOX".into()));
+
+    assert_eq!(
+        parse_list_mailbox_name(r#"*LIST (\HasChildren) "/" "INBOX""#),
+        None
+    );
+    assert_eq!(
+        parse_list_mailbox_name(r#"* LIST(\HasChildren) "/" "INBOX""#),
+        None
+    );
+}
+
+#[test]
 fn quota_observation_requires_success_and_a_matching_inbox_root() {
     assert!(quota_response_has_successful_root(
         "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n",
