@@ -114,9 +114,12 @@ for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT 
   fi
 done
 
-# Validate all endpoints and compare canonical identities before launching any
-# executable. This catches equivalent host casing, DNS trailing dots, decimal
-# port variants, and compressed/expanded IPv6 spellings.
+# Validate all endpoints and compare conservative mailbox identities before
+# launching any executable. Port is intentionally omitted from the collision
+# key: IMAP and IMAPS ports on the same host commonly expose the same mailbox.
+# This catches host casing, DNS trailing dots, and compressed/expanded IPv6
+# spellings. Separate services that are genuinely different mail stores should
+# use distinct hostnames or addresses for this smoke harness.
 source_endpoint="$MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT"
 dest_endpoint="$MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT"
 parse_imap_endpoint() {
@@ -208,7 +211,9 @@ else:
             print("ERROR: IPv6 IMAP endpoints must use brackets", file=sys.stderr)
             raise SystemExit(1)
         host = str(address)
-print(f"{host}:{port_number}\n{user.casefold()}")
+# Keep validating the port above, but do not use it to distinguish mailbox
+# identity: ports 143 and 993 frequently lead to the same account store.
+print(f"{host}\n{user.casefold()}")
 PY
 }
 source_identity="$(normalize_mailbox_identity "$source_endpoint" "$MAILSWIFTSYNC_PROVIDER_SOURCE_USER")"

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Treat the same normalized IMAP host and username as one mailbox identity in
+  the provider-smoke self-copy guard regardless of port, while still
+  validating the configured ports; cover a 143/993 alias collision.
 - Attach the actual completed transfer-attempt verification folder cursors to
   customer-proof run consistency, including scan intervals and successful
   source/destination revalidation times; distinguish these from standalone
