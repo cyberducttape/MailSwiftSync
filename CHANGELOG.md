@@ -6,6 +6,9 @@
   diagnostic project, run, mailbox-job, email, and Message-ID identifiers;
   avoid dictionary-recoverable plain hashes and raw run IDs in transcript paths
   and headers.
+- Correct the release-readiness verification-resume description and add a
+  regression check for tracked-snapshot metadata reuse versus always-refetched
+  body proofs.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.

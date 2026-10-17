@@ -363,6 +363,8 @@ fn capability_manifest_does_not_overstate_verification_resume() {
         fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
     let architecture =
         fs::read_to_string("docs/architecture.md").expect("architecture guide should exist");
+    let release_readiness = fs::read_to_string("docs/release-readiness.md")
+        .expect("release readiness document should exist");
 
     assert!(
         manifest.contains(
@@ -377,6 +379,13 @@ fn capability_manifest_does_not_overstate_verification_resume() {
             "Snapshot drift, an untracked snapshot, or an invalid prefix restarts the folder from the first page"
         ),
         "the capability claim must remain aligned with the enforced architecture contract"
+    );
+    assert!(
+        release_readiness.contains(
+            "An incomplete folder prefix resumes at the next sequence only when that same tracked snapshot matches"
+        ) && release_readiness.contains("Body-hash pages are always refetched")
+            && !release_readiness.contains("the folder is fully rescanned whether the snapshot matches or changed"),
+        "release readiness must describe snapshot-bound metadata resume without implying body-proof reuse"
     );
 }
 
