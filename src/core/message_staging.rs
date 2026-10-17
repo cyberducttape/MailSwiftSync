@@ -824,7 +824,8 @@ impl MessageMetadataStage {
             .query_row(
                 "SELECT c.uidvalidity,c.uidnext,c.exists_count,c.highest_modseq,c.completed,c.scan_completed_at,\
                  (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox),\
-                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity)\
+                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),\
+                 (SELECT COUNT(*) FROM stage_fingerprints f WHERE f.side=c.side AND f.mailbox=c.mailbox)\
                  FROM stage_cursors c WHERE c.side=?1 AND c.mailbox=?2",
                 params![side.as_i64(), mailbox],
                 |row| {
@@ -837,6 +838,7 @@ impl MessageMetadataStage {
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, i64>(6)?,
                         row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
                     ))
                 },
             )
@@ -851,6 +853,7 @@ impl MessageMetadataStage {
             scan_completed_at,
             total_rows,
             snapshot_rows,
+            fingerprint_rows,
         )) = saved
         else {
             return Ok(None);
@@ -864,8 +867,97 @@ impl MessageMetadataStage {
             && scan_completed_at.is_some()
             && total_rows == expected_rows
             && snapshot_rows == expected_rows
+            && fingerprint_rows == 0
         {
             Ok(Some(snapshot.exists))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Resume a committed metadata-page prefix only when the same tracked
+    /// mailbox snapshot remains selected. A page and its cursor share one
+    /// transaction, so the staged count and maximum UID must agree with the
+    /// cursor. Content fingerprints are excluded and fetched again.
+    pub(crate) fn resumable_mailbox_prefix(
+        &self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        snapshot: FolderSnapshot,
+    ) -> Result<Option<(u64, u64)>, String> {
+        if !self.is_durable() || snapshot.highest_modseq.is_none() {
+            return Ok(None);
+        }
+        let (uidvalidity, uidnext, exists, highest_modseq) =
+            snapshot.to_sql().map_err(|error| error.to_string())?;
+        let saved = self
+            .connection_ref()
+            .map_err(|error| error.to_string())?
+            .query_row(
+                "SELECT c.uidvalidity,c.uidnext,c.exists_count,c.highest_modseq,c.last_uid,c.completed,c.scan_started_at,c.scan_completed_at,\
+                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox),\
+                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),\
+                 (SELECT MAX(CAST(m.uid AS INTEGER)) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox),\
+                 (SELECT COUNT(*) FROM stage_fingerprints f WHERE f.side=c.side AND f.mailbox=c.mailbox)\
+                 FROM stage_cursors c WHERE c.side=?1 AND c.mailbox=?2",
+                params![side.as_i64(), mailbox],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
+                        row.get::<_, i64>(11)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| format!("could not inspect verification resume prefix: {error}"))?;
+        let Some((
+            saved_uidvalidity,
+            saved_uidnext,
+            saved_exists,
+            saved_modseq,
+            last_uid,
+            completed,
+            scan_started_at,
+            scan_completed_at,
+            total_rows,
+            snapshot_rows,
+            max_uid,
+            fingerprint_rows,
+        )) = saved
+        else {
+            return Ok(None);
+        };
+        let expected_exists = sqlite_i64(snapshot.exists).map_err(|error| error.to_string())?;
+        if saved_uidvalidity == uidvalidity
+            && saved_uidnext == uidnext
+            && saved_exists == exists
+            && saved_modseq == highest_modseq
+            && completed == 0
+            && scan_started_at.is_some()
+            && scan_completed_at.is_none()
+            && total_rows == snapshot_rows
+            && snapshot_rows > 0
+            && snapshot_rows <= expected_exists
+            && last_uid > 0
+            && u64::try_from(last_uid)
+                .is_ok_and(|uid| uid <= u32::MAX as u64 && uid < snapshot.uidnext)
+            && max_uid == Some(last_uid)
+            && fingerprint_rows == 0
+        {
+            Ok(Some((
+                u64::try_from(snapshot_rows).map_err(|error| error.to_string())?,
+                u64::try_from(last_uid).map_err(|error| error.to_string())?,
+            )))
         } else {
             Ok(None)
         }

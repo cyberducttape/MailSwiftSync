@@ -366,15 +366,15 @@ fn capability_manifest_does_not_overstate_verification_resume() {
 
     assert!(
         manifest.contains(
-            "only a fully completed durable metadata folder with an identical tracked UIDVALIDITY/UIDNEXT/EXISTS/HIGHESTMODSEQ snapshot can be reused after interruption"
+            "a committed durable metadata prefix can resume only with an identical tracked UIDVALIDITY/UIDNEXT/EXISTS/HIGHESTMODSEQ snapshot"
         ) && !manifest.contains("verification staging resumes from snapshot-bound cursors"),
-        "capability claims must limit reuse to complete metadata folders with an identical tracked snapshot"
+        "capability claims must limit metadata resume to committed prefixes with an identical tracked snapshot"
     );
     assert!(
         architecture.contains(
-            "A fully completed metadata folder may be reused only when its fresh SELECT exactly matches the stored UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ"
+            "For an incomplete metadata folder, a committed prefix resumes at the next sequence only after its page/cursor consistency is checked"
         ) && architecture.contains(
-            "A partial folder, an untracked snapshot, any snapshot drift, or a body-hash page is invalidated and refetched"
+            "Snapshot drift, an untracked snapshot, or an invalid prefix restarts the folder from the first page"
         ),
         "the capability claim must remain aligned with the enforced architecture contract"
     );

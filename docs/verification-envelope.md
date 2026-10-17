@@ -321,7 +321,7 @@ evidence.
 | Compared messages | Singleton pairs are compared when exactly one source and one destination message share the Message-ID, expected destination folder, INTERNALDATE, and RFC822.SIZE. Equal-sized duplicate groups with FLAGS on every message are compared as multisets of canonical flag sets; mismatched group sizes, probable pairings, unmatched messages, and messages whose FETCH carried no FLAGS are not compared. Duplicate flag frequencies are aggregated in SQLite and consumed as ordered rows, avoiding per-message flag-string collections in Rust; SQLite temporary aggregation cost remains workload-dependent. The compared count against all source messages is reported as flag coverage. |
 | Documented exception | The destination lost flags, gained none, and every lost flag is one the destination folder's SELECT `PERMANENTFLAGS` cannot store (a keyword is storable when `\*` is listed; a system flag only when listed by name). This is counted as excepted, not as a failure. Without `PERMANENTFLAGS` every flag is assumed storable, as RFC 9051 requires. |
 | Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
-| Point in time | Each side is inventoried independently, not as one cross-server instant. FLAGS contribute to fidelity evidence only when the folder has a tracked CONDSTORE `HIGHESTMODSEQ`, which is checked at scan completion. Without that snapshot, FLAGS are not fetched into evidence and flag coverage is incomplete; a second read alone cannot prove stability. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. On retry, a complete durable metadata folder may be reused only after a fresh SELECT exactly matches its UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ; the folder is then reselected again during the retry. Partial pages, untracked snapshots, and every body-hash page are refetched. |
+| Point in time | Each side is inventoried independently, not as one cross-server instant. FLAGS contribute to fidelity evidence only when the folder has a tracked CONDSTORE `HIGHESTMODSEQ`, which is checked at scan completion. Without that snapshot, FLAGS are not fetched into evidence and flag coverage is incomplete; a second read alone cannot prove stability. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. On retry, a committed durable metadata prefix may resume only after a fresh SELECT exactly matches UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ. The stored page/cursor pair is transaction-bound and the folder is reselected after the resumed scan. An unchanged complete folder is reusable under the same test. Untracked or changed snapshots restart from the first page; body-hash pages are always refetched. |
 
 ## Snapshot and cutover semantics
 
@@ -635,13 +635,15 @@ project report exposes it per run as `verification_limit` (`code`,
 | `deadline` | Verification exceeded the migration timeout | Retryable; unfinished or changed folders rescan | Rerun for another attempt, or raise the migration timeout |
 
 "Retryable" means the same plan may make progress on another attempt. On a
-durable metadata retry, a fully completed folder is reusable only when a fresh
-SELECT matches its complete snapshot, including a tracked HIGHESTMODSEQ, and
-the staged row count exactly matches EXISTS. Partial folders, changed or
-untracked snapshots, and all body fingerprints are invalidated and fetched
-again. This guards mutable FLAGS and avoids treating the mere presence of saved
-pages as proof. Folders absent from the fresh LIST are pruned before scanning
-begins; the source and destination are still not one atomic snapshot.
+durable metadata retry, a committed partial prefix resumes at its next sequence
+only when a fresh SELECT matches UIDVALIDITY, UIDNEXT, EXISTS, and a tracked
+HIGHESTMODSEQ; row count, UID cursor, and absence of old body fingerprints are
+validated before reuse. A fully completed folder can likewise be reused only
+when its staged row count equals EXISTS. Changed or untracked snapshots restart
+from the first page, and all body fingerprints are fetched again. This guards
+mutable FLAGS and avoids treating saved-page presence alone as proof. Folders
+absent from the fresh LIST are pruned before scanning begins; the source and
+destination are still not one atomic snapshot.
 A folder that stops at a limit tags the whole account result, even
 when its own detail is truncated from the folder-failure summary. A single
 IMAP command that stalls for 15 seconds is treated as a provider or transport

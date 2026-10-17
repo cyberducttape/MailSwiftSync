@@ -333,6 +333,13 @@ trait MessageSink {
     ) -> Result<bool, String> {
         Ok(false)
     }
+    fn resume_mailbox_prefix(
+        &mut self,
+        _mailbox: &str,
+        _snapshot: crate::core::FolderSnapshot,
+    ) -> Result<Option<(u64, u64)>, String> {
+        Ok(None)
+    }
     fn checkpoint_page(
         &mut self,
         _mailbox: &str,
@@ -481,6 +488,33 @@ impl MessageSink for StageMessageSink<'_> {
         self.active_mailbox = Some(mailbox.to_owned());
         self.add_current_attempt_messages(count)?;
         Ok(true)
+    }
+
+    fn resume_mailbox_prefix(
+        &mut self,
+        mailbox: &str,
+        snapshot: crate::core::FolderSnapshot,
+    ) -> Result<Option<(u64, u64)>, String> {
+        let Some((count, last_uid)) = self
+            .stage
+            .resumable_mailbox_prefix(self.side, mailbox, snapshot)?
+        else {
+            return Ok(None);
+        };
+        let count = usize::try_from(count)
+            .map_err(|_| "resumed verification prefix exceeds this platform".to_owned())?;
+        if message_fetch_limit_exceeded(self.count, count) {
+            return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
+                "account would exceed the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit while resuming a folder"
+            )));
+        }
+        self.reset_mailbox_count(mailbox);
+        self.active_mailbox = Some(mailbox.to_owned());
+        self.add_current_attempt_messages(count)?;
+        Ok(Some((
+            u64::try_from(count).map_err(|error| error.to_string())?,
+            last_uid,
+        )))
     }
 
     fn checkpoint_page(
@@ -1108,12 +1142,17 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             ModseqSnapshot::Unsupported => None,
         }),
     };
-    // A durable, fully completed metadata scan can survive a restart only
-    // when the server provides a tracked MODSEQ and the complete SELECT
-    // snapshot still matches. Body hashes and partial folders always refetch.
+    // Durable metadata from a prior attempt is eligible for reuse only when
+    // the server provides a tracked MODSEQ and the complete SELECT snapshot
+    // still matches. Body-hash scans never reuse old pages.
     let reused_completed_scan =
         body_hash.is_none() && sink.reuse_completed_mailbox(mailbox, snapshot)?;
-    if !reused_completed_scan {
+    let resumed_prefix = if !reused_completed_scan && body_hash.is_none() {
+        sink.resume_mailbox_prefix(mailbox, snapshot)?
+    } else {
+        None
+    };
+    if !reused_completed_scan && resumed_prefix.is_none() {
         sink.begin_mailbox_scan(mailbox, snapshot)?;
     }
     sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
@@ -1125,6 +1164,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             host,
             mailbox,
             start_exists,
+            resumed_prefix,
             &mut response,
             &mut buffer,
             budget,
@@ -1462,6 +1502,7 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     host: &str,
     mailbox: &str,
     exists: u64,
+    resume_prefix: Option<(u64, u64)>,
     response: &mut String,
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
@@ -1471,10 +1512,23 @@ fn enumerate_uid_pages<S: Read + Write, F>(
 where
     F: FnMut(&mut S, &mut [u8; 4096], &[u64], &str) -> Result<usize, String>,
 {
-    let mut sequence_start = 1_u64;
-    let mut enumerated_uid_count = 0_u64;
+    let (mut sequence_start, mut enumerated_uid_count, mut last_enumerated_uid) =
+        match resume_prefix {
+            Some((count, last_uid)) if count > 0 && count <= exists => (
+                count
+                    .checked_add(1)
+                    .ok_or_else(|| format!("{host}: verification resume sequence overflowed"))?,
+                count,
+                Some(last_uid),
+            ),
+            Some(_) => {
+                return Err(format!(
+                    "{host}: {mailbox} has an invalid persisted verification prefix"
+                ));
+            }
+            None => (1, 0, None),
+        };
     let mut search_number = 0usize;
-    let mut last_enumerated_uid = None;
     while sequence_start <= exists {
         budget.check()?;
         let sequence_end = sequence_start
@@ -1512,10 +1566,12 @@ where
             ));
         }
         last_enumerated_uid = uids.last().copied().or(last_enumerated_uid);
-        enumerated_uid_count = enumerated_uid_count.saturating_add(uids.len() as u64);
-        // Every scan starts from the first extant UID. Durable staged pages
-        // are invalidated before enumeration because their FLAGS and body
-        // evidence cannot be proven current after an interruption.
+        enumerated_uid_count = enumerated_uid_count
+            .checked_add(uids.len() as u64)
+            .ok_or_else(|| format!("{host}: enumerated UID count overflowed"))?;
+        // Fresh scans begin at the first extant message. A resumable prefix
+        // starts at the next sequence only after the caller validated the
+        // persisted page/cursor pair against a tracked unchanged snapshot.
         let mut offset = 0;
         while offset < uids.len() {
             let (count, uid_set) = encode_uid_page(&uids[offset..], planner.size());

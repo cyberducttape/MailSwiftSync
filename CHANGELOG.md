@@ -120,18 +120,18 @@
 - Bound unbudgeted STARTTLS handshakes with an absolute deadline, and commit
   each durable verification page together with its progress cursor to avoid an
   extra SQLite synchronization and inconsistent intermediate checkpoint.
-- Reuse a fully completed durable metadata folder scan after interruption only
-  when a fresh SELECT exactly matches its UIDVALIDITY, UIDNEXT, EXISTS, and
-  tracked HIGHESTMODSEQ; partial scans, servers without MODSEQ, and all body
-  fingerprints still require a fresh scan.
+- Resume committed durable metadata prefixes after interruption only when a
+  fresh SELECT exactly matches UIDVALIDITY, UIDNEXT, EXISTS, and tracked
+  HIGHESTMODSEQ; complete folders may be reused, while drifted/untracked
+  prefixes and all body fingerprints require fresh fetches.
 - Consume bounded literal values in IMAP LIST extension data without treating
   them as mailbox names, including parenthesized extensions whose closing
   delimiters immediately follow literal bytes; reject aggregate extension-
   literal data beyond the inventory limit. Reduce body-fingerprint and FETCH
   protocol-text temporary allocations, and reject a projected metadata-page
   overrun before issuing the metadata UID FETCH or staging its records.
-  Interrupted partial scans still rescan; only complete metadata folders with
-  an identical tracked snapshot can be reused.
+  Interrupted metadata scans resume only from committed prefixes with an
+  identical tracked snapshot; otherwise they restart from the first page.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.
