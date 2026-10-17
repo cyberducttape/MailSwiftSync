@@ -825,6 +825,32 @@ fn verification_envelope_records_current_head_skewed_scale_matrix() {
 }
 
 #[test]
+fn verification_envelope_records_revision_tagged_scale_matrix_and_artifacts() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "provenance-tagged full typical-shape matrix",
+        "478fe7bbdf37e8aa010b9f1ff36964cc9a2b3ebf",
+        "43,478/s",
+        "27,855/s",
+        "31,426/s",
+        "42,841/s",
+        "41,104/s",
+        "1,092,691,152 B / 100,893,904 B",
+        "83.8",
+        "37c383f6bd22c27cd9683ac54f79cbf5987d6d6fe440b3461372d04edd61bff4",
+        "b4d1f710acb5f55c33bb658eb955b700b1911c6706d4bcdbe223fa77b8c0d1d0",
+        "7f15d953a6c7c99c75731abd247151b693ac9868f91d1270839e1bd3ac693865",
+        "not a safe disk\nreservation or universal ceiling",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "revision-tagged verification benchmark evidence is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");

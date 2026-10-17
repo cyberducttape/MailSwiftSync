@@ -708,6 +708,38 @@ numbers expose materially different I/O and reconciliation costs; they are
 not transferable provider SLAs, end-to-end migration measurements, or a
 universal disk-sizing formula.
 
+A provenance-tagged full typical-shape matrix was run on 2026-10-17 at commit
+`478fe7bbdf37e8aa010b9f1ff36964cc9a2b3ebf`, using Rust 1.92.0 on the shared
+AMD Ryzen 7 7735U workstation (Ubuntu 26.04.1 x86_64, Linux
+7.0.0-38-generic, ext4 on NVMe). Each size used a separate process and durable
+stage. The release CLI reported the full source revision. All cases passed
+the benchmark's 64 MiB peak-RSS and 20,000 messages/s reconciliation gates:
+
+| Messages per endpoint | Stage / reconcile | Reconcile rate | FLAGS compared / time | Restart reconcile | Peak RSS | Stage after staging | Peak stage / journal | Reconciliation writes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 23 ms / 37 ms | 43,478/s | 980 / 9 ms | 35 ms | 13 MiB | 675,840 B | 1,011,712 B / 107,216 B | 557,056 B |
+| 10,000 | 270 ms / 359 ms | 27,855/s | 9,800 / 100 ms | 361 ms | 17 MiB | 6,242,304 B | 9,415,680 B / 949,248 B | 5,337,088 B |
+| 100,000 | 3.104 s / 3.182 s | 31,426/s | 98,000 / 635 ms | 2.088 s | 22 MiB | 64,651,264 B | 105,372,120 B / 9,722,328 B | 64,884,736 B |
+| 500,000 | 9.900 s / 11.671 s | 42,841/s | 490,000 / 5.499 s | 10.962 s | 21 MiB | 334,123,008 B | 544,121,344 B / 50,225,664 B | 334,880,768 B |
+| 1,000,000 | 36.580 s / 24.328 s | 41,104/s | 980,000 / 6.402 s | 22.509 s | 21 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 680,017,920 B |
+
+At 1M per endpoint, the fixture recorded 20,000 intentional changed-ID
+mismatches and compared FLAGS for 980,000 messages. The process used 83.8
+CPU-seconds; staging read/wrote 151,552 / 868,814,848 bytes and reconciliation
+read/wrote 86,016 / 680,017,920 bytes. SHA-256: benchmark harness
+`scripts/benchmark-verification-scale.sh`:
+`37c383f6bd22c27cd9683ac54f79cbf5987d6d6fe440b3461372d04edd61bff4`;
+release CLI binary:
+`b4d1f710acb5f55c33bb658eb955b700b1911c6706d4bcdbe223fa77b8c0d1d0`;
+release test harness:
+`7f15d953a6c7c99c75731abd247151b693ac9868f91d1270839e1bd3ac693865`.
+These are synthetic, single-process SQLite measurements on one shared host.
+They exclude IMAP inventory/fetching, message transfer, concurrent workers,
+terminal evidence commit, and report export. In particular, the approximately
+1.09 GB peak stage size is a capacity-planning observation, not a safe disk
+reservation or universal ceiling; none of these measurements qualifies
+provider behavior, large-byte mailboxes, or other host classes.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the

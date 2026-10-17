@@ -31,13 +31,13 @@
   with forced TLS 1.0/1.1 rejection baselines and a TLS 1.2 success case.
   End-to-end imapsync protocol enforcement and negotiated-protocol evidence
   remain integration qualification gates.
-- Repeat the complete durable typical-shape verification benchmark matrix on
-  the current clean head through 1,000,000 messages per endpoint; record the
-  test-harness and release-binary digests, verify the binary embeds the full
-  source revision, and publish per-size reconciliation/RSS/stage/journal
-  metrics plus 1M phase I/O. Keep the result explicitly synthetic and separate
-  from provider, IMAP transfer, concurrent-worker, and final-evidence-commit
-  claims.
+- Record a full durable typical-shape verification benchmark matrix on commit
+  `478fe7bbdf37e8aa010b9f1ff36964cc9a2b3ebf` through 1,000,000 messages per
+  endpoint. The release CLI reports the full source revision; harness and
+  release-binary SHA-256 values and per-size reconciliation/RSS/stage/journal
+  metrics are in `docs/verification-envelope.md`. This is synthetic SQLite
+  evidence only, not provider, IMAP transfer, concurrent-worker, or final-
+  evidence-commit qualification.
 - Add a bounded, privacy-preserving one-shot Prometheus text snapshot for
   durable local-ledger job, transfer-attempt, and verification counts. It
   refuses truncated projections and labels no customer-controlled identities;
