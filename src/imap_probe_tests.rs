@@ -351,7 +351,7 @@ fn list_response_streaming_parser_rejects_oversized_records_and_literals() {
 }
 
 #[test]
-fn list_response_streaming_parser_bounds_extension_literals_before_reading_payload() {
+fn list_response_streaming_parser_rejects_oversized_declared_extension_without_payload() {
     let response =
         b"* LIST (\\HasNoChildren) \"/\" \"INBOX\" X-TEST {1048577}\r\na005 OK LIST completed\r\n";
     let mut stream = Cursor::new(response);
