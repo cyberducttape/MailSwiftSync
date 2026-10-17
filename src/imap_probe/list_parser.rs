@@ -102,6 +102,9 @@ fn list_field_layout(line: &str) -> Option<(Vec<String>, usize)> {
         return None;
     }
     let attributes_end = attributes_end?;
+    if !valid_list_attributes(&bytes[1..attributes_end - 1]) {
+        return None;
+    }
     let fields = tokens(after_list.get(attributes_end..)?)?;
     // The delimiter and mailbox name are the next two fields. The LIST
     // grammar requires an attribute list, so the mailbox cannot precede it.
@@ -111,6 +114,37 @@ fn list_field_layout(line: &str) -> Option<(Vec<String>, usize)> {
         return None;
     }
     Some((fields, 1))
+}
+
+/// Validate the fixed LIST attribute field as flag atoms. Quoted strings and
+/// nested groups belong to extended response data, not `mbx-list-flags`.
+fn valid_list_attributes(attributes: &[u8]) -> bool {
+    if !attributes.is_ascii()
+        || attributes.iter().any(|byte| {
+            (byte.is_ascii_control() && *byte != b' ')
+                || matches!(*byte, b'"' | b'(' | b')' | b'{' | b'}' | b'%' | b'*')
+        })
+    {
+        return false;
+    }
+    let Ok(attributes) = std::str::from_utf8(attributes) else {
+        return false;
+    };
+    tokens(attributes).is_some_and(|flags| {
+        flags.into_iter().all(|flag| {
+            let Some(atom) = flag.strip_prefix('\\') else {
+                return false;
+            };
+            !atom.is_empty()
+                && atom.bytes().all(|byte| {
+                    byte.is_ascii_graphic()
+                        && !matches!(
+                            byte,
+                            b'(' | b')' | b'{' | b'}' | b'%' | b'*' | b'"' | b'\\' | b']'
+                        )
+                })
+        })
+    })
 }
 
 /// Tokenize the bounded, non-literal portion of a LIST response. Quoted

@@ -545,6 +545,9 @@ fn list_parser_rejects_an_unclosed_quoted_attribute_list() {
     let malformed = r#"* LIST (\HasChildren "value)" "/" "INBOX""#;
     assert_eq!(parse_list_mailbox_name(malformed), None);
 
+    let quoted_attribute = r#"* LIST (\HasChildren "\NoSelect") "/" "INBOX""#;
+    assert_eq!(parse_list_mailbox_name(quoted_attribute), None);
+
     let valid_with_quoted_mailbox_and_extension =
         r#"* LIST (\HasChildren) "/" "value)" ("CHILDINFO" ("SUBSCRIBED"))"#;
     assert_eq!(
