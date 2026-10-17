@@ -125,9 +125,11 @@ pub(crate) struct RunContext<'a> {
     /// Provenance of a live transfer attempt. `Some` exactly when this
     /// process is a live transfer whose attempt boundaries must be durable.
     pub(crate) transfer_pass: Option<&'a core::TransferPassIntent>,
-    /// Shared process-start budget. The token is taken immediately before
-    /// `spawn`, after every admission, authentication, claim, and preparation
-    /// step, so time spent waiting upstream cannot bank tokens into a burst.
+    /// Shared engine-release budget. Gatekeepers may be spawned while waiting
+    /// for durable process registration, but the token is acquired only when
+    /// the registered gatekeeper is released to execute the engine. This
+    /// prevents registration delays from turning paced gatekeeper spawns into
+    /// a burst of provider connections.
     pub(crate) launch_limiter: Option<(
         &'a crate::process::ProcessLaunchLimiter,
         &'a crate::controller::rate_domains::RateDomainPath,
@@ -179,23 +181,11 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             expected_executable_identity,
         )?;
     }
-    let mut child = if let Some((limiter, path)) = launch_limiter {
-        limiter
-            .launch_scoped(path, cancel, || {
-                spawn_retrying_busy_executable(&mut command)
-            })
-            .ok_or_else(|| {
-                if cancel.load(Ordering::Relaxed) {
-                    format!("{executable} launch cancelled before process start")
-                } else {
-                    format!("{executable} launch refused: process-start limiter unavailable")
-                }
-            })?
-            .map_err(|error| format!("could not start {executable}: {error}"))?
-    } else {
-        spawn_retrying_busy_executable(&mut command)
-            .map_err(|error| format!("could not start {executable}: {error}"))?
-    };
+    // Spawn only the inert gatekeeper here. The provider-facing engine does
+    // not execute until its durable ownership acknowledgement has been
+    // recorded and the shared launch budget admits its release below.
+    let mut child = spawn_retrying_busy_executable(&mut command)
+        .map_err(|error| format!("could not start {executable}: {error}"))?;
     let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
         Ok(supervisor) => supervisor,
@@ -443,7 +433,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             ))
         } else {
             transfer_attempt_started = transfer_pass.is_some();
-            if let Err(error) = release_engine(&mut release_stdin) {
+            if let Err(error) =
+                release_engine_with_limiter(&mut release_stdin, launch_limiter, cancel)
+            {
                 cancel.store(true, Ordering::Relaxed);
                 let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
                 Err(format!("engine release failed; child cancelled: {error}"))

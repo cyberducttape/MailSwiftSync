@@ -519,6 +519,16 @@ mod tests {
             retry_count: usize,
             limiters: BatchLimiters,
         ) -> Run {
+            run_with_batched_process_registration(forms, concurrency, retry_count, limiters, false)
+        }
+
+        pub(super) fn run_with_batched_process_registration(
+            forms: Vec<crate::Form>,
+            concurrency: usize,
+            retry_count: usize,
+            limiters: BatchLimiters,
+            batch_registration_replies: bool,
+        ) -> Run {
             let count = forms.len();
             let jobs = forms
                 .into_iter()
@@ -567,11 +577,21 @@ mod tests {
             );
             let mut starts = Vec::new();
             let mut finished = Vec::new();
+            let mut pending_process_start_replies = Vec::new();
             while let Ok(event) = rx.recv_timeout(Duration::from_secs(60)) {
                 match event {
                     Event::ProcessStarted(_, job_id, _, _, _, _, _, reply) => {
                         starts.push((job_id, Instant::now()));
-                        let _ = reply.send(Ok(()));
+                        if batch_registration_replies {
+                            pending_process_start_replies.push(reply);
+                            if pending_process_start_replies.len() == count {
+                                for reply in pending_process_start_replies.drain(..) {
+                                    let _ = reply.send(Ok(()));
+                                }
+                            }
+                        } else {
+                            let _ = reply.send(Ok(()));
+                        }
                     }
                     Event::ClaimBatch { reply, .. }
                     | Event::EngineVersion { reply, .. }
@@ -650,6 +670,33 @@ mod tests {
         assert!(
             run_elapsed >= minimum_elapsed,
             "the completed launch burst took {run_elapsed:?}, below the rate-limited minimum {minimum_elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delayed_durable_process_registration_does_not_burst_engine_releases() {
+        const WORKERS: usize = 4;
+        const STARTS_PER_SECOND: usize = 4;
+        let directory = composed::temp_directory();
+        let engine = composed::overlap_detecting_engine(&directory);
+        let forms = (0..WORKERS)
+            .map(|index| composed::form(&engine, &format!("user{index}@a.example")))
+            .collect::<Vec<_>>();
+        let run = composed::run_with_batched_process_registration(
+            forms,
+            WORKERS,
+            0,
+            composed::limiters(WORKERS, STARTS_PER_SECOND),
+            true,
+        );
+
+        assert_eq!(run.starts.len(), WORKERS, "{:?}", run.finished);
+        assert_eq!(run.finished.len(), WORKERS, "{:?}", run.finished);
+        assert!(
+            !directory.join("burst-detected").exists(),
+            "simultaneously acknowledged gatekeepers must not execute engines in a burst"
         );
         let _ = std::fs::remove_dir_all(&directory);
     }

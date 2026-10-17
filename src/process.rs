@@ -1227,12 +1227,11 @@ struct TokenBucketState {
 /// The external engine owns the IMAP connection, so the controller cannot
 /// meter individual messages directly. Batch command construction divides
 /// configured imapsync message/byte ceilings across workers; this bucket
-/// smooths engine process starts so a batch does not open every mailbox's
-/// engine sessions at once. The limiter is intentionally shared by all
-/// workers, and `run_streaming` takes the token immediately before `spawn`:
-/// a token taken earlier (before provider admission, OAuth refresh, the
-/// authentication probe, or the durable claim) would let workers that waited
-/// upstream spawn together in a burst once they were released.
+/// smooths the release of registered gatekeepers to the provider-facing
+/// engine, so delayed durable registration cannot release a waiting batch in
+/// a connection burst. Gatekeeper processes may be spawned before admission;
+/// the launch token belongs at the final release boundary, after provider
+/// admission, OAuth refresh, authentication probes, and durable registration.
 pub(crate) struct ProcessLaunchLimiter {
     ceiling_per_second: f64,
     state: Mutex<TokenBucketState>,
@@ -1284,11 +1283,11 @@ impl ProcessLaunchLimiter {
         self.acquire_scoped_inner(Some(path), cancel)
     }
 
-    /// Apply launch admission and perform the OS spawn while holding the
-    /// shared bucket lock. A detached permit is unsafe here: a worker can be
-    /// descheduled after acquiring it and later spawn alongside a newer
-    /// permit. The closure must therefore contain only the bounded spawn
-    /// operation, not preparation or process supervision.
+    /// Apply launch admission and perform the bounded engine-release action
+    /// while holding the shared bucket lock. A detached permit is unsafe here:
+    /// a worker can be descheduled after acquiring it and later release its
+    /// engine alongside a newer permit. The closure must not include
+    /// preparation, durable registration, or process supervision.
     pub(crate) fn launch_scoped<T, E>(
         &self,
         path: &RateDomainPath,
@@ -1307,6 +1306,11 @@ impl ProcessLaunchLimiter {
             }
             let wait = {
                 let mut state = self.state.lock().ok()?;
+                // Cancellation may have arrived while this worker waited
+                // behind another release holding the bucket lock.
+                if cancel.load(Ordering::Relaxed) {
+                    return None;
+                }
                 let now = Instant::now();
                 state.global.refill(now, self.ceiling_per_second);
                 let mut wait = state.global.wait();

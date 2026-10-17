@@ -222,6 +222,10 @@
   readiness probes, including DNS/TCP setup, STARTTLS, authentication, and
   follow-up IMAP commands; report probe timeouts separately from verification
   resource-limit failures.
+- Pace provider-facing engine release only after its durable process
+  registration acknowledgement, so gatekeepers accumulated during slow
+  registration cannot open IMAP sessions in a burst; add a concurrent delayed-
+  acknowledgement regression using the Unix test gatekeeper.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.
@@ -1749,8 +1753,9 @@ operator distribution archives.
   credential, tenant, provider, global) with AIMD concurrency, escalating to
   a broader domain only after distinct children are throttled, so one
   tenant's throttling no longer pauses another on the same endpoints.
-- The batch process-start limiter now takes its token immediately before
-  spawn, so workers released together cannot start engines in a burst.
+- The batch process-start limiter takes its token at the engine-release
+  boundary after durable registration, so delayed acknowledgements cannot
+  release several gatekeepers into a provider-facing burst.
 - Startup no longer panics when neither durable nor temporary state can be
   opened; it shows a fatal screen (or exits 1 headless) with both errors.
 - Verification levels and the `install-engine` capability are checked
