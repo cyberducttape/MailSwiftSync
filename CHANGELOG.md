@@ -19,10 +19,10 @@
   1,000,000 records per endpoint on the same current revision; record the
   shape-dependent disk and latency costs while keeping them explicitly separate
   from provider and end-to-end migration qualification.
-- Run the release-gatekeeper, controller-crash, engine-SIGKILL, bounded storage-
-  failure, corrupt-restore, and backup-recovery drills against the current
-  debug binary; record its commit and digest while keeping power-loss and real
-  filesystem-full qualification explicitly open.
+- Re-run the release-gatekeeper, controller-crash, engine-SIGKILL, bounded
+  storage-failure, corrupt-restore, and backup-recovery drills against an
+  artifact embedding the current full commit SHA; record its digest while
+  keeping power-loss and real filesystem-full qualification explicitly open.
 - Inject `SQLITE_FULL` midway through terminal evidence plus 4,000 streamed
   mismatch rows; prove the run/mailbox/evidence transaction rolls back wholly
   and retries successfully after storage capacity is restored.

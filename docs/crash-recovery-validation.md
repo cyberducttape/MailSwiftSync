@@ -37,9 +37,11 @@ and repeatable, and a new journal would add its own failure states.
 On 2026-10-17, the repository's `process-supervision-chaos-smoke.sh`,
 `controller-recovery-smoke.sh`, and `controller-chaos-smoke.sh` all passed
 against the normal debug binary built from commit
-`43f40ca87b77e2f579f5566cf81c4c413fa79938` (SHA-256
-`d1398608817ba712f38fb41f2e750f1739f914d0520463173d176c015e95f6a5`). The
-host was Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, with Rust 1.92.0.
+`5a7129642d42f7b21b022d6601a81634a758cc1a` (MailSwiftSync 0.1.0-alpha.1;
+SHA-256 `04af4380a9dcbf9721cf44b9e0e7ff228f7a308d20fc38c0ee193ea08283f1d7`).
+The build embedded that full commit SHA. The host was Ubuntu 26.04.1 x86_64,
+Linux 7.0.0-38-generic, with Rust 1.92.0. All three scripts passed on this
+artifact.
 The process-supervision drill proved that missing and invalid durable-release
 tokens do not start the fake engine, while `GO\n` does. The recovery drill
 SIGKILLed the controller and separately the engine process group; restart

@@ -345,8 +345,8 @@ fn crash_recovery_docs_record_current_head_local_fault_drills_with_limits() {
         .expect("crash-recovery validation evidence should exist");
     for evidence in [
         "Current-head local process and ledger fault drills",
-        "43f40ca87b77e2f579f5566cf81c4c413fa79938",
-        "d1398608817ba712f38fb41f2e750f1739f914d0520463173d176c015e95f6a5",
+        "5a7129642d42f7b21b022d6601a81634a758cc1a",
+        "04af4380a9dcbf9721cf44b9e0e7ff228f7a308d20fc38c0ee193ea08283f1d7",
         "RLIMIT_FSIZE` is a bounded write-failure\nsimulation",
         "do not simulate OS restart",
     ] {
