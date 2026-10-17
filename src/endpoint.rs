@@ -118,7 +118,11 @@ fn destination_identity(
     if mailbox.is_empty() {
         return Err("destination mailbox is empty".into());
     }
-    let default_port = if tls == "starttls" { 143 } else { 993 };
+    let default_port = if matches!(tls, "starttls" | "plain") {
+        143
+    } else {
+        993
+    };
     let (host, endpoint_port) = parts(host, default_port)?;
     let port = if configured_port.trim().is_empty() {
         endpoint_port
@@ -273,6 +277,27 @@ mod tests {
             canonical_destination_identity("User@example.test", "[2001:db8::1]", "starttls", "143")
                 .unwrap(),
             "endpoint:2001:db8::1:143:User@example.test"
+        );
+    }
+
+    #[test]
+    fn endpoint_identity_uses_imap_default_for_plain_transport() {
+        assert_eq!(
+            casefolded_destination_identity("User@example.test", "mail.example.test", "plain", "")
+                .unwrap(),
+            casefolded_destination_identity(
+                "user@example.test",
+                "MAIL.example.test.",
+                "starttls",
+                ""
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            casefolded_destination_identity("user@example.test", "mail.example.test", "plain", "")
+                .unwrap(),
+            casefolded_destination_identity("user@example.test", "mail.example.test", "imaps", "")
+                .unwrap()
         );
     }
 

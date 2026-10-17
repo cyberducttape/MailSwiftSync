@@ -408,6 +408,21 @@ mod tests {
     }
 
     #[test]
+    fn migration_plan_rejects_plain_source_and_starttls_destination_on_same_default_port() {
+        let mut form = Form::default();
+        form.profile.source_host = "mail.example.test".into();
+        form.profile.source_tls = "plain".into();
+        form.profile.allow_insecure_source_transport = true;
+        form.profile.source_user = "same@example.test".into();
+        form.profile.destination_host = "MAIL.example.test.".into();
+        form.profile.destination_tls = "starttls".into();
+        form.profile.destination_user = "SAME@example.test".into();
+
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("same IMAP mailbox"), "{error}");
+    }
+
+    #[test]
     fn migration_plan_allows_distinct_mailboxes_or_distinct_hosts() {
         let mut form = Form::default();
         form.profile.source_host = "imap.example.test:993".into();
