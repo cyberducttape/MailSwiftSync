@@ -39,6 +39,9 @@ used.
 | OAuth token revoked/expired | Authentication failure is classified and stops/retries only under policy; no success is recorded |
 | Destination quota exhausted | Actionable quota/capacity failure; ledger remains readable and non-verified |
 | Provider throttles connections | Bounded retry budget, provider-aware cooldown, tenant isolation, and telemetry |
+| TLS trust and identity failures | In both the Rustls probe and actual pinned imapsync transfer path, expired certificates, hostname mismatch, and untrusted CAs are rejected; a custom CA succeeds only for the intended certificate identity |
+| STARTTLS downgrade and protocol floor | STARTTLS refusal/downgrade is rejected; record negotiated TLS version and peer certificate identity for probe and engine connections. The product currently makes no universal minimum-TLS-version claim across Rustls and Perl/IO::Socket::SSL |
+| TLS reconnect and certificate rotation | A changed or wrong certificate is rejected on transfer reconnects; probe pinning is not treated as transfer enforcement, and pinned plans remain refused until the engine path is qualified |
 | Source UIDVALIDITY changes | Existing checkpoint is rejected and a fresh scan is required |
 | Destination receives new messages | Missing/extra/changed classification follows the verification policy |
 | SQLite unavailable or corrupted | No false completion; status/recover fail closed; verified backup restores into a usable ledger |

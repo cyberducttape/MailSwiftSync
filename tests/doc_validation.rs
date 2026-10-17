@@ -391,6 +391,52 @@ fn production_docs_keep_body_proof_and_power_loss_claims_bounded() {
 }
 
 #[test]
+fn security_docs_preserve_tls_stack_and_customer_isolation_boundaries() {
+    let status =
+        fs::read_to_string("PRODUCTION_STATUS.md").expect("production status should exist");
+    assert!(status.contains("no universal TLS-minimum policy is claimed across both stacks"));
+
+    let architecture = fs::read_to_string("docs/architecture.md")
+        .expect("architecture documentation should exist");
+    for tls_control in [
+        "SSL_verify_mode=1",
+        "SSL_verifycn_scheme=imap",
+        "pinned plans are rejected before transfer",
+    ] {
+        assert!(
+            architecture.contains(tls_control),
+            "missing TLS boundary: {tls_control}"
+        );
+    }
+
+    let qualification = fs::read_to_string("docs/production-qualification-environment.md")
+        .expect("production qualification matrix should exist");
+    for scenario in [
+        "expired certificates",
+        "STARTTLS refusal/downgrade",
+        "transfer reconnects",
+    ] {
+        assert!(
+            qualification.contains(scenario),
+            "missing TLS qualification scenario: {scenario}"
+        );
+    }
+
+    let runbook = fs::read_to_string("docs/msp-operations-runbook.md")
+        .expect("MSP operations runbook should exist");
+    for isolation in [
+        "dedicated VM or host",
+        "dedicated unprivileged OS account per",
+        "Do not\nshare an interactive OS account",
+    ] {
+        assert!(
+            runbook.contains(isolation),
+            "missing customer isolation control: {isolation}"
+        );
+    }
+}
+
+#[test]
 fn crash_recovery_docs_bound_engine_storage_fault_claim_to_ci_fixture() {
     let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
         .expect("crash-recovery validation matrix should exist");

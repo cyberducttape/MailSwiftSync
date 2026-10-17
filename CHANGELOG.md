@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Expand production qualification scenarios for TLS behavior in both the Rustls
+  probe and actual imapsync transfer/reconnect paths, and make the interim
+  one-customer-per-OS-security-boundary operating rule explicit for MSP pilots.
 - Clarify the Basic/Standard/Forensic evidence contract, exact RFC822 body-hash
   semantics, and partial-coverage limits; expand the still-open hypervisor
   power-cut matrix to include runtime secrets, checkpoints, evidence commits,
