@@ -8,16 +8,6 @@ use std::{net::TcpStream, sync::Arc};
 
 const BUDGETED_IMAP_IO_SLICE: Duration = Duration::from_millis(250);
 
-/// Open an IMAP connection and establish a certificate-validated TLS session.
-pub(crate) fn connect_tls_stream(
-    host: &str,
-    transport: &str,
-    ca_bundle: &str,
-    certificate_pin_sha256: &str,
-) -> Result<(StreamOwned<ClientConnection, TcpStream>, String), String> {
-    connect_tls_stream_inner(host, transport, ca_bundle, certificate_pin_sha256, None)
-}
-
 pub(super) fn connect_tls_stream_with_budget(
     host: &str,
     transport: &str,

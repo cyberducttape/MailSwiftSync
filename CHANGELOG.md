@@ -218,6 +218,10 @@
   overrun before issuing the metadata UID FETCH or staging its records.
   Interrupted metadata scans resume only from committed prefixes with an
   identical tracked snapshot; otherwise they restart from the first page.
+- Apply one absolute deadline across native TLS capability and destination-
+  readiness probes, including DNS/TCP setup, STARTTLS, authentication, and
+  follow-up IMAP commands; report probe timeouts separately from verification
+  resource-limit failures.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.

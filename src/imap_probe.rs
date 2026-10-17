@@ -34,9 +34,13 @@ use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 use fetch_parser::{parse_message_fetch_metadata_response_bytes, parse_message_id_header};
 pub(crate) use folders::MailboxDescriptor;
 #[cfg(test)]
-use folders::{ListInventorySummary, read_imap_list_response_with_mailboxes, record_list_entry};
 use folders::{
-    authenticated_list_command, read_imap_list_response, read_imap_list_response_with_details,
+    ListInventorySummary, read_imap_list_response, read_imap_list_response_with_mailboxes,
+    record_list_entry,
+};
+use folders::{
+    authenticated_list_command, read_imap_list_response_with_budget,
+    read_imap_list_response_with_details,
 };
 #[cfg(test)]
 use list_parser::tokens as parse_list_tokens;
@@ -45,7 +49,7 @@ use list_parser::{delimiter as parse_list_delimiter, mailbox_name as parse_list_
 #[cfg(test)]
 use protocol::{TaggedResponseScanner, tagged_response_outside_literals};
 use protocol::{
-    read_imap_tagged, read_imap_tagged_bytes_with_budget, read_imap_tagged_with_budget,
+    read_imap_tagged_bytes_with_budget, read_imap_tagged_with_budget,
     read_imap_tagged_with_optional_budget, write_imap_command,
 };
 
@@ -63,7 +67,6 @@ pub(crate) fn wait_for_io_retry(deadline: Instant, cancel: Option<&AtomicBool>) 
     }
 }
 use resolver::connect_racing;
-pub(crate) use tls::connect_tls_stream;
 use tls::connect_tls_stream_with_budget;
 
 pub(crate) fn internal_dns_resolver_main(arguments: &[std::ffi::OsString]) -> i32 {
@@ -129,6 +132,8 @@ pub(crate) fn imap_quote(value: &str) -> Result<String, String> {
 
 const MAX_IMAP_LIST_INVENTORY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_IMAP_COMMAND_DURATION: Duration = Duration::from_secs(15);
+const TLS_CAPABILITY_PROBE_BUDGET: Duration = Duration::from_secs(90);
+const TLS_READINESS_PROBE_BUDGET: Duration = Duration::from_secs(45);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 /// Initial metadata FETCH page; `FetchPagePlanner` adapts it per folder.
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 128;
@@ -157,6 +162,7 @@ fn message_fetch_limit_exceeded(existing: usize, incoming: usize) -> bool {
 pub(crate) struct MessageFetchBudget<'a> {
     pub(super) deadline: Instant,
     pub(super) cancel: &'a AtomicBool,
+    verification_limits: bool,
 }
 
 /// Shared admission accounting for transient fetched pages on both sides of
@@ -573,16 +579,48 @@ impl<'a> MessageFetchBudget<'a> {
         Self {
             deadline: Instant::now() + timeout,
             cancel,
+            verification_limits: true,
+        }
+    }
+
+    pub(crate) fn for_probe(timeout: Duration, cancel: &'a AtomicBool) -> Self {
+        Self {
+            deadline: Instant::now() + timeout,
+            cancel,
+            verification_limits: false,
+        }
+    }
+
+    pub(super) fn limit_error(
+        &self,
+        limit: crate::core::VerificationLimit,
+        detail: String,
+    ) -> String {
+        if self.verification_limits {
+            limit.tag(detail)
+        } else {
+            detail
         }
     }
 
     pub(super) fn check(&self) -> Result<(), String> {
         if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err("message-level verification cancelled by operator".into());
+            return Err(if self.verification_limits {
+                "message-level verification cancelled by operator"
+            } else {
+                "IMAP probe cancelled by operator"
+            }
+            .into());
         }
         if Instant::now() >= self.deadline {
-            return Err(crate::core::VerificationLimit::Deadline
-                .tag("message-level verification exceeded its execution deadline"));
+            return Err(self.limit_error(
+                crate::core::VerificationLimit::Deadline,
+                if self.verification_limits {
+                    "message-level verification exceeded its execution deadline".into()
+                } else {
+                    "IMAP probe exceeded its total execution deadline".into()
+                },
+            ));
         }
         Ok(())
     }
@@ -698,9 +736,24 @@ pub(crate) fn probe_tls_capabilities_with_transport(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
 ) -> Result<crate::core::ServerCapabilities, String> {
-    let (stream, greeting) =
-        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
-    complete_authenticated_imap_probe(stream, host, user, credential, auth_method, greeting)
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::for_probe(TLS_CAPABILITY_PROBE_BUDGET, &cancel);
+    let (stream, greeting) = connect_tls_stream_with_budget(
+        host,
+        transport,
+        ca_bundle,
+        certificate_pin_sha256,
+        &budget,
+    )?;
+    complete_authenticated_imap_probe(
+        stream,
+        host,
+        user,
+        credential,
+        auth_method,
+        greeting,
+        &budget,
+    )
 }
 
 /// Authenticate an already TLS-protected connection and perform only the
@@ -791,11 +844,14 @@ fn probe_tls_readiness(
     request: TlsProbeRequest<'_>,
     check_inbox_quota: bool,
 ) -> Result<DestinationQuotaObservation, String> {
-    let (stream, greeting) = connect_tls_stream(
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::for_probe(TLS_READINESS_PROBE_BUDGET, &cancel);
+    let (stream, greeting) = connect_tls_stream_with_budget(
         request.host,
         request.transport,
         request.ca_bundle,
         request.certificate_pin_sha256,
+        &budget,
     )?;
     let (mut stream, post_auth_capabilities) = authenticate_imap_stream(
         stream,
@@ -804,13 +860,14 @@ fn probe_tls_readiness(
         request.credential,
         request.auth_method,
         greeting,
-        None,
+        Some(&budget),
     )?;
     live_readiness_on_authenticated_stream(
         &mut stream,
         request.host,
         &post_auth_capabilities,
         check_inbox_quota,
+        Some(&budget),
     )
 }
 
@@ -819,13 +876,12 @@ fn live_readiness_on_authenticated_stream<S: Read + Write>(
     host: &str,
     post_auth_capabilities: &str,
     check_inbox_quota: bool,
+    budget: Option<&MessageFetchBudget<'_>>,
 ) -> Result<DestinationQuotaObservation, String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
-    stream
-        .write_all(b"a004 NOOP\r\n")
-        .map_err(|e| e.to_string())?;
-    read_imap_tagged(stream, "a004", &mut response, &mut buffer)?;
+    write_imap_command(stream, b"a004 NOOP\r\n", budget, "could not write NOOP")?;
+    read_imap_tagged_with_optional_budget(stream, "a004", &mut response, &mut buffer, budget)?;
     if !imap_command_succeeded(&response, "a004") {
         return Err(imap_command_failure(
             &response,
@@ -837,17 +893,33 @@ fn live_readiness_on_authenticated_stream<S: Read + Write>(
     let quota_observation =
         if check_inbox_quota && advertises_capability(post_auth_capabilities, "QUOTA") {
             let mut quota_response = String::new();
-            if stream.write_all(QUOTA_PROBE_COMMAND).is_ok()
-                && read_imap_tagged(stream, "a006", &mut quota_response, &mut buffer).is_ok()
-            {
+            let quota_result = write_imap_command(
+                stream,
+                QUOTA_PROBE_COMMAND,
+                budget,
+                "could not write quota probe",
+            )
+            .and_then(|()| {
+                read_imap_tagged_with_optional_budget(
+                    stream,
+                    "a006",
+                    &mut quota_response,
+                    &mut buffer,
+                    budget,
+                )
+            });
+            if quota_result.is_ok() {
                 inbox_quota_observation(post_auth_capabilities, Some(&quota_response))
             } else {
+                if let Some(budget) = budget {
+                    budget.check()?;
+                }
                 DestinationQuotaObservation::Unknown
             }
         } else {
             DestinationQuotaObservation::Unknown
         };
-    let _ = stream.write_all(b"a007 LOGOUT\r\n");
+    let _ = write_imap_command(stream, b"a007 LOGOUT\r\n", budget, "could not write LOGOUT");
     Ok(quota_observation)
 }
 
@@ -858,26 +930,45 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     credential: &str,
     auth_method: &str,
     greeting: String,
+    budget: &MessageFetchBudget<'_>,
 ) -> Result<crate::core::ServerCapabilities, String> {
-    let (mut stream, post_auth_response) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting, None)?;
+    let (mut stream, post_auth_response) = authenticate_imap_stream(
+        stream,
+        host,
+        user,
+        credential,
+        auth_method,
+        greeting,
+        Some(budget),
+    )?;
     let mut buffer = [0; 4096];
-    stream
-        .write_all(b"a004 NAMESPACE\r\n")
-        .map_err(|e| e.to_string())?;
+    write_imap_command(
+        &mut stream,
+        b"a004 NAMESPACE\r\n",
+        Some(budget),
+        "could not write NAMESPACE",
+    )?;
     let mut namespace_response = String::new();
-    read_imap_tagged(&mut stream, "a004", &mut namespace_response, &mut buffer)?;
-    stream
-        .write_all(
-            authenticated_list_command(
-                "a005",
-                advertises_capability(&post_auth_response, "SPECIAL-USE"),
-            )
-            .as_bytes(),
+    read_imap_tagged_with_optional_budget(
+        &mut stream,
+        "a004",
+        &mut namespace_response,
+        &mut buffer,
+        Some(budget),
+    )?;
+    write_imap_command(
+        &mut stream,
+        authenticated_list_command(
+            "a005",
+            advertises_capability(&post_auth_response, "SPECIAL-USE"),
         )
-        .map_err(|e| e.to_string())?;
-    let list_summary = read_imap_list_response(&mut stream, "a005", &mut buffer)
-        .map_err(|error| format!("{host}: folder inventory failed: {error}"))?;
+        .as_bytes(),
+        Some(budget),
+        "could not write LIST",
+    )?;
+    let list_summary =
+        read_imap_list_response_with_budget(&mut stream, "a005", &mut buffer, budget)
+            .map_err(|error| format!("{host}: folder inventory failed: {error}"))?;
     if list_summary.mailbox_count == 0 {
         return Err(format!(
             "{host}: folder inventory returned no untagged LIST records"
@@ -897,22 +988,39 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     caps.namespace = namespace_parser::parse(&namespace_response);
     if caps.supports("QUOTA") {
         let mut quota_response = String::new();
-        stream
-            .write_all(QUOTA_PROBE_COMMAND)
-            .map_err(|e| e.to_string())?;
+        write_imap_command(
+            &mut stream,
+            QUOTA_PROBE_COMMAND,
+            Some(budget),
+            "could not write quota probe",
+        )?;
         // A provider can advertise QUOTA while denying the root query. Keep
         // that result explicitly unknown; quota support is advisory and must
         // not turn an otherwise valid mailbox into a false capacity failure.
         // GETQUOTAROOT requires a mailbox name; the empty-root example belongs
         // to GETQUOTA. INBOX is mandatory, and this observation is scoped to
         // the quota roots returned for INBOX rather than all account folders.
-        if read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok()
+        if read_imap_tagged_with_optional_budget(
+            &mut stream,
+            "a006",
+            &mut quota_response,
+            &mut buffer,
+            Some(budget),
+        )
+        .is_ok()
             && quota_response_has_successful_root(&quota_response, "a006", "INBOX")
         {
             caps.record_quota_response(&quota_response);
+        } else {
+            budget.check()?;
         }
     }
-    let _ = stream.write_all(b"a007 LOGOUT\r\n");
+    let _ = write_imap_command(
+        &mut stream,
+        b"a007 LOGOUT\r\n",
+        Some(budget),
+        "could not write LOGOUT",
+    );
     Ok(caps)
 }
 

@@ -1426,6 +1426,17 @@ fn message_fetch_budget_honors_operator_cancellation() {
 }
 
 #[test]
+fn probe_deadline_is_bounded_without_being_misclassified_as_a_verification_limit() {
+    use crate::core::VerificationLimit;
+
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::for_probe(Duration::ZERO, &cancel);
+    let error = budget.check().unwrap_err();
+    assert!(error.contains("IMAP probe exceeded its total execution deadline"));
+    assert_eq!(VerificationLimit::from_detail(&error), None);
+}
+
+#[test]
 fn verifier_safety_limits_are_tagged_at_their_source() {
     use crate::core::VerificationLimit;
     let limit = |error: &str| VerificationLimit::from_detail(error);

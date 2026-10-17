@@ -32,12 +32,22 @@ pub(super) struct ListInventorySummary {
 /// Consume an authenticated LIST response without retaining the complete
 /// inventory. Each record, literal, response duration, and optional retained
 /// inventory has its own explicit bound.
+#[cfg(test)]
 pub(super) fn read_imap_list_response<S: Read>(
     stream: &mut S,
     tag: &str,
     buffer: &mut [u8; 4096],
 ) -> Result<ListInventorySummary, String> {
     read_imap_list_response_inner(stream, tag, buffer, None, None)
+}
+
+pub(super) fn read_imap_list_response_with_budget<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    buffer: &mut [u8; 4096],
+    budget: &MessageFetchBudget<'_>,
+) -> Result<ListInventorySummary, String> {
+    read_imap_list_response_inner(stream, tag, buffer, None, Some(budget))
 }
 
 #[cfg(test)]
