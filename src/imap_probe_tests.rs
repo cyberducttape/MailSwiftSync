@@ -351,6 +351,16 @@ fn list_response_streaming_parser_rejects_oversized_records_and_literals() {
 }
 
 #[test]
+fn list_response_streaming_parser_bounds_extension_literals_before_reading_payload() {
+    let response =
+        b"* LIST (\\HasNoChildren) \"/\" \"INBOX\" X-TEST {1048577}\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("literal exceeded 1 MiB"));
+}
+
+#[test]
 fn list_inventory_descriptor_memory_is_aggregate_bounded() {
     let line = format!(
         "* LIST (\\HasNoChildren) \"/\" \"{}\"",
