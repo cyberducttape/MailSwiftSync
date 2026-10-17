@@ -552,10 +552,13 @@ fn pseudonym_hash_with_key(kind: &[u8], value: &str, key: &[u8]) -> String {
 }
 
 fn hex_prefix(digest: &[u8]) -> String {
-    digest[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(24);
+    for byte in &digest[..12] {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 /// Pseudonymize mailbox and Message-ID-like values in the opt-in transcript.
@@ -1253,6 +1256,14 @@ mod tests {
         );
         assert_ne!(first, pseudonym_hash_with_key(b"run", value, &first_key));
         assert!(!first.contains(value));
+    }
+
+    #[test]
+    fn pseudonym_hex_prefix_uses_lowercase_fixed_width_encoding() {
+        let digest = [
+            0x00, 0x0f, 0xa5, 0xff, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
+        ];
+        assert_eq!(hex_prefix(&digest), "000fa5ff1020304050607080");
     }
 
     #[test]
