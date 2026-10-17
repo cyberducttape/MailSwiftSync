@@ -102,6 +102,34 @@ jobs:
           scripts/verify-deb-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.deb' -print -quit)"
           MAILSWIFTSYNC_PACKAGE_BINARY=target/debug/mailswiftsync scripts/package-rpm.sh "$RUNNER_TEMP/packages"
           scripts/verify-rpm-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.rpm' -print -quit)"
+      - name: Install, run, and remove Debian package without deleting migration data
+        run: |
+          set -euo pipefail
+          package="$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$package"
+          if sudo dpkg-query -W -f='${Status}' mailswiftsync 2>/dev/null | grep -q 'install ok installed'; then
+            echo 'MailSwiftSync was already installed on the CI runner' >&2
+            exit 1
+          fi
+          if sudo test -e /var/lib/mailswiftsync; then
+            echo 'MailSwiftSync state directory already exists on the CI runner' >&2
+            exit 1
+          fi
+          sudo install -d -m 0700 /var/lib/mailswiftsync
+          printf 'preserve-me\n' | sudo tee /var/lib/mailswiftsync/state-sentinel >/dev/null
+          cleanup() {
+            sudo dpkg -r mailswiftsync >/dev/null 2>&1 || true
+            sudo rm -f /var/lib/mailswiftsync/state-sentinel
+            sudo rmdir /var/lib/mailswiftsync 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sudo dpkg -i "$package"
+          mailswiftsync --version
+          test -x /usr/bin/mailswiftsync
+          test -f /usr/share/doc/mailswiftsync/docs/distribution/SERVICE.md
+          sudo dpkg -r mailswiftsync
+          test ! -e /usr/bin/mailswiftsync
+          test "$(sudo cat /var/lib/mailswiftsync/state-sentinel)" = preserve-me
       - name: Install, run, and remove the RPM on Fedora
         run: |
           # fedora:42, pinned by image-index digest.
