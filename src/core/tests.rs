@@ -412,6 +412,172 @@ fn message_mismatch_details_commit_atomically_with_terminal_evidence() {
 }
 
 #[test]
+fn sqlite_full_rolls_back_terminal_evidence_and_allows_retry() {
+    const MISMATCH_COUNT: usize = 4_000;
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("evidence-full", "old.example", "new.example")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "a@example", "a@example")
+        .unwrap();
+    let run_id = "evidence-full-run";
+    db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
+
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(VerificationOutcome::Missing),
+        source_messages: MISMATCH_COUNT as u64,
+        destination_messages: 0,
+        source_bytes: MISMATCH_COUNT as u64,
+        destination_bytes: 0,
+        unmatched_messages: Some(MISMATCH_COUNT as u64),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: true,
+        missing_messages: MISMATCH_COUNT as u64,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
+        flag_verification: None,
+    };
+    let wide_value = "x".repeat(240);
+    let mismatches = (0..MISMATCH_COUNT)
+        .map(|index| MessageMismatch {
+            id: format!("evidence-full-{index}"),
+            job_id: std::sync::Arc::from(job.clone()),
+            run_id: std::sync::Arc::from(run_id),
+            mismatch_type: message_verification::MismatchType::Missing,
+            source_folder: Some("INBOX".into()),
+            destination_folder: None,
+            source_uidvalidity: Some(7),
+            destination_uidvalidity: None,
+            source_uid: Some(format!("{index:0240}")),
+            dest_uid: None,
+            source_message_id: None,
+            dest_message_id: None,
+            source_size_bytes: Some(1),
+            dest_size_bytes: None,
+            source_date: Some(wide_value.clone()),
+            dest_date: None,
+            source_fingerprint: Some("a".repeat(128)),
+            destination_fingerprint: None,
+        })
+        .collect::<Vec<_>>();
+
+    db.connection.execute_batch("VACUUM").unwrap();
+    let page_count: i64 = db
+        .connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .unwrap();
+    let maximum = page_count + 2;
+    let configured_maximum: i64 = db
+        .connection
+        .query_row(&format!("PRAGMA max_page_count={maximum}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(configured_maximum, maximum);
+
+    let error = db
+        .finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
+            &project.id,
+            &job,
+            run_id,
+            "completed",
+            "verification_difference",
+            "evidence commit storage fault",
+            &evidence,
+            &mismatches,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("database or disk is full"),
+        "{error}"
+    );
+
+    let run_status: String = db
+        .connection
+        .query_row("SELECT status FROM runs WHERE id=?1", [run_id], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let mailbox_state: String = db
+        .connection
+        .query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1",
+            [&job],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let evidence_history_rows: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_history WHERE run_id=?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mismatch_rows: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM message_mismatches WHERE run_id=?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(run_status, "running");
+    assert_eq!(mailbox_state, "running");
+    assert_eq!(evidence_history_rows, 0);
+    assert_eq!(mismatch_rows, 0);
+
+    db.connection
+        .query_row("PRAGMA max_page_count=2147483646", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    db.finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
+        &project.id,
+        &job,
+        run_id,
+        "completed",
+        "verification_difference",
+        "evidence commit retried after storage recovery",
+        &evidence,
+        &mismatches,
+        None,
+    )
+    .unwrap();
+    assert_eq!(db.run_status(run_id).unwrap().as_deref(), Some("completed"));
+    assert_eq!(
+        db.mailbox_state(&job).unwrap().as_deref(),
+        Some("verification_difference")
+    );
+    assert_eq!(
+        db.latest_evidence_for_run(&job)
+            .unwrap()
+            .unwrap()
+            .1
+            .missing_messages,
+        MISMATCH_COUNT as u64
+    );
+    assert_eq!(
+        db.connection
+            .query_row(
+                "SELECT COUNT(*) FROM message_mismatches WHERE run_id=?1",
+                [run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        MISMATCH_COUNT as i64
+    );
+}
+
+#[test]
 fn mismatch_storage_rejects_negative_unsigned_fields() {
     let db = StateStore::in_memory().unwrap();
     db.connection

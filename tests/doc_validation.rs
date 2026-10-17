@@ -376,6 +376,23 @@ fn crash_recovery_docs_bound_engine_storage_fault_claim_to_ci_fixture() {
 }
 
 #[test]
+fn crash_recovery_docs_cover_terminal_evidence_sqlite_full_rollback() {
+    let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation matrix should exist");
+    for evidence in [
+        "sqlite_full_rolls_back_terminal_evidence_and_allows_retry",
+        "streams 4,000 mismatch rows",
+        "no evidence or mismatch rows leak from the rolled-back transaction",
+        "not an actually full filesystem or power-loss test",
+    ] {
+        assert!(
+            recovery.contains(evidence),
+            "terminal evidence SQLITE_FULL limitation is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn capability_manifest_does_not_overstate_verification_resume() {
     let manifest =
         fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");

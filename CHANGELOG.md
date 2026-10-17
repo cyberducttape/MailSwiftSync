@@ -23,6 +23,9 @@
   failure, corrupt-restore, and backup-recovery drills against the current
   debug binary; record its commit and digest while keeping power-loss and real
   filesystem-full qualification explicitly open.
+- Inject `SQLITE_FULL` midway through terminal evidence plus 4,000 streamed
+  mismatch rows; prove the run/mailbox/evidence transaction rolls back wholly
+  and retries successfully after storage capacity is restored.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.
