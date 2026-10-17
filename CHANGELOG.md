@@ -222,6 +222,14 @@
   readiness probes, including DNS/TCP setup, STARTTLS, authentication, and
   follow-up IMAP commands; report probe timeouts separately from verification
   resource-limit failures.
+- Rerun process-release, controller-crash/recovery, and ledger corruption /
+  storage-fault drills on a binary embedding the current full commit SHA; record
+  the digest and host details while retaining the explicit non-coverage of
+  provider behavior, real filesystem exhaustion, and host power loss.
+- Record the newly reported RustSec informational unmaintained notices for the
+  transitive `zvariant`, `zbus_names`, and `zvariant_derive` crates. No
+  vulnerability or yanked crate was reported; compatible parent-crate migration
+  and Linux keyring/accessibility qualification remain open.
 - Pace provider-facing engine release only after its durable process
   registration acknowledgement, so gatekeepers accumulated during slow
   registration cannot open IMAP sessions in a burst; add a concurrent delayed-
