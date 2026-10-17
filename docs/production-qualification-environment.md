@@ -39,12 +39,38 @@ used.
 | OAuth token revoked/expired | Authentication failure is classified and stops/retries only under policy; no success is recorded |
 | Destination quota exhausted | Actionable quota/capacity failure; ledger remains readable and non-verified |
 | Provider throttles connections | Bounded retry budget, provider-aware cooldown, tenant isolation, and telemetry |
+| TLS trust and identity failures | In both the Rustls probe and actual pinned imapsync transfer path, expired certificates, hostname mismatch, and untrusted CAs are rejected; a custom CA succeeds only for the intended certificate identity |
+| STARTTLS downgrade and protocol floor | Native probes and generated imapsync TLS arguments request TLS 1.2 or newer. Test that the exact packaged imapsync/Perl/IO::Socket::SSL stack enforces the setting, rejects TLS 1.0/1.1 and downgrade attempts, and record negotiated protocol and peer certificate identity for both connections; those negotiated values are not currently persisted |
+| TLS reconnect and certificate rotation | A changed or wrong certificate is rejected on transfer reconnects; probe pinning is not treated as transfer enforcement, and pinned plans remain refused until the engine path is qualified |
 | Source UIDVALIDITY changes | Existing checkpoint is rejected and a fresh scan is required |
 | Destination receives new messages | Missing/extra/changed classification follows the verification policy |
 | SQLite unavailable or corrupted | No false completion; status/recover fail closed; verified backup restores into a usable ledger |
 | Worker loses network for 30 minutes | Bounded timeout/retry behavior and auditable terminal or retry state |
 | Same-size content mutation | Detected only when supported content-proof mode covers the message; metadata-only evidence says so explicitly |
 | Verification exceeds configured limits | Explicit incomplete/attention evidence; never an unqualified verified result |
+
+## Security-focused qualification
+
+The repository already has parser fuzz targets, adversarial credential-file
+checks, redaction/support-bundle fixtures, concurrent OAuth refresh-lock tests,
+and policy tests for private-address webhook/OAuth egress. These are useful
+automated controls, but are not a penetration-test report or proof against
+every platform race. Preserve the distinction between existing unit/lab
+coverage and release-specific security qualification.
+
+| Boundary | Existing evidence | Additional release qualification |
+|---|---|---|
+| Malicious IMAP responses | Fuzz targets cover LIST/FETCH/literal framing; parser bounds and malformed-input regressions run in CI | Run a retained corpus and bounded fuzz campaign against the exact release build; include oversized literals, truncated frames, and response-limit boundaries |
+| Mailbox names and delimiters | Unicode scenarios and explicit control-octet rejection are tested/documented | Differentially test real Dovecot/provider LIST responses with Unicode, unusual delimiters, quoting, and extended LIST data; unsupported names must fail closed |
+| Secret exposure/redaction | Tests cover known and encoded credential fields, process output, support-bundle canaries, and passfile-based engine arguments | Inspect process arguments/environment while auth is active on each supported OS; inject unexpected engine errors and confirm no secret reaches logs, diagnostics, support bundles, or reports |
+| Credential filesystem races | Unix no-follow/descriptor checks and Windows handle/DACL replacement tests exist | Run concurrent symlink/replacement stress under the production service identity and filesystem; verify no passfile can be redirected or read by another local account |
+| OAuth refresh rotation | Durable recovery and concurrent callback serialization tests exist | Exercise two real concurrent migrations against a disposable rotating-token provider, then interrupt between provider rotation and local persistence and recover from the exact deployment secret store |
+| Restricted network destinations | Webhook and token HTTP clients enforce checked-address policy, pin DNS results, and bypass ambient proxies; private-network policy is explicit | Confirm these checks against DNS rebinding and mixed public/private answers. Generic IMAP migration endpoints intentionally are not an SSRF-safe remote-service boundary; any remotely accessible worker must add organization-enforced egress controls before exposure |
+
+The current desktop/local and dedicated-worker deployments assume the operator
+controls endpoint configuration and the host network policy. Do not expose an
+unauthenticated migration API or treat the webhook/OAuth egress guard as a
+general firewall for IMAP transfer connections.
 
 ## Evidence and promotion rules
 

@@ -365,6 +365,7 @@ mod tests {
             "imap.example.test",
             "* CAPABILITY IMAP4rev1 QUOTA\r\n",
             true,
+            None,
         )
         .expect("a valid NOOP and quota response should complete readiness");
 
@@ -384,6 +385,7 @@ mod tests {
             "imap.example.test",
             "* CAPABILITY IMAP4rev1\r\n",
             true,
+            None,
         )
         .expect("NOOP should complete readiness when QUOTA is unavailable");
 
@@ -406,6 +408,7 @@ mod tests {
             "imap.example.test",
             "* CAPABILITY IMAP4rev1 QUOTA\r\n",
             true,
+            None,
         )
         .expect("a denied advisory quota query must not fail endpoint readiness");
 

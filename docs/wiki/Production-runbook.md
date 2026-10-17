@@ -28,6 +28,18 @@ strategy or imapsync `--delete2`) refuses to start unless the command adds
 `--acknowledge-destination-loss`; the same flag applies to `batch-live` and
 `supervise`. Every live run prints its destination mutation policy to stderr.
 
+`--delete2` is disabled in the default profile and production organization
+policy rejects destination deletion/mirror replacement. A compatibility or lab
+policy is required to permit it. The GUI requires a separate destructive
+confirmation; headless live, batch-live, and supervise require the explicit
+acknowledgement flag. Admission requires a successful preflight for the same
+plan fingerprint, and the immutable run snapshot records the endpoints and
+destination-mutation settings that were admitted. This local application has
+no authenticated operator identity: the record proves which plan ran, not a
+cryptographic, person-bound approval. MSP separation-of-duties approval must
+remain in the organization's change-management system until an authenticated
+control plane exists.
+
 Exit status: `0` success; `2` usage error. When a single-mailbox `live` run
 finishes without a verified terminal state, the status says why: `3` delta
 required (repeat the final pass), `4` verification difference, `5` operator

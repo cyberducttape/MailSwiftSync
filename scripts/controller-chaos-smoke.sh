@@ -32,6 +32,8 @@ trap cleanup EXIT
 
 mkdir -p "$workspace/config/mailswiftsync"
 chmod 0700 "$workspace" "$workspace/config" "$workspace/config/mailswiftsync"
+printf 'profile = "lab"\n' > "$workspace/config/mailswiftsync/organization-policy.toml"
+chmod 0600 "$workspace/config/mailswiftsync/organization-policy.toml"
 cat > "$workspace/fake-engine" <<EOF
 #!/usr/bin/env bash
 if [[ "\${1:-}" == "--version" ]]; then

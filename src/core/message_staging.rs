@@ -288,8 +288,9 @@ impl MessageMetadataStage {
 
     /// Open the private staging database for one verification attempt.
     /// The caller removes it after verification has produced durable evidence;
-    /// an interrupted attempt retains diagnostic/progress context, but every
-    /// retry invalidates its persisted scan pages before fetching again.
+    /// an interrupted attempt retains metadata pages as inert state. A retry
+    /// may reuse only a complete metadata scan with an identical tracked
+    /// MODSEQ snapshot; partial pages and body proofs are fetched again.
     pub(crate) fn open_durable(path: PathBuf, identity: &str) -> Result<Self, String> {
         let parent = path
             .parent()
@@ -802,6 +803,166 @@ impl MessageMetadataStage {
         Ok(())
     }
 
+    /// Reuse a completed metadata scan only when CONDSTORE supplied a tracked
+    /// mutation watermark and every persisted row belongs to the identical
+    /// SELECT snapshot. Partial scans, untracked snapshots, and body proofs are
+    /// never eligible for reuse.
+    pub(crate) fn reusable_completed_mailbox(
+        &self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        snapshot: FolderSnapshot,
+    ) -> Result<Option<u64>, String> {
+        if !self.is_durable() || snapshot.highest_modseq.is_none() {
+            return Ok(None);
+        }
+        let (uidvalidity, uidnext, exists, highest_modseq) =
+            snapshot.to_sql().map_err(|error| error.to_string())?;
+        let saved = self
+            .connection_ref()
+            .map_err(|error| error.to_string())?
+            .query_row(
+                "SELECT c.uidvalidity,c.uidnext,c.exists_count,c.highest_modseq,c.completed,c.scan_completed_at,\
+                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox),\
+                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),\
+                 (SELECT COUNT(*) FROM stage_fingerprints f WHERE f.side=c.side AND f.mailbox=c.mailbox)\
+                 FROM stage_cursors c WHERE c.side=?1 AND c.mailbox=?2",
+                params![side.as_i64(), mailbox],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| format!("could not inspect completed verification folder: {error}"))?;
+        let Some((
+            saved_uidvalidity,
+            saved_uidnext,
+            saved_exists,
+            saved_modseq,
+            completed,
+            scan_completed_at,
+            total_rows,
+            snapshot_rows,
+            fingerprint_rows,
+        )) = saved
+        else {
+            return Ok(None);
+        };
+        let expected_rows = sqlite_i64(snapshot.exists).map_err(|error| error.to_string())?;
+        if saved_uidvalidity == uidvalidity
+            && saved_uidnext == uidnext
+            && saved_exists == exists
+            && saved_modseq == highest_modseq
+            && completed == 1
+            && scan_completed_at.is_some()
+            && total_rows == expected_rows
+            && snapshot_rows == expected_rows
+            && fingerprint_rows == 0
+        {
+            Ok(Some(snapshot.exists))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Resume a committed metadata-page prefix only when the same tracked
+    /// mailbox snapshot remains selected. A page and its cursor share one
+    /// transaction, so the staged count and maximum UID must agree with the
+    /// cursor. Content fingerprints are excluded and fetched again.
+    pub(crate) fn resumable_mailbox_prefix(
+        &self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        snapshot: FolderSnapshot,
+    ) -> Result<Option<(u64, u64)>, String> {
+        if !self.is_durable() || snapshot.highest_modseq.is_none() {
+            return Ok(None);
+        }
+        let (uidvalidity, uidnext, exists, highest_modseq) =
+            snapshot.to_sql().map_err(|error| error.to_string())?;
+        let saved = self
+            .connection_ref()
+            .map_err(|error| error.to_string())?
+            .query_row(
+                "SELECT c.uidvalidity,c.uidnext,c.exists_count,c.highest_modseq,c.last_uid,c.completed,c.scan_started_at,c.scan_completed_at,\
+                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox),\
+                 (SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity),\
+                 (SELECT MAX(CAST(m.uid AS INTEGER)) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox),\
+                 (SELECT COUNT(*) FROM stage_fingerprints f WHERE f.side=c.side AND f.mailbox=c.mailbox)\
+                 FROM stage_cursors c WHERE c.side=?1 AND c.mailbox=?2",
+                params![side.as_i64(), mailbox],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
+                        row.get::<_, i64>(11)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| format!("could not inspect verification resume prefix: {error}"))?;
+        let Some((
+            saved_uidvalidity,
+            saved_uidnext,
+            saved_exists,
+            saved_modseq,
+            last_uid,
+            completed,
+            scan_started_at,
+            scan_completed_at,
+            total_rows,
+            snapshot_rows,
+            max_uid,
+            fingerprint_rows,
+        )) = saved
+        else {
+            return Ok(None);
+        };
+        let expected_exists = sqlite_i64(snapshot.exists).map_err(|error| error.to_string())?;
+        if saved_uidvalidity == uidvalidity
+            && saved_uidnext == uidnext
+            && saved_exists == exists
+            && saved_modseq == highest_modseq
+            && completed == 0
+            && scan_started_at.is_some()
+            && scan_completed_at.is_none()
+            && total_rows == snapshot_rows
+            && snapshot_rows > 0
+            && snapshot_rows <= expected_exists
+            && last_uid > 0
+            && u64::try_from(last_uid)
+                .is_ok_and(|uid| uid <= u32::MAX as u64 && uid < snapshot.uidnext)
+            && max_uid == Some(last_uid)
+            && fingerprint_rows == 0
+        {
+            Ok(Some((
+                u64::try_from(snapshot_rows).map_err(|error| error.to_string())?,
+                u64::try_from(last_uid).map_err(|error| error.to_string())?,
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub(crate) fn checkpoint_page(
         &mut self,
         side: StagedMessageSide,
@@ -1018,21 +1179,33 @@ impl MessageMetadataStage {
     }
 
     /// Start a new verification attempt. Reconciliation artifacts and
-    /// persisted body proofs never cross attempt boundaries. Persisted folder
-    /// rows are pruned against each endpoint's fresh LIST and then invalidated
-    /// folder-by-folder before refetch, avoiding a mailbox-wide delete journal.
+    /// persisted body proofs never cross attempt boundaries. Folder rows are
+    /// pruned against each endpoint's fresh LIST, then either reused after an
+    /// exact tracked-snapshot check or invalidated folder-by-folder before
+    /// refetch, avoiding a mailbox-wide delete journal.
     pub(crate) fn begin_verification_attempt(&mut self) -> Result<(), String> {
         self.reset_reconciliation()?;
-        self.connection()?
-            .execute("DELETE FROM stage_fingerprints", [])
+        let tx = self
+            .connection()?
+            .unchecked_transaction()
+            .map_err(|error| format!("could not begin verification retry cleanup: {error}"))?;
+        tx.execute("DELETE FROM stage_fingerprints", [])
             .map_err(|error| format!("could not invalidate prior body fingerprints: {error}"))?;
+        tx.execute(
+            "UPDATE stage_cursors SET source_revalidated_at=NULL,destination_revalidated_at=NULL",
+            [],
+        )
+        .map_err(|error| format!("could not clear prior folder revalidation times: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("could not commit verification retry cleanup: {error}"))?;
         Ok(())
     }
 
     /// Keep staged data only for selectable folders in the current endpoint
-    /// inventory. All retained folders are still fully invalidated by
-    /// `begin_mailbox_scan` before they are fetched; this removes only orphaned
-    /// folders without journaling a second account-wide deletion.
+    /// inventory. Each retained folder is either proven reusable from its
+    /// complete tracked snapshot or invalidated by `begin_mailbox_scan` before
+    /// fetching; this removes orphaned folders without a second account-wide
+    /// deletion journal.
     pub(crate) fn retain_mailboxes(
         &mut self,
         side: StagedMessageSide,
@@ -1636,6 +1809,85 @@ mod tests {
         assert_eq!(stage.count(side).unwrap(), 0);
         stage.begin_mailbox_scan(side, "INBOX", folder).unwrap();
         drop(stage);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn only_complete_matching_modseq_snapshots_are_reusable() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let side = StagedMessageSide::Source;
+        let tracked = FolderSnapshot {
+            uidvalidity: 42,
+            uidnext: 8,
+            exists: 1,
+            highest_modseq: Some(17),
+        };
+        let mut stage = MessageMetadataStage::open_durable(path, "plan").unwrap();
+        stage.begin_mailbox_scan(side, "INBOX", tracked).unwrap();
+        stage.insert_messages(side, &page(42, [7])).unwrap();
+        assert_eq!(
+            stage
+                .reusable_completed_mailbox(side, "INBOX", tracked)
+                .unwrap(),
+            None,
+            "a partial page must never be reused"
+        );
+        stage.complete_mailbox(side, "INBOX", tracked, 7).unwrap();
+        assert_eq!(
+            stage
+                .reusable_completed_mailbox(side, "INBOX", tracked)
+                .unwrap(),
+            Some(1)
+        );
+        stage
+            .record_source_revalidation(&HashMap::from([(
+                "INBOX".to_owned(),
+                "2026-10-16T12:00:00.000Z".to_owned(),
+            )]))
+            .unwrap();
+        stage.begin_verification_attempt().unwrap();
+        assert_eq!(
+            stage.folder_cursors().unwrap()[0].source_revalidated_at,
+            None,
+            "timestamps from an earlier attempt cannot stand in for current revalidation"
+        );
+        assert_eq!(
+            stage
+                .reusable_completed_mailbox(side, "INBOX", tracked)
+                .unwrap(),
+            Some(1),
+            "clearing prior revalidation does not invalidate a matching completed scan"
+        );
+        assert_eq!(
+            stage
+                .reusable_completed_mailbox(
+                    side,
+                    "INBOX",
+                    FolderSnapshot {
+                        highest_modseq: None,
+                        ..tracked
+                    },
+                )
+                .unwrap(),
+            None,
+            "untracked snapshots cannot authorize reuse"
+        );
+        assert_eq!(
+            stage
+                .reusable_completed_mailbox(
+                    side,
+                    "INBOX",
+                    FolderSnapshot {
+                        highest_modseq: Some(18),
+                        ..tracked
+                    },
+                )
+                .unwrap(),
+            None,
+            "a changed mutation watermark invalidates the stage"
+        );
+        stage.finish().unwrap();
         let _ = std::fs::remove_dir_all(directory);
     }
 

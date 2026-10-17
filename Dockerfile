@@ -50,19 +50,27 @@ RUN apt-get update \
         procps \
         "dovecot-core=${DOVECOT_VERSION}" \
         "dovecot-imapd=${DOVECOT_VERSION}" \
+    && apt-mark hold dovecot-core dovecot-imapd \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin mailswiftsync \
     && install -d -o mailswiftsync -g mailswiftsync -m 0700 /var/lib/mailswiftsync /run/user/10001 \
     && install -d -m 0755 /usr/local/lib/mailswiftsync
 
 COPY --from=imapsync-package /tmp/imapsync.deb /tmp/imapsync.deb
+# Keep the qualified Dovecot release fixed while applying available security
+# updates to inherited Debian packages and the Perl runtime.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y /tmp/imapsync.deb \
     && rm -f /tmp/imapsync.deb \
+    && apt-get upgrade --no-install-recommends -y \
+    && apt-mark unhold dovecot-core dovecot-imapd \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/mailswiftsync /usr/local/bin/mailswiftsync
 COPY scripts/imap-integration-smoke.sh /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+COPY scripts/imapsync-tls-floor-smoke.sh /usr/local/lib/mailswiftsync/imapsync-tls-floor-smoke.sh
 COPY scripts/oauth-imapsync-refresh-smoke.py /usr/local/lib/mailswiftsync/oauth-imapsync-refresh-smoke.py
 COPY scripts/maildir-fixture-scan.py /usr/local/lib/mailswiftsync/maildir-fixture-scan.py
 COPY scripts/generate-scale-maildir.py /usr/local/lib/mailswiftsync/generate-scale-maildir.py
@@ -72,6 +80,7 @@ COPY scripts/controller-chaos-smoke.sh /usr/local/lib/mailswiftsync/controller-c
 COPY scripts/engine-storage-fault-smoke.sh /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
 RUN chmod 0755 /usr/local/bin/mailswiftsync
 RUN chmod 0755 /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+RUN chmod 0755 /usr/local/lib/mailswiftsync/imapsync-tls-floor-smoke.sh
 RUN chmod 0755 /usr/local/lib/mailswiftsync/oauth-imapsync-refresh-smoke.py
 RUN chmod 0755 /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
 RUN chmod 0755 /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
@@ -84,6 +93,9 @@ ENV MAILSWIFTSYNC_STATE_PATH=/var/lib/mailswiftsync/state.db \
 # short-lived process files stay in the container's ephemeral filesystem; a
 # deployment should mount /run/user/10001 as tmpfs when it needs an explicit
 # volatile boundary.
+# Container replacement therefore preserves the ledger but not runtime
+# passfiles. Operators must reprovision keyring/secret-manager access and run
+# authenticated preflight before resuming work that needs credentials.
 VOLUME ["/var/lib/mailswiftsync"]
 USER mailswiftsync
 WORKDIR /var/lib/mailswiftsync

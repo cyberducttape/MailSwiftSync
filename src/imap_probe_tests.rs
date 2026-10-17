@@ -541,6 +541,31 @@ fn list_parser_preserves_nil_delimiter_as_absent() {
 }
 
 #[test]
+fn list_parser_rejects_an_unclosed_quoted_attribute_list() {
+    let malformed = r#"* LIST (\HasChildren "value)" "/" "INBOX""#;
+    assert_eq!(parse_list_mailbox_name(malformed), None);
+
+    let quoted_attribute = r#"* LIST (\HasChildren "\NoSelect") "/" "INBOX""#;
+    assert_eq!(parse_list_mailbox_name(quoted_attribute), None);
+
+    let valid_with_quoted_mailbox_and_extension =
+        r#"* LIST (\HasChildren) "/" "value)" ("CHILDINFO" ("SUBSCRIBED"))"#;
+    assert_eq!(
+        parse_list_mailbox_name(valid_with_quoted_mailbox_and_extension),
+        Some("value)".into())
+    );
+
+    assert_eq!(
+        parse_list_mailbox_name(r#"*LIST (\HasChildren) "/" "INBOX""#),
+        None
+    );
+    assert_eq!(
+        parse_list_mailbox_name(r#"* LIST(\HasChildren) "/" "INBOX""#),
+        None
+    );
+}
+
+#[test]
 fn quota_observation_requires_success_and_a_matching_inbox_root() {
     assert!(quota_response_has_successful_root(
         "* QUOTAROOT INBOX \"\"\r\n* QUOTA \"\" (STORAGE 12 100)\r\na006 OK quota completed\r\n",
@@ -648,6 +673,20 @@ fn list_literal_parsing_consumes_crlf_before_trailing_extension_fields() {
 #[test]
 fn list_parser_ignores_bounded_trailing_extension_literals() {
     let response = b"* LIST (\\HasChildren) \"/\" \"Projects\" X-TEST {3}\r\n\x00\xffx X-SECOND {4}\r\nmore\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
+fn list_parser_accepts_zero_length_trailing_extension_literal() {
+    // The first CRLF introduces the literal; the second terminates the LIST
+    // response after its zero octets. Keep both framing boundaries explicit.
+    let response =
+        b"* LIST (\\HasChildren) \"/\" \"Projects\" X-TEST {0}\r\n\r\na005 OK LIST completed\r\n";
     let mut stream = Cursor::new(response);
     let mut buffer = [0_u8; 4096];
     let mut mailboxes = Vec::new();
@@ -859,7 +898,10 @@ fn header_fingerprint_normalizes_selected_headers_and_is_distinct_from_message_i
     )
     .unwrap();
     assert_eq!(first, second);
-    assert!(first.starts_with("header-fingerprint:"));
+    assert_eq!(
+        first,
+        "header-fingerprint:bf7a11e0fae4a28d2064f2b6027989a3658f6a8a218cf3c02f7fc533f39e7fab"
+    );
 }
 
 #[test]
@@ -1406,6 +1448,17 @@ fn message_fetch_budget_honors_operator_cancellation() {
     let cancelled = AtomicBool::new(true);
     let budget = MessageFetchBudget::new(Duration::from_secs(60), &cancelled);
     assert!(budget.check().unwrap_err().contains("cancelled"));
+}
+
+#[test]
+fn probe_deadline_is_bounded_without_being_misclassified_as_a_verification_limit() {
+    use crate::core::VerificationLimit;
+
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::for_probe(Duration::ZERO, &cancel);
+    let error = budget.check().unwrap_err();
+    assert!(error.contains("IMAP probe exceeded its total execution deadline"));
+    assert_eq!(VerificationLimit::from_detail(&error), None);
 }
 
 #[test]

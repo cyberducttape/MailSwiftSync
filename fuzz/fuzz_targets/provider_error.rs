@@ -1,5 +1,8 @@
 #![no_main]
 
+// This target fuzzes classification and signal parsing; provider identity
+// helpers in the shared source module are exercised by the application.
+#[allow(dead_code)]
 #[path = "../../src/core/provider_intelligence.rs"]
 mod provider_intelligence;
 

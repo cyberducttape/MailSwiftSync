@@ -360,11 +360,5 @@ pub(super) fn header_fingerprint(body: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     let digest = Sha256::digest(canonical.as_bytes());
-    Some(format!(
-        "header-fingerprint:{}",
-        digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
+    Some(format!("header-fingerprint:{}", hex_encode(&digest)))
 }

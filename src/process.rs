@@ -5,7 +5,7 @@ use std::{
     process::{Child, Command},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -30,6 +30,53 @@ const MAX_CAPTURED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 /// however, so process supervision must never join a drainer without a
 /// deadline.
 pub(crate) const READER_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+static ACTIVE_READER_THREADS: AtomicUsize = AtomicUsize::new(0);
+static DETACHED_READER_THREADS_TOTAL: AtomicUsize = AtomicUsize::new(0);
+static READER_DRAIN_TIMEOUTS_TOTAL: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReaderThreadMetrics {
+    pub(crate) active: usize,
+    /// Cumulative detached-reader count for this process lifetime.
+    pub(crate) detached_total: usize,
+    /// Cumulative reader drain timeout count for this process lifetime.
+    pub(crate) drain_timeouts_total: usize,
+}
+
+pub(crate) fn reader_thread_metrics() -> ReaderThreadMetrics {
+    ReaderThreadMetrics {
+        active: ACTIVE_READER_THREADS.load(Ordering::Relaxed),
+        detached_total: DETACHED_READER_THREADS_TOTAL.load(Ordering::Relaxed),
+        drain_timeouts_total: READER_DRAIN_TIMEOUTS_TOTAL.load(Ordering::Relaxed),
+    }
+}
+
+struct ReaderThreadGuard;
+
+impl ReaderThreadGuard {
+    fn new() -> Self {
+        ACTIVE_READER_THREADS.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for ReaderThreadGuard {
+    fn drop(&mut self) {
+        ACTIVE_READER_THREADS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn spawn_reader_thread<F, T>(reader: F) -> thread::JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    thread::spawn(move || {
+        let _guard = ReaderThreadGuard::new();
+        reader()
+    })
+}
 
 #[cfg(test)]
 pub(crate) fn receive_reader_result<T>(
@@ -67,6 +114,7 @@ fn receive_reader_result_with_cancel<T, F: FnOnce()>(
             .map_err(|_| format!("{stream_name} reader thread panicked"))
             .map(|_| result),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            READER_DRAIN_TIMEOUTS_TOTAL.fetch_add(1, Ordering::Relaxed);
             cancel();
             // Revocable pipe readers poll readiness, so they can notice the
             // cancellation even when an escaped descendant keeps the pipe
@@ -91,10 +139,16 @@ fn receive_reader_result_with_cancel<T, F: FnOnce()>(
                     ))
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    let detached_total =
+                        DETACHED_READER_THREADS_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
                     drop(handle);
+                    let metrics = reader_thread_metrics();
                     Err(format!(
-                        "{stream_name} reader did not close within {} seconds after process supervision ended; drainer remains detached",
-                        READER_DRAIN_TIMEOUT.as_secs()
+                        "{stream_name} reader did not close within {} seconds after process supervision ended; drainer remains detached (active={}, detached_total={}, drain_timeouts_total={})",
+                        READER_DRAIN_TIMEOUT.as_secs(),
+                        metrics.active,
+                        detached_total,
+                        metrics.drain_timeouts_total,
                     ))
                 }
             }
@@ -680,6 +734,39 @@ mod tests {
     use super::*;
     use std::{cell::RefCell, collections::VecDeque, io};
 
+    #[test]
+    fn repeated_detached_reader_failures_are_counted_and_threads_exit_after_release() {
+        let initial = reader_thread_metrics();
+        for _ in 0..3 {
+            let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+            let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+            let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+            let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+            let handle = spawn_reader_thread(move || {
+                started_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+                let _ = result_tx.send(());
+                let _ = finished_tx.send(());
+            });
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("reader should start");
+
+            let error =
+                receive_reader_result_with_cancel(result_rx, handle, Instant::now(), "test", || {})
+                    .expect_err("blocked reader must be detached after the bounded grace period");
+            assert!(error.contains("drainer remains detached"));
+
+            release_tx.send(()).expect("release detached test reader");
+            finished_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("released reader should finish");
+        }
+        let final_metrics = reader_thread_metrics();
+        assert!(final_metrics.detached_total >= initial.detached_total + 3);
+        assert!(final_metrics.drain_timeouts_total >= initial.drain_timeouts_total + 3);
+    }
+
     struct ScriptedPipeReader {
         readiness: RefCell<VecDeque<io::Result<PipeReadiness>>>,
         reads: VecDeque<io::Result<Vec<u8>>>,
@@ -1140,12 +1227,11 @@ struct TokenBucketState {
 /// The external engine owns the IMAP connection, so the controller cannot
 /// meter individual messages directly. Batch command construction divides
 /// configured imapsync message/byte ceilings across workers; this bucket
-/// smooths engine process starts so a batch does not open every mailbox's
-/// engine sessions at once. The limiter is intentionally shared by all
-/// workers, and `run_streaming` takes the token immediately before `spawn`:
-/// a token taken earlier (before provider admission, OAuth refresh, the
-/// authentication probe, or the durable claim) would let workers that waited
-/// upstream spawn together in a burst once they were released.
+/// smooths the release of registered gatekeepers to the provider-facing
+/// engine, so delayed durable registration cannot release a waiting batch in
+/// a connection burst. Gatekeeper processes may be spawned before admission;
+/// the launch token belongs at the final release boundary, after provider
+/// admission, OAuth refresh, authentication probes, and durable registration.
 pub(crate) struct ProcessLaunchLimiter {
     ceiling_per_second: f64,
     state: Mutex<TokenBucketState>,
@@ -1197,11 +1283,11 @@ impl ProcessLaunchLimiter {
         self.acquire_scoped_inner(Some(path), cancel)
     }
 
-    /// Apply launch admission and perform the OS spawn while holding the
-    /// shared bucket lock. A detached permit is unsafe here: a worker can be
-    /// descheduled after acquiring it and later spawn alongside a newer
-    /// permit. The closure must therefore contain only the bounded spawn
-    /// operation, not preparation or process supervision.
+    /// Apply launch admission and perform the bounded engine-release action
+    /// while holding the shared bucket lock. A detached permit is unsafe here:
+    /// a worker can be descheduled after acquiring it and later release its
+    /// engine alongside a newer permit. The closure must not include
+    /// preparation, durable registration, or process supervision.
     pub(crate) fn launch_scoped<T, E>(
         &self,
         path: &RateDomainPath,
@@ -1220,6 +1306,11 @@ impl ProcessLaunchLimiter {
             }
             let wait = {
                 let mut state = self.state.lock().ok()?;
+                // Cancellation may have arrived while this worker waited
+                // behind another release holding the bucket lock.
+                if cancel.load(Ordering::Relaxed) {
+                    return None;
+                }
                 let now = Instant::now();
                 state.global.refill(now, self.ceiling_per_second);
                 let mut wait = state.global.wait();

@@ -8,6 +8,15 @@ locked-down host and ledger per customer and keep an operator responsible for
 each live migration window. MailSwiftSync remains a technical preview, not a
 generally supported migration service.
 
+Treat that separation as an operating-system security boundary, not a naming
+convention: use a dedicated VM or host and dedicated unprivileged OS account per
+customer trust domain. Isolate the ledger, configuration/policy, runtime and
+temporary credential directories, logs, evidence exports, backups, and signing
+keys; enforce owner-only permissions and customer-specific retention. Do not
+share an interactive OS account or grant operators access to another customer's
+workspace. If the MSP cannot enforce that boundary, do not place those customers'
+mailboxes in the same MailSwiftSync deployment.
+
 For the host-level command sequence and recovery mechanics, use the
 [production migration runbook](wiki/Production-runbook.md). This document adds
 the MSP project, approval, and support controls around that procedure.

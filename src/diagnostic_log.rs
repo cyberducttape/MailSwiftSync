@@ -10,7 +10,7 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
@@ -19,16 +19,17 @@ use std::{
 };
 
 use crate::credentials::{ensure_private_directory, restrict_file_permissions};
-use sha2::{Digest, Sha256};
+use ring::rand::SecureRandom;
+use zeroize::Zeroizing;
 
 const RETAIN_FILES: usize = 20;
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DIRECTORY_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_FILENAME_COMPONENT_BYTES: usize = 128;
 const WRITER_CAPACITY: usize = 64 * 1024;
 const FLUSH_BYTES: usize = 64 * 1024;
 const FLUSH_LINES: usize = 64;
+const WRITER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Lines and bytes that may wait for the writer thread. A full queue drops
 /// the line and reports it to the caller instead of blocking.
@@ -50,6 +51,7 @@ pub(crate) struct DiagnosticLogger {
     worker: Option<JoinHandle<()>>,
     queued_bytes: Arc<AtomicUsize>,
     field_continuations: Mutex<HashMap<(String, String), SensitiveFieldContinuation>>,
+    pseudonym_key: Arc<Zeroizing<[u8; 32]>>,
 }
 
 enum Command {
@@ -72,9 +74,19 @@ impl DiagnosticLogger {
     pub(crate) fn create(directory: &Path) -> Result<Self, String> {
         ensure_private_directory(directory)
             .map_err(|error| format!("could not secure diagnostic log directory: {error}"))?;
+        // Plain hashes of email addresses and folder names are vulnerable to
+        // dictionary recovery. Keep a process-local HMAC key so pseudonyms
+        // remain correlatable within this transcript without being reusable
+        // across diagnostic sessions.
+        let mut pseudonym_key = Zeroizing::new([0_u8; 32]);
+        ring::rand::SystemRandom::new()
+            .fill(&mut *pseudonym_key)
+            .map_err(|_| "could not initialize diagnostic pseudonym key".to_owned())?;
+        let pseudonym_key = Arc::new(pseudonym_key);
         let mut writer = LogWriter {
             directory: directory.to_owned(),
             state: LoggerState::default(),
+            pseudonym_key: Arc::clone(&pseudonym_key),
         };
         writer.prune()?;
         let (sender, receiver) = mpsc::sync_channel(QUEUE_LINES);
@@ -89,6 +101,7 @@ impl DiagnosticLogger {
             worker: Some(worker),
             queued_bytes,
             field_continuations: Mutex::new(HashMap::new()),
+            pseudonym_key,
         })
     }
 
@@ -115,6 +128,7 @@ impl DiagnosticLogger {
                     continuations
                         .entry((run_id.to_owned(), stream.to_owned()))
                         .or_default(),
+                    Some(self.pseudonym_key.as_ref().as_ref()),
                 )
             })
             .unwrap_or_else(|_| "[REDACTED]".to_owned());
@@ -211,7 +225,17 @@ impl Drop for DiagnosticLogger {
         // Disconnecting the queue lets the writer drain, flush, and prune.
         drop(self.sender.take());
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            let deadline = Instant::now() + WRITER_SHUTDOWN_TIMEOUT;
+            while !worker.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if worker.is_finished() {
+                let _ = worker.join();
+            }
+            // A filesystem write/flush cannot be cancelled portably. Detach
+            // a stuck diagnostic writer rather than making application or
+            // controller shutdown unbounded; queued transcript lines may be
+            // incomplete in this exceptional path.
         }
     }
 }
@@ -239,6 +263,7 @@ struct FileState {
 struct LogWriter {
     directory: PathBuf,
     state: LoggerState,
+    pseudonym_key: Arc<Zeroizing<[u8; 32]>>,
 }
 
 impl LogWriter {
@@ -386,19 +411,21 @@ impl LogWriter {
         // names or domains. Keep the raw value only in the writer's
         // in-memory identity check; diagnostic filenames and headers must
         // remain safe to copy into an incident bundle.
-        let project_hash = pseudonym_hash(project_id);
-        let mailbox_hash = pseudonym_hash(job_id);
+        let key = self.pseudonym_key.as_ref().as_ref();
+        let project_hash = pseudonym_hash_with_key(b"project", project_id, key);
+        let run_hash = pseudonym_hash_with_key(b"run", run_id, key);
+        let mailbox_hash = pseudonym_hash_with_key(b"mailbox-job", job_id, key);
         let filename = if part == 0 {
             format!(
-                "mailswiftsync-{project_id}-{run_id}-mailbox-{mailbox_hash}.log",
+                "mailswiftsync-{project_id}-{run_hash}-mailbox-{mailbox_hash}.log",
                 project_id = project_hash,
-                run_id = safe_component(run_id),
+                run_hash = run_hash,
             )
         } else {
             format!(
-                "mailswiftsync-{project_id}-{run_id}-mailbox-{mailbox_hash}-part-{part:04}.log",
+                "mailswiftsync-{project_id}-{run_hash}-mailbox-{mailbox_hash}-part-{part:04}.log",
                 project_id = project_hash,
-                run_id = safe_component(run_id),
+                run_hash = run_hash,
             )
         };
         let path = self.directory.join(filename);
@@ -413,7 +440,7 @@ impl LogWriter {
             .map_err(|error| format!("could not restrict diagnostic log permissions: {error}"))?;
         let mut file = BufWriter::with_capacity(WRITER_CAPACITY, file);
         let header = format!(
-            "# MailSwiftSync diagnostic log; project_hash={project_hash} run_id={run_id} mailbox_hash={mailbox_hash}\n"
+            "# MailSwiftSync diagnostic log; project_hash={project_hash} run_hash={run_hash} mailbox_hash={mailbox_hash}\n"
         );
         file.write_all(header.as_bytes())
             .map_err(|error| format!("could not initialize diagnostic log: {error}"))?;
@@ -492,20 +519,6 @@ impl LogWriter {
     }
 }
 
-fn safe_component(value: &str) -> String {
-    value
-        .chars()
-        .take(MAX_FILENAME_COMPONENT_BYTES)
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 /// Match only the exact filename shape emitted by `new_file`. The diagnostic
 /// directory is operator-selected and may contain unrelated files, so a broad
 /// prefix match is not sufficient authority to prune a file.
@@ -538,12 +551,25 @@ fn is_managed_log_filename(name: &str) -> bool {
             .is_some_and(|number| number.len() >= 4 && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
-fn pseudonym_hash(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    digest[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+fn pseudonym_hash_with_key(kind: &[u8], value: &str, key: &[u8]) -> String {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
+    let mut context = ring::hmac::Context::with_key(&key);
+    context.update(b"mailswiftsync:diagnostic-pseudonym:v1\0");
+    context.update(kind);
+    context.update(b"\0");
+    context.update(value.as_bytes());
+    let digest = context.sign();
+    hex_prefix(digest.as_ref())
+}
+
+fn hex_prefix(digest: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(24);
+    for byte in &digest[..12] {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 /// Pseudonymize mailbox and Message-ID-like values in the opt-in transcript.
@@ -551,7 +577,22 @@ fn pseudonym_hash(value: &str) -> String {
 /// pass is deliberately limited to diagnostic persistence so evidence remains
 /// semantically complete while support logs avoid retaining identifiers.
 pub(crate) fn sanitize_private_metadata(line: &str) -> String {
-    sanitize_private_metadata_with_continuation(line, &mut SensitiveFieldContinuation::default())
+    static PROCESS_PSEUDONYM_KEY: OnceLock<Option<Zeroizing<[u8; 32]>>> = OnceLock::new();
+    let key = PROCESS_PSEUDONYM_KEY
+        .get_or_init(|| {
+            let mut key = Zeroizing::new([0_u8; 32]);
+            ring::rand::SystemRandom::new()
+                .fill(&mut *key)
+                .ok()
+                .map(|()| key)
+        })
+        .as_ref()
+        .map(|key| key.as_ref());
+    sanitize_private_metadata_with_continuation(
+        line,
+        &mut SensitiveFieldContinuation::default(),
+        key,
+    )
 }
 
 #[derive(Default)]
@@ -563,6 +604,7 @@ struct SensitiveFieldContinuation {
 fn sanitize_private_metadata_with_continuation(
     line: &str,
     continuation: &mut SensitiveFieldContinuation,
+    pseudonym_key: Option<&[u8]>,
 ) -> String {
     if let Some(quote) = continuation.quote {
         let bytes = line.as_bytes();
@@ -575,8 +617,11 @@ fn sanitize_private_metadata_with_continuation(
             } else if byte == quote {
                 continuation.quote = None;
                 continuation.escaped = false;
-                let rest =
-                    sanitize_private_metadata_with_continuation(&line[index + 1..], continuation);
+                let rest = sanitize_private_metadata_with_continuation(
+                    &line[index + 1..],
+                    continuation,
+                    pseudonym_key,
+                );
                 return format!("[REDACTED]{}{}", char::from(quote), rest);
             }
         }
@@ -585,7 +630,11 @@ fn sanitize_private_metadata_with_continuation(
     }
 
     let url_redacted = redact_url_userinfo(line);
-    let line = url_redacted.as_str();
+    // Remove known secret fields before pseudonymizing free-form identifiers.
+    // Otherwise `account=alice@example.test` is first wrapped as a mailbox
+    // pseudonym and then partially consumed by the field parser.
+    let line = redact_sensitive_fields(&url_redacted, continuation);
+    let line = line.as_str();
     let bytes = line.as_bytes();
     let mut output = String::with_capacity(line.len());
     let mut cursor = 0;
@@ -639,13 +688,21 @@ fn sanitize_private_metadata_with_continuation(
         }
         output.push_str(&line[cursor..left]);
         output.push_str("[mailbox:");
-        output.push_str(&pseudonym_hash(&line[left..right]));
+        if let Some(key) = pseudonym_key {
+            output.push_str(&pseudonym_hash_with_key(
+                b"line-identifier",
+                &line[left..right],
+                key,
+            ));
+        } else {
+            // If a cryptographic pseudonym key cannot be obtained, avoid
+            // falling back to a dictionary-recoverable digest.
+            output.push_str("REDACTED");
+        }
         output.push(']');
         cursor = right;
     }
-    // URI userinfo was already removed above, and pseudonymization never
-    // introduces it, so the field pass runs once on the final text.
-    redact_sensitive_fields(&output, continuation)
+    output
 }
 
 /// Remove userinfo from URI authorities before persisting an opt-in
@@ -700,7 +757,7 @@ fn is_uri_authority_at(line: &str, at: usize) -> bool {
 /// lines. This protects support transcripts without mutating the semantic
 /// engine stream used by verification.
 fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinuation) -> String {
-    const KEYS: [&str; 44] = [
+    const KEYS: &[&str] = &[
         "client_secret",
         "client-secret",
         "clientsecret",
@@ -723,6 +780,26 @@ fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinua
         "token",
         "credential",
         "bearer",
+        "source_user",
+        "destination_user",
+        "source-user",
+        "destination-user",
+        "sourceuser",
+        "destinationuser",
+        "username",
+        "user_name",
+        "user-name",
+        "user name",
+        "userid",
+        "user_id",
+        "user-id",
+        "user id",
+        "user",
+        "account_name",
+        "account-name",
+        "accountname",
+        "account name",
+        "account",
         "source_mailbox",
         "destination_mailbox",
         "source-mailbox",
@@ -820,7 +897,7 @@ fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinua
                 continuation.escaped = escaped;
             }
             (begin, end)
-        } else if key == "authorization"
+        } else if *key == "authorization"
             && (lower[value_start..].starts_with("bearer ")
                 || lower[value_start..].starts_with("basic "))
         {
@@ -848,6 +925,10 @@ fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinua
         };
         if value_end <= value_begin {
             search = key_start + key.len();
+            continue;
+        }
+        if *key == "user" && line[value_begin..value_end].contains("[mailbox:") {
+            search = value_end;
             continue;
         }
         output.push_str(&line[cursor..value_begin]);
@@ -901,15 +982,6 @@ fn truncate_line(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn components_are_safe_for_filenames() {
-        assert_eq!(safe_component("a/b c"), "a_b_c");
-        assert_eq!(
-            safe_component(&"x".repeat(256)).len(),
-            MAX_FILENAME_COMPONENT_BYTES
-        );
-    }
 
     #[test]
     fn lines_are_bounded() {
@@ -1150,12 +1222,80 @@ mod tests {
     }
 
     #[test]
+    fn logger_drop_is_bounded_when_the_writer_is_stalled() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        let resume = logger.pause_writer();
+        let (dropped, completed) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            drop(logger);
+            let _ = dropped.send(());
+        });
+
+        completed
+            .recv_timeout(WRITER_SHUTDOWN_TIMEOUT + Duration::from_millis(500))
+            .expect("logger destruction must not wait forever on a stalled writer");
+        // Allow the detached test writer to finish before removing its
+        // directory; no log file was opened while it was paused.
+        resume.send(()).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn mailbox_pseudonym_is_stable_and_does_not_contain_the_identifier() {
         let identifier = "customer-mailbox-123";
-        let hash = pseudonym_hash(identifier);
-        assert_eq!(hash, pseudonym_hash(identifier));
+        let key = [0x93; 32];
+        let hash = pseudonym_hash_with_key(b"line-identifier", identifier, &key);
+        assert_eq!(
+            hash,
+            pseudonym_hash_with_key(b"line-identifier", identifier, &key)
+        );
         assert_eq!(hash.len(), 24);
         assert!(!hash.contains(identifier));
+    }
+
+    #[test]
+    fn metadata_sanitization_never_falls_back_to_plaintext_hashes() {
+        let mut continuation = SensitiveFieldContinuation::default();
+        let sanitized = sanitize_private_metadata_with_continuation(
+            "account=alice@example.test",
+            &mut continuation,
+            None,
+        );
+        assert_eq!(sanitized, "account=[REDACTED]");
+        let free_form = sanitize_private_metadata_with_continuation(
+            "From: <alice@example.test>",
+            &mut continuation,
+            None,
+        );
+        assert_eq!(free_form, "From: <[mailbox:REDACTED]>");
+    }
+
+    #[test]
+    fn diagnostic_pseudonyms_are_stable_only_under_the_transcript_key() {
+        let value = "billing@example.test";
+        let first_key = [0x31; 32];
+        let other_key = [0x72; 32];
+        let first = pseudonym_hash_with_key(b"mailbox", value, &first_key);
+        assert_eq!(
+            first,
+            pseudonym_hash_with_key(b"mailbox", value, &first_key)
+        );
+        assert_ne!(
+            first,
+            pseudonym_hash_with_key(b"mailbox", value, &other_key)
+        );
+        assert_ne!(first, pseudonym_hash_with_key(b"run", value, &first_key));
+        assert!(!first.contains(value));
+    }
+
+    #[test]
+    fn pseudonym_hex_prefix_uses_lowercase_fixed_width_encoding() {
+        let digest = [
+            0x00, 0x0f, 0xa5, 0xff, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
+        ];
+        assert_eq!(hex_prefix(&digest), "000fa5ff1020304050607080");
     }
 
     #[test]
@@ -1165,7 +1305,7 @@ mod tests {
         logger
             .write_line(
                 "Acme Hosting / customer@example.test",
-                "run-1",
+                "private-run-id-1",
                 "mailbox-1",
                 "stdout",
                 "safe diagnostic line",
@@ -1177,9 +1317,12 @@ mod tests {
         let content = fs::read_to_string(entry.path()).unwrap();
         assert!(!filename.contains("Acme"));
         assert!(!filename.contains("customer@example.test"));
+        assert!(!filename.contains("private-run-id-1"));
         assert!(!content.contains("Acme Hosting"));
         assert!(!content.contains("customer@example.test"));
+        assert!(!content.contains("private-run-id-1"));
         assert!(content.contains("project_hash="));
+        assert!(content.contains("run_hash="));
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1189,8 +1332,24 @@ mod tests {
         let sanitized = sanitize_private_metadata(line);
         assert!(!sanitized.contains("alice@example.test"));
         assert!(!sanitized.contains("msg-42@example.test"));
-        assert_eq!(sanitized.matches("[mailbox:").count(), 2);
-        assert!(sanitized.contains("Login user=<[mailbox:"));
+        assert_eq!(sanitized.matches("[mailbox:").count(), 1);
+        assert!(sanitized.contains("Login user=[REDACTED]"));
+        assert!(sanitized.contains("Message-ID=<[mailbox:"));
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_bare_account_and_username_values() {
+        let sanitized = sanitize_private_metadata(
+            "Login user=<admin> username=night-operator source_user:archive account_name='billing'",
+        );
+
+        for private_value in ["admin", "night-operator", "archive", "billing"] {
+            assert!(!sanitized.contains(private_value));
+        }
+        assert!(sanitized.contains("user=[REDACTED]"));
+        assert!(sanitized.contains("username=[REDACTED]"));
+        assert!(sanitized.contains("source_user:[REDACTED]"));
+        assert!(sanitized.contains("account_name='[REDACTED]'"));
     }
 
     #[test]
@@ -1264,6 +1423,7 @@ mod tests {
         let first = sanitize_private_metadata_with_continuation(
             r#"{"access_token":"first-secret-fragment"#,
             &mut continuation,
+            None,
         );
         assert!(!first.contains("first-secret-fragment"));
         assert!(continuation.quote.is_some());
@@ -1271,6 +1431,7 @@ mod tests {
         let second = sanitize_private_metadata_with_continuation(
             r#"second-secret-fragment","status":"safe"}"#,
             &mut continuation,
+            None,
         );
         assert!(!second.contains("second-secret-fragment"));
         assert!(second.contains("status"));

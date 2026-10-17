@@ -187,6 +187,23 @@ impl Form {
                 return Err(format!("{label} cannot contain control characters."));
             }
         }
+        let source_store = endpoint::casefolded_destination_identity(
+            &self.profile.source_user,
+            &self.profile.source_host,
+            &self.profile.source_tls,
+            &self.profile.source_port,
+        )?;
+        let destination_store = endpoint::casefolded_destination_identity(
+            &self.profile.destination_user,
+            &self.profile.destination_host,
+            effective_destination_tls(&self.profile.destination_tls),
+            &self.profile.destination_port,
+        )?;
+        if source_store == destination_store {
+            return Err(
+                "Source and destination identify the same IMAP mailbox at the same normalized host and port. Choose distinct mailbox identities or endpoints.".into(),
+            );
+        }
         for (label, value) in [
             ("Source keyring ID", &self.profile.source_credential_id),
             (

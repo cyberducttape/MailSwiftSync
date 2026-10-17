@@ -120,6 +120,7 @@ if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
     printf 'engine=%s\n' "$test_engine"
     printf 'dovecot_version=%s\n' "$dovecot_version"
     printf 'imapsync_version=%s\n' "$imapsync_version"
+    printf 'dovecot_ssl_min_protocol=TLSv1.2\n'
   } > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt"
   chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt" 2>/dev/null || true
 fi
@@ -140,7 +141,7 @@ cleanup() {
   if [[ "$status" -ne 0 ]]; then
     if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
       {
-        printf 'exit_status=%s\nengine=%s\ndovecot_version=%s\nimapsync_version=%s\n' \
+        printf 'exit_status=%s\nengine=%s\ndovecot_version=%s\nimapsync_version=%s\ndovecot_ssl_min_protocol=TLSv1.2\n' \
           "$status" "${test_engine:-unknown}" "${dovecot_version:-unknown}" "${imapsync_version:-unknown}"
         echo '--- bounded process state (PID PPID state wait-channel command) ---'
         ps -eo pid,ppid,stat,wchan:32,comm | head -80 || true
@@ -409,6 +410,7 @@ ssl_key = <$root/tls.key"
   fi
   cat > "$config" <<EOF
 $version_setting
+ssl_min_protocol = TLSv1.2
 base_dir = $root/run/
 state_dir = $root/run/
 protocols = imap
@@ -1142,6 +1144,8 @@ run_interruption_drill() {
   local drill_state="$app_runtime/drill-$label-state.db"
   mkdir -p "$drill_config/mailswiftsync"
   chmod 0700 "$drill_config" "$drill_config/mailswiftsync"
+  printf 'profile = "lab"\n' > "$drill_config/mailswiftsync/organization-policy.toml"
+  chmod 0600 "$drill_config/mailswiftsync/organization-policy.toml"
   # Throttle the engine so the transfer is still in flight when it is killed.
   sed -e "s/^name = .*/name = \"Interruption drill $label\"/" \
     -e "s/^source_user = .*/source_user = \"$drill_user\"/" \

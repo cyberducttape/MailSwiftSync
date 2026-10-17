@@ -25,6 +25,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the distributed runtime image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:integration .
+      - name: Verify packaged IO::Socket::SSL rejects TLS 1.0 and 1.1
+        run: >-
+          docker run --rm --entrypoint /bin/bash mailswiftsync:integration
+          /usr/local/lib/mailswiftsync/imapsync-tls-floor-smoke.sh
       - name: Exercise packaged imapsync OAuth refresh callbacks
         run: >-
           docker run --rm --entrypoint python3 mailswiftsync:integration

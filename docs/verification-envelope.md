@@ -4,6 +4,28 @@ This document separates implementation admission limits from measured scale
 and provider qualification. A configured ceiling is not a claim that every
 provider, mailbox shape, or host has been qualified at that size.
 
+## Verification policy and claim boundaries
+
+The product exposes evidence methods rather than three interchangeable
+“verified” badges. This mapping clarifies Basic, Standard, and Forensic policy
+tiers without overstating what each one proves:
+
+| Policy tier | Current evidence method | Establishes | Does not establish |
+| --- | --- | --- | --- |
+| Basic | Aggregate/engine evidence | Observed folder, message, and byte totals within the engine's reported scope | Individual message identity, FLAGS fidelity, or message content equality |
+| Standard | Per-message metadata reconciliation | Reconciled message identities and modeled metadata; FLAGS/keywords only where their evidence coverage is complete | RFC822 body or attachment equality |
+| Forensic | Bounded body-hash verification, in addition to metadata pairing | SHA-256 equality of exact fetched RFC822 bytes for every message admitted to that run's complete bounded scope | A universal full-mailbox claim when any message is outside limits; provider qualification; unrelated mailbox state such as ACLs, subscriptions, or service behavior |
+
+Forensic hashing does not normalize MIME or rewrite message content before
+hashing: it compares the exact RFC822 byte sequence returned by each IMAP
+server. Bodies are fetched only after metadata reconciliation establishes the
+pairing. If a required body cannot be fetched, exceeds a configured limit, or
+the total scope exceeds budget, the run fails closed or remains incomplete; it
+must not be described as fully content-verified. “Forensic” is the UI policy
+name, not a claim that every message in every mailbox was covered. Customer and
+operator outputs must retain the explicit Level 3 “bounded content fingerprints”
+label and coverage/exception counts.
+
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
 | Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
@@ -138,6 +160,38 @@ during reconciliation. The fixture recorded 20,000 changed-ID mismatches and
 compared flags for 980,000 messages. This confirms the synthetic durable-stage
 measurement on the current revision only; it remains neither an IMAP
 integration nor a provider, large-transfer, or production-host qualification.
+
+A full current-head typical-shape repeat was run on 2026-10-17 from clean
+commit `2498e069ba0e48a08dc0f1273bd1a14b747f516b` on the shared AMD Ryzen 7
+7735U workstation (Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, Rust
+1.92.0, ext4 on NVMe). The release test harness was built from that clean
+checkout with `MAILSWIFTSYNC_GIT_SHA` set to the recorded commit; its SHA-256
+was `276647ccba2cd29d9bdff8d11555f9979c64c4f7cd6047a45d2fc174753dea03`.
+The separately built release application reported the full commit in
+`--version` output (`MailSwiftSync 0.1.0-alpha.1 (git
+2498e069ba0e48a08dc0f1273bd1a14b747f516b)`) and had SHA-256
+`3aca4454989fe41a3d5bfb26c6b60d85f25a784c094b48d5d1c337de4848e08a`.
+All matrix sizes passed the script's 64 MiB peak-RSS and 20,000 messages/s
+reconciliation thresholds:
+
+| Messages/endpoint | Staging | Reconciliation | Reconcile rate | Peak RSS | Peak stage directory | Peak journal |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 19 ms | 20 ms | 50,000/s | 13 MiB | 1,118,928 B | 107,216 B |
+| 10,000 | 288 ms | 333 ms | 30,030/s | 17 MiB | 9,415,680 B | 949,248 B |
+| 100,000 | 2.886 s | 2.446 s | 40,883/s | 22 MiB | 105,372,120 B | 9,722,328 B |
+| 500,000 | 10.498 s | 11.604 s | 43,088/s | 21 MiB | 544,121,344 B | 50,225,664 B |
+| 1,000,000 | 20.449 s | 26.152 s | 38,237/s | 20 MiB | 1,092,691,152 B | 100,893,904 B |
+
+At 1M, restart reconciliation took 26.607 s, FLAGS comparison took 8.716 s
+and covered 980,000 unambiguous messages, with 20,000 intentional changed-ID
+mismatches. Phase I/O accounting reported 868,814,848 B written during
+staging, then 359,477,248 B read and 742,207,488 B written during
+reconciliation; peak staged database size after staging was 670,916,608 B.
+The staging-plus-reconciliation peak was approximately 1.02 GiB, which is
+important operationally even though process RSS remained low. This is a
+synthetic durable SQLite benchmark, not an IMAP transfer or provider test; it
+does not include final evidence commit, concurrent workers, report exports,
+or establish a general disk-space reservation or capacity commitment.
 
 A duplicate-heavy current-head run at commit `6f714fb07ea2bb708cc61b69882aef1e2a8ae22a`
 on 2026-10-12 used the same shared Ryzen 7 7735U workstation (Ubuntu 26.04.1
@@ -321,7 +375,7 @@ evidence.
 | Compared messages | Singleton pairs are compared when exactly one source and one destination message share the Message-ID, expected destination folder, INTERNALDATE, and RFC822.SIZE. Equal-sized duplicate groups with FLAGS on every message are compared as multisets of canonical flag sets; mismatched group sizes, probable pairings, unmatched messages, and messages whose FETCH carried no FLAGS are not compared. Duplicate flag frequencies are aggregated in SQLite and consumed as ordered rows, avoiding per-message flag-string collections in Rust; SQLite temporary aggregation cost remains workload-dependent. The compared count against all source messages is reported as flag coverage. |
 | Documented exception | The destination lost flags, gained none, and every lost flag is one the destination folder's SELECT `PERMANENTFLAGS` cannot store (a keyword is storable when `\*` is listed; a system flag only when listed by name). This is counted as excepted, not as a failure. Without `PERMANENTFLAGS` every flag is assumed storable, as RFC 9051 requires. |
 | Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
-| Point in time | Each side is inventoried independently, not as one cross-server instant. FLAGS contribute to fidelity evidence only when the folder has a tracked CONDSTORE `HIGHESTMODSEQ`, which is checked at scan completion. Without that snapshot, FLAGS are not fetched into evidence and flag coverage is incomplete; a second read alone cannot prove stability. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. A resumed durable scan never reuses an earlier folder page. |
+| Point in time | Each side is inventoried independently, not as one cross-server instant. FLAGS contribute to fidelity evidence only when the folder has a tracked CONDSTORE `HIGHESTMODSEQ`, which is checked at scan completion. Without that snapshot, FLAGS are not fetched into evidence and flag coverage is incomplete; a second read alone cannot prove stability. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. On retry, a committed durable metadata prefix may resume only after a fresh SELECT exactly matches UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ. The stored page/cursor pair is transaction-bound and the folder is reselected after the resumed scan. An unchanged complete folder is reusable under the same test. Untracked or changed snapshots restart from the first page; body-hash pages are always refetched. |
 
 ## Snapshot and cutover semantics
 
@@ -604,6 +658,88 @@ particular, the roughly 1.09 GB stage-directory peak at 1M remains important
 for target-filesystem planning; the stage's 512 MiB free-space reserve is not a
 total-workload reservation or a universal capacity guarantee.
 
+A fresh full matrix on 2026-10-17 at commit
+`a0342b00bd8eb1d85bd74ae0d93e8e0e7b8a0f12` ran on the shared AMD Ryzen 7
+7735U workstation (Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, Rust
+1.92.0, ext4 on NVMe), using a separate process and durable stage per case.
+All five cases passed the script's 64 MiB peak-RSS and 20,000 messages/s
+reconciliation gates:
+
+| Messages per endpoint | Stage / reconcile | Reconcile rate | FLAGS compared / time | Restart reconcile | Peak RSS | Stage after staging | Peak stage / journal | Reconciliation writes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 18 ms / 20 ms | 50,000/s | 980 / 11 ms | 29 ms | 13 MiB | 675,840 B | 1,118,928 B / 107,216 B | 557,056 B |
+| 10,000 | 176 ms / 206 ms | 48,543/s | 9,800 / 70 ms | 249 ms | 17 MiB | 6,242,304 B | 10,124,288 B / 949,248 B | 5,337,088 B |
+| 100,000 | 2.856 s / 2.304 s | 43,402/s | 98,000 / 630 ms | 2.130 s | 22 MiB | 64,651,264 B | 105,372,120 B / 9,722,328 B | 64,884,736 B |
+| 500,000 | 10.065 s / 11.079 s | 45,130/s | 490,000 / 3.182 s | 11.010 s | 21 MiB | 334,123,008 B | 544,121,344 B / 50,225,664 B | 334,880,768 B |
+| 1,000,000 | 28.116 s / 22.498 s | 44,448/s | 980,000 / 6.486 s | 22.645 s | 21 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 680,132,608 B |
+
+Each fixture contained 2% intentional changed-ID mismatches. At 1M, 20,000
+messages were classified as changed; the other 980,000 unambiguous messages
+were compared for FLAGS. The 1M case used 76.3 process CPU-seconds and wrote
+about 869 MB during staging and 680 MB during reconciliation. These are
+synthetic, single-process SQLite measurements on one shared workstation. They
+exclude network inventory, engine transfer, concurrent workers, terminal
+evidence persistence, and report export; they do not qualify provider behavior,
+large-byte mailboxes, or other hardware, and do not establish a safe aggregate
+disk-space envelope. In particular, the observed 1.09 GB stage peak is a
+capacity-planning signal, not a guaranteed upper bound.
+
+The same revision also ran duplicate-ID, missing-ID, and mismatch-heavy
+reconciliation at 100,000, 500,000, and 1,000,000 records per endpoint. Each
+case passed the same 64 MiB RSS and 20,000 messages/s gates:
+
+| Shape | Records / endpoint | Stage | Reconcile | Restart reconcile | Reconcile rate | Peak RSS | Peak stage / journal | Mismatch rows | Reconciliation writes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Duplicate IDs | 100,000 | 3.209 s | 4.317 s | 2.281 s | 23,164/s | 21 MiB | 105,679,448 B / 9,779,800 B | 2,000 | 64,921,600 B |
+| Duplicate IDs | 500,000 | 10.167 s | 12.207 s | 12.055 s | 40,960/s | 21 MiB | 544,850,744 B / 50,438,968 B | 10,000 | 334,381,056 B |
+| Duplicate IDs | 1,000,000 | 20.725 s | 24.436 s | 24.352 s | 40,923/s | 21 MiB | 1,094,813,856 B / 101,443,744 B | 20,000 | 740,220,928 B |
+| Missing IDs | 100,000 | 1.869 s | 1.946 s | 1.949 s | 51,387/s | 21 MiB | 78,127,928 B / 7,107,384 B | 10,000 | 42,541,056 B |
+| Missing IDs | 500,000 | 9.478 s | 10.133 s | 10.042 s | 49,343/s | 21 MiB | 402,232,392 B / 36,754,504 B | 50,000 | 220,135,424 B |
+| Missing IDs | 1,000,000 | 19.279 s | 20.885 s | 21.482 s | 47,881/s | 21 MiB | 807,295,472 B / 73,832,944 B | 100,000 | 479,731,712 B |
+| Mismatch-heavy | 100,000 | 3.043 s | 4.258 s | 3.040 s | 23,485/s | 21 MiB | 99,940,824 B / 9,722,328 B | 60,000 | 67,743,744 B |
+| Mismatch-heavy | 500,000 | 10.092 s | 15.633 s | 15.576 s | 31,983/s | 21 MiB | 515,990,016 B / 50,233,856 B | 300,000 | 351,039,488 B |
+| Mismatch-heavy | 1,000,000 | 20.688 s | 31.787 s | 31.924 s | 31,459/s | 21 MiB | 1,035,998,416 B / 100,893,904 B | 600,000 | 887,103,488 B |
+
+The `missing_ids` fixture has half its messages without RFC Message-IDs and
+exercises probable metadata matching; `mismatch_heavy` produces 60% mismatch
+rows at each size. All nine runs used the same single shared workstation and
+current code revision as the typical-shape matrix above. These shape-specific
+numbers expose materially different I/O and reconciliation costs; they are
+not transferable provider SLAs, end-to-end migration measurements, or a
+universal disk-sizing formula.
+
+A provenance-tagged full typical-shape matrix was run on 2026-10-17 at commit
+`478fe7bbdf37e8aa010b9f1ff36964cc9a2b3ebf`, using Rust 1.92.0 on the shared
+AMD Ryzen 7 7735U workstation (Ubuntu 26.04.1 x86_64, Linux
+7.0.0-38-generic, ext4 on NVMe). Each size used a separate process and durable
+stage. The release CLI reported the full source revision. All cases passed
+the benchmark's 64 MiB peak-RSS and 20,000 messages/s reconciliation gates:
+
+| Messages per endpoint | Stage / reconcile | Reconcile rate | FLAGS compared / time | Restart reconcile | Peak RSS | Stage after staging | Peak stage / journal | Reconciliation writes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 23 ms / 37 ms | 43,478/s | 980 / 9 ms | 35 ms | 13 MiB | 675,840 B | 1,011,712 B / 107,216 B | 557,056 B |
+| 10,000 | 270 ms / 359 ms | 27,855/s | 9,800 / 100 ms | 361 ms | 17 MiB | 6,242,304 B | 9,415,680 B / 949,248 B | 5,337,088 B |
+| 100,000 | 3.104 s / 3.182 s | 31,426/s | 98,000 / 635 ms | 2.088 s | 22 MiB | 64,651,264 B | 105,372,120 B / 9,722,328 B | 64,884,736 B |
+| 500,000 | 9.900 s / 11.671 s | 42,841/s | 490,000 / 5.499 s | 10.962 s | 21 MiB | 334,123,008 B | 544,121,344 B / 50,225,664 B | 334,880,768 B |
+| 1,000,000 | 36.580 s / 24.328 s | 41,104/s | 980,000 / 6.402 s | 22.509 s | 21 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 680,017,920 B |
+
+At 1M per endpoint, the fixture recorded 20,000 intentional changed-ID
+mismatches and compared FLAGS for 980,000 messages. The process used 83.8
+CPU-seconds; staging read/wrote 151,552 / 868,814,848 bytes and reconciliation
+read/wrote 86,016 / 680,017,920 bytes. SHA-256: benchmark harness
+`scripts/benchmark-verification-scale.sh`:
+`37c383f6bd22c27cd9683ac54f79cbf5987d6d6fe440b3461372d04edd61bff4`;
+release CLI binary:
+`b4d1f710acb5f55c33bb658eb955b700b1911c6706d4bcdbe223fa77b8c0d1d0`;
+release test harness:
+`7f15d953a6c7c99c75731abd247151b693ac9868f91d1270839e1bd3ac693865`.
+These are synthetic, single-process SQLite measurements on one shared host.
+They exclude IMAP inventory/fetching, message transfer, concurrent workers,
+terminal evidence commit, and report export. In particular, the approximately
+1.09 GB peak stage size is a capacity-planning observation, not a safe disk
+reservation or universal ceiling; none of these measurements qualifies
+provider behavior, large-byte mailboxes, or other host classes.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the
@@ -626,21 +762,25 @@ project report exposes it per run as `verification_limit` (`code`,
 | --- | --- | --- | --- |
 | `folder_inventory` | LIST inventory 32 MiB or 100,000 folders | No | Exclude folders or split the account |
 | `response_size` | One IMAP response 64 MiB | No | Lower the body-hash per-message bound or use metadata verification |
-| `fetched_state` | Transient fetched state 256 MiB | Retryable; full folder rescan | Rerun; use metadata verification if it recurs |
+| `fetched_state` | Transient fetched state 256 MiB | Retryable; unfinished or changed folders rescan | Rerun; unchanged complete metadata folders may be reused only with tracked snapshot equality |
 | `message_count` | 1,000,000 messages per endpoint | No | Split into smaller folder scopes or accept the difference explicitly |
 | `body_hash_message_count` | 100,000 messages per endpoint in ephemeral body-hash mode | No | Use a durable verification run or disable body-hash verification to obtain metadata evidence |
 | `body_hash_message_size` | Per-message body-hash bound | No | Raise the bound (up to 64 MiB) or disable body hashing |
 | `body_hash_total_size` | Total body-hash bound | No | Raise the bound (up to 8 GiB) or disable body hashing |
 | `reconciliation_state` | Reconciliation state, or 64 MiB in-memory mismatch detail (ephemeral runs) | No | Inspect the transfer and run another delta pass |
-| `deadline` | Verification exceeded the migration timeout | Retryable; full folder rescan | Rerun for a fresh scan, or raise the migration timeout |
+| `deadline` | Verification exceeded the migration timeout | Retryable; unfinished or changed folders rescan | Rerun for another attempt, or raise the migration timeout |
 
-"Retryable" means the same plan may make progress on another attempt; it does
-not mean staged message pages are reused. Every new verification attempt
-atomically clears prior message rows and body fingerprints for a folder before
-fetching it again, even when UIDVALIDITY, UIDNEXT, and EXISTS are unchanged;
-folders absent from the fresh LIST are pruned before scanning begins.
-The stored cursor is diagnostic recovery/progress metadata only. A folder that
-stops at a limit tags the whole account result, even
+"Retryable" means the same plan may make progress on another attempt. On a
+durable metadata retry, a committed partial prefix resumes at its next sequence
+only when a fresh SELECT matches UIDVALIDITY, UIDNEXT, EXISTS, and a tracked
+HIGHESTMODSEQ; row count, UID cursor, and absence of old body fingerprints are
+validated before reuse. A fully completed folder can likewise be reused only
+when its staged row count equals EXISTS. Changed or untracked snapshots restart
+from the first page, and all body fingerprints are fetched again. This guards
+mutable FLAGS and avoids treating saved-page presence alone as proof. Folders
+absent from the fresh LIST are pruned before scanning begins; the source and
+destination are still not one atomic snapshot.
+A folder that stops at a limit tags the whole account result, even
 when its own detail is truncated from the folder-failure summary. A single
 IMAP command that stalls for 15 seconds is treated as a provider or transport
 failure, not a limit, because retrying can succeed.

@@ -213,7 +213,7 @@ new metadata verifier against real accounts.
 - ✅ IMAPS (port 993) with certificate validation
 - ✅ STARTTLS (port 143) supported
 - ✅ Native MailSwiftSync probes use Rustls, certificate roots, and hostname verification
-- ⚠️ External imapsync transfer uses its own Perl/SSL runtime; no universal TLS-minimum policy is claimed across both stacks
+- ⚠️ Both native Rustls probes and generated imapsync TLS arguments now request TLS 1.2 or newer; negotiated engine protocol/certificate identity are not yet persisted, and the exact packaged Perl/IO::Socket::SSL behavior still requires integration qualification
 
 ### File Operations ✅ VERIFIED
 - ✅ Cross-platform atomic file replacement (Windows ReplaceFileW, Unix rename)

@@ -102,15 +102,17 @@ impl App {
                 };
                 // A transfer that completed without evidence records why
                 // verification fell short, including any safety limit.
-                let verification_failure =
-                    (succeeded && !run_context.dry_run && terminal_evidence.is_none())
-                        .then_some(self.pending_verification_failure.as_deref())
-                        .flatten();
+                let verification_missing =
+                    succeeded && !run_context.dry_run && terminal_evidence.is_none();
                 let detail = r.as_ref().err().map_or_else(
                     || {
-                        verification_failure
-                            .map(crate::controller::failure::incomplete_verification_detail)
-                            .unwrap_or_default()
+                        if verification_missing {
+                            crate::controller::failure::completed_without_verification_detail(
+                                self.pending_verification_failure.as_deref(),
+                            )
+                        } else {
+                            String::new()
+                        }
                     },
                     |error| {
                         let provider = crate::controller::failure::provider_for_sided_error(
@@ -460,7 +462,7 @@ mod tests {
     /// verification reports `verification_error`, then return the durable
     /// mailbox state, attention reason, run status, and run detail.
     fn finish_with_verification_failure(
-        verification_error: &str,
+        verification_error: Option<&str>,
     ) -> (String, Option<core::AttentionReason>, String, String) {
         let mut result = None;
         with_app(|app| {
@@ -497,9 +499,11 @@ mod tests {
             });
             app.run_id = Some("limit-run".into());
             let (sender, receiver) = std::sync::mpsc::sync_channel(8);
-            sender
-                .send(Event::VerificationFailed(verification_error.to_owned()))
-                .unwrap();
+            if let Some(verification_error) = verification_error {
+                sender
+                    .send(Event::VerificationFailed(verification_error.to_owned()))
+                    .unwrap();
+            }
             sender
                 .send(Event::Finished(Ok(StreamOutcome::Completed)))
                 .unwrap();
@@ -560,7 +564,7 @@ mod tests {
     fn completed_transfer_with_a_verification_limit_records_the_limit_for_review() {
         let error = core::VerificationLimit::BodyHashMessageCount
             .tag("imap.example.test: body-hash proof is limited to 100000 messages per endpoint");
-        let (state, reason, run_status, detail) = finish_with_verification_failure(&error);
+        let (state, reason, run_status, detail) = finish_with_verification_failure(Some(&error));
         // The transfer completed; the evidence did not. Never verified,
         // never a failed migration.
         assert_eq!(state, "attention");
@@ -579,12 +583,24 @@ mod tests {
     #[test]
     fn completed_transfer_with_a_verifier_error_records_incomplete_evidence() {
         let (state, reason, run_status, detail) =
-            finish_with_verification_failure("imap.example.test: connection reset by peer");
+            finish_with_verification_failure(Some("imap.example.test: connection reset by peer"));
         assert_eq!(state, "attention");
         assert_eq!(run_status, "completed");
         assert_eq!(reason, Some(core::AttentionReason::VerificationIncomplete));
         assert!(detail.contains("connection reset by peer"), "{detail}");
         assert_eq!(core::VerificationLimit::from_detail(&detail), None);
+    }
+
+    #[test]
+    fn completed_transfer_without_a_verification_event_persists_an_explanation() {
+        let (state, reason, run_status, detail) = finish_with_verification_failure(None);
+        assert_eq!(state, "attention");
+        assert_eq!(run_status, "completed");
+        assert_eq!(reason, Some(core::AttentionReason::VerificationIncomplete));
+        assert!(
+            detail.contains("verification produced neither evidence nor a failure detail"),
+            "{detail}"
+        );
     }
 
     #[test]

@@ -26,6 +26,32 @@ fn doc_files_exist() {
 }
 
 #[test]
+fn metrics_attempt_outcomes_are_documented_as_a_gauge() {
+    let implementation = fs::read_to_string("src/cli/metrics.rs")
+        .expect("Prometheus metrics implementation should exist");
+    let production_implementation = implementation
+        .split_once("#[cfg(test)]")
+        .map_or(implementation.as_str(), |(production, _)| production);
+    let contract = fs::read_to_string("docs/automation-contract.md")
+        .expect("automation contract should exist");
+    assert!(
+        production_implementation.contains("\"mailswiftsync_transfer_attempt_outcomes\"")
+            && !production_implementation.contains("mailswiftsync_transfer_attempt_outcomes_total"),
+        "mutable terminal/unfinished attempt outcomes must not use a counter name"
+    );
+    assert!(
+        contract.contains(
+            "`mailswiftsync_transfer_attempt_outcomes{outcome}` | Gauge | Current durable counts"
+        ) && contract.contains("this is not monotonic and must not be modeled as a counter"),
+        "the automation contract must explain why attempt outcomes are a gauge"
+    );
+    assert!(
+        !contract.contains("mailswiftsync_transfer_attempt_outcomes_total"),
+        "the obsolete counter name must not remain in the published metric contract"
+    );
+}
+
+#[test]
 fn adoption_qualification_digests_are_well_formed_sha256() {
     let plan = fs::read_to_string("docs/adoption-qualification-plan.md")
         .expect("adoption qualification plan should exist");
@@ -149,7 +175,8 @@ fn oauth_refresh_docs_disclose_the_windows_callback_boundary() {
     let security = fs::read_to_string("docs/wiki/Security-and-profiles.md")
         .expect("security guide should exist");
     let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
-        .expect("production runbook should exist");
+        .expect("production runbook should exist")
+        .replace('\n', " ");
 
     for document in [
         &readme, &release, &alpha, &service, &bulk, &security, &runbook,
@@ -340,6 +367,200 @@ fn crash_recovery_docs_match_the_restored_ledger_integration_drill() {
 }
 
 #[test]
+fn crash_recovery_docs_record_current_head_local_fault_drills_with_limits() {
+    let docs = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation evidence should exist")
+        .replace("\r\n", "\n");
+    for evidence in [
+        "Current-head local process and ledger fault drills",
+        "5a7129642d42f7b21b022d6601a81634a758cc1a",
+        "04af4380a9dcbf9721cf44b9e0e7ff228f7a308d20fc38c0ee193ea08283f1d7",
+        "RLIMIT_FSIZE` is a bounded write-failure\nsimulation",
+        "do not simulate OS restart",
+    ] {
+        assert!(
+            docs.contains(evidence),
+            "current-head crash-recovery evidence is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
+fn production_docs_keep_body_proof_and_power_loss_claims_bounded() {
+    let verification = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope should exist");
+    for claim in [
+        "does not establish",
+        "exact RFC822 byte sequence",
+        "must not be described as fully content-verified",
+    ] {
+        assert!(
+            verification.contains(claim),
+            "missing claim boundary: {claim}"
+        );
+    }
+
+    let durability = fs::read_to_string("docs/durability-and-concurrency-validation.md")
+        .expect("durability validation plan should exist");
+    for cut_point in [
+        "temporary runtime-secret creation",
+        "Dovecot checkpoint",
+        "verification-page/cursor commit",
+        "report signing",
+        "explicitly marked for manual intervention",
+    ] {
+        assert!(
+            durability.contains(cut_point),
+            "missing power-cut case: {cut_point}"
+        );
+    }
+    assert!(durability.contains("not substitutes for this campaign"));
+}
+
+#[test]
+fn security_docs_preserve_tls_stack_and_customer_isolation_boundaries() {
+    let status =
+        fs::read_to_string("PRODUCTION_STATUS.md").expect("production status should exist");
+    for tls_boundary in [
+        "Both native Rustls probes and generated imapsync TLS arguments now request TLS 1.2 or newer",
+        "negotiated engine protocol/certificate identity are not yet persisted",
+        "exact packaged Perl/IO::Socket::SSL behavior still requires integration qualification",
+    ] {
+        assert!(
+            status.contains(tls_boundary),
+            "missing external TLS-stack boundary: {tls_boundary}"
+        );
+    }
+
+    let architecture = fs::read_to_string("docs/architecture.md")
+        .expect("architecture documentation should exist");
+    for tls_control in [
+        "SSL_verify_mode=1",
+        "SSL_verifycn_scheme=imap",
+        "pinned plans are rejected before transfer",
+    ] {
+        assert!(
+            architecture.contains(tls_control),
+            "missing TLS boundary: {tls_control}"
+        );
+    }
+
+    let qualification = fs::read_to_string("docs/production-qualification-environment.md")
+        .expect("production qualification matrix should exist");
+    for scenario in [
+        "expired certificates",
+        "STARTTLS downgrade",
+        "rejects TLS 1.0/1.1",
+        "negotiated protocol and peer certificate identity",
+        "transfer reconnects",
+    ] {
+        assert!(
+            qualification.contains(scenario),
+            "missing TLS qualification scenario: {scenario}"
+        );
+    }
+
+    let runbook = fs::read_to_string("docs/msp-operations-runbook.md")
+        .expect("MSP operations runbook should exist");
+    for isolation in [
+        "dedicated VM or host",
+        "dedicated unprivileged OS account per",
+        "Do not\nshare an interactive OS account",
+    ] {
+        assert!(
+            runbook.contains(isolation),
+            "missing customer isolation control: {isolation}"
+        );
+    }
+}
+
+#[test]
+fn packaged_imapsync_lab_uses_an_explicit_tls_12_server_floor() {
+    let harness = fs::read_to_string("scripts/imap-integration-smoke.sh")
+        .expect("IMAP integration harness should exist");
+    assert!(
+        harness.contains("ssl_min_protocol = TLSv1.2")
+            && harness.contains("dovecot_ssl_min_protocol=TLSv1.2"),
+        "the packaged-engine integration artifact must state and enforce the TLS 1.2 fixture floor"
+    );
+}
+
+#[test]
+fn packaged_tls_floor_smoke_qualifies_legacy_rejection_and_tls12_success() {
+    let dockerfile = fs::read_to_string("Dockerfile").expect("runtime Dockerfile should exist");
+    let workflow = fs::read_to_string(".github/workflows/integration.yml")
+        .expect("IMAP integration workflow should exist");
+    let script = fs::read_to_string("scripts/imapsync-tls-floor-smoke.sh")
+        .expect("packaged TLS floor smoke test should exist");
+
+    assert!(dockerfile.contains("scripts/imapsync-tls-floor-smoke.sh"));
+    assert!(workflow.contains("imapsync-tls-floor-smoke.sh"));
+    for scenario in [
+        "assert_legacy_rejected tls1 TLSv1",
+        "assert_legacy_rejected tls1_1 TLSv1_1",
+        "start_server tls1_2",
+        "SSLv23:!TLSv1:!TLSv1_1:!SSLv3:!SSLv2",
+        "TLS 1.2+ floor connected to a TLS 1.2-only server",
+    ] {
+        assert!(
+            script.contains(scenario),
+            "packaged TLS floor smoke test is missing scenario: {scenario}"
+        );
+    }
+}
+
+#[test]
+fn runtime_image_applies_security_updates_and_is_scanned_in_ci_and_release() {
+    let dockerfile = fs::read_to_string("Dockerfile").expect("runtime Dockerfile should exist");
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
+    let release =
+        fs::read_to_string(".github/workflows/release.yml").expect("release workflow should exist");
+    let installer = fs::read_to_string("scripts/install-pinned-trivy.sh")
+        .expect("pinned Trivy installer should exist");
+    let scanner = fs::read_to_string("scripts/scan-runtime-image.sh")
+        .expect("runtime image scanner should exist");
+
+    assert!(dockerfile.contains("apt-mark hold dovecot-core dovecot-imapd"));
+    assert!(dockerfile.contains("apt-get upgrade --no-install-recommends -y"));
+    assert!(dockerfile.contains("apt-mark unhold dovecot-core dovecot-imapd"));
+    assert!(dockerfile.contains("apt-get clean"));
+    assert!(installer.contains("TRIVY_VERSION=\"0.76.0\""));
+    assert!(installer.contains("TRIVY_ARCHIVE_SHA256="));
+    assert!(installer.contains("sha256sum --check --status"));
+    assert!(scanner.contains("--severity HIGH,CRITICAL"));
+    assert!(scanner.contains("--ignore-unfixed"));
+    assert!(scanner.contains("--format json"));
+    assert!(scanner.contains("--download-db-only"));
+    assert!(scanner.contains(".scanner.txt"));
+    assert!(ci.contains("scripts/scan-runtime-image.sh mailswiftsync:ci"));
+    assert!(ci.contains("mailswiftsync-image-vulnerability-report.json"));
+    assert!(ci.contains("mailswiftsync-image-vulnerability-report.scanner.txt"));
+    assert!(release.contains("scripts/scan-runtime-image.sh mailswiftsync:sbom"));
+    assert!(release.contains("mailswiftsync-image-vulnerability-report.json"));
+    assert!(release.contains("mailswiftsync-image-vulnerability-report.scanner.txt"));
+}
+
+#[test]
+fn destructive_sync_docs_require_plan_bound_local_confirmation() {
+    let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
+        .expect("production runbook should exist")
+        .replace('\n', " ");
+    for requirement in [
+        "disabled in the default profile",
+        "production organization policy rejects",
+        "separate destructive confirmation",
+        "same plan fingerprint",
+        "immutable run snapshot records the endpoints",
+        "no authenticated operator identity",
+    ] {
+        assert!(
+            runbook.contains(requirement),
+            "missing destructive-operation guard: {requirement}"
+        );
+    }
+}
+
+#[test]
 fn crash_recovery_docs_bound_engine_storage_fault_claim_to_ci_fixture() {
     let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
         .expect("crash-recovery validation matrix should exist");
@@ -358,22 +579,59 @@ fn crash_recovery_docs_bound_engine_storage_fault_claim_to_ci_fixture() {
 }
 
 #[test]
+fn crash_recovery_docs_cover_terminal_evidence_sqlite_full_rollback() {
+    let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation matrix should exist");
+    for evidence in [
+        "sqlite_full_rolls_back_terminal_evidence_and_allows_retry",
+        "streams 4,000 mismatch rows",
+        "no evidence or mismatch rows leak from the rolled-back transaction",
+        "not an actually full filesystem or power-loss test",
+    ] {
+        assert!(
+            recovery.contains(evidence),
+            "terminal evidence SQLITE_FULL limitation is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn capability_manifest_does_not_overstate_verification_resume() {
     let manifest =
         fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
     let architecture =
         fs::read_to_string("docs/architecture.md").expect("architecture guide should exist");
+    let verification_envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope should exist");
+    let release_readiness = fs::read_to_string("docs/release-readiness.md")
+        .expect("release readiness document should exist");
 
     assert!(
         manifest.contains(
-            "verification cursors are recovery context only and interrupted scans are refetched before evidence is reused"
+            "a committed durable metadata prefix can resume only with an identical tracked UIDVALIDITY/UIDNEXT/EXISTS/HIGHESTMODSEQ snapshot"
         ) && !manifest.contains("verification staging resumes from snapshot-bound cursors"),
-        "capability claims must not imply that staged verification pages are reused after interruption"
+        "capability claims must limit metadata resume to committed prefixes with an identical tracked snapshot"
     );
     assert!(
-        architecture.contains("Cursors retained after an interruption are recovery context only")
-            && architecture.contains("they never authorize reuse of fetched pages"),
+        architecture.contains(
+            "For an incomplete metadata folder, a committed prefix resumes at the next sequence only after its page/cursor consistency is checked"
+        ) && architecture.contains(
+            "Snapshot drift, an untracked snapshot, or an invalid prefix restarts the folder from the first page"
+        ),
         "the capability claim must remain aligned with the enforced architecture contract"
+    );
+    assert!(
+        verification_envelope.contains(
+            "a committed durable metadata prefix may resume only after a fresh SELECT exactly matches UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ"
+        ) && verification_envelope.contains("body-hash pages are always refetched"),
+        "the verification envelope must describe the same guarded resume boundary"
+    );
+    assert!(
+        release_readiness.contains(
+            "An incomplete folder prefix resumes at the next sequence only when that same tracked snapshot matches"
+        ) && release_readiness.contains("Body-hash pages are always refetched")
+            && !release_readiness.contains("the folder is fully rescanned whether the snapshot matches or changed"),
+        "release readiness must describe snapshot-bound metadata resume without implying body-proof reuse"
     );
 }
 
@@ -569,6 +827,51 @@ fn verification_envelope_records_current_head_maximum_stress_observations() {
         assert!(
             envelope.contains(evidence),
             "maximum-envelope verification observation is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
+fn verification_envelope_records_current_head_skewed_scale_matrix() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "same revision also ran duplicate-ID, missing-ID, and mismatch-heavy",
+        "Duplicate IDs | 1,000,000 | 20.725 s | 24.436 s | 24.352 s | 40,923/s",
+        "Missing IDs | 1,000,000 | 19.279 s | 20.885 s | 21.482 s | 47,881/s",
+        "Mismatch-heavy | 1,000,000 | 20.688 s | 31.787 s | 31.924 s | 31,459/s",
+        "1,035,998,416 B / 100,893,904 B",
+        "universal disk-sizing formula.",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "current-head skewed verification evidence is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
+fn verification_envelope_records_revision_tagged_scale_matrix_and_artifacts() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "provenance-tagged full typical-shape matrix",
+        "478fe7bbdf37e8aa010b9f1ff36964cc9a2b3ebf",
+        "43,478/s",
+        "27,855/s",
+        "31,426/s",
+        "42,841/s",
+        "41,104/s",
+        "1,092,691,152 B / 100,893,904 B",
+        "83.8",
+        "37c383f6bd22c27cd9683ac54f79cbf5987d6d6fe440b3461372d04edd61bff4",
+        "b4d1f710acb5f55c33bb658eb955b700b1911c6706d4bcdbe223fa77b8c0d1d0",
+        "7f15d953a6c7c99c75731abd247151b693ac9868f91d1270839e1bd3ac693865",
+        "not a safe disk\nreservation or universal ceiling",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "revision-tagged verification benchmark evidence is missing {evidence:?}"
         );
     }
 }

@@ -318,6 +318,12 @@ impl OrganizationPolicy {
                 self.profile
             ));
         }
+        if policy_profile == "production" && profile.useuid && profile.usecache {
+            return Err(
+                "Organization policy profile production prohibits combining imapsync --useuid and --usecache: an interruption during APPEND can duplicate an in-flight message on resume. Use the default header-matching behavior, or explicitly select compatibility/lab and require independent post-resume verification."
+                    .into(),
+            );
+        }
         if policy_profile == "production"
             && (!self.require_tls
                 || self.allow_plain_imap
@@ -525,6 +531,26 @@ mod tests {
             ..OrganizationPolicy::default()
         };
         assert!(policy.check_form(&Form::default()).is_ok());
+    }
+
+    #[test]
+    fn production_rejects_only_the_known_risky_uid_cache_combination() {
+        let mut form = Form::default();
+        form.profile.useuid = true;
+        let policy = OrganizationPolicy::default();
+        assert!(policy.check_form(&form).is_ok());
+
+        form.profile.usecache = true;
+        let error = policy.check_form(&form).unwrap_err();
+        assert!(error.contains("APPEND can duplicate"), "{error}");
+
+        for profile in ["compatibility", "lab"] {
+            let policy = OrganizationPolicy {
+                profile: profile.into(),
+                ..OrganizationPolicy::default()
+            };
+            assert!(policy.check_form(&form).is_ok(), "profile={profile}");
+        }
     }
 
     #[test]

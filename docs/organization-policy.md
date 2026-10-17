@@ -48,6 +48,13 @@ individual policy settings to express their weaker behavior. The profile is
 stored alongside the individual settings so policy review shows which
 exception class was selected.
 
+Production policy also rejects the imapsync `--useuid` plus `--usecache`
+combination. After interruption during an in-flight APPEND, that expert
+combination can duplicate a message on resume. The default header-matching
+resume behavior remains available. A compatibility or lab policy can explicitly
+allow the combination, but the resumed transfer must still undergo independent
+verification; transfer resumption alone is not evidence of exact-once delivery.
+
 Provider entries may cap provider-endpoint, per-tenant, and per-credential
 concurrency independently on either source or destination. They do not reduce
 the global batch worker ceiling, so unrelated domains may use available workers

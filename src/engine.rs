@@ -1,5 +1,11 @@
 use super::Profile;
 
+/// Keep the external Perl/IO::Socket::SSL transfer engine at the same
+/// protocol floor as the native Rustls probe. `SSLv23` enables version
+/// negotiation; the exclusions reject SSLv2/3 and TLS 1.0/1.1 while allowing
+/// TLS 1.2 and newer.
+const MINIMUM_TLS_VERSION: &str = "SSLv23:!TLSv1:!TLSv1_1:!SSLv3:!SSLv2";
+
 /// Engine-plan construction errors are surfaced instead of producing a
 /// shortened, apparently valid command line. The controller currently uses
 /// bounded human-readable strings for plan errors, so keep this alias aligned
@@ -218,6 +224,10 @@ fn append_ssl_args(args: &mut Vec<String>, option: &str, ca_bundle: &str) {
     // explicitly for both transports so transfer security does not depend on
     // which connection setup path the engine selects.
     args.extend([option.to_owned(), "SSL_verifycn_scheme=imap".into()]);
+    args.extend([
+        option.to_owned(),
+        format!("SSL_version={MINIMUM_TLS_VERSION}"),
+    ]);
     let ca_bundle = ca_bundle.trim();
     if !ca_bundle.is_empty() {
         args.extend([option.to_owned(), format!("SSL_ca_file={ca_bundle}")]);
@@ -240,7 +250,7 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{imapsync_args, validate_throttle_divisor};
+    use super::{MINIMUM_TLS_VERSION, imapsync_args, validate_throttle_divisor};
     use crate::migration_plan::Profile;
 
     fn argument_value<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
@@ -248,6 +258,27 @@ mod tests {
             .windows(2)
             .find(|pair| pair[0] == option)
             .map(|pair| pair[1].as_str())
+    }
+
+    #[test]
+    fn both_imapsync_tls_connections_request_tls_12_or_newer() {
+        let arguments = imapsync_args(&Profile::default(), false, 1).unwrap();
+        let tls_versions = arguments
+            .windows(2)
+            .filter(|pair| pair[0] == "--sslargs1" || pair[0] == "--sslargs2")
+            .map(|pair| pair[1].as_str())
+            .filter(|value| value.starts_with("SSL_version="))
+            .collect::<Vec<_>>();
+
+        assert_eq!(tls_versions.len(), 2);
+        assert_eq!(
+            tls_versions[0],
+            format!("SSL_version={MINIMUM_TLS_VERSION}")
+        );
+        assert_eq!(
+            tls_versions[1],
+            format!("SSL_version={MINIMUM_TLS_VERSION}")
+        );
     }
 
     #[test]

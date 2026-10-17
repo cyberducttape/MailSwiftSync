@@ -412,6 +412,172 @@ fn message_mismatch_details_commit_atomically_with_terminal_evidence() {
 }
 
 #[test]
+fn sqlite_full_rolls_back_terminal_evidence_and_allows_retry() {
+    const MISMATCH_COUNT: usize = 4_000;
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("evidence-full", "old.example", "new.example")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "a@example", "a@example")
+        .unwrap();
+    let run_id = "evidence-full-run";
+    db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
+
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(VerificationOutcome::Missing),
+        source_messages: MISMATCH_COUNT as u64,
+        destination_messages: 0,
+        source_bytes: MISMATCH_COUNT as u64,
+        destination_bytes: 0,
+        unmatched_messages: Some(MISMATCH_COUNT as u64),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: true,
+        missing_messages: MISMATCH_COUNT as u64,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
+        flag_verification: None,
+    };
+    let wide_value = "x".repeat(240);
+    let mismatches = (0..MISMATCH_COUNT)
+        .map(|index| MessageMismatch {
+            id: format!("evidence-full-{index}"),
+            job_id: std::sync::Arc::from(job.clone()),
+            run_id: std::sync::Arc::from(run_id),
+            mismatch_type: message_verification::MismatchType::Missing,
+            source_folder: Some("INBOX".into()),
+            destination_folder: None,
+            source_uidvalidity: Some(7),
+            destination_uidvalidity: None,
+            source_uid: Some(format!("{index:0240}")),
+            dest_uid: None,
+            source_message_id: None,
+            dest_message_id: None,
+            source_size_bytes: Some(1),
+            dest_size_bytes: None,
+            source_date: Some(wide_value.clone()),
+            dest_date: None,
+            source_fingerprint: Some("a".repeat(128)),
+            destination_fingerprint: None,
+        })
+        .collect::<Vec<_>>();
+
+    db.connection.execute_batch("VACUUM").unwrap();
+    let page_count: i64 = db
+        .connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .unwrap();
+    let maximum = page_count + 2;
+    let configured_maximum: i64 = db
+        .connection
+        .query_row(&format!("PRAGMA max_page_count={maximum}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(configured_maximum, maximum);
+
+    let error = db
+        .finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
+            &project.id,
+            &job,
+            run_id,
+            "completed",
+            "verification_difference",
+            "evidence commit storage fault",
+            &evidence,
+            &mismatches,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("database or disk is full"),
+        "{error}"
+    );
+
+    let run_status: String = db
+        .connection
+        .query_row("SELECT status FROM runs WHERE id=?1", [run_id], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let mailbox_state: String = db
+        .connection
+        .query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1",
+            [&job],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let evidence_history_rows: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_history WHERE run_id=?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mismatch_rows: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM message_mismatches WHERE run_id=?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(run_status, "running");
+    assert_eq!(mailbox_state, "running");
+    assert_eq!(evidence_history_rows, 0);
+    assert_eq!(mismatch_rows, 0);
+
+    db.connection
+        .query_row("PRAGMA max_page_count=2147483646", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    db.finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
+        &project.id,
+        &job,
+        run_id,
+        "completed",
+        "verification_difference",
+        "evidence commit retried after storage recovery",
+        &evidence,
+        &mismatches,
+        None,
+    )
+    .unwrap();
+    assert_eq!(db.run_status(run_id).unwrap().as_deref(), Some("completed"));
+    assert_eq!(
+        db.mailbox_state(&job).unwrap().as_deref(),
+        Some("verification_difference")
+    );
+    assert_eq!(
+        db.latest_evidence_for_run(&job)
+            .unwrap()
+            .unwrap()
+            .1
+            .missing_messages,
+        MISMATCH_COUNT as u64
+    );
+    assert_eq!(
+        db.connection
+            .query_row(
+                "SELECT COUNT(*) FROM message_mismatches WHERE run_id=?1",
+                [run_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        MISMATCH_COUNT as i64
+    );
+}
+
+#[test]
 fn mismatch_storage_rejects_negative_unsigned_fields() {
     let db = StateStore::in_memory().unwrap();
     db.connection
@@ -6436,6 +6602,24 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
             )
             .unwrap();
     }
+    for (attempt, copied, bytes_copied) in [(2, 100, 1_000), (3, 5, 50), (3, 7, 70)] {
+        db.connection
+            .execute(
+                "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,'metrics-run','transfer_progress_checkpoint',?2)",
+                params![
+                    project.id,
+                    serde_json::json!({
+                        "attempt": attempt,
+                        "progress": {
+                            "messages_copied": copied,
+                            "bytes_copied": bytes_copied
+                        }
+                    })
+                    .to_string()
+                ],
+            )
+            .unwrap();
+    }
     db.record_evidence_for_run(
         &job,
         "metrics-run",
@@ -6474,6 +6658,8 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
     let metrics = db.project_operation_metrics(&project.id).unwrap();
     assert_eq!(metrics.transfer_attempts, 3);
     assert_eq!(metrics.retried_attempts, 2);
+    assert_eq!(metrics.unfinished_attempt_messages_copied, 7);
+    assert_eq!(metrics.unfinished_attempt_bytes_copied, 70);
     assert_eq!(
         metrics.attempt_outcomes,
         std::collections::BTreeMap::from([
@@ -6497,6 +6683,75 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
             ("native_dovecot:exact_metadata_match".to_owned(), 1),
         ])
     );
+}
+
+#[test]
+fn project_operation_metrics_report_current_message_findings_separately() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("finding-metrics", "source", "destination")
+        .unwrap();
+    let missing_job = db
+        .add_mailbox(&project.id, "missing-source", "missing-destination")
+        .unwrap();
+    db.begin_run(&project.id, &missing_job, "missing-run", "imapsync")
+        .unwrap();
+    let mut missing = flag_evidence(VerificationOutcome::Missing, None);
+    missing.destination_messages = 5;
+    missing.unmatched_messages = Some(1);
+    missing.missing_messages = 1;
+    db.record_evidence_for_run(&missing_job, "missing-run", &missing)
+        .unwrap();
+
+    let probable_job = db
+        .add_mailbox(&project.id, "probable-source", "probable-destination")
+        .unwrap();
+    db.begin_run(&project.id, &probable_job, "probable-run", "imapsync")
+        .unwrap();
+    let mut probable = flag_evidence(VerificationOutcome::ProbableMatch, None);
+    probable.probable_messages = 2;
+    db.record_evidence_for_run(&probable_job, "probable-run", &probable)
+        .unwrap();
+
+    let metrics = db.project_operation_metrics(&project.id).unwrap();
+    assert_eq!(
+        metrics.verification_message_findings,
+        std::collections::BTreeMap::from([
+            ("extra".to_owned(), 0),
+            ("missing".to_owned(), 1),
+            ("modified".to_owned(), 0),
+            ("probable".to_owned(), 2),
+        ])
+    );
+}
+
+#[test]
+fn read_snapshot_keeps_status_queries_on_one_wal_commit() {
+    let directory =
+        std::env::temp_dir().join(format!("mailswiftsync-read-snapshot-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let path = directory.join("state.db");
+    let writer = StateStore::open(&path).unwrap();
+    let project = writer
+        .create_project("snapshot", "source", "destination")
+        .unwrap();
+    writer
+        .add_mailbox(&project.id, "one@source", "one@destination")
+        .unwrap();
+    let reader = StateStore::open_readonly(&path).unwrap();
+    let snapshot = reader.begin_read_snapshot().unwrap();
+
+    assert_eq!(reader.mailbox_state_counts(&project.id).unwrap().total, 1);
+    writer
+        .add_mailbox(&project.id, "two@source", "two@destination")
+        .unwrap();
+    assert_eq!(reader.mailbox_state_counts(&project.id).unwrap().total, 1);
+
+    snapshot.commit().unwrap();
+    assert_eq!(reader.mailbox_state_counts(&project.id).unwrap().total, 2);
+    drop(reader);
+    drop(writer);
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

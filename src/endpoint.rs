@@ -118,7 +118,11 @@ fn destination_identity(
     if mailbox.is_empty() {
         return Err("destination mailbox is empty".into());
     }
-    let default_port = if tls == "starttls" { 143 } else { 993 };
+    let default_port = if matches!(tls, "starttls" | "plain") {
+        143
+    } else {
+        993
+    };
     let (host, endpoint_port) = parts(host, default_port)?;
     let port = if configured_port.trim().is_empty() {
         endpoint_port
@@ -132,7 +136,10 @@ fn destination_identity(
         return Err("destination endpoint port must be between 1 and 65535".into());
     }
     let host = match host.parse::<std::net::IpAddr>() {
-        Ok(address) => address.to_string(),
+        Ok(std::net::IpAddr::V4(address)) => address.to_string(),
+        Ok(std::net::IpAddr::V6(address)) => address
+            .to_ipv4_mapped()
+            .map_or_else(|| address.to_string(), |mapped| mapped.to_string()),
         Err(_) => host.trim_end_matches('.').to_ascii_lowercase(),
     };
     let mailbox = if force_casefold || mailbox_case_insensitive_for_host(&host) {
@@ -273,6 +280,42 @@ mod tests {
             canonical_destination_identity("User@example.test", "[2001:db8::1]", "starttls", "143")
                 .unwrap(),
             "endpoint:2001:db8::1:143:User@example.test"
+        );
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_and_ipv4_share_destination_identity() {
+        let ipv4 =
+            canonical_destination_identity("user@example.test", "192.0.2.10", "imaps", "").unwrap();
+        let mapped_dotted =
+            canonical_destination_identity("user@example.test", "[::ffff:192.0.2.10]", "imaps", "")
+                .unwrap();
+        let mapped_hex =
+            canonical_destination_identity("user@example.test", "[::ffff:c000:20a]", "imaps", "")
+                .unwrap();
+
+        assert_eq!(ipv4, mapped_dotted);
+        assert_eq!(ipv4, mapped_hex);
+    }
+
+    #[test]
+    fn endpoint_identity_uses_imap_default_for_plain_transport() {
+        assert_eq!(
+            casefolded_destination_identity("User@example.test", "mail.example.test", "plain", "")
+                .unwrap(),
+            casefolded_destination_identity(
+                "user@example.test",
+                "MAIL.example.test.",
+                "starttls",
+                ""
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            casefolded_destination_identity("user@example.test", "mail.example.test", "plain", "")
+                .unwrap(),
+            casefolded_destination_identity("user@example.test", "mail.example.test", "imaps", "")
+                .unwrap()
         );
     }
 
