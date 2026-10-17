@@ -408,6 +408,18 @@ mod tests {
     }
 
     #[test]
+    fn migration_plan_rejects_ipv4_and_its_mapped_ipv6_alias_as_self_copy() {
+        let mut form = Form::default();
+        form.profile.source_host = "192.0.2.10".into();
+        form.profile.source_user = "user@example.test".into();
+        form.profile.destination_host = "[::ffff:c000:20a]".into();
+        form.profile.destination_user = "USER@example.test".into();
+
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("same IMAP mailbox"), "{error}");
+    }
+
+    #[test]
     fn migration_plan_rejects_plain_source_and_starttls_destination_on_same_default_port() {
         let mut form = Form::default();
         form.profile.source_host = "mail.example.test".into();
