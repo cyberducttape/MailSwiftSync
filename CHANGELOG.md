@@ -234,6 +234,10 @@
   this repository despite weekly update configuration and scheduled audit CI;
   enabling and verifying the repository-level controls is an administrator
   release gate.
+- Record that GitHub secret scanning is enabled but push protection and
+  non-provider-pattern scanning are disabled; distinguish detection from
+  push-time prevention and retain the required administrator configuration as
+  a release gate.
 - Pace provider-facing engine release only after its durable process
   registration acknowledgement, so gatekeepers accumulated during slow
   registration cannot open IMAP sessions in a burst; add a concurrent delayed-

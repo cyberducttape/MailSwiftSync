@@ -760,6 +760,15 @@ Dependabot alerts and security updates, then verify the settings and resulting
 alerts before GA; this workspace's GitHub authorization cannot change that
 repository-level setting.
 
+The same settings snapshot shows GitHub secret scanning enabled but push
+protection and non-provider-pattern scanning disabled. Therefore, enabled
+secret scanning must not be described as push-time prevention or coverage of
+all credential formats. Before GA, a repository administrator should enable
+push protection and non-provider-pattern scanning where available, review any
+existing findings, and verify the effective settings. Secret scanning
+validity checks are also disabled; this does not change code-side credential
+handling but limits GitHub's ability to identify known active credentials.
+
 ### External runtime engine and image findings
 
 The final-image SPDX inventory enumerates Debian packages from the built
