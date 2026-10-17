@@ -123,10 +123,10 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         "mailswiftsync_transfer_attempts_total",
         "Total durably recorded transfer attempts across the projected ledgers.",
     );
-    counter_header(
+    gauge_header(
         &mut output,
-        "mailswiftsync_transfer_attempt_outcomes_total",
-        "Durably recorded transfer attempts by terminal or unfinished outcome.",
+        "mailswiftsync_transfer_attempt_outcomes",
+        "Current durable transfer-attempt counts by terminal or unfinished outcome.",
     );
     counter_header(
         &mut output,
@@ -206,7 +206,7 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
     for (outcome, count) in attempt_outcomes {
         let _ = writeln!(
             output,
-            "mailswiftsync_transfer_attempt_outcomes_total{{outcome=\"{outcome}\"}} {count}"
+            "mailswiftsync_transfer_attempt_outcomes{{outcome=\"{outcome}\"}} {count}"
         );
     }
     for ((method, outcome), count) in verification_outcomes {
@@ -284,12 +284,16 @@ mod tests {
                 mailbox_state_counts: MailboxStateCounts::default(),
                 attention_reason_counts: Default::default(),
                 operations: ProjectOperationMetrics {
-                    transfer_attempts: 3,
+                    transfer_attempts: 4,
                     retried_attempts: 1,
                     unfinished_attempt_messages_copied: 4,
                     unfinished_attempt_bytes_copied: 4096,
-                    attempt_outcomes: [("completed".into(), 2), ("failed:capacity".into(), 1)]
-                        .into(),
+                    attempt_outcomes: [
+                        ("completed".into(), 2),
+                        ("failed:capacity".into(), 1),
+                        ("unfinished".into(), 1),
+                    ]
+                    .into(),
                     verification_outcomes: Default::default(),
                     verification_method_outcomes: [
                         ("metadata_reconciliation:exact_metadata_match".into(), 1),
@@ -310,10 +314,16 @@ mod tests {
         assert!(output.contains("mailswiftsync_transfer_retries_total 1"));
         assert!(output.contains("mailswiftsync_unfinished_attempt_messages_copied 4"));
         assert!(output.contains("mailswiftsync_unfinished_attempt_bytes_copied 4096"));
-        assert!(output.contains("mailswiftsync_transfer_attempts_total 3"));
-        assert!(output.contains(
-            "mailswiftsync_transfer_attempt_outcomes_total{outcome=\"failed:capacity\"} 1"
-        ));
+        assert!(output.contains("mailswiftsync_transfer_attempts_total 4"));
+        assert!(output.contains("# TYPE mailswiftsync_transfer_attempt_outcomes gauge"));
+        assert!(
+            output
+                .contains("mailswiftsync_transfer_attempt_outcomes{outcome=\"failed:capacity\"} 1")
+        );
+        assert!(
+            output.contains("mailswiftsync_transfer_attempt_outcomes{outcome=\"unfinished\"} 1")
+        );
+        assert!(!output.contains("mailswiftsync_transfer_attempt_outcomes_total"));
         assert!(output.contains("mailswiftsync_registered_engine_processes 0"));
         assert!(output.contains("method=\"metadata_reconciliation\",outcome=\"missing\""));
         assert!(output.contains("mailswiftsync_verification_message_findings{kind=\"missing\"} 2"));

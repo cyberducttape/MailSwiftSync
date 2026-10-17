@@ -148,7 +148,7 @@ mailbox, run, customer, or endpoint labels. The metric contract is:
 | `mailswiftsync_transfer_retries_total` | Counter | Cumulative attempts after the first attempt of a pass. |
 | `mailswiftsync_unfinished_attempt_messages_copied` | Gauge | Latest durable copied-message snapshots summed across attempts without terminal outcomes. Retries can repeat work, so this is not unique mailbox coverage. |
 | `mailswiftsync_unfinished_attempt_bytes_copied` | Gauge | Byte counterpart, also a persisted snapshot rather than a transfer rate or lifetime total. |
-| `mailswiftsync_transfer_attempt_outcomes_total{outcome}` | Counter | Attempt outcomes with a fixed allowlist; unknown values collapse to `other`. `failed:capacity` is a capacity failure category, not a provider-throttle event counter. |
+| `mailswiftsync_transfer_attempt_outcomes{outcome}` | Gauge | Current durable counts by terminal or unfinished outcome. An attempt can move from `unfinished` to a terminal label, so this is not monotonic and must not be modeled as a counter. Unknown values collapse to `other`; `failed:capacity` is a capacity category, not a provider-throttle event counter. |
 | `mailswiftsync_verification_mailboxes{method,outcome}` | Gauge | Current persisted mailbox evidence counts, not message counts. Labels use fixed allowlists; unknown values collapse to `other`. |
 | `mailswiftsync_verification_message_findings{kind}` | Gauge | Current latest-evidence counts by `missing`, `extra`, `modified`, or `probable`; probable matches are not confirmed differences. |
 

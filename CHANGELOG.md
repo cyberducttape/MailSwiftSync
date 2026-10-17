@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Export durable transfer-attempt outcome counts as a gauge rather than a
+  counter: unfinished attempts change label when they reach a terminal outcome,
+  so the series is not monotonic and must not carry a Prometheus `_total` name.
 - Apply available Debian security upgrades to the runtime image while holding
   the qualified Dovecot package versions, and scan PR/release images with
   checksum-pinned Trivy; retain full CVE reports and scanner/database identity,
