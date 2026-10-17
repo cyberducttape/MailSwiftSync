@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- Reject migration plans whose source and destination normalize to the same
-  IMAP host and case-folded username, even when their configured ports differ;
-  explain that separate stores on one host require distinct hostnames.
+- Reject migration plans whose source and destination resolve to the same
+  normalized IMAP host, effective port, and case-folded username, while
+  allowing distinct IMAP services on different ports of one host.
 - Treat the same normalized IMAP host and username as one mailbox identity in
   the provider-smoke self-copy guard regardless of port, while still
   validating the configured ports; cover a 143/993 alias collision.

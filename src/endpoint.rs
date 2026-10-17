@@ -107,28 +107,6 @@ pub(crate) fn canonical_destination_identity(
     destination_identity(mailbox, host, tls, configured_port, false)
 }
 
-/// Return a conservative identity for a mailbox store, ignoring its port.
-/// IMAPS and STARTTLS ports on one host commonly expose the same account
-/// database, so a migration plan must not treat them as distinct source and
-/// destination mailboxes. This cannot detect DNS aliases; genuinely separate
-/// stores on one host must be configured with distinct hostnames.
-pub(crate) fn canonical_mailbox_store_identity(
-    mailbox: &str,
-    host: &str,
-    default_port: u16,
-) -> Result<String, String> {
-    let mailbox = mailbox.trim();
-    if mailbox.is_empty() {
-        return Err("mailbox identity is empty".into());
-    }
-    let (host, _) = parts(host, default_port)?;
-    let host = match host.parse::<std::net::IpAddr>() {
-        Ok(address) => address.to_string(),
-        Err(_) => host.trim_end_matches('.').to_ascii_lowercase(),
-    };
-    Ok(format!("imap-store:{host}:{}", mailbox.to_lowercase()))
-}
-
 fn destination_identity(
     mailbox: &str,
     host: &str,
@@ -190,10 +168,7 @@ pub(crate) fn mailbox_identity(mailbox: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        canonical_destination_identity, canonical_mailbox_store_identity,
-        casefolded_destination_identity, parts,
-    };
+    use super::{canonical_destination_identity, casefolded_destination_identity, parts};
 
     #[test]
     fn parses_common_endpoint_forms() {
@@ -298,28 +273,6 @@ mod tests {
             canonical_destination_identity("User@example.test", "[2001:db8::1]", "starttls", "143")
                 .unwrap(),
             "endpoint:2001:db8::1:143:User@example.test"
-        );
-    }
-
-    #[test]
-    fn mailbox_store_identity_normalizes_host_user_and_ignores_port() {
-        assert_eq!(
-            canonical_mailbox_store_identity("User@example.test", "MAIL.example.test.:993", 993)
-                .unwrap(),
-            canonical_mailbox_store_identity("user@example.test", "mail.example.test:143", 143)
-                .unwrap()
-        );
-        assert_eq!(
-            canonical_mailbox_store_identity("user@example.test", "[2001:db8::1]:993", 993)
-                .unwrap(),
-            canonical_mailbox_store_identity("USER@example.test", "[2001:0db8:0:0::1]:143", 143)
-                .unwrap()
-        );
-        assert_ne!(
-            canonical_mailbox_store_identity("user@example.test", "mail.example.test:993", 993)
-                .unwrap(),
-            canonical_mailbox_store_identity("other@example.test", "mail.example.test:143", 143)
-                .unwrap()
         );
     }
 

@@ -393,16 +393,18 @@ mod tests {
     }
 
     #[test]
-    fn migration_plan_rejects_same_source_and_destination_mailbox_across_ports() {
+    fn migration_plan_rejects_same_source_and_destination_mailbox_at_same_endpoint() {
         let mut form = Form::default();
-        form.profile.source_host = "IMAP.Example.test.:993".into();
+        form.profile.source_host = "IMAP.Example.test.".into();
+        form.profile.source_port = "19143".into();
         form.profile.source_user = "User@example.test".into();
-        form.profile.destination_host = "imap.example.test:143".into();
+        form.profile.destination_host = "imap.example.test".into();
+        form.profile.destination_port = "19143".into();
         form.profile.destination_user = "user@example.test".into();
 
         let error = form.validate_internal(false).unwrap_err();
         assert!(error.contains("same IMAP mailbox"), "{error}");
-        assert!(error.contains("ports are ignored"), "{error}");
+        assert!(error.contains("same normalized host and port"), "{error}");
     }
 
     #[test]
@@ -414,8 +416,13 @@ mod tests {
         form.profile.destination_user = "destination@example.test".into();
         assert!(form.validate_internal(false).is_ok());
 
-        form.profile.destination_host = "other.example.test:143".into();
+        // Separate IMAP services on one host are a valid source/destination
+        // pair (for example, isolated Dovecot instances in the integration
+        // lab). Endpoint identity must include the effective port.
         form.profile.destination_user = "source@example.test".into();
+        assert!(form.validate_internal(false).is_ok());
+
+        form.profile.destination_host = "other.example.test:143".into();
         assert!(form.validate_internal(false).is_ok());
     }
 
