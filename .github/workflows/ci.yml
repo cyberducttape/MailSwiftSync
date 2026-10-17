@@ -48,7 +48,7 @@ jobs:
       - run: cargo fmt --check
       - name: Analyze systemd supervisor security profile
         run: >-
-          systemd-analyze security --offline=yes
+          systemd-analyze --threshold=40 --offline=yes security
           docs/distribution/mailswiftsync-supervise.service --no-pager
       - name: Verify documentation claims against capability manifest
         run: |
