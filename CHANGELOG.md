@@ -105,11 +105,13 @@
   each durable verification page together with its progress cursor to avoid an
   extra SQLite synchronization and inconsistent intermediate checkpoint.
 - Consume bounded literal values in IMAP LIST extension data without treating
-  them as mailbox names; reject aggregate extension-literal data beyond the
-  inventory limit. Reduce body-fingerprint and FETCH protocol-text temporary
-  allocations, and reject a projected metadata-page overrun before issuing the
-  FETCH or staging its records. Interrupted scans still rescan: retained pages
-  are not reused until a snapshot-bound resume protocol is qualified.
+  them as mailbox names, including parenthesized extensions whose closing
+  delimiters immediately follow literal bytes; reject aggregate extension-
+  literal data beyond the inventory limit. Reduce body-fingerprint and FETCH
+  protocol-text temporary allocations, and reject a projected metadata-page
+  overrun before issuing the FETCH or staging its records. Interrupted scans
+  still rescan: retained pages are not reused until a snapshot-bound resume
+  protocol is qualified.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.
