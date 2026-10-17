@@ -1142,6 +1142,8 @@ run_interruption_drill() {
   local drill_state="$app_runtime/drill-$label-state.db"
   mkdir -p "$drill_config/mailswiftsync"
   chmod 0700 "$drill_config" "$drill_config/mailswiftsync"
+  printf 'profile = "lab"\n' > "$drill_config/mailswiftsync/organization-policy.toml"
+  chmod 0600 "$drill_config/mailswiftsync/organization-policy.toml"
   # Throttle the engine so the transfer is still in flight when it is killed.
   sed -e "s/^name = .*/name = \"Interruption drill $label\"/" \
     -e "s/^source_user = .*/source_user = \"$drill_user\"/" \

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reject imapsync `--useuid` plus `--usecache` plans under production
+  organization policy because an interrupted in-flight APPEND can duplicate a
+  message on resume; compatibility and lab policies retain the explicitly
+  acknowledged path with independent verification.
 - Use a random, zeroized per-logger HMAC key and type-separated pseudonyms for
   diagnostic project, run, mailbox-job, email, and Message-ID identifiers;
   avoid dictionary-recoverable plain hashes and raw run IDs in transcript paths
