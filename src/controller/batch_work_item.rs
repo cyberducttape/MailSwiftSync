@@ -17,10 +17,10 @@ use crate::{
     process::ProcessLaunchLimiter,
     runner::{
         MessageVerificationResult, ResolvedImapsyncIdentity, RunContext, TerminalEvidenceSource,
-        message_verification_enabled, persist_engine_identity_before_launch,
-        run_dovecot_destination_preflight, run_dovecot_verification, run_imap_message_verification,
-        run_streaming, send_reliable_event, terminal_evidence_source,
-        validate_dovecot_checkpoint_context,
+        message_verification_enabled, message_verification_limitation,
+        persist_engine_identity_before_launch, run_dovecot_destination_preflight,
+        run_dovecot_verification, run_imap_message_verification, run_streaming,
+        send_reliable_event, terminal_evidence_source, validate_dovecot_checkpoint_context,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -35,6 +35,27 @@ use std::{
 };
 
 const JOB_FINISHED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn successful_batch_detail(
+    form: &crate::Form,
+    delta_required: bool,
+    verification_failure: Option<&str>,
+    verification_evidence_recorded: bool,
+) -> String {
+    if delta_required {
+        "Dovecot reports that another delta pass is required".into()
+    } else if form.dry_run {
+        "process completed".into()
+    } else if let Some(reason) = verification_failure {
+        crate::controller::failure::incomplete_verification_detail(reason)
+    } else if !verification_evidence_recorded {
+        crate::controller::failure::completed_without_verification_detail(
+            message_verification_limitation(form),
+        )
+    } else {
+        "process completed".into()
+    }
+}
 
 fn provider_for_error(form: &crate::Form, error: &str) -> &'static str {
     let side = failure_sides(error);
@@ -444,6 +465,7 @@ struct BatchAttemptContext<'a> {
     oauth_refresh_locks: &'a OAuthRefreshLocks,
     transfer_attempt_number: &'a mut u32,
     verification_failure: &'a mut Option<String>,
+    verification_evidence_recorded: &'a mut bool,
     launch_limiter: &'a ProcessLaunchLimiter,
     launch_path: &'a RateDomainPath,
 }
@@ -469,6 +491,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
         oauth_refresh_locks,
         transfer_attempt_number,
         verification_failure,
+        verification_evidence_recorded,
         launch_limiter,
         launch_path,
     } = context;
@@ -591,6 +614,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                                 mismatches,
                             })
                             .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
+                            *verification_evidence_recorded = true;
                         }
                         Err(error) => {
                             let safe = redact_child_text(form, &error);
@@ -631,6 +655,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                         mismatches: core::MismatchSet::default(),
                     })
                     .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
+                    *verification_evidence_recorded = true;
                 }
                 if !form.dry_run && form.engine() == core::Engine::Dovecot {
                     let verification_secret = form.source_password.clone();
@@ -681,6 +706,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                             mismatches: core::MismatchSet::default(),
                         },
                     )?;
+                    *verification_evidence_recorded = true;
                 }
                 Ok(stream.outcome)
             });
@@ -1048,6 +1074,7 @@ impl BatchAttemptRunner {
         }
         let mut transfer_attempt_number = task.transfer_attempt_number;
         let mut verification_failure = task.verification_failure.take();
+        let mut verification_evidence_recorded = false;
         let result = run_prepared_batch_attempt(BatchAttemptContext {
             form: &task.form,
             checkpoint: task.checkpoint.clone(),
@@ -1065,6 +1092,7 @@ impl BatchAttemptRunner {
             oauth_refresh_locks: &self.oauth_refresh_locks,
             transfer_attempt_number: &mut transfer_attempt_number,
             verification_failure: &mut verification_failure,
+            verification_evidence_recorded: &mut verification_evidence_recorded,
             launch_limiter: &self.launch_limiter,
             launch_path: &task.rate_path,
         });
@@ -1091,14 +1119,12 @@ impl BatchAttemptRunner {
                 } else {
                     "completed"
                 };
-                let detail = if delta_required {
-                    "Dovecot reports that another delta pass is required".into()
-                } else {
-                    task.verification_failure.as_ref().map_or_else(
-                        || "process completed".into(),
-                        |reason| crate::controller::failure::incomplete_verification_detail(reason),
-                    )
-                };
+                let detail = successful_batch_detail(
+                    &task.form,
+                    delta_required,
+                    task.verification_failure.as_deref(),
+                    verification_evidence_recorded,
+                );
                 let fingerprint = task
                     .form
                     .dry_run
@@ -1166,6 +1192,55 @@ impl BatchAttemptRunner {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[test]
+    fn completed_batch_without_verification_records_the_plan_limitation() {
+        let mut form = crate::Form {
+            dry_run: false,
+            ..Default::default()
+        };
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.automap = true;
+
+        let detail = successful_batch_detail(&form, false, None, false);
+
+        assert!(
+            detail.contains("[attention_reason=verification_incomplete]"),
+            "{detail}"
+        );
+        assert!(detail.contains("automatic folder mapping"));
+    }
+
+    #[test]
+    fn batch_success_detail_preserves_dry_run_and_evidence_semantics() {
+        let form = crate::Form {
+            dry_run: false,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            successful_batch_detail(&form, false, None, false),
+            crate::controller::failure::completed_without_verification_detail(None)
+        );
+        let mut dry_run = form.clone();
+        dry_run.dry_run = true;
+        assert_eq!(
+            successful_batch_detail(&dry_run, false, None, false),
+            "process completed"
+        );
+        assert_eq!(
+            successful_batch_detail(&form, false, None, true),
+            "process completed"
+        );
+        assert!(
+            successful_batch_detail(&form, false, Some("scan timed out"), false)
+                .contains("scan timed out")
+        );
+        assert!(
+            successful_batch_detail(&form, true, None, false)
+                .contains("another delta pass is required")
+        );
+    }
 
     fn test_runner(tx: mpsc::SyncSender<Event>) -> BatchAttemptRunner {
         BatchAttemptRunner {
