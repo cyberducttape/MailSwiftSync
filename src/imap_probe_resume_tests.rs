@@ -3,8 +3,8 @@
 //! server between runs, and drives the real fetch path against a scripted
 //! IMAP server. The invariant under test: after a scan the staged folder
 //! equals the server's current folder exactly, whatever happened between
-//! runs. Only completed snapshots with an unchanged tracked MODSEQ may be
-//! reused; partial and untracked scans are refetched.
+//! runs. Completed folders and committed metadata prefixes require an
+//! unchanged tracked MODSEQ; untracked scans are refetched.
 use super::*;
 use crate::core::{
     ExtractedMessage, ExtractedMessages, FolderSnapshot, MailboxMessageKey, MessageMetadataStage,
@@ -846,6 +846,48 @@ fn durable_partial_folder_resumes_at_the_next_sequence_after_snapshot_validation
             .1;
         assert_eq!(message.flags.as_deref(), Some("$clienttag \\Seen"));
     }
+    stage.finish().unwrap();
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn durable_partial_folder_resumes_by_sequence_with_sparse_uids() {
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("verification.sqlite");
+    let uids = vec![3, 80, 500, 2_000, 50_000];
+    let mut original_server = FolderServer::new(&uids, 9, 50_001);
+    original_server.condstore = true;
+    original_server.modseq = 22;
+    let snapshot = original_server.snapshot();
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_mailbox_scan(SIDE, "INBOX", snapshot).unwrap();
+    stage
+        .insert_page_with_fingerprints(
+            SIDE,
+            &staged_page(9, [3, 80, 500]),
+            &HashMap::new(),
+            Some(("INBOX", snapshot, 500)),
+        )
+        .unwrap();
+    drop(stage);
+
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_verification_attempt().unwrap();
+    let mut resumed = FolderServer::new(&uids, 9, 50_001);
+    resumed.condstore = true;
+    resumed.modseq = 22;
+    assert_eq!(
+        scan_with(&mut stage, &mut resumed, false, true),
+        uids.len() as u64
+    );
+    assert_eq!(resumed.fetched, [2_000, 50_000]);
+    assert!(
+        resumed
+            .commands
+            .iter()
+            .any(|command| { command.contains("FETCH 4:5 (UID)") })
+    );
+    assert_eq!(staged_uids(&stage), uids);
     stage.finish().unwrap();
     let _ = std::fs::remove_dir_all(directory);
 }
