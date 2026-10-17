@@ -272,6 +272,7 @@ fn certificate_matches_pin(certificate: &[u8], expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{certificate_matches_pin, complete_tls_handshake_until};
+    use crate::imap_probe::MessageFetchBudget;
     use rustls::pki_types::ServerName;
     use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
     use std::net::{TcpListener, TcpStream};
@@ -315,6 +316,39 @@ mod tests {
             start + Duration::from_millis(40),
         );
         assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_millis(150));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn probe_tls_handshake_obeys_total_budget_without_verification_limit_classification() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let socket = TcpStream::connect(address).unwrap();
+        let config = ClientConfig::builder()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+        let name = ServerName::try_from("example.com").unwrap();
+        let connection = ClientConnection::new(Arc::new(config), name).unwrap();
+        let mut stream = StreamOwned::new(connection, socket);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let budget = MessageFetchBudget::for_probe(Duration::from_millis(40), &cancel);
+        let start = Instant::now();
+
+        let error = complete_tls_handshake_until(
+            &mut stream,
+            "example.com",
+            Some(&budget),
+            budget.deadline,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("TLS handshake deadline exceeded"));
+        assert_eq!(crate::core::VerificationLimit::from_detail(&error), None);
         assert!(start.elapsed() < Duration::from_millis(150));
         server.join().unwrap();
     }
