@@ -778,15 +778,27 @@ handling but limits GitHub's ability to identify known active credentials.
 
 The final-image SPDX inventory enumerates Debian packages from the built
 runtime image, including the installed imapsync `.deb`, Perl, and packaged Perl
-modules. The release workflow checksums and attests that SBOM. This is an
-inventory and provenance record for the SBOM; it is **not** a vulnerability
-scan of the image or of the Perl dependency graph. RustSec and `cargo-deny`
-cover the Rust lockfiles, while `pip-audit` covers the listed Python
-qualification helpers. No current release gate scans the final image's OS or
-Perl packages for known vulnerabilities. A GA claim requires a reviewed,
-repeatable scan of the exact release image, including an explicit disposition
-for findings that are fixed, accepted, or unresolved; do not treat SBOM
-generation as that scan.
+modules. The PR container build and release SBOM workflows now scan the exact
+built runtime image with Trivy 0.76.0, whose Linux archive is version- and
+SHA-256-pinned in `scripts/install-pinned-trivy.sh`. They retain the complete
+JSON vulnerability report and a scanner/database version-and-timestamp
+sidecar, and fail on fixable HIGH or CRITICAL findings; unfixed findings remain
+visible and require an explicit disposition before a GA claim. The release
+workflow also includes the scan report and sidecar in its attested and
+published evidence. RustSec and `cargo-deny` cover the Rust lockfiles,
+while `pip-audit` covers the listed Python qualification helpers. A green scan
+is a time-bounded result for the exact built image and vulnerability database,
+not a guarantee against future advisories.
+
+A local Trivy 0.76.0 scan of the pinned Debian base image alone on 2026-10-17
+(`debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251`,
+Trivy vulnerability DB v2 updated 2026-10-16 01:13 UTC) identified 65
+vulnerabilities, including eight fixable HIGH/CRITICAL findings in the base
+package set. This was not a scan of the complete runtime image and is not
+release evidence. The Docker build now applies available Debian package
+upgrades while holding the specifically qualified Dovecot packages at their
+declared version; the first complete-image CI report must confirm the result
+and be reviewed for any remaining findings.
 
 The Docker build pins imapsync `2.314` and verifies the downloaded Debian
 artifact against a repository-pinned SHA-256. This detects an artifact that

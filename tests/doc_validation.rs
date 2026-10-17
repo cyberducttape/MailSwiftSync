@@ -484,6 +484,37 @@ fn packaged_tls_floor_smoke_qualifies_legacy_rejection_and_tls12_success() {
 }
 
 #[test]
+fn runtime_image_applies_security_updates_and_is_scanned_in_ci_and_release() {
+    let dockerfile = fs::read_to_string("Dockerfile").expect("runtime Dockerfile should exist");
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
+    let release =
+        fs::read_to_string(".github/workflows/release.yml").expect("release workflow should exist");
+    let installer = fs::read_to_string("scripts/install-pinned-trivy.sh")
+        .expect("pinned Trivy installer should exist");
+    let scanner = fs::read_to_string("scripts/scan-runtime-image.sh")
+        .expect("runtime image scanner should exist");
+
+    assert!(dockerfile.contains("apt-mark hold dovecot-core dovecot-imapd"));
+    assert!(dockerfile.contains("apt-get upgrade --no-install-recommends -y"));
+    assert!(dockerfile.contains("apt-mark unhold dovecot-core dovecot-imapd"));
+    assert!(dockerfile.contains("apt-get clean"));
+    assert!(installer.contains("TRIVY_VERSION=\"0.76.0\""));
+    assert!(installer.contains("TRIVY_ARCHIVE_SHA256="));
+    assert!(installer.contains("sha256sum --check --status"));
+    assert!(scanner.contains("--severity HIGH,CRITICAL"));
+    assert!(scanner.contains("--ignore-unfixed"));
+    assert!(scanner.contains("--format json"));
+    assert!(scanner.contains("--download-db-only"));
+    assert!(scanner.contains(".scanner.txt"));
+    assert!(ci.contains("scripts/scan-runtime-image.sh mailswiftsync:ci"));
+    assert!(ci.contains("mailswiftsync-image-vulnerability-report.json"));
+    assert!(ci.contains("mailswiftsync-image-vulnerability-report.scanner.txt"));
+    assert!(release.contains("scripts/scan-runtime-image.sh mailswiftsync:sbom"));
+    assert!(release.contains("mailswiftsync-image-vulnerability-report.json"));
+    assert!(release.contains("mailswiftsync-image-vulnerability-report.scanner.txt"));
+}
+
+#[test]
 fn destructive_sync_docs_require_plan_bound_local_confirmation() {
     let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
         .expect("production runbook should exist")

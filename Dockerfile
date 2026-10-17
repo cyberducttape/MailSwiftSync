@@ -50,15 +50,22 @@ RUN apt-get update \
         procps \
         "dovecot-core=${DOVECOT_VERSION}" \
         "dovecot-imapd=${DOVECOT_VERSION}" \
+    && apt-mark hold dovecot-core dovecot-imapd \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin mailswiftsync \
     && install -d -o mailswiftsync -g mailswiftsync -m 0700 /var/lib/mailswiftsync /run/user/10001 \
     && install -d -m 0755 /usr/local/lib/mailswiftsync
 
 COPY --from=imapsync-package /tmp/imapsync.deb /tmp/imapsync.deb
+# Keep the qualified Dovecot release fixed while applying available security
+# updates to inherited Debian packages and the Perl runtime.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y /tmp/imapsync.deb \
     && rm -f /tmp/imapsync.deb \
+    && apt-get upgrade --no-install-recommends -y \
+    && apt-mark unhold dovecot-core dovecot-imapd \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/mailswiftsync /usr/local/bin/mailswiftsync
