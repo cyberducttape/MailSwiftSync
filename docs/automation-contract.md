@@ -125,22 +125,35 @@ five operator questions as follows:
 | Which have unverified or inconsistent results? | `verification_outcomes`, `verification_method_outcomes`, mailbox states, and durable evidence/reverify outputs | Consumers must retain proof method and outcome separately; transfer completion is not verification |
 | Which require human intervention? | `aggregate_mailbox_state_counts.needs_review` and `attention_reason_counts`; detailed status provides bounded mailbox rows | Detail is bounded/truncated. Use the durable ledger and evidence workflow for case-level investigation |
 
-No Prometheus metric names are currently a product contract. In particular,
-the UI's transfer throughput, adaptive cooldown notes, child-process reader
-drain counters, SQLite write timing on failed event batches, and host CPU/RSS/
-disk measurements are not a durable fleet-wide metrics API. `fleet-status`
-aggregates local ledgers; it is not distributed worker discovery or a central
-control plane. The durable webhook outbox can deliver lifecycle/status events,
-but does not replace polling for current gauges or provide centralized
-operator identity.
+`mailswiftsync metrics <state.db>` emits a one-shot Prometheus text snapshot
+from one local ledger. It is a bounded projection, not a network listener or a
+distributed exporter. The command refuses to emit output if its project or
+process projection is truncated. It emits no project, mailbox, run, customer,
+or endpoint labels. The metric contract is:
 
-Until a dedicated exporter or local metrics endpoint is qualified, poll
-`status --summary` (or `fleet-status` for explicitly isolated local ledgers),
-check `format` and `format_version`, and calculate rates from successive
-snapshots only for monotonically cumulative counters. Do not use customer
-names, mailbox addresses, run IDs, or endpoints as Prometheus labels. A future
-exporter should use bounded-cardinality labels and distinguish gauges,
-counters, process-local observations, and durable ledger facts explicitly.
+| Metric | Type | Meaning and limits |
+|---|---|---|
+| `mailswiftsync_mailbox_jobs{state}` | Gauge | Current durable job counts for `total`, `queued`, `ready`, `running`, `verified`, and `needs_review`. `running` includes claimed work; `verified` includes explicitly accepted exceptions. |
+| `mailswiftsync_registered_engine_processes` | Gauge | Durable process registrations, not a process-liveness check. Validate process ownership before acting on a PID. |
+| `mailswiftsync_transfer_attempts_total` | Counter | Cumulative transfer attempts recorded in the projected ledger. |
+| `mailswiftsync_transfer_retries_total` | Counter | Cumulative attempts after the first attempt of a pass. |
+| `mailswiftsync_transfer_attempt_outcomes_total{outcome}` | Counter | Attempt outcomes with a fixed allowlist; unknown values collapse to `other`. `failed:capacity` is a capacity failure category, not a provider-throttle event counter. |
+| `mailswiftsync_verification_mailboxes{method,outcome}` | Gauge | Current persisted mailbox evidence counts, not message counts. Labels use fixed allowlists; unknown values collapse to `other`. |
+
+These metrics do not include process-local transfer throughput, adaptive
+cooldown state, reader-drain timeout totals, SQLite transaction latency, or
+host CPU/RSS/disk. Do not infer recent progress or liveness from these ledger
+counters. `fleet-status` aggregates local ledgers; it is not distributed worker
+discovery or a central control plane. The durable webhook outbox can deliver
+lifecycle/status events, but does not replace polling for current gauges or
+provide centralized operator identity.
+
+For local monitoring, invoke the command through a restricted Prometheus
+textfile-collector/task integration rather than exposing a new network
+listener. For JSON automation, continue polling `status --summary` (or
+`fleet-status` for explicitly isolated local ledgers), check `format` and
+`format_version`, and calculate rates from successive snapshots only for
+monotonically cumulative counters.
 
 ### Compatibility policy
 

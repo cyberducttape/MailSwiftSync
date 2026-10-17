@@ -443,6 +443,19 @@ fn unknown_command_exits_with_usage_error() {
 }
 
 #[test]
+fn metrics_requires_exactly_one_ledger_path() {
+    for arguments in [&["metrics"][..], &["metrics", "state.db", "extra"][..]] {
+        let output = run(arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("Usage: mailswiftsync metrics <state.db>"),
+            "{arguments:?}"
+        );
+    }
+}
+
+#[test]
 fn oauth_authorize_refuses_incomplete_requests_before_any_network_use() {
     for (arguments, expected) in [
         (&["oauth-authorize"][..], "requires a provider"),

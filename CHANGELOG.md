@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add a bounded, privacy-preserving one-shot Prometheus text snapshot for
+  durable local-ledger job, transfer-attempt, and verification counts. It
+  refuses truncated projections and labels no customer-controlled identities;
+  document that registered processes are not a liveness check and that
+  process-local throughput, host resources, provider throttles, and SQLite
+  latency are not exported.
+- Add the queued mailbox-job count to status summary and fleet-status JSON as
+  an additive field in the existing versioned contract.
 - Map the five SRE operations questions to the versioned durable status fields,
   and explicitly distinguish current gauges from process-local telemetry,
   cumulative counters, and metrics not yet exported. Document the absence of a

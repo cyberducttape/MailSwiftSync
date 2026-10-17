@@ -254,15 +254,16 @@ impl StateStore {
 
     pub fn mailbox_state_counts(&self, project_id: &str) -> rusqlite::Result<MailboxStateCounts> {
         self.connection.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            "SELECT COUNT(*), SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
             [project_id],
             |row| {
                 Ok(MailboxStateCounts {
                     total: sqlite_usize(row.get(0)?)?,
-                    ready: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
-                    running: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
-                    verified: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
-                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    queued: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
+                    ready: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
+                    running: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
+                    verified: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(5)?.unwrap_or(0))?,
                 })
             },
         )
@@ -270,15 +271,16 @@ impl StateStore {
 
     pub fn all_mailbox_state_counts(&self) -> rusqlite::Result<MailboxStateCounts> {
         self.connection.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs",
+            "SELECT COUNT(*), SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs",
             [],
             |row| {
                 Ok(MailboxStateCounts {
                     total: sqlite_usize(row.get(0)?)?,
-                    ready: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
-                    running: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
-                    verified: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
-                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    queued: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
+                    ready: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
+                    running: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
+                    verified: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(5)?.unwrap_or(0))?,
                 })
             },
         )
