@@ -893,6 +893,51 @@ fn durable_partial_folder_resumes_by_sequence_with_sparse_uids() {
 }
 
 #[test]
+fn durable_partial_folder_with_inconsistent_cursor_is_refetched_from_start() {
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("verification.sqlite");
+    let uids = vec![3, 80, 500, 2_000, 50_000];
+    let mut original_server = FolderServer::new(&uids, 9, 50_001);
+    original_server.condstore = true;
+    original_server.modseq = 22;
+    let snapshot = original_server.snapshot();
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_mailbox_scan(SIDE, "INBOX", snapshot).unwrap();
+    // Simulate a stage whose committed cursor does not describe its page.
+    // Normal writes commit these atomically; resume must still fail closed if
+    // the persisted state is inconsistent.
+    stage
+        .insert_page_with_fingerprints(
+            SIDE,
+            &staged_page(9, [3, 80, 500]),
+            &HashMap::new(),
+            Some(("INBOX", snapshot, 499)),
+        )
+        .unwrap();
+    drop(stage);
+
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_verification_attempt().unwrap();
+    let mut resumed = FolderServer::new(&uids, 9, 50_001);
+    resumed.condstore = true;
+    resumed.modseq = 22;
+    assert_eq!(
+        scan_with(&mut stage, &mut resumed, false, true),
+        uids.len() as u64
+    );
+    assert_eq!(resumed.fetched, uids);
+    assert!(
+        resumed
+            .commands
+            .iter()
+            .any(|command| command.contains("FETCH 1:5 (UID)"))
+    );
+    assert_eq!(staged_uids(&stage), uids);
+    stage.finish().unwrap();
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn durable_partial_folder_with_modseq_drift_restarts_from_the_first_sequence() {
     let directory = crate::credentials::create_secret_directory().unwrap();
     let path = directory.join("verification.sqlite");
