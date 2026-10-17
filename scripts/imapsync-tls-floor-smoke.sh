@@ -60,7 +60,7 @@ start_server() {
     "-$protocol" -cipher 'DEFAULT:@SECLEVEL=0' \
     >/dev/null 2>&1 &
   server_pid=$!
-  sleep 0.1
+  sleep 0.25
   if ! kill -0 "$server_pid" 2>/dev/null; then
     echo "FAIL: OpenSSL could not start the $protocol fixture server" >&2
     return 1

@@ -473,6 +473,7 @@ fn packaged_tls_floor_smoke_qualifies_legacy_rejection_and_tls12_success() {
         "assert_legacy_rejected tls1 TLSv1",
         "assert_legacy_rejected tls1_1 TLSv1_1",
         "start_server tls1_2",
+        "SSLv23:!TLSv1:!TLSv1_1:!SSLv3:!SSLv2",
         "TLS 1.2+ floor connected to a TLS 1.2-only server",
     ] {
         assert!(
