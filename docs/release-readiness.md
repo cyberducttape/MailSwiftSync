@@ -397,6 +397,40 @@ reconciliation as successful.
 
 ## Required before calling it production-ready
 
+### Controller and SQLite workload qualification
+
+The controller is intentionally retained as a single-host design. Mailbox
+state edges are centralized in `valid_mailbox_transition`; terminal run/evidence
+operations use guarded, transactional updates; the batch scheduler parks
+cooling-down work outside worker slots and serves eligible source tenants
+round-robin. A worker that panics leaves unresolved jobs in operator-review
+state rather than manufacturing completion. These are code-level invariants,
+not proof against every simultaneous cancellation/completion or storage-fault
+interleaving; retain focused race and fault-injection tests when changing those
+paths.
+
+SQLite is configured for WAL and a 5-second busy timeout, and batched event
+write failures report elapsed write time and batch size. The product does not
+yet expose a sustained successful-write latency distribution, lock-wait
+histogram, WAL high-water mark/checkpoint duration, or bytes of durable state
+per migrated message. Before increasing local worker limits or advertising
+large queue capacity, benchmark these against representative progress-event,
+verification-stage, and evidence workloads. Include active backup, controller
+restart, and SQLITE_BUSY/SQLITE_FULL cases; do not infer capacity from the
+database's suitability for a lower-volume local controller.
+
+Batch verification currently runs inside the admitted mailbox worker attempt
+and retains that attempt's provider-rate admission through verification. There
+is no independently configured transfer/verification concurrency pool, and
+the adaptive limiter responds to capacity/error signals rather than optimizing
+for completed-and-verified messages per unit time. This intentionally bounds
+combined pressure but can make long verification scans occupy transfer
+capacity. A future split budget must be measured against provider throttling
+and must preserve same-destination exclusion. Qualification reports should
+measure engine transfer throughput and verification throughput, request
+volume, provider cooldown time, and end-to-end verified mailbox completion
+separately; do not claim adaptive useful-throughput optimization today.
+
 - **100k-row desktop scale gate:** the importer accepts up to 100,000 rows.
   Imported rows now retain only mailbox identity/credential deltas and share
   immutable batch defaults through an `Arc`; a full `Form` is hydrated only at

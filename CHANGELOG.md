@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Document controller state/ownership safeguards and the unqualified areas:
+  SQLite successful-write/WAL workload metrics, independent transfer and
+  verification budgets, and adaptive optimization for verified throughput.
 - Clarify supply-chain evidence boundaries: the final-image SPDX inventory is
   not an OS/Perl vulnerability scan, and the pinned imapsync checksum is not
   upstream publisher provenance. Document the version-update qualification
