@@ -94,6 +94,36 @@ fn verification_consistency(folders: &[core::TransferPassFolder]) -> serde_json:
     })
 }
 
+fn run_verification_consistency(
+    run: &core::ReportRunSnapshot,
+) -> (serde_json::Value, serde_json::Value) {
+    if !run.verification_folders.is_empty() {
+        return (
+            verification_consistency(&run.verification_folders),
+            serde_json::json!({"kind": "standalone_verification_run"}),
+        );
+    }
+    if let Some(pass) = run
+        .transfer_passes
+        .iter()
+        .rev()
+        .find(|pass| pass.verified_at.is_some() && !pass.folders.is_empty())
+    {
+        return (
+            verification_consistency(&pass.folders),
+            serde_json::json!({
+                "kind": "transfer_attempt",
+                "attempt": pass.attempt,
+                "verified_at": pass.verified_at,
+            }),
+        );
+    }
+    (
+        verification_consistency(&[]),
+        serde_json::json!({"kind": "not_recorded"}),
+    )
+}
+
 fn proof_tier(evidence: &core::MailboxEvidence) -> &'static str {
     match evidence.verification_method() {
         core::VerificationMethod::AggregateEngine | core::VerificationMethod::NativeDovecot => {
@@ -314,6 +344,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
         };
     let run_entry = |run: &core::ReportRunSnapshot| -> serde_json::Value {
         let value = &run.run;
+        let (consistency, observation_source) = run_verification_consistency(run);
         serde_json::json!({
             "run_id": value.id,
             "project_id": project.id.clone(),
@@ -329,7 +360,8 @@ pub(crate) fn export_from_store_with_options_and_identity(
             "dropped_presentation_lines": run.diagnostic_lines_dropped,
             "transfer_attempt_count": run.transfer_attempt_count,
             "unfinished_transfer_attempt_count": run.unfinished_transfer_attempt_count,
-            "verification_consistency": verification_consistency(&run.verification_folders),
+            "verification_consistency": consistency,
+            "verification_observation_source": observation_source,
         })
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
@@ -776,6 +808,103 @@ mod tests {
         ]);
         assert_eq!(partial["source_scan"], serde_json::Value::Null);
         assert_eq!(partial["source_change_status"], "unknown_incomplete_scan");
+    }
+
+    #[test]
+    fn customer_proof_uses_transfer_verification_cursors_for_live_run_consistency() {
+        let mut source = core::TransferPassFolder {
+            side: core::PassSide::Source,
+            folder_digest: "a".repeat(64),
+            uidvalidity: 7,
+            uidnext: 18,
+            exists: 17,
+            verified_through_uid: 17,
+            staged_messages: 17,
+            complete: true,
+            scan_started_at: Some("2026-10-17T01:00:00.000Z".into()),
+            scan_completed_at: Some("2026-10-17T01:01:00.000Z".into()),
+            source_revalidated_at: Some("2026-10-17T01:04:00.000Z".into()),
+            destination_revalidated_at: None,
+        };
+        let mut destination = source.clone();
+        destination.side = core::PassSide::Destination;
+        destination.scan_started_at = Some("2026-10-17T01:02:00.000Z".into());
+        destination.scan_completed_at = Some("2026-10-17T01:03:00.000Z".into());
+        destination.source_revalidated_at = None;
+        destination.destination_revalidated_at = Some("2026-10-17T01:03:30.000Z".into());
+
+        let run = core::ReportRunSnapshot {
+            run: core::RunSummary {
+                id: "live-run".into(),
+                job_id: Some("job".into()),
+                parent_run_id: None,
+                engine: "imapsync".into(),
+                phase_at_start: "final_delta".into(),
+                plan_snapshot: String::new(),
+                status: "completed".into(),
+                started_at: "2026-10-17T00:59:00Z".into(),
+                finished_at: Some("2026-10-17T01:05:00Z".into()),
+                detail: String::new(),
+            },
+            engine_version: Some("2.314".into()),
+            diagnostic_lines_dropped: Some(0),
+            transfer_attempt_count: Some(1),
+            unfinished_transfer_attempt_count: 0,
+            transfer_passes: vec![core::TransferPassRecord {
+                run_id: "live-run".into(),
+                attempt: 1,
+                pass_sequence: 1,
+                pass_kind: "imapsync_sync".into(),
+                engine: "imapsync".into(),
+                executable_identity: "sha256:binary".into(),
+                command_sha256: "command".into(),
+                command: Vec::new(),
+                folder_scope: "all_selectable_folders".into(),
+                source_range: "full_mailbox".into(),
+                started_at: "2026-10-17T00:59:30Z".into(),
+                finished_at: Some("2026-10-17T01:00:00Z".into()),
+                outcome: Some("completed".into()),
+                delta_required: Some(false),
+                engine_counters: None,
+                emitted_state_sha256: None,
+                verification_method: Some("metadata_reconciliation".into()),
+                verification_outcome: Some("exact_metadata_match".into()),
+                verified_at: Some("2026-10-17T01:04:00Z".into()),
+                folders: vec![source.clone(), destination],
+                progress: None,
+            }],
+            verification_folders: Vec::new(),
+        };
+
+        let (consistency, observation_source) = run_verification_consistency(&run);
+        assert_eq!(observation_source["kind"], "transfer_attempt");
+        assert_eq!(observation_source["attempt"], 1);
+        assert_eq!(
+            consistency["source_scan"]["started_at"],
+            "2026-10-17T01:00:00.000Z"
+        );
+        assert_eq!(
+            consistency["destination_scan"]["started_at"],
+            "2026-10-17T01:02:00.000Z"
+        );
+        assert_eq!(
+            consistency["source_change_status"],
+            "unchanged_at_revalidation"
+        );
+        assert_eq!(
+            consistency["destination_change_status"],
+            "unchanged_at_revalidation"
+        );
+
+        // A standalone verification run has more specific observations and
+        // must take precedence over transfer-attempt data if both exist.
+        source.scan_started_at = Some("2026-10-17T02:00:00.000Z".into());
+        let standalone = core::ReportRunSnapshot {
+            verification_folders: vec![source],
+            ..run
+        };
+        let (_, source) = run_verification_consistency(&standalone);
+        assert_eq!(source["kind"], "standalone_verification_run");
     }
 
     #[test]
@@ -1319,6 +1448,54 @@ mod tests {
             )
             .unwrap();
         store
+            .record_transfer_attempt_finished(
+                "diagnostic-run",
+                1,
+                "completed",
+                &crate::core::TransferPassCompletion::default(),
+            )
+            .unwrap();
+        let folder = |side, start: &str, end: &str, source_check, destination_check| {
+            crate::core::TransferPassFolder {
+                side,
+                folder_digest: "b".repeat(64),
+                uidvalidity: 1,
+                uidnext: 2,
+                exists: 1,
+                verified_through_uid: 1,
+                staged_messages: 1,
+                complete: true,
+                scan_started_at: Some(start.to_owned()),
+                scan_completed_at: Some(end.to_owned()),
+                source_revalidated_at: source_check,
+                destination_revalidated_at: destination_check,
+            }
+        };
+        store
+            .record_transfer_pass_verified(
+                "diagnostic-run",
+                1,
+                "metadata_reconciliation",
+                "exact_metadata_match",
+                &[
+                    folder(
+                        core::PassSide::Source,
+                        "2026-10-17T01:00:00.000Z",
+                        "2026-10-17T01:01:00.000Z",
+                        Some("2026-10-17T01:04:00.000Z".into()),
+                        None,
+                    ),
+                    folder(
+                        core::PassSide::Destination,
+                        "2026-10-17T01:02:00.000Z",
+                        "2026-10-17T01:03:00.000Z",
+                        None,
+                        Some("2026-10-17T01:03:30.000Z".into()),
+                    ),
+                ],
+            )
+            .unwrap();
+        store
             .finish_run("diagnostic-run", "completed", "ok")
             .unwrap();
 
@@ -1344,7 +1521,23 @@ mod tests {
         assert_eq!(proof["runs"][0]["diagnostic_stream_complete"], false);
         assert_eq!(proof["runs"][0]["dropped_presentation_lines"], 3284);
         assert_eq!(proof["runs"][0]["transfer_attempt_count"], 1);
-        assert_eq!(proof["runs"][0]["unfinished_transfer_attempt_count"], 1);
+        assert_eq!(proof["runs"][0]["unfinished_transfer_attempt_count"], 0);
+        assert_eq!(
+            proof["runs"][0]["verification_observation_source"]["kind"],
+            "transfer_attempt"
+        );
+        assert_eq!(
+            proof["runs"][0]["verification_consistency"]["source_scan"]["started_at"],
+            "2026-10-17T01:00:00.000Z"
+        );
+        assert_eq!(
+            proof["runs"][0]["verification_consistency"]["source_change_status"],
+            "unchanged_at_revalidation"
+        );
+        assert_eq!(
+            proof["runs"][0]["verification_consistency"]["destination_change_status"],
+            "unchanged_at_revalidation"
+        );
         assert!(!proof.to_string().contains("raw engine output"));
         let _ = std::fs::remove_dir_all(directory);
     }

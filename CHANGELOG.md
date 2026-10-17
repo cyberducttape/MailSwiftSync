@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Attach the actual completed transfer-attempt verification folder cursors to
+  customer-proof run consistency, including scan intervals and successful
+  source/destination revalidation times; distinguish these from standalone
+  verification runs and report `not_recorded` when no verified observations
+  exist.
 - Update the transitive `inout` dependency to non-yanked 0.2.4; the prior
   lockfile version caused the configured strict dependency audit to fail.
 - Record the exact packaged imapsync and native Dovecot integration evidence,
