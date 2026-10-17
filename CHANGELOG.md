@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Map the five SRE operations questions to the versioned durable status fields,
+  and explicitly distinguish current gauges from process-local telemetry,
+  cumulative counters, and metrics not yet exported. Document the absence of a
+  Prometheus contract and prohibit sensitive high-cardinality labels.
 - Separate existing adversarial-security test coverage from outstanding
   release-specific penetration qualification, and state explicitly that the
   webhook/OAuth egress guard does not make generic IMAP endpoints safe for a

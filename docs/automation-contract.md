@@ -111,6 +111,37 @@ on absolute totals.
 storage schema migrates and is **not** a compatibility signal: dispatch on
 `format` and `format_version` instead.
 
+### SRE operational coverage and limits
+
+The versioned status JSON is the supported machine-readable polling surface;
+it is not a Prometheus exposition endpoint. Its current fields map to the
+five operator questions as follows:
+
+| Operator question | Durable status evidence | Limitation |
+|---|---|---|
+| Which migrations are active? | `aggregate_mailbox_state_counts.running` and bounded `active_processes` records (`run_id`, `job_id`, PID and executable identity); per-project summaries also include mailbox-state counts | `active_processes_truncated` must be checked. A durable `running` row and a process record are distinct facts; validate ownership before acting on a PID |
+| Which are making useful progress? | `operations.attempt_outcomes.unfinished` and durable transfer-attempt/checkpoint history indicate unfinished work | These do not prove recent progress. Rolling throughput and recent per-job updates are process-local UI telemetry, not exported durable metrics; absence of a recent event is not by itself a stall diagnosis |
+| Which are blocked or retrying? | `operations.retried_attempts`, `attempt_outcomes` (including `failed:capacity`), mailbox states, and `attention_reason_counts` | `retried_attempts` is cumulative, not a current retry gauge. The status contract does not expose a complete retry timer queue or live provider cooldown state |
+| Which have unverified or inconsistent results? | `verification_outcomes`, `verification_method_outcomes`, mailbox states, and durable evidence/reverify outputs | Consumers must retain proof method and outcome separately; transfer completion is not verification |
+| Which require human intervention? | `aggregate_mailbox_state_counts.needs_review` and `attention_reason_counts`; detailed status provides bounded mailbox rows | Detail is bounded/truncated. Use the durable ledger and evidence workflow for case-level investigation |
+
+No Prometheus metric names are currently a product contract. In particular,
+the UI's transfer throughput, adaptive cooldown notes, child-process reader
+drain counters, SQLite write timing on failed event batches, and host CPU/RSS/
+disk measurements are not a durable fleet-wide metrics API. `fleet-status`
+aggregates local ledgers; it is not distributed worker discovery or a central
+control plane. The durable webhook outbox can deliver lifecycle/status events,
+but does not replace polling for current gauges or provide centralized
+operator identity.
+
+Until a dedicated exporter or local metrics endpoint is qualified, poll
+`status --summary` (or `fleet-status` for explicitly isolated local ledgers),
+check `format` and `format_version`, and calculate rates from successive
+snapshots only for monotonically cumulative counters. Do not use customer
+names, mailbox addresses, run IDs, or endpoints as Prometheus labels. A future
+exporter should use bounded-cardinality labels and distinguish gauges,
+counters, process-local observations, and durable ledger facts explicitly.
+
 ### Compatibility policy
 
 - Callers must check `format` and reject an unknown `format_version`.
