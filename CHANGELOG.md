@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Separate existing adversarial-security test coverage from outstanding
+  release-specific penetration qualification, and state explicitly that the
+  webhook/OAuth egress guard does not make generic IMAP endpoints safe for a
+  remotely accessible service.
 - Document controller state/ownership safeguards and the unqualified areas:
   SQLite successful-write/WAL workload metrics, independent transfer and
   verification budgets, and adaptive optimization for verified throughput.
