@@ -83,7 +83,7 @@ that a provider preset is a qualified integration.
 | **Message-level mismatch detection** | yes | yes (TLS imapsync path) | unit+scenario | pending | Folder-aware verifier is called after successful imapsync transfers; failures remain operator-reviewable and are never downgraded to aggregate success |
 | **Named message evidence levels** | yes | partial | unit+integration | pending | Metadata reconciliation is the default; explicit encrypted-imapsync body-hash runs emit a distinct Level 3 — Bounded content fingerprints outcome after complete coverage |
 | **Checkpoint persistence** per message | no | no | none | no | Not implemented; Dovecot run-level checkpoints are now bound to a complete source/destination UIDVALIDITY digest, while evidence persists per run |
-| **Crash recovery** | partial | partial | unit | no | Run-level recovery works; verification cursors are recovery context only and interrupted scans are refetched before evidence is reused. Per-message transfer recovery is not implemented |
+| **Crash recovery** | partial | partial | unit | no | Run-level recovery works; only a fully completed durable metadata folder with an identical tracked UIDVALIDITY/UIDNEXT/EXISTS/HIGHESTMODSEQ snapshot can be reused after interruption. Partial scans and body proofs are refetched; per-message transfer recovery is not implemented |
 | **Exception acceptance workflow** | yes | yes | unit | no | UI accepts exceptions, stored durably |
 
 ---

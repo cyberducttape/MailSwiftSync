@@ -3,7 +3,8 @@
 //! server between runs, and drives the real fetch path against a scripted
 //! IMAP server. The invariant under test: after a scan the staged folder
 //! equals the server's current folder exactly, whatever happened between
-//! runs. Resumed folders are rescanned because FLAGS can change independently.
+//! runs. Only completed snapshots with an unchanged tracked MODSEQ may be
+//! reused; partial and untracked scans are refetched.
 use super::*;
 use crate::core::{
     ExtractedMessage, ExtractedMessages, FolderSnapshot, MailboxMessageKey, MessageMetadataStage,
@@ -697,6 +698,123 @@ fn completed_folder_restart_rescans_an_unchanged_stage_for_flags() {
     assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
     assert_eq!(server.fetched, uids);
     assert_eq!(staged_uids(&stage), uids);
+}
+
+#[test]
+fn durable_completed_folder_reuses_only_an_identical_tracked_snapshot() {
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("verification.sqlite");
+    let uids = vec![1, 2, 3];
+    let mut first = FolderServer::new(&uids, 9, 4);
+    first.condstore = true;
+    first.modseq = 12;
+    first.flags.insert(1, "\\Seen $ClientTag".into());
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    assert_eq!(scan_with(&mut stage, &mut first, false, true), 3);
+    assert_eq!(first.fetched, uids);
+    drop(stage);
+
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_verification_attempt().unwrap();
+    let mut resumed = FolderServer::new(&uids, 9, 4);
+    resumed.condstore = true;
+    resumed.modseq = 12;
+    resumed.flags.insert(1, "\\Seen $ClientTag".into());
+    assert_eq!(scan_with(&mut stage, &mut resumed, false, true), 3);
+    assert!(resumed.fetched.is_empty());
+    assert_eq!(resumed.fetch_commands, 0);
+    assert_eq!(resumed.uid_enumeration_commands, 0);
+    assert_eq!(staged_uids(&stage), uids);
+    let message = stage
+        .all_messages(SIDE)
+        .unwrap()
+        .into_iter()
+        .find(|(key, _)| key.uid == "1")
+        .unwrap()
+        .1;
+    assert_eq!(message.flags.as_deref(), Some("$clienttag \\Seen"));
+    stage.finish().unwrap();
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn durable_completed_folder_with_modseq_drift_is_refetched() {
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("verification.sqlite");
+    let uids = vec![1, 2, 3];
+    let mut first = FolderServer::new(&uids, 9, 4);
+    first.condstore = true;
+    first.modseq = 12;
+    first.flags.insert(1, String::new());
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    assert_eq!(scan_with(&mut stage, &mut first, false, true), 3);
+    drop(stage);
+
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_verification_attempt().unwrap();
+    let mut resumed = FolderServer::new(&uids, 9, 4);
+    resumed.condstore = true;
+    resumed.modseq = 13;
+    resumed.flags.insert(1, "\\Seen".into());
+    assert_eq!(scan_with(&mut stage, &mut resumed, false, true), 3);
+    assert_eq!(resumed.fetched, uids);
+    let message = stage
+        .all_messages(SIDE)
+        .unwrap()
+        .into_iter()
+        .find(|(key, _)| key.uid == "1")
+        .unwrap()
+        .1;
+    assert_eq!(message.flags.as_deref(), Some("\\Seen"));
+    stage.finish().unwrap();
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn durable_completed_folder_without_modseq_is_refetched() {
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("verification.sqlite");
+    let uids = vec![1, 2, 3];
+    let mut first = FolderServer::new(&uids, 9, 4);
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    assert_eq!(scan(&mut stage, &mut first), 3);
+    drop(stage);
+
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_verification_attempt().unwrap();
+    let mut resumed = FolderServer::new(&uids, 9, 4);
+    assert_eq!(scan(&mut stage, &mut resumed), 3);
+    assert_eq!(resumed.fetched, uids);
+    assert_eq!(resumed.uid_enumeration_commands, 1);
+    stage.finish().unwrap();
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn durable_body_hashes_are_never_reused_after_restart() {
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("verification.sqlite");
+    let uids = vec![1, 2, 3];
+    let mut first = FolderServer::new(&uids, 9, 4);
+    first.condstore = true;
+    first.modseq = 12;
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    assert_eq!(scan_with(&mut stage, &mut first, true, true), 3);
+    let original_fingerprints = stage.content_fingerprints(SIDE);
+    assert_eq!(original_fingerprints.len(), uids.len());
+    drop(stage);
+
+    let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+    stage.begin_verification_attempt().unwrap();
+    assert!(stage.content_fingerprints(SIDE).is_empty());
+    let mut resumed = FolderServer::new(&uids, 9, 4);
+    resumed.condstore = true;
+    resumed.modseq = 12;
+    assert_eq!(scan_with(&mut stage, &mut resumed, true, true), 3);
+    assert_eq!(resumed.fetched, uids);
+    assert_eq!(stage.content_fingerprints(SIDE), original_fingerprints);
+    stage.finish().unwrap();
+    let _ = std::fs::remove_dir_all(directory);
 }
 
 #[test]

@@ -321,7 +321,7 @@ evidence.
 | Compared messages | Singleton pairs are compared when exactly one source and one destination message share the Message-ID, expected destination folder, INTERNALDATE, and RFC822.SIZE. Equal-sized duplicate groups with FLAGS on every message are compared as multisets of canonical flag sets; mismatched group sizes, probable pairings, unmatched messages, and messages whose FETCH carried no FLAGS are not compared. Duplicate flag frequencies are aggregated in SQLite and consumed as ordered rows, avoiding per-message flag-string collections in Rust; SQLite temporary aggregation cost remains workload-dependent. The compared count against all source messages is reported as flag coverage. |
 | Documented exception | The destination lost flags, gained none, and every lost flag is one the destination folder's SELECT `PERMANENTFLAGS` cannot store (a keyword is storable when `\*` is listed; a system flag only when listed by name). This is counted as excepted, not as a failure. Without `PERMANENTFLAGS` every flag is assumed storable, as RFC 9051 requires. |
 | Difference | Any other difference, including a flag the destination gained. The mailbox gets the `flags_changed` outcome (unless a message-level outcome is more severe) and cannot reach `verified`; an operator can accept it like any other verification difference. |
-| Point in time | Each side is inventoried independently, not as one cross-server instant. FLAGS contribute to fidelity evidence only when the folder has a tracked CONDSTORE `HIGHESTMODSEQ`, which is checked at scan completion. Without that snapshot, FLAGS are not fetched into evidence and flag coverage is incomplete; a second read alone cannot prove stability. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. A resumed durable scan never reuses an earlier folder page. |
+| Point in time | Each side is inventoried independently, not as one cross-server instant. FLAGS contribute to fidelity evidence only when the folder has a tracked CONDSTORE `HIGHESTMODSEQ`, which is checked at scan completion. Without that snapshot, FLAGS are not fetched into evidence and flag coverage is incomplete; a second read alone cannot prove stability. A user reading or flagging mail between the source and destination scans, or after cutover, can still be reported as a difference. On retry, a complete durable metadata folder may be reused only after a fresh SELECT exactly matches its UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ; the folder is then reselected again during the retry. Partial pages, untracked snapshots, and every body-hash page are refetched. |
 
 ## Snapshot and cutover semantics
 
@@ -626,21 +626,23 @@ project report exposes it per run as `verification_limit` (`code`,
 | --- | --- | --- | --- |
 | `folder_inventory` | LIST inventory 32 MiB or 100,000 folders | No | Exclude folders or split the account |
 | `response_size` | One IMAP response 64 MiB | No | Lower the body-hash per-message bound or use metadata verification |
-| `fetched_state` | Transient fetched state 256 MiB | Retryable; full folder rescan | Rerun; use metadata verification if it recurs |
+| `fetched_state` | Transient fetched state 256 MiB | Retryable; unfinished or changed folders rescan | Rerun; unchanged complete metadata folders may be reused only with tracked snapshot equality |
 | `message_count` | 1,000,000 messages per endpoint | No | Split into smaller folder scopes or accept the difference explicitly |
 | `body_hash_message_count` | 100,000 messages per endpoint in ephemeral body-hash mode | No | Use a durable verification run or disable body-hash verification to obtain metadata evidence |
 | `body_hash_message_size` | Per-message body-hash bound | No | Raise the bound (up to 64 MiB) or disable body hashing |
 | `body_hash_total_size` | Total body-hash bound | No | Raise the bound (up to 8 GiB) or disable body hashing |
 | `reconciliation_state` | Reconciliation state, or 64 MiB in-memory mismatch detail (ephemeral runs) | No | Inspect the transfer and run another delta pass |
-| `deadline` | Verification exceeded the migration timeout | Retryable; full folder rescan | Rerun for a fresh scan, or raise the migration timeout |
+| `deadline` | Verification exceeded the migration timeout | Retryable; unfinished or changed folders rescan | Rerun for another attempt, or raise the migration timeout |
 
-"Retryable" means the same plan may make progress on another attempt; it does
-not mean staged message pages are reused. Every new verification attempt
-atomically clears prior message rows and body fingerprints for a folder before
-fetching it again, even when UIDVALIDITY, UIDNEXT, and EXISTS are unchanged;
-folders absent from the fresh LIST are pruned before scanning begins.
-The stored cursor is diagnostic recovery/progress metadata only. A folder that
-stops at a limit tags the whole account result, even
+"Retryable" means the same plan may make progress on another attempt. On a
+durable metadata retry, a fully completed folder is reusable only when a fresh
+SELECT matches its complete snapshot, including a tracked HIGHESTMODSEQ, and
+the staged row count exactly matches EXISTS. Partial folders, changed or
+untracked snapshots, and all body fingerprints are invalidated and fetched
+again. This guards mutable FLAGS and avoids treating the mere presence of saved
+pages as proof. Folders absent from the fresh LIST are pruned before scanning
+begins; the source and destination are still not one atomic snapshot.
+A folder that stops at a limit tags the whole account result, even
 when its own detail is truncated from the folder-failure summary. A single
 IMAP command that stalls for 15 seconds is treated as a provider or transport
 failure, not a limit, because retrying can succeed.

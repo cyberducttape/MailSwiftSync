@@ -324,6 +324,15 @@ trait MessageSink {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Reuse a completed folder from a durable stage only when its original
+    /// snapshot can be proven unchanged. Ephemeral sinks always rescan.
+    fn reuse_completed_mailbox(
+        &mut self,
+        _mailbox: &str,
+        _snapshot: crate::core::FolderSnapshot,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
     fn checkpoint_page(
         &mut self,
         _mailbox: &str,
@@ -448,6 +457,30 @@ impl MessageSink for StageMessageSink<'_> {
         self.reset_mailbox_count(mailbox);
         self.active_mailbox = Some(mailbox.to_owned());
         Ok(())
+    }
+
+    fn reuse_completed_mailbox(
+        &mut self,
+        mailbox: &str,
+        snapshot: crate::core::FolderSnapshot,
+    ) -> Result<bool, String> {
+        let Some(count) = self
+            .stage
+            .reusable_completed_mailbox(self.side, mailbox, snapshot)?
+        else {
+            return Ok(false);
+        };
+        let count = usize::try_from(count)
+            .map_err(|_| "reused verification folder count exceeds this platform".to_owned())?;
+        if message_fetch_limit_exceeded(self.count, count) {
+            return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
+                "account would exceed the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit while reusing a completed folder"
+            )));
+        }
+        self.reset_mailbox_count(mailbox);
+        self.active_mailbox = Some(mailbox.to_owned());
+        self.add_current_attempt_messages(count)?;
+        Ok(true)
     }
 
     fn checkpoint_page(
@@ -1075,176 +1108,187 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             ModseqSnapshot::Unsupported => None,
         }),
     };
-    sink.begin_mailbox_scan(mailbox, snapshot)?;
+    // A durable, fully completed metadata scan can survive a restart only
+    // when the server provides a tracked MODSEQ and the complete SELECT
+    // snapshot still matches. Body hashes and partial folders always refetch.
+    let reused_completed_scan =
+        body_hash.is_none() && sink.reuse_completed_mailbox(mailbox, snapshot)?;
+    if !reused_completed_scan {
+        sink.begin_mailbox_scan(mailbox, snapshot)?;
+    }
     sink.record_permanent_flags(mailbox, parse_permanent_flags(&response).as_deref())?;
-    let enumerated_uid_count = enumerate_uid_pages(
-        stream,
-        host,
-        mailbox,
-        start_exists,
-        &mut response,
-        &mut buffer,
-        budget,
-        if body_hash.is_some() {
-            FetchPagePlanner::body()
-        } else {
-            FetchPagePlanner::metadata()
-        },
-        |stream, buffer, uid_page, uid_set| {
-            budget.check()?;
-            if message_fetch_limit_exceeded(sink.len(), uid_page.len()) {
-                return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
+    let enumerated_uid_count = if reused_completed_scan {
+        start_exists
+    } else {
+        enumerate_uid_pages(
+            stream,
+            host,
+            mailbox,
+            start_exists,
+            &mut response,
+            &mut buffer,
+            budget,
+            if body_hash.is_some() {
+                FetchPagePlanner::body()
+            } else {
+                FetchPagePlanner::metadata()
+            },
+            |stream, buffer, uid_page, uid_set| {
+                budget.check()?;
+                if message_fetch_limit_exceeded(sink.len(), uid_page.len()) {
+                    return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
                     "{host}: account would exceed the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
                 )));
-            }
-            if body_hash.is_some()
-                && !sink.has_durable_stage()
-                && body_hash_message_limit_exceeded(sink.len(), uid_page.len())
-            {
-                return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
+                }
+                if body_hash.is_some()
+                    && !sink.has_durable_stage()
+                    && body_hash_message_limit_exceeded(sink.len(), uid_page.len())
+                {
+                    return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
                     "{host}: ephemeral body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use a durable SQLite-backed verification run or metadata-only verification"
                 )));
-            }
-            let tag = format!("v{:03}", page_number + 3);
-            page_number = page_number.saturating_add(1);
-            let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
-            // A flag observation is suitable for fidelity evidence only when
-            // the selected mailbox supplies a tracked MODSEQ that can detect
-            // concurrent flag changes through the end-of-scan snapshot.
-            // Re-reading FLAGS without MODSEQ only narrows the race window; it
-            // cannot establish that the observation remained stable.
-            let flags_field = if matches!(start_modseq, Some(ModseqSnapshot::Tracked(_))) {
-                " FLAGS"
-            } else {
-                ""
-            };
-            let command = format!(
-                // RFC 3501 exposes system flags and custom keyword atoms
-                // through FLAGS; KEYWORDS is not a portable FETCH data item.
-                "{tag} UID FETCH {uid_set} (UID{flags_field} RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO CC SUBJECT DATE CONTENT-TYPE)]{body_field})\r\n"
-            );
-            write_imap_command(
-                stream,
-                command.as_bytes(),
-                Some(budget),
-                &format!("{host}: could not fetch mailbox metadata"),
-            )?;
-            let raw_response = read_imap_tagged_bytes_with_budget(
-                stream,
-                &tag,
-                buffer,
-                MAX_MESSAGE_FETCH_RESPONSE_BYTES,
-                budget,
-            )?;
-            let response_bytes = raw_response.len();
-            // Check the raw bytes: a lossy UTF-8 copy would shift literal
-            // lengths for 8-bit message bodies and break literal framing.
-            if !imap_command_succeeded(&raw_response, &tag) {
-                return Err(imap_command_failure(
-                    &raw_response,
+                }
+                let tag = format!("v{:03}", page_number + 3);
+                page_number = page_number.saturating_add(1);
+                let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
+                // A flag observation is suitable for fidelity evidence only when
+                // the selected mailbox supplies a tracked MODSEQ that can detect
+                // concurrent flag changes through the end-of-scan snapshot.
+                // Re-reading FLAGS without MODSEQ only narrows the race window; it
+                // cannot establish that the observation remained stable.
+                let flags_field = if matches!(start_modseq, Some(ModseqSnapshot::Tracked(_))) {
+                    " FLAGS"
+                } else {
+                    ""
+                };
+                let command = format!(
+                    // RFC 3501 exposes system flags and custom keyword atoms
+                    // through FLAGS; KEYWORDS is not a portable FETCH data item.
+                    "{tag} UID FETCH {uid_set} (UID{flags_field} RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO CC SUBJECT DATE CONTENT-TYPE)]{body_field})\r\n"
+                );
+                write_imap_command(
+                    stream,
+                    command.as_bytes(),
+                    Some(budget),
+                    &format!("{host}: could not fetch mailbox metadata"),
+                )?;
+                let raw_response = read_imap_tagged_bytes_with_budget(
+                    stream,
                     &tag,
-                    "FETCH mailbox metadata",
-                    host,
-                ));
-            }
-            let mut page_messages = parse_message_fetch_metadata_response_bytes_with_mailbox(
-                &raw_response,
-                std::sync::Arc::clone(&mailbox_context),
-                Some(start_uidvalidity),
-            )?;
-            validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
-            if !matches!(start_modseq, Some(ModseqSnapshot::Tracked(_))) {
-                // Servers may send unsolicited FETCH updates. Never let an
-                // untracked FLAGS item leak into the evidence merely because
-                // it appeared alongside a requested metadata response.
-                page_messages
-                    .values_mut()
-                    .for_each(|message| message.flags = None);
-            }
-            let body_page = body_hash
-                .map(|options| {
-                    parse_message_fetch_body_hashes_response_bytes(
+                    buffer,
+                    MAX_MESSAGE_FETCH_RESPONSE_BYTES,
+                    budget,
+                )?;
+                let response_bytes = raw_response.len();
+                // Check the raw bytes: a lossy UTF-8 copy would shift literal
+                // lengths for 8-bit message bodies and break literal framing.
+                if !imap_command_succeeded(&raw_response, &tag) {
+                    return Err(imap_command_failure(
                         &raw_response,
-                        mailbox,
-                        Some(start_uidvalidity),
-                        options.max_body_bytes,
-                    )
-                })
-                .transpose()?;
-            if let (Some(options), Some(body_page)) = (body_hash, body_page.as_ref()) {
-                options.budget.reserve(body_page.total_bytes)?;
-                if body_page.fingerprints.len() != page_messages.len()
-                    || body_page.fingerprints.keys().collect::<HashSet<_>>()
-                        != page_messages.keys().collect::<HashSet<_>>()
-                {
-                    return Err(format!(
-                        "{host}: folder {mailbox}: body FETCH coverage mismatch (metadata {}, body {})",
-                        page_messages.len(),
-                        body_page.fingerprints.len()
+                        &tag,
+                        "FETCH mailbox metadata",
+                        host,
                     ));
                 }
-            }
-            for (key, message) in &page_messages {
-                let fingerprint = body_page
-                    .as_ref()
-                    .and_then(|page| page.fingerprints.get(key));
-                state_reservation.reserve(estimated_message_record_bytes(
-                    key,
-                    message,
-                    fingerprint,
-                ))?;
-            }
-            if let Some(last_uid) = uid_page.last().copied() {
-                if let Some(body_page) = body_page.as_ref() {
-                    sink.insert_page_and_checkpoint(
-                        mailbox,
-                        snapshot,
-                        last_uid,
-                        &page_messages,
-                        &body_page.fingerprints,
-                    )?;
-                } else {
-                    sink.insert_page_and_checkpoint(
-                        mailbox,
-                        snapshot,
-                        last_uid,
-                        &page_messages,
-                        &HashMap::new(),
-                    )?;
+                let mut page_messages = parse_message_fetch_metadata_response_bytes_with_mailbox(
+                    &raw_response,
+                    std::sync::Arc::clone(&mailbox_context),
+                    Some(start_uidvalidity),
+                )?;
+                validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
+                if !matches!(start_modseq, Some(ModseqSnapshot::Tracked(_))) {
+                    // Servers may send unsolicited FETCH updates. Never let an
+                    // untracked FLAGS item leak into the evidence merely because
+                    // it appeared alongside a requested metadata response.
+                    page_messages
+                        .values_mut()
+                        .for_each(|message| message.flags = None);
                 }
-            } else if let Some(body_page) = body_page.as_ref() {
-                sink.insert_batch_with_fingerprints(&page_messages, &body_page.fingerprints)?;
-            } else {
-                sink.insert_batch(&page_messages)?;
-            }
-            // The live sink stages the page into SQLite. Do not retain the
-            // transient Rust estimate after durable staging succeeds.
-            state_reservation.release(
-                page_messages
-                    .iter()
-                    .map(|(key, message)| {
-                        estimated_message_record_bytes(
-                            key,
-                            message,
-                            body_page
-                                .as_ref()
-                                .and_then(|page| page.fingerprints.get(key)),
+                let body_page = body_hash
+                    .map(|options| {
+                        parse_message_fetch_body_hashes_response_bytes(
+                            &raw_response,
+                            mailbox,
+                            Some(start_uidvalidity),
+                            options.max_body_bytes,
                         )
                     })
-                    .sum(),
-            );
-            Ok(response_bytes)
-        },
-    )?;
+                    .transpose()?;
+                if let (Some(options), Some(body_page)) = (body_hash, body_page.as_ref()) {
+                    options.budget.reserve(body_page.total_bytes)?;
+                    if body_page.fingerprints.len() != page_messages.len()
+                        || body_page.fingerprints.keys().collect::<HashSet<_>>()
+                            != page_messages.keys().collect::<HashSet<_>>()
+                    {
+                        return Err(format!(
+                            "{host}: folder {mailbox}: body FETCH coverage mismatch (metadata {}, body {})",
+                            page_messages.len(),
+                            body_page.fingerprints.len()
+                        ));
+                    }
+                }
+                for (key, message) in &page_messages {
+                    let fingerprint = body_page
+                        .as_ref()
+                        .and_then(|page| page.fingerprints.get(key));
+                    state_reservation.reserve(estimated_message_record_bytes(
+                        key,
+                        message,
+                        fingerprint,
+                    ))?;
+                }
+                if let Some(last_uid) = uid_page.last().copied() {
+                    if let Some(body_page) = body_page.as_ref() {
+                        sink.insert_page_and_checkpoint(
+                            mailbox,
+                            snapshot,
+                            last_uid,
+                            &page_messages,
+                            &body_page.fingerprints,
+                        )?;
+                    } else {
+                        sink.insert_page_and_checkpoint(
+                            mailbox,
+                            snapshot,
+                            last_uid,
+                            &page_messages,
+                            &HashMap::new(),
+                        )?;
+                    }
+                } else if let Some(body_page) = body_page.as_ref() {
+                    sink.insert_batch_with_fingerprints(&page_messages, &body_page.fingerprints)?;
+                } else {
+                    sink.insert_batch(&page_messages)?;
+                }
+                // The live sink stages the page into SQLite. Do not retain the
+                // transient Rust estimate after durable staging succeeds.
+                state_reservation.release(
+                    page_messages
+                        .iter()
+                        .map(|(key, message)| {
+                            estimated_message_record_bytes(
+                                key,
+                                message,
+                                body_page
+                                    .as_ref()
+                                    .and_then(|page| page.fingerprints.get(key)),
+                            )
+                        })
+                        .sum(),
+                );
+                Ok(response_bytes)
+            },
+        )?
+    };
     if enumerated_uid_count != start_exists {
         return Err(format!(
             "{host}: folder {mailbox}: UID enumeration coverage mismatch (EXISTS {start_exists}, validated UIDs {enumerated_uid_count})",
         )
         .into());
     }
-    // The stage was invalidated when this scan began. Require complete
-    // coverage of the current SELECT snapshot; no rows from an interrupted
-    // scan can stand in for newly fetched messages.
+    // Require complete coverage of the selected snapshot. Previously staged
+    // rows count only when the durable sink proved a completed, identical,
+    // MODSEQ-tracked snapshot; all other paths invalidated and refetched them.
     let staged = sink.mailbox_len(mailbox, start_uidvalidity)?;
     if staged != start_exists {
         return Err(MailboxFetchError::Changed(format!(
@@ -1252,10 +1296,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         )));
     }
 
-    // Re-SELECT after the bounded scan. If the folder changed while it was
-    // being read, discard the scan so a moving mailbox cannot be reported as
-    // missing, extra, or modified mail. The account-level caller retries this
-    // folder once before marking verification incomplete.
+    // Re-SELECT after a fresh scan or reused snapshot. Any intervening change
+    // invalidates the proof; the account-level caller retries this folder
+    // once before marking verification incomplete.
     let end_tag = format!("v{:03}", page_number + 3);
     let end_select = format!("{end_tag} SELECT {quoted_mailbox}{select_parameter}\r\n");
     write_imap_command(
@@ -1299,7 +1342,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         )));
     }
     let last_uid = uidnext.saturating_sub(1);
-    sink.complete_mailbox(mailbox, snapshot, last_uid)?;
+    if !reused_completed_scan {
+        sink.complete_mailbox(mailbox, snapshot, last_uid)?;
+    }
     state_reservation.commit();
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.

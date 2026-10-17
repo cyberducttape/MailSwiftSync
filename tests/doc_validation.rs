@@ -366,13 +366,16 @@ fn capability_manifest_does_not_overstate_verification_resume() {
 
     assert!(
         manifest.contains(
-            "verification cursors are recovery context only and interrupted scans are refetched before evidence is reused"
+            "only a fully completed durable metadata folder with an identical tracked UIDVALIDITY/UIDNEXT/EXISTS/HIGHESTMODSEQ snapshot can be reused after interruption"
         ) && !manifest.contains("verification staging resumes from snapshot-bound cursors"),
-        "capability claims must not imply that staged verification pages are reused after interruption"
+        "capability claims must limit reuse to complete metadata folders with an identical tracked snapshot"
     );
     assert!(
-        architecture.contains("Cursors retained after an interruption are recovery context only")
-            && architecture.contains("they never authorize reuse of fetched pages"),
+        architecture.contains(
+            "A fully completed metadata folder may be reused only when its fresh SELECT exactly matches the stored UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ"
+        ) && architecture.contains(
+            "A partial folder, an untracked snapshot, any snapshot drift, or a body-hash page is invalidated and refetched"
+        ),
         "the capability claim must remain aligned with the enforced architecture contract"
     );
 }
