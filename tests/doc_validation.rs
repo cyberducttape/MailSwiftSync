@@ -342,7 +342,8 @@ fn crash_recovery_docs_match_the_restored_ledger_integration_drill() {
 #[test]
 fn crash_recovery_docs_record_current_head_local_fault_drills_with_limits() {
     let docs = fs::read_to_string("docs/crash-recovery-validation.md")
-        .expect("crash-recovery validation evidence should exist");
+        .expect("crash-recovery validation evidence should exist")
+        .replace("\r\n", "\n");
     for evidence in [
         "Current-head local process and ledger fault drills",
         "5a7129642d42f7b21b022d6601a81634a758cc1a",
