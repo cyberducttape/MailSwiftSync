@@ -393,6 +393,33 @@ mod tests {
     }
 
     #[test]
+    fn migration_plan_rejects_same_source_and_destination_mailbox_across_ports() {
+        let mut form = Form::default();
+        form.profile.source_host = "IMAP.Example.test.:993".into();
+        form.profile.source_user = "User@example.test".into();
+        form.profile.destination_host = "imap.example.test:143".into();
+        form.profile.destination_user = "user@example.test".into();
+
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("same IMAP mailbox"), "{error}");
+        assert!(error.contains("ports are ignored"), "{error}");
+    }
+
+    #[test]
+    fn migration_plan_allows_distinct_mailboxes_or_distinct_hosts() {
+        let mut form = Form::default();
+        form.profile.source_host = "imap.example.test:993".into();
+        form.profile.source_user = "source@example.test".into();
+        form.profile.destination_host = "imap.example.test:143".into();
+        form.profile.destination_user = "destination@example.test".into();
+        assert!(form.validate_internal(false).is_ok());
+
+        form.profile.destination_host = "other.example.test:143".into();
+        form.profile.destination_user = "source@example.test".into();
+        assert!(form.validate_internal(false).is_ok());
+    }
+
+    #[test]
     fn microsoft_365_imap_rejects_password_authentication() {
         let mut form = Form::default();
         form.profile.source_host = "outlook.office365.com".into();

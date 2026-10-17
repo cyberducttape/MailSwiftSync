@@ -187,6 +187,21 @@ impl Form {
                 return Err(format!("{label} cannot contain control characters."));
             }
         }
+        let source_store = endpoint::canonical_mailbox_store_identity(
+            &self.profile.source_user,
+            &self.profile.source_host,
+            default_imap_port(&self.profile.source_tls),
+        )?;
+        let destination_store = endpoint::canonical_mailbox_store_identity(
+            &self.profile.destination_user,
+            &self.profile.destination_host,
+            default_imap_port(effective_destination_tls(&self.profile.destination_tls)),
+        )?;
+        if source_store == destination_store {
+            return Err(
+                "Source and destination identify the same IMAP mailbox on the same normalized host; ports are ignored because they may expose one mailbox store. Choose distinct mailbox identities or distinct hostnames for separate stores.".into(),
+            );
+        }
         for (label, value) in [
             ("Source keyring ID", &self.profile.source_credential_id),
             (
