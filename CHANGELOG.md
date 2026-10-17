@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Refresh the locked Linux D-Bus dependency patch releases. RustSec still
+  classifies `zbus_names`, `zvariant`, and `zvariant_derive` as unmaintained
+  (RUSTSEC-2026-0371, -0370, and -0372); they remain transitive desktop,
+  accessibility, and keyring dependencies, with no compatible replacement
+  selected.
 - Exercise the LIST fuzz target through the production budgeted streaming
   reader, fixing a fuzz-only compile failure and ensuring the harness covers
   the same bounded parser path used by live verification.
