@@ -26,6 +26,32 @@ fn doc_files_exist() {
 }
 
 #[test]
+fn metrics_attempt_outcomes_are_documented_as_a_gauge() {
+    let implementation = fs::read_to_string("src/cli/metrics.rs")
+        .expect("Prometheus metrics implementation should exist");
+    let production_implementation = implementation
+        .split_once("#[cfg(test)]")
+        .map_or(implementation.as_str(), |(production, _)| production);
+    let contract = fs::read_to_string("docs/automation-contract.md")
+        .expect("automation contract should exist");
+    assert!(
+        production_implementation.contains("\"mailswiftsync_transfer_attempt_outcomes\"")
+            && !production_implementation.contains("mailswiftsync_transfer_attempt_outcomes_total"),
+        "mutable terminal/unfinished attempt outcomes must not use a counter name"
+    );
+    assert!(
+        contract.contains(
+            "`mailswiftsync_transfer_attempt_outcomes{outcome}` | Gauge | Current durable counts"
+        ) && contract.contains("this is not monotonic and must not be modeled as a counter"),
+        "the automation contract must explain why attempt outcomes are a gauge"
+    );
+    assert!(
+        !contract.contains("mailswiftsync_transfer_attempt_outcomes_total"),
+        "the obsolete counter name must not remain in the published metric contract"
+    );
+}
+
+#[test]
 fn adoption_qualification_digests_are_well_formed_sha256() {
     let plan = fs::read_to_string("docs/adoption-qualification-plan.md")
         .expect("adoption qualification plan should exist");
