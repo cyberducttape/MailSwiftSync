@@ -647,6 +647,17 @@ fn list_parser_ignores_bounded_trailing_extension_literals() {
 }
 
 #[test]
+fn list_parser_accepts_extension_literal_followed_by_parenthesis_closers() {
+    let response = b"* LIST (\\HasChildren) \"/\" \"Projects\" (X-TEST {3}\r\nxyz) X-SECOND \"ignored\"\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
 fn list_parser_preserves_a_literal_mailbox_name_before_extension_literals() {
     let response = b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects X-TEST {3}\r\nxyz\r\na005 OK LIST completed\r\n";
     let mut stream = Cursor::new(response);
@@ -655,6 +666,26 @@ fn list_parser_preserves_a_literal_mailbox_name_before_extension_literals() {
     read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
         .unwrap();
     assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
+fn list_parser_accepts_closing_extension_data_after_a_mailbox_literal() {
+    let response = b"* LIST (\\HasChildren) \"/\" {8}\r\nProjects (X-TEST {3}\r\nxyz)\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let mut mailboxes = Vec::new();
+    read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)
+        .unwrap();
+    assert_eq!(mailboxes, ["Projects"]);
+}
+
+#[test]
+fn list_parser_rejects_non_delimiter_data_after_an_extension_literal() {
+    let response = b"* LIST (\\HasChildren) \"/\" \"Projects\" (X-TEST {3}\r\nxyz)BAD\r\na005 OK LIST completed\r\n";
+    let mut stream = Cursor::new(response);
+    let mut buffer = [0_u8; 4096];
+    let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+    assert!(error.contains("malformed data after IMAP LIST extension literal"));
 }
 
 #[test]

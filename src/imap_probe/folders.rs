@@ -148,13 +148,27 @@ fn read_imap_list_response_inner<S: Read>(
             // the response. Consume and validate the actual CRLF (and any
             // trailing extension fields) before committing the mailbox entry.
             if let Some(header) = literal_header.take() {
+                let mailbox_literal = literal_is_mailbox;
                 if text.bytes().any(|byte| byte.is_ascii_control()) {
-                    return Err(
-                        "IMAP LIST data after mailbox literal contained a control octet".into(),
-                    );
+                    return Err("IMAP LIST data after literal contained a control octet".into());
                 }
-                if !text.is_empty() && !text.chars().next().is_some_and(char::is_whitespace) {
-                    return Err("malformed data after IMAP LIST mailbox literal".into());
+                let after_extension_closers = text.trim_start_matches(')');
+                let closes_extension_list = !mailbox_literal
+                    && text.starts_with(')')
+                    && (after_extension_closers.is_empty()
+                        || after_extension_closers
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_whitespace));
+                if !text.is_empty()
+                    && !text.chars().next().is_some_and(char::is_whitespace)
+                    && !closes_extension_list
+                {
+                    return Err(if mailbox_literal {
+                        "malformed data after IMAP LIST mailbox literal".into()
+                    } else {
+                        "malformed data after IMAP LIST extension literal".into()
+                    });
                 }
                 let mut header = header;
                 if let Some(size) = list_literal_size(text) {
