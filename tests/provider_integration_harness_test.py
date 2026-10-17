@@ -320,6 +320,7 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
             ("destination", "imap.example.test:993", "LAB@example.test", "source and destination must be different", "imap.example.test:143"),
             ("recovery", "IMAP.EXAMPLE.TEST.:993", "LAB@example.test", "recovery destination must not be the source", "imap.example.test:0993"),
             ("recovery", "DESTINATION.EXAMPLE.TEST.:0993", "DESTINATION@example.test", "recovery destination must not be the normal live destination", "imap.example.test:0993"),
+            ("recovery", "destination.example.test:143", "DESTINATION@example.test", "recovery destination must not be the normal live destination", "imap.example.test:0993"),
             ("destination", "[::1]:0993", "lab@example.test", "source and destination must be different", "[0:0:0:0:0:0:0:1]:993"),
         )
         for role, endpoint, user, expected_error, source_endpoint in collision_cases:
