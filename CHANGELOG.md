@@ -109,9 +109,9 @@
   delimiters immediately follow literal bytes; reject aggregate extension-
   literal data beyond the inventory limit. Reduce body-fingerprint and FETCH
   protocol-text temporary allocations, and reject a projected metadata-page
-  overrun before issuing the FETCH or staging its records. Interrupted scans
-  still rescan: retained pages are not reused until a snapshot-bound resume
-  protocol is qualified.
+  overrun before issuing the metadata UID FETCH or staging its records.
+  Interrupted scans still rescan: retained pages are not reused until a
+  snapshot-bound resume protocol is qualified.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.
