@@ -151,7 +151,13 @@ the source. This is not an atomic snapshot and does not prove continued
 quiescence. Consumers of version 4 must update before accepting version 5.
 Version 6 adds post-scan destination cursor revalidation evidence alongside
 the source recheck; the two checks are sequential, not atomic, and do not
-prove continued quiescence.
+prove continued quiescence. For completed live transfer runs, the
+`verification_consistency` object is derived from the folder cursors attached
+to the verified transfer attempt; standalone verification runs use their own
+folder observations. `verification_observation_source.kind` identifies which
+record supplied those observations (`transfer_attempt`,
+`standalone_verification_run`, or `not_recorded`). A `not_recorded` observation
+is not evidence that either endpoint was unchanged.
 Consumers of version 5 must update before accepting version 6. Each evidence
 row also carries `proof_tier` (`aggregate`, `metadata`, or bounded `content`)
 separately from `proof_result`; none implies cutover readiness.
