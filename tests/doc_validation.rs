@@ -395,7 +395,16 @@ fn production_docs_keep_body_proof_and_power_loss_claims_bounded() {
 fn security_docs_preserve_tls_stack_and_customer_isolation_boundaries() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("production status should exist");
-    assert!(status.contains("no universal TLS-minimum policy is claimed across both stacks"));
+    for tls_boundary in [
+        "Both native Rustls probes and generated imapsync TLS arguments now request TLS 1.2 or newer",
+        "negotiated engine protocol/certificate identity are not yet persisted",
+        "exact packaged Perl/IO::Socket::SSL behavior still requires integration qualification",
+    ] {
+        assert!(
+            status.contains(tls_boundary),
+            "missing external TLS-stack boundary: {tls_boundary}"
+        );
+    }
 
     let architecture = fs::read_to_string("docs/architecture.md")
         .expect("architecture documentation should exist");
@@ -414,7 +423,9 @@ fn security_docs_preserve_tls_stack_and_customer_isolation_boundaries() {
         .expect("production qualification matrix should exist");
     for scenario in [
         "expired certificates",
-        "STARTTLS refusal/downgrade",
+        "STARTTLS downgrade",
+        "rejects TLS 1.0/1.1",
+        "negotiated protocol and peer certificate identity",
         "transfer reconnects",
     ] {
         assert!(
