@@ -859,7 +859,10 @@ fn header_fingerprint_normalizes_selected_headers_and_is_distinct_from_message_i
     )
     .unwrap();
     assert_eq!(first, second);
-    assert!(first.starts_with("header-fingerprint:"));
+    assert_eq!(
+        first,
+        "header-fingerprint:bf7a11e0fae4a28d2064f2b6027989a3658f6a8a218cf3c02f7fc533f39e7fab"
+    );
 }
 
 #[test]

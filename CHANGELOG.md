@@ -26,6 +26,9 @@
 - Inject `SQLITE_FULL` midway through terminal evidence plus 4,000 streamed
   mismatch rows; prove the run/mailbox/evidence transaction rolls back wholly
   and retries successfully after storage capacity is restored.
+- Reuse the verifier's preallocated SHA-256 hex encoder for synthetic header
+  identities, avoiding per-byte formatting allocations while preserving the
+  stable identity encoding.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.
