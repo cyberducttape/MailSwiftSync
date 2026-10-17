@@ -751,6 +751,15 @@ older crate family; do not claim this exposure is remediated merely because
 then qualify Linux keyring behavior and accessibility before removing this
 notice. Re-run both audit tools against the exact release lockfile.
 
+The repository's GitHub security settings were also checked on 2026-10-17:
+Dependabot security alerts and security updates are disabled. The repository
+does contain weekly Dependabot update configuration and a scheduled dependency
+audit workflow, but neither is a substitute for GitHub's per-advisory alerts
+and automated security-update PRs. A repository administrator must enable
+Dependabot alerts and security updates, then verify the settings and resulting
+alerts before GA; this workspace's GitHub authorization cannot change that
+repository-level setting.
+
 ### External runtime engine and image findings
 
 The final-image SPDX inventory enumerates Debian packages from the built

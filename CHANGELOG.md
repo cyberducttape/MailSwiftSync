@@ -230,6 +230,10 @@
   transitive `zvariant`, `zbus_names`, and `zvariant_derive` crates. No
   vulnerability or yanked crate was reported; compatible parent-crate migration
   and Linux keyring/accessibility qualification remain open.
+- Record that GitHub Dependabot alerts and security updates are disabled for
+  this repository despite weekly update configuration and scheduled audit CI;
+  enabling and verifying the repository-level controls is an administrator
+  release gate.
 - Pace provider-facing engine release only after its durable process
   registration acknowledgement, so gatekeepers accumulated during slow
   registration cannot open IMAP sessions in a burst; add a concurrent delayed-
