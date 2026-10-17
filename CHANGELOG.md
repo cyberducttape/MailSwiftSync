@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Clarify supply-chain evidence boundaries: the final-image SPDX inventory is
+  not an OS/Perl vulnerability scan, and the pinned imapsync checksum is not
+  upstream publisher provenance. Document the version-update qualification
+  sequence and keep these as explicit GA release gates.
 - Keep the migration configuration fingerprint independent of secret bytes
   while testing that static-secret rotation changes the process-local preflight
   credential binding; add an exact-image CI check for Docker state-volume

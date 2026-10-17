@@ -700,3 +700,36 @@ The previous unmaintained `ttf-parser 0.25.1` warning is resolved: the current
 Linux Wayland configuration disables winit's default `ab_glyph` renderer and
 the lockfile no longer contains `ttf-parser`. Release qualification must
 recheck the XLSX ZIP/XML path before publishing artifacts.
+
+### External runtime engine and image findings
+
+The final-image SPDX inventory enumerates Debian packages from the built
+runtime image, including the installed imapsync `.deb`, Perl, and packaged Perl
+modules. The release workflow checksums and attests that SBOM. This is an
+inventory and provenance record for the SBOM; it is **not** a vulnerability
+scan of the image or of the Perl dependency graph. RustSec and `cargo-deny`
+cover the Rust lockfiles, while `pip-audit` covers the listed Python
+qualification helpers. No current release gate scans the final image's OS or
+Perl packages for known vulnerabilities. A GA claim requires a reviewed,
+repeatable scan of the exact release image, including an explicit disposition
+for findings that are fixed, accepted, or unresolved; do not treat SBOM
+generation as that scan.
+
+The Docker build pins imapsync `2.314` and verifies the downloaded Debian
+artifact against a repository-pinned SHA-256. This detects an artifact that
+does not match the expected bytes, but does not independently establish who
+published those bytes or provide upstream provenance. The current process has
+not established a verifiable upstream signature/attestation for that `.deb`.
+Record this as an upstream-provenance limitation rather than implying the
+checksum is a publisher signature.
+
+For every imapsync version update, review the upstream release and artifact
+source, independently verify the candidate checksum, update the version and
+digest together, and review the generated image SBOM and vulnerability
+findings. Then run the packaged imapsync integration, OAuth refresh callback,
+recovery/interruption, and TLS-policy tests against that exact candidate;
+update the qualified engine version and compatibility evidence only after
+those tests pass. The current packaged integration suite qualifies the pinned
+version used by that run; it does not automatically qualify a future engine
+update. Reproducibility of the externally distributed Perl package is not
+claimed.
