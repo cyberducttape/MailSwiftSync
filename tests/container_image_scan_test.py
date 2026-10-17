@@ -80,6 +80,29 @@ class RuntimeImageScanTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("refusing to install Trivy into an existing path", result.stderr)
 
+    def test_trivy_installer_removes_its_directory_after_download_failure(self):
+        with tempfile.TemporaryDirectory(prefix="mss-trivy-install-failure-test-") as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_curl = fake_bin / "curl"
+            fake_curl.write_text("#!/bin/sh\nexit 22\n", encoding="utf-8")
+            fake_curl.chmod(0o755)
+            target = root / "new-install"
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts/install-pinned-trivy.sh"), str(target)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 22)
+            self.assertFalse(target.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
