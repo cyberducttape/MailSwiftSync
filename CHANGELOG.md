@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Replace first-match secret-option removal with validated removal of every
+  generated placeholder pair; malformed/duplicate options are flagged and an
+  adjacent CLI switch is preserved rather than consumed as a value.
 - Expand production qualification scenarios for TLS behavior in both the Rustls
   probe and actual imapsync transfer/reconnect paths, and make the interim
   one-customer-per-OS-security-boundary operating rule explicit for MSP pilots.

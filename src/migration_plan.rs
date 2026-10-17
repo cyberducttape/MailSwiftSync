@@ -13,7 +13,7 @@ pub(crate) use saved_profile::*;
 use validation::validate_certificate_pin;
 
 use crate::atomic_artifact::write_private_atomic;
-use crate::command::remove_option;
+use crate::command::remove_placeholder_options;
 use crate::imap_probe::{command_endpoint_parts, command_port};
 use crate::{
     DOVECOT_SYNC_LOCK_WAIT_SECONDS, core, create_secret_directory,

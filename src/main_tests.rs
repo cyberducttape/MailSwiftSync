@@ -2453,14 +2453,9 @@ fn imap_preflight_requires_tagged_ok_responses() {
 }
 
 #[test]
-fn removing_secret_options_removes_values_starting_with_dashes() {
-    let mut args = vec![
-        "--password1".into(),
-        "--looks-like-an-option".into(),
-        "--host".into(),
-        "mail".into(),
-    ];
-    remove_option(&mut args, "--password1");
+fn removing_secret_options_preserves_adjacent_flags_when_values_are_missing() {
+    let mut args = vec!["--password1".into(), "--host".into(), "mail".into()];
+    assert!(remove_placeholder_options(&mut args, "--password1", "••••••••").is_err());
     assert_eq!(args, ["--host", "mail"]);
 }
 

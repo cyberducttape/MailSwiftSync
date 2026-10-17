@@ -1,11 +1,56 @@
 //! Safe command-line construction primitives shared by engines and plans.
 
-pub(crate) fn remove_option(args: &mut Vec<String>, option: &str) {
-    if let Some(index) = args.iter().position(|arg| arg == option) {
-        args.remove(index);
-        if index < args.len() {
-            args.remove(index);
+/// Remove all occurrences of a generated secret option/value pair.
+///
+/// The preview builder uses a fixed placeholder, so a following option token
+/// is unambiguously a missing value and must be preserved. All matching pairs
+/// are removed even when the shape is malformed, ensuring callers never retain
+/// a duplicate generated secret argument while still receiving an error.
+pub(crate) fn remove_placeholder_options(
+    args: &mut Vec<String>,
+    option: &str,
+    placeholder: &str,
+) -> Result<(), String> {
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut occurrences = 0usize;
+    let mut malformed = false;
+    let mut index = 0usize;
+
+    while index < args.len() {
+        if args[index] != option {
+            filtered.push(args[index].clone());
+            index += 1;
+            continue;
         }
+
+        occurrences += 1;
+        match args.get(index + 1) {
+            Some(value) if value == placeholder => index += 2,
+            Some(value) if value.starts_with("--") => {
+                malformed = true;
+                // Preserve the adjacent option; it is not this option's value.
+                index += 1;
+            }
+            Some(_) => {
+                malformed = true;
+                // Do not retain an unexpected value where a secret placeholder
+                // was expected: it may itself be sensitive.
+                index += 2;
+            }
+            None => {
+                malformed = true;
+                index += 1;
+            }
+        }
+    }
+
+    *args = filtered;
+    if malformed {
+        Err(format!("malformed generated argument pair for {option}"))
+    } else if occurrences > 1 {
+        Err(format!("duplicate generated argument {option}"))
+    } else {
+        Ok(())
     }
 }
 
@@ -57,7 +102,61 @@ pub(crate) fn parse_shell_words(input: &str) -> Result<Vec<String>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_shell_words;
+    use super::{parse_shell_words, remove_placeholder_options};
+
+    const PLACEHOLDER: &str = "••••••••";
+
+    #[test]
+    fn placeholder_option_removal_rejects_duplicates_and_removes_all_values() {
+        let mut args = vec![
+            "--password1".into(),
+            PLACEHOLDER.into(),
+            "--host1".into(),
+            "source.example".into(),
+            "--password1".into(),
+            PLACEHOLDER.into(),
+        ];
+
+        assert!(remove_placeholder_options(&mut args, "--password1", PLACEHOLDER).is_err());
+        assert_eq!(args, ["--host1", "source.example"]);
+    }
+
+    #[test]
+    fn placeholder_option_removal_detects_missing_value_at_end() {
+        let mut args = vec![
+            "--host1".into(),
+            "source.example".into(),
+            "--password1".into(),
+        ];
+
+        assert!(remove_placeholder_options(&mut args, "--password1", PLACEHOLDER).is_err());
+        assert_eq!(args, ["--host1", "source.example"]);
+    }
+
+    #[test]
+    fn placeholder_option_removal_preserves_adjacent_flag() {
+        let mut args = vec![
+            "--password1".into(),
+            "--host1".into(),
+            "source.example".into(),
+        ];
+
+        assert!(remove_placeholder_options(&mut args, "--password1", PLACEHOLDER).is_err());
+        assert_eq!(args, ["--host1", "source.example"]);
+    }
+
+    #[test]
+    fn placeholder_option_removal_removes_single_pair() {
+        let mut args = vec![
+            "--password1".into(),
+            PLACEHOLDER.into(),
+            "--host1".into(),
+            "source.example".into(),
+        ];
+
+        remove_placeholder_options(&mut args, "--password1", PLACEHOLDER).unwrap();
+        assert_eq!(args, ["--host1", "source.example"]);
+    }
 
     #[test]
     fn parse_shell_words_preserves_quoted_values() {
