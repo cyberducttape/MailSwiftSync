@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Exercise the LIST fuzz target through the production budgeted streaming
+  reader, fixing a fuzz-only compile failure and ensuring the harness covers
+  the same bounded parser path used by live verification.
 - Compile every nightly fuzz target locally and mark intentionally unused
   provider identity helpers in the provider-error fuzz harness, keeping the
   full parser/safety-target build warning-free.

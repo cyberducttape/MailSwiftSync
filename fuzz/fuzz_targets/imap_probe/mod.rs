@@ -1,7 +1,7 @@
 use std::{
     io::{Cursor, Read},
     sync::atomic::{AtomicBool, Ordering},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 pub const MAX_IMAP_LIST_INVENTORY_BYTES: usize = 32 * 1024 * 1024;
@@ -68,7 +68,17 @@ pub fn fuzz_line(line: &str) {
 pub fn fuzz_stream(bytes: &[u8]) {
     let mut stream = Cursor::new(bytes);
     let mut buffer = [0_u8; 4096];
-    let _ = folders::read_imap_list_response(&mut stream, "a005", &mut buffer);
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget {
+        deadline: Instant::now() + Duration::from_secs(60),
+        cancel: &cancel,
+    };
+    let _ = folders::read_imap_list_response_with_budget(
+        &mut stream,
+        "a005",
+        &mut buffer,
+        &budget,
+    );
 }
 
 pub fn fuzz_literal(payload: &[u8]) {
