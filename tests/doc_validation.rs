@@ -363,6 +363,8 @@ fn capability_manifest_does_not_overstate_verification_resume() {
         fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
     let architecture =
         fs::read_to_string("docs/architecture.md").expect("architecture guide should exist");
+    let verification_envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope should exist");
     let release_readiness = fs::read_to_string("docs/release-readiness.md")
         .expect("release readiness document should exist");
 
@@ -379,6 +381,12 @@ fn capability_manifest_does_not_overstate_verification_resume() {
             "Snapshot drift, an untracked snapshot, or an invalid prefix restarts the folder from the first page"
         ),
         "the capability claim must remain aligned with the enforced architecture contract"
+    );
+    assert!(
+        verification_envelope.contains(
+            "a committed durable metadata prefix may resume only after a fresh SELECT exactly matches UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ"
+        ) && verification_envelope.contains("body-hash pages are always refetched"),
+        "the verification envelope must describe the same guarded resume boundary"
     );
     assert!(
         release_readiness.contains(
