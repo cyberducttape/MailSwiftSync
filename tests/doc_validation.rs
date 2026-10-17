@@ -340,6 +340,24 @@ fn crash_recovery_docs_match_the_restored_ledger_integration_drill() {
 }
 
 #[test]
+fn crash_recovery_docs_record_current_head_local_fault_drills_with_limits() {
+    let docs = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation evidence should exist");
+    for evidence in [
+        "Current-head local process and ledger fault drills",
+        "43f40ca87b77e2f579f5566cf81c4c413fa79938",
+        "d1398608817ba712f38fb41f2e750f1739f914d0520463173d176c015e95f6a5",
+        "RLIMIT_FSIZE` is a bounded write-failure\nsimulation",
+        "do not simulate OS restart",
+    ] {
+        assert!(
+            docs.contains(evidence),
+            "current-head crash-recovery evidence is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn crash_recovery_docs_bound_engine_storage_fault_claim_to_ci_fixture() {
     let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
         .expect("crash-recovery validation matrix should exist");

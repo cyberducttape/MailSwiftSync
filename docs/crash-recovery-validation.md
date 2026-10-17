@@ -32,6 +32,30 @@ and repeatable, and a new journal would add its own failure states.
 | 7 | Restore the ledger after a crash and resume a partially completed mailbox | `controller-chaos-smoke.sh` proves `restore` rejects a corrupt or truncated backup. The IMAP lab's default-plan interruption drill kills the controller mid-transfer, recovers the run, backs up and restores the ledger to a new path, resumes the mailbox, and requires exactly the source message count plus verified state. | Proven in CI (integration workflow) for the default header-matching plan; this does not establish per-message checkpoints or host power-loss durability. |
 | 8 | Verification staging reaches SQLite's page limit (`SQLITE_FULL`) | `core::message_staging::tests::sqlite_full_rolls_back_page_and_retains_durable_stage_for_recovery` caps the stage's SQLite page count, forces a staging write to fail with `SQLITE_FULL`, verifies the page transaction rolled back, reopens the retained stage, restores the page limit, and stages a later page. This is deterministic SQLite-level fault injection, not an actually full filesystem or an end-to-end controller/evidence-commit failure. | Proven by Rust unit test; real filesystem exhaustion and full-run recovery remain unqualified. |
 
+### Current-head local process and ledger fault drills
+
+On 2026-10-17, the repository's `process-supervision-chaos-smoke.sh`,
+`controller-recovery-smoke.sh`, and `controller-chaos-smoke.sh` all passed
+against the normal debug binary built from commit
+`43f40ca87b77e2f579f5566cf81c4c413fa79938` (SHA-256
+`d1398608817ba712f38fb41f2e750f1739f914d0520463173d176c015e95f6a5`). The
+host was Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, with Rust 1.92.0.
+The process-supervision drill proved that missing and invalid durable-release
+tokens do not start the fake engine, while `GO\n` does. The recovery drill
+SIGKILLed the controller and separately the engine process group; restart
+classified interrupted work as Attention/failed and cleared active process
+ownership. The ledger drill injected `RLIMIT_FSIZE` during initial ledger
+creation, confirmed the controller failed rather than reporting success, then
+reopened a valid ledger after the limit was lifted; it also rejected truncated
+and corrupt restores without replacing the live ledger and restored a verified
+backup over a deliberately corrupted copy.
+
+These were local disposable-fixture runs using a fake shell engine, not
+imapsync or Dovecot integration. `RLIMIT_FSIZE` is a bounded write-failure
+simulation, not a physically full filesystem. They do not simulate OS restart,
+power loss, kernel panic, or storage-controller cache loss, and do not replace
+the packaged CI and release-host qualification required above.
+
 ### Latest packaged integration evidence
 
 On 2026-10-16, packaged product integration jobs passed for current PR head

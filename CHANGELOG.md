@@ -19,6 +19,10 @@
   1,000,000 records per endpoint on the same current revision; record the
   shape-dependent disk and latency costs while keeping them explicitly separate
   from provider and end-to-end migration qualification.
+- Run the release-gatekeeper, controller-crash, engine-SIGKILL, bounded storage-
+  failure, corrupt-restore, and backup-recovery drills against the current
+  debug binary; record its commit and digest while keeping power-loss and real
+  filesystem-full qualification explicitly open.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.
