@@ -460,6 +460,29 @@ fn packaged_imapsync_lab_uses_an_explicit_tls_12_server_floor() {
 }
 
 #[test]
+fn packaged_tls_floor_smoke_qualifies_legacy_rejection_and_tls12_success() {
+    let dockerfile = fs::read_to_string("Dockerfile").expect("runtime Dockerfile should exist");
+    let workflow = fs::read_to_string(".github/workflows/integration.yml")
+        .expect("IMAP integration workflow should exist");
+    let script = fs::read_to_string("scripts/imapsync-tls-floor-smoke.sh")
+        .expect("packaged TLS floor smoke test should exist");
+
+    assert!(dockerfile.contains("scripts/imapsync-tls-floor-smoke.sh"));
+    assert!(workflow.contains("imapsync-tls-floor-smoke.sh"));
+    for scenario in [
+        "assert_legacy_rejected tls1 TLSv1",
+        "assert_legacy_rejected tls1_1 TLSv1_1",
+        "start_server tls1_2",
+        "TLS 1.2+ floor connected to a TLS 1.2-only server",
+    ] {
+        assert!(
+            script.contains(scenario),
+            "packaged TLS floor smoke test is missing scenario: {scenario}"
+        );
+    }
+}
+
+#[test]
 fn destructive_sync_docs_require_plan_bound_local_confirmation() {
     let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
         .expect("production runbook should exist")

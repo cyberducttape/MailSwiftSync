@@ -63,6 +63,7 @@ RUN apt-get update \
 
 COPY --from=builder /build/target/release/mailswiftsync /usr/local/bin/mailswiftsync
 COPY scripts/imap-integration-smoke.sh /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+COPY scripts/imapsync-tls-floor-smoke.sh /usr/local/lib/mailswiftsync/imapsync-tls-floor-smoke.sh
 COPY scripts/oauth-imapsync-refresh-smoke.py /usr/local/lib/mailswiftsync/oauth-imapsync-refresh-smoke.py
 COPY scripts/maildir-fixture-scan.py /usr/local/lib/mailswiftsync/maildir-fixture-scan.py
 COPY scripts/generate-scale-maildir.py /usr/local/lib/mailswiftsync/generate-scale-maildir.py
@@ -72,6 +73,7 @@ COPY scripts/controller-chaos-smoke.sh /usr/local/lib/mailswiftsync/controller-c
 COPY scripts/engine-storage-fault-smoke.sh /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
 RUN chmod 0755 /usr/local/bin/mailswiftsync
 RUN chmod 0755 /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+RUN chmod 0755 /usr/local/lib/mailswiftsync/imapsync-tls-floor-smoke.sh
 RUN chmod 0755 /usr/local/lib/mailswiftsync/oauth-imapsync-refresh-smoke.py
 RUN chmod 0755 /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
 RUN chmod 0755 /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
