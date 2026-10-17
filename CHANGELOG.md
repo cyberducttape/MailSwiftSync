@@ -11,6 +11,10 @@
   body proofs.
 - Bound diagnostic-writer shutdown when filesystem I/O stalls; optional
   transcript output may be incomplete rather than holding controller shutdown.
+- Re-run the complete durable verification reconciliation matrix on the current
+  revision through 1,000,000 messages per endpoint; record per-phase I/O, peak
+  RSS, stage/journal growth, FLAGS work, and restart timings without presenting
+  synthetic SQLite performance as provider or transfer qualification.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.

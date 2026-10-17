@@ -604,6 +604,32 @@ particular, the roughly 1.09 GB stage-directory peak at 1M remains important
 for target-filesystem planning; the stage's 512 MiB free-space reserve is not a
 total-workload reservation or a universal capacity guarantee.
 
+A fresh full matrix on 2026-10-17 at commit
+`a0342b00bd8eb1d85bd74ae0d93e8e0e7b8a0f12` ran on the shared AMD Ryzen 7
+7735U workstation (Ubuntu 26.04.1 x86_64, Linux 7.0.0-38-generic, Rust
+1.92.0, ext4 on NVMe), using a separate process and durable stage per case.
+All five cases passed the script's 64 MiB peak-RSS and 20,000 messages/s
+reconciliation gates:
+
+| Messages per endpoint | Stage / reconcile | Reconcile rate | FLAGS compared / time | Restart reconcile | Peak RSS | Stage after staging | Peak stage / journal | Reconciliation writes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 18 ms / 20 ms | 50,000/s | 980 / 11 ms | 29 ms | 13 MiB | 675,840 B | 1,118,928 B / 107,216 B | 557,056 B |
+| 10,000 | 176 ms / 206 ms | 48,543/s | 9,800 / 70 ms | 249 ms | 17 MiB | 6,242,304 B | 10,124,288 B / 949,248 B | 5,337,088 B |
+| 100,000 | 2.856 s / 2.304 s | 43,402/s | 98,000 / 630 ms | 2.130 s | 22 MiB | 64,651,264 B | 105,372,120 B / 9,722,328 B | 64,884,736 B |
+| 500,000 | 10.065 s / 11.079 s | 45,130/s | 490,000 / 3.182 s | 11.010 s | 21 MiB | 334,123,008 B | 544,121,344 B / 50,225,664 B | 334,880,768 B |
+| 1,000,000 | 28.116 s / 22.498 s | 44,448/s | 980,000 / 6.486 s | 22.645 s | 21 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 680,132,608 B |
+
+Each fixture contained 2% intentional changed-ID mismatches. At 1M, 20,000
+messages were classified as changed; the other 980,000 unambiguous messages
+were compared for FLAGS. The 1M case used 76.3 process CPU-seconds and wrote
+about 869 MB during staging and 680 MB during reconciliation. These are
+synthetic, single-process SQLite measurements on one shared workstation. They
+exclude network inventory, engine transfer, concurrent workers, terminal
+evidence persistence, and report export; they do not qualify provider behavior,
+large-byte mailboxes, or other hardware, and do not establish a safe aggregate
+disk-space envelope. In particular, the observed 1.09 GB stage peak is a
+capacity-planning signal, not a guaranteed upper bound.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the
