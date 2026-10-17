@@ -362,13 +362,15 @@ mailswiftsync oauth-authorize google|microsoft|custom <keyring-id> --client-id <
 
 For opt-in headless incident troubleshooting, preflight/live and batch
 commands may receive `--diagnostic-log /secure/directory`. Batch execution
-writes each child mailbox run to its own owner-only transcript; filenames use
-stable hashes of the project and mailbox job IDs rather than those identifiers
-themselves. Transcript headers use the same project pseudonym. Transcripts are
+writes each child mailbox run to its own owner-only transcript; filenames and
+headers use type-separated HMAC pseudonyms of project, run, and mailbox job IDs
+rather than those identifiers themselves. A random key is kept only in memory
+for that diagnostic logger, so pseudonyms remain joinable within its transcripts
+but are not directly comparable across logger sessions. Transcripts are
 secret-redacted, capped at 8 MiB per file and 128 MiB per directory, and
 retention is limited to the newest 20 files when runs finish. Email and
-Message-ID-like values in persisted transcript lines are replaced with stable
-per-value pseudonyms; other provider, folder, and message metadata may remain.
+Message-ID-like values in persisted transcript lines use keyed per-value
+pseudonyms; other provider, folder, and message metadata may remain.
 The option still prints a warning because logs are plaintext, not encrypted or
 compressed, and the sanitized support bundle does not include them. Select
 logs manually for any support handoff and securely remove them after

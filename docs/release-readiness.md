@@ -147,15 +147,17 @@ reconciliation as successful.
   mailbox statuses to an explicitly marked 1,000-row sample.
 - Headless preflight/live and batch commands support opt-in
   `--diagnostic-log <directory>` transcripts. Each batch child has a separate
-  file; project and mailbox job IDs are hashed in filenames and project IDs are
-  pseudonymized in transcript headers. Engine output is redacted for known
-  secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB per
-  file / 128 MiB per directory, with
+  file; filenames and headers use type-separated, per-logger HMAC pseudonyms
+  for project, run, and mailbox-job IDs. The random pseudonym key exists only
+  in memory and is zeroized when the logger is dropped, so identifiers are not
+  directly correlatable across logger sessions. Engine output is redacted for
+  known secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB
+  per file / 128 MiB per directory, with
   retention capped at 20 completed files. These plaintext logs can still
   contain provider, mailbox, folder, and message metadata in free-form engine
-  prose; email/Message-ID values and structured mailbox/folder key-value
-  fields are pseudonymized or redacted, but this is not complete semantic
-  anonymization. Transcript contents
+  prose; email/Message-ID values use per-logger keyed pseudonyms and structured
+  mailbox/folder key-value fields are pseudonymized or redacted, but this is not
+  complete semantic anonymization. Transcript contents
   are not account-pseudonymized, encrypted, or compressed, and support bundles
   do not collect them. Operators must select and handle logs explicitly.
   Logging is disabled by default. Newly created directories are restricted;

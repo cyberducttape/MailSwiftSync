@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use a random, zeroized per-logger HMAC key and type-separated pseudonyms for
+  diagnostic project, run, mailbox-job, email, and Message-ID identifiers;
+  avoid dictionary-recoverable plain hashes and raw run IDs in transcript paths
+  and headers.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.
