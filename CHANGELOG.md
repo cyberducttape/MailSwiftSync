@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update the transitive `inout` dependency to non-yanked 0.2.4; the prior
+  lockfile version caused the configured strict dependency audit to fail.
 - Record the exact packaged imapsync and native Dovecot integration evidence,
   including its metadata-versus-aggregate assurance levels and explicit
   cutover/provider-qualification limitations; refresh the evidence with the
