@@ -15,6 +15,10 @@
   revision through 1,000,000 messages per endpoint; record per-phase I/O, peak
   RSS, stage/journal growth, FLAGS work, and restart timings without presenting
   synthetic SQLite performance as provider or transfer qualification.
+- Exercise duplicate-ID, absent-ID, and mismatch-heavy reconciliation through
+  1,000,000 records per endpoint on the same current revision; record the
+  shape-dependent disk and latency costs while keeping them explicitly separate
+  from provider and end-to-end migration qualification.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.

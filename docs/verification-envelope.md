@@ -630,6 +630,30 @@ large-byte mailboxes, or other hardware, and do not establish a safe aggregate
 disk-space envelope. In particular, the observed 1.09 GB stage peak is a
 capacity-planning signal, not a guaranteed upper bound.
 
+The same revision also ran duplicate-ID, missing-ID, and mismatch-heavy
+reconciliation at 100,000, 500,000, and 1,000,000 records per endpoint. Each
+case passed the same 64 MiB RSS and 20,000 messages/s gates:
+
+| Shape | Records / endpoint | Stage | Reconcile | Restart reconcile | Reconcile rate | Peak RSS | Peak stage / journal | Mismatch rows | Reconciliation writes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Duplicate IDs | 100,000 | 3.209 s | 4.317 s | 2.281 s | 23,164/s | 21 MiB | 105,679,448 B / 9,779,800 B | 2,000 | 64,921,600 B |
+| Duplicate IDs | 500,000 | 10.167 s | 12.207 s | 12.055 s | 40,960/s | 21 MiB | 544,850,744 B / 50,438,968 B | 10,000 | 334,381,056 B |
+| Duplicate IDs | 1,000,000 | 20.725 s | 24.436 s | 24.352 s | 40,923/s | 21 MiB | 1,094,813,856 B / 101,443,744 B | 20,000 | 740,220,928 B |
+| Missing IDs | 100,000 | 1.869 s | 1.946 s | 1.949 s | 51,387/s | 21 MiB | 78,127,928 B / 7,107,384 B | 10,000 | 42,541,056 B |
+| Missing IDs | 500,000 | 9.478 s | 10.133 s | 10.042 s | 49,343/s | 21 MiB | 402,232,392 B / 36,754,504 B | 50,000 | 220,135,424 B |
+| Missing IDs | 1,000,000 | 19.279 s | 20.885 s | 21.482 s | 47,881/s | 21 MiB | 807,295,472 B / 73,832,944 B | 100,000 | 479,731,712 B |
+| Mismatch-heavy | 100,000 | 3.043 s | 4.258 s | 3.040 s | 23,485/s | 21 MiB | 99,940,824 B / 9,722,328 B | 60,000 | 67,743,744 B |
+| Mismatch-heavy | 500,000 | 10.092 s | 15.633 s | 15.576 s | 31,983/s | 21 MiB | 515,990,016 B / 50,233,856 B | 300,000 | 351,039,488 B |
+| Mismatch-heavy | 1,000,000 | 20.688 s | 31.787 s | 31.924 s | 31,459/s | 21 MiB | 1,035,998,416 B / 100,893,904 B | 600,000 | 887,103,488 B |
+
+The `missing_ids` fixture has half its messages without RFC Message-IDs and
+exercises probable metadata matching; `mismatch_heavy` produces 60% mismatch
+rows at each size. All nine runs used the same single shared workstation and
+current code revision as the typical-shape matrix above. These shape-specific
+numbers expose materially different I/O and reconciliation costs; they are
+not transferable provider SLAs, end-to-end migration measurements, or a
+universal disk-sizing formula.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the

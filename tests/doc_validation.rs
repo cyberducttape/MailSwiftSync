@@ -594,6 +594,25 @@ fn verification_envelope_records_current_head_maximum_stress_observations() {
 }
 
 #[test]
+fn verification_envelope_records_current_head_skewed_scale_matrix() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "same revision also ran duplicate-ID, missing-ID, and mismatch-heavy",
+        "Duplicate IDs | 1,000,000 | 20.725 s | 24.436 s | 24.352 s | 40,923/s",
+        "Missing IDs | 1,000,000 | 19.279 s | 20.885 s | 21.482 s | 47,881/s",
+        "Mismatch-heavy | 1,000,000 | 20.688 s | 31.787 s | 31.924 s | 31,459/s",
+        "1,035,998,416 B / 100,893,904 B",
+        "universal disk-sizing formula.",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "current-head skewed verification evidence is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
