@@ -370,7 +370,10 @@ but are not directly comparable across logger sessions. Transcripts are
 secret-redacted, capped at 8 MiB per file and 128 MiB per directory, and
 retention is limited to the newest 20 files when runs finish. Email and
 Message-ID-like values in persisted transcript lines use keyed per-value
-pseudonyms; other provider, folder, and message metadata may remain.
+pseudonyms; other provider, folder, and message metadata may remain. If the
+diagnostic filesystem stalls, logger shutdown waits at most two seconds before
+detaching its writer; the last queued transcript lines may then be incomplete,
+but controller shutdown remains bounded.
 The option still prints a warning because logs are plaintext, not encrypted or
 compressed, and the sanitized support bundle does not include them. Select
 logs manually for any support handoff and securely remove them after

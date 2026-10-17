@@ -153,7 +153,9 @@ reconciliation as successful.
   directly correlatable across logger sessions. Engine output is redacted for
   known secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB
   per file / 128 MiB per directory, with
-  retention capped at 20 completed files. These plaintext logs can still
+  retention capped at 20 completed files. Shutdown waits at most two seconds
+  for the logger thread, then detaches it if filesystem I/O is still stalled;
+  diagnostic output may be incomplete in that case. These plaintext logs can still
   contain provider, mailbox, folder, and message metadata in free-form engine
   prose; email/Message-ID values use per-logger keyed pseudonyms and structured
   mailbox/folder key-value fields are pseudonymized or redacted, but this is not

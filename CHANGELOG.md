@@ -9,6 +9,8 @@
 - Correct the release-readiness verification-resume description and add a
   regression check for tracked-snapshot metadata reuse versus always-refetched
   body proofs.
+- Bound diagnostic-writer shutdown when filesystem I/O stalls; optional
+  transcript output may be incomplete rather than holding controller shutdown.
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.

@@ -29,6 +29,7 @@ const MAX_DIRECTORY_BYTES: u64 = 128 * 1024 * 1024;
 const WRITER_CAPACITY: usize = 64 * 1024;
 const FLUSH_BYTES: usize = 64 * 1024;
 const FLUSH_LINES: usize = 64;
+const WRITER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Lines and bytes that may wait for the writer thread. A full queue drops
 /// the line and reports it to the caller instead of blocking.
@@ -224,7 +225,17 @@ impl Drop for DiagnosticLogger {
         // Disconnecting the queue lets the writer drain, flush, and prune.
         drop(self.sender.take());
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            let deadline = Instant::now() + WRITER_SHUTDOWN_TIMEOUT;
+            while !worker.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if worker.is_finished() {
+                let _ = worker.join();
+            }
+            // A filesystem write/flush cannot be cancelled portably. Detach
+            // a stuck diagnostic writer rather than making application or
+            // controller shutdown unbounded; queued transcript lines may be
+            // incomplete in this exceptional path.
         }
     }
 }
@@ -1207,6 +1218,27 @@ mod tests {
             .map(|content| content.matches("[stdout] line ").count())
             .sum::<usize>();
         assert_eq!(persisted, accepted);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn logger_drop_is_bounded_when_the_writer_is_stalled() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        let resume = logger.pause_writer();
+        let (dropped, completed) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            drop(logger);
+            let _ = dropped.send(());
+        });
+
+        completed
+            .recv_timeout(WRITER_SHUTDOWN_TIMEOUT + Duration::from_millis(500))
+            .expect("logger destruction must not wait forever on a stalled writer");
+        // Allow the detached test writer to finish before removing its
+        // directory; no log file was opened while it was paused.
+        resume.send(()).unwrap();
+        thread::sleep(Duration::from_millis(20));
         fs::remove_dir_all(directory).unwrap();
     }
 
