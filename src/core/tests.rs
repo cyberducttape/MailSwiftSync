@@ -6686,6 +6686,46 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
 }
 
 #[test]
+fn project_operation_metrics_report_current_message_findings_separately() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("finding-metrics", "source", "destination")
+        .unwrap();
+    let missing_job = db
+        .add_mailbox(&project.id, "missing-source", "missing-destination")
+        .unwrap();
+    db.begin_run(&project.id, &missing_job, "missing-run", "imapsync")
+        .unwrap();
+    let mut missing = flag_evidence(VerificationOutcome::Missing, None);
+    missing.destination_messages = 5;
+    missing.unmatched_messages = Some(1);
+    missing.missing_messages = 1;
+    db.record_evidence_for_run(&missing_job, "missing-run", &missing)
+        .unwrap();
+
+    let probable_job = db
+        .add_mailbox(&project.id, "probable-source", "probable-destination")
+        .unwrap();
+    db.begin_run(&project.id, &probable_job, "probable-run", "imapsync")
+        .unwrap();
+    let mut probable = flag_evidence(VerificationOutcome::ProbableMatch, None);
+    probable.probable_messages = 2;
+    db.record_evidence_for_run(&probable_job, "probable-run", &probable)
+        .unwrap();
+
+    let metrics = db.project_operation_metrics(&project.id).unwrap();
+    assert_eq!(
+        metrics.verification_message_findings,
+        std::collections::BTreeMap::from([
+            ("extra".to_owned(), 0),
+            ("missing".to_owned(), 1),
+            ("modified".to_owned(), 0),
+            ("probable".to_owned(), 2),
+        ])
+    );
+}
+
+#[test]
 fn difference_file_export_streams_every_row_across_pages_into_a_private_file() {
     use message_verification::MismatchType;
     let db = StateStore::in_memory().unwrap();

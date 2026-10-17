@@ -13,6 +13,9 @@
 - Export last durable progress snapshots for unfinished transfer attempts as
   gauges, explicitly distinguishing retryable attempt work from unique mailbox
   coverage, throughput, and freshness.
+- Export current durable verification finding counts by missing, extra,
+  modified, and probable-match category; keep lower-confidence probable matches
+  distinct from confirmed differences.
 - Map the five SRE operations questions to the versioned durable status fields,
   and explicitly distinguish current gauges from process-local telemetry,
   cumulative counters, and metrics not yet exported. Document the absence of a

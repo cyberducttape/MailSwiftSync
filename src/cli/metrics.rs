@@ -37,6 +37,7 @@ const VERIFICATION_METHODS: &[&str] = &[
     "body_hash",
     "native_dovecot",
 ];
+const VERIFICATION_FINDING_KINDS: &[&str] = &["missing", "extra", "modified", "probable"];
 
 pub(super) fn metrics_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let Some(state) = arguments.next() else {
@@ -137,6 +138,11 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         "mailswiftsync_verification_mailboxes",
         "Current mailbox evidence counts by verification method and outcome.",
     );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_verification_message_findings",
+        "Current message-level finding counts from latest mailbox evidence; probable matches are not confirmed differences.",
+    );
 
     let mut transfer_attempts = 0_usize;
     let mut transfer_retries = 0_usize;
@@ -144,6 +150,10 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
     let mut unfinished_attempt_bytes_copied = 0_u64;
     let mut attempt_outcomes = std::collections::BTreeMap::<&str, usize>::new();
     let mut verification_outcomes = std::collections::BTreeMap::<(&str, &str), usize>::new();
+    let mut verification_findings = VERIFICATION_FINDING_KINDS
+        .iter()
+        .map(|kind| (*kind, 0_usize))
+        .collect::<std::collections::BTreeMap<_, _>>();
 
     for project in &summary.projects {
         transfer_attempts =
@@ -168,6 +178,11 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
             let method = allowlisted_label(method, VERIFICATION_METHODS);
             let outcome = allowlisted_label(outcome, VERIFICATION_OUTCOMES);
             let total = verification_outcomes.entry((method, outcome)).or_default();
+            *total = checked_metric_sum(*total, *count)?;
+        }
+        for (kind, count) in &project.operations.verification_message_findings {
+            let kind = allowlisted_label(kind, VERIFICATION_FINDING_KINDS);
+            let total = verification_findings.entry(kind).or_default();
             *total = checked_metric_sum(*total, *count)?;
         }
     }
@@ -198,6 +213,12 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         let _ = writeln!(
             output,
             "mailswiftsync_verification_mailboxes{{method=\"{method}\",outcome=\"{outcome}\"}} {count}"
+        );
+    }
+    for (kind, count) in verification_findings {
+        let _ = writeln!(
+            output,
+            "mailswiftsync_verification_message_findings{{kind=\"{kind}\"}} {count}"
         );
     }
     Ok(output)
@@ -275,6 +296,8 @@ mod tests {
                         ("metadata_reconciliation:missing".into(), 1),
                     ]
                     .into(),
+                    verification_message_findings: [("missing".into(), 2), ("probable".into(), 1)]
+                        .into(),
                 },
             }],
         }
@@ -293,6 +316,11 @@ mod tests {
         ));
         assert!(output.contains("mailswiftsync_registered_engine_processes 0"));
         assert!(output.contains("method=\"metadata_reconciliation\",outcome=\"missing\""));
+        assert!(output.contains("mailswiftsync_verification_message_findings{kind=\"missing\"} 2"));
+        assert!(
+            output.contains("mailswiftsync_verification_message_findings{kind=\"probable\"} 1")
+        );
+        assert!(output.contains("mailswiftsync_verification_message_findings{kind=\"extra\"} 0"));
         assert!(!output.contains("customer-project-private-id"));
         assert!(!output.contains("private customer name"));
         assert!(!output.contains("private-source.example.test"));

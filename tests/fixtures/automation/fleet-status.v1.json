@@ -51,6 +51,8 @@
     "ledgers[].summary.projects[].operations.transfer_attempts": "integer",
     "ledgers[].summary.projects[].operations.unfinished_attempt_bytes_copied": "integer",
     "ledgers[].summary.projects[].operations.unfinished_attempt_messages_copied": "integer",
+    "ledgers[].summary.projects[].operations.verification_message_findings": "map",
+    "ledgers[].summary.projects[].operations.verification_message_findings{}": "integer",
     "ledgers[].summary.projects[].operations.verification_outcomes": "map",
     "ledgers[].summary.projects[].operations.verification_outcomes{}": "integer",
     "ledgers[].summary.projects[].operations.verification_method_outcomes": "map",

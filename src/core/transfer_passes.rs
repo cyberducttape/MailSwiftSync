@@ -781,6 +781,10 @@ pub struct ProjectOperationMetrics {
     /// Current outcome cross-tabulated by evidence method, so an aggregate
     /// total match cannot be confused with per-message metadata or body proof.
     pub verification_method_outcomes: std::collections::BTreeMap<String, usize>,
+    /// Current message-level findings from each mailbox's latest durable
+    /// evidence row. `probable` denotes lower-confidence matches, not a
+    /// confirmed difference.
+    pub verification_message_findings: std::collections::BTreeMap<String, usize>,
 }
 
 impl StateStore {
@@ -853,6 +857,33 @@ impl StateStore {
             metrics
                 .verification_method_outcomes
                 .insert(format!("{method}:{outcome}"), count);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1",
+        )?;
+        for row in statement.query_map([project_id], |row| {
+            Ok((
+                super::sqlite_usize(row.get(0)?)?,
+                super::sqlite_usize(row.get(1)?)?,
+                super::sqlite_usize(row.get(2)?)?,
+                super::sqlite_usize(row.get(3)?)?,
+            ))
+        })? {
+            let (missing, extra, modified, probable) = row?;
+            for (kind, count) in [
+                ("missing", missing),
+                ("extra", extra),
+                ("modified", modified),
+                ("probable", probable),
+            ] {
+                let total = metrics
+                    .verification_message_findings
+                    .entry(kind.to_owned())
+                    .or_default();
+                *total = total
+                    .checked_add(count)
+                    .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+            }
         }
         Ok(metrics)
     }

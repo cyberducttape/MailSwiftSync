@@ -107,9 +107,11 @@ throughput measure. `verification_method_outcomes` provides the same
 current evidence counts as `method:outcome` keys (for example,
 `metadata_reconciliation:exact_metadata_match` versus
 `native_dovecot:exact_metadata_match`) so aggregate totals are not mistaken for
-per-message reconciliation. Mailbox state counts and `attention_reason_counts`
-give the recovery backlog. Alert on rates between successive polls rather than
-on absolute totals.
+per-message reconciliation. `verification_message_findings` carries current
+missing, extra, modified, and probable-match counts from each mailbox's latest
+evidence. Mailbox state counts and `attention_reason_counts` give the recovery
+backlog. Alert on rates between successive polls rather than on absolute
+totals.
 
 `schema_version` is the SQLite ledger schema version. It changes whenever the
 storage schema migrates and is **not** a compatibility signal: dispatch on
@@ -145,6 +147,7 @@ or endpoint labels. The metric contract is:
 | `mailswiftsync_unfinished_attempt_bytes_copied` | Gauge | Byte counterpart, also a persisted snapshot rather than a transfer rate or lifetime total. |
 | `mailswiftsync_transfer_attempt_outcomes_total{outcome}` | Counter | Attempt outcomes with a fixed allowlist; unknown values collapse to `other`. `failed:capacity` is a capacity failure category, not a provider-throttle event counter. |
 | `mailswiftsync_verification_mailboxes{method,outcome}` | Gauge | Current persisted mailbox evidence counts, not message counts. Labels use fixed allowlists; unknown values collapse to `other`. |
+| `mailswiftsync_verification_message_findings{kind}` | Gauge | Current latest-evidence counts by `missing`, `extra`, `modified`, or `probable`; probable matches are not confirmed differences. |
 
 Progress gauges reflect the last committed checkpoint for attempts still
 lacking a terminal outcome; they can be stale after a crash and do not prove
