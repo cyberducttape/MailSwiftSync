@@ -992,6 +992,11 @@ fn credential_fingerprint_changes_without_exposing_secret_material() {
         first.credential_fingerprint(),
         second.credential_fingerprint()
     );
+    assert_eq!(first.plan_fingerprint(), second.plan_fingerprint());
+    assert_ne!(
+        first.credential_binding_fingerprint(),
+        second.credential_binding_fingerprint()
+    );
     assert!(!first.credential_fingerprint().contains("source-one"));
     assert!(!first.credential_fingerprint().contains("destination-one"));
 }

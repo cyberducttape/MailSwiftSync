@@ -84,6 +84,9 @@ ENV MAILSWIFTSYNC_STATE_PATH=/var/lib/mailswiftsync/state.db \
 # short-lived process files stay in the container's ephemeral filesystem; a
 # deployment should mount /run/user/10001 as tmpfs when it needs an explicit
 # volatile boundary.
+# Container replacement therefore preserves the ledger but not runtime
+# passfiles. Operators must reprovision keyring/secret-manager access and run
+# authenticated preflight before resuming work that needs credentials.
 VOLUME ["/var/lib/mailswiftsync"]
 USER mailswiftsync
 WORKDIR /var/lib/mailswiftsync

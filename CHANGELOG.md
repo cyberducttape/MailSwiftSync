@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Keep the migration configuration fingerprint independent of secret bytes
+  while testing that static-secret rotation changes the process-local preflight
+  credential binding; add an exact-image CI check for Docker state-volume
+  persistence versus ephemeral runtime files. Clarify that OAuth recovery
+  records are owner-only but unencrypted, and that container-volume smoke tests
+  do not qualify SQLite recovery, backups, or host power-loss durability.
 - Document subprocess reader counters and platform caveats; verify destructive
   sync's default-off/production-policy, confirmation, same-plan preflight, and
   durable-plan boundaries, including the absence of identity-bound approval in

@@ -8,6 +8,25 @@ operator procedures are the security boundary.
 
 ## Provisioning for a headless service
 
+For the distributed container image, `/var/lib/mailswiftsync` is the only
+declared persistent volume. The ledger and its recovery history survive
+container replacement when that volume is retained; runtime passfiles and
+short-lived process files under `/run/user/10001` do not. A replacement
+container must regain the approved keyring or secret-manager access and pass
+authenticated preflight before live work can resume. Do not persist the runtime
+directory merely to make a missing credential file appear recoverable. CI
+tests Docker's state-volume versus container-filesystem boundary using marker
+files; it does not prove SQLite ledger recovery or emulate host power loss,
+volume-driver guarantees, backups, or restoration. Qualify those against the
+actual deployment storage.
+
+OAuth refresh-rotation recovery records are protected by owner-only filesystem
+permissions, but are not encrypted by MailSwiftSync. They may contain refresh
+configuration material. Root access, storage snapshots, backups, or a
+compromised service UID remain within the trust boundary. Use encrypted storage
+or an external secret manager with a tested restore path when those threats
+are in scope; filesystem permissions alone are not encryption.
+
 1. Create a dedicated, non-login service identity where practical, with access
    only to its ledger/runtime directories, approved engine binary, and
    explicitly selected CA files. Never run the controller or migration engine

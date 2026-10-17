@@ -359,6 +359,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build container image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:ci .
+      - name: Verify container state and runtime persistence boundary
+        run: bash scripts/container-persistence-smoke.sh mailswiftsync:ci
       - name: Smoke-test container CLI
         run: docker run --rm mailswiftsync:ci --version
       - name: Smoke-test bundled imapsync
