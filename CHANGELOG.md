@@ -24,6 +24,8 @@
   current-head repeat run and validate each exported proof digest.
 - Keep secret-shaped diagnostic redaction fixtures out of assertion failure
   messages so a failing test cannot echo the fixture into CI logs.
+- Redact bare usernames and account identifiers in diagnostic transcripts,
+  while preserving already-pseudonymized mailbox identifiers.
 - Align the Fedora RPM install smoke test and service deployment guide with the
   package's nested `docs/distribution` paths, and assert the RPM, workflow, and
   operator guide agree.

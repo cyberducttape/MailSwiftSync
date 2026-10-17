@@ -700,7 +700,7 @@ fn is_uri_authority_at(line: &str, at: usize) -> bool {
 /// lines. This protects support transcripts without mutating the semantic
 /// engine stream used by verification.
 fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinuation) -> String {
-    const KEYS: [&str; 44] = [
+    const KEYS: &[&str] = &[
         "client_secret",
         "client-secret",
         "clientsecret",
@@ -723,6 +723,26 @@ fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinua
         "token",
         "credential",
         "bearer",
+        "source_user",
+        "destination_user",
+        "source-user",
+        "destination-user",
+        "sourceuser",
+        "destinationuser",
+        "username",
+        "user_name",
+        "user-name",
+        "user name",
+        "userid",
+        "user_id",
+        "user-id",
+        "user id",
+        "user",
+        "account_name",
+        "account-name",
+        "accountname",
+        "account name",
+        "account",
         "source_mailbox",
         "destination_mailbox",
         "source-mailbox",
@@ -820,7 +840,7 @@ fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinua
                 continuation.escaped = escaped;
             }
             (begin, end)
-        } else if key == "authorization"
+        } else if *key == "authorization"
             && (lower[value_start..].starts_with("bearer ")
                 || lower[value_start..].starts_with("basic "))
         {
@@ -848,6 +868,10 @@ fn redact_sensitive_fields(line: &str, continuation: &mut SensitiveFieldContinua
         };
         if value_end <= value_begin {
             search = key_start + key.len();
+            continue;
+        }
+        if *key == "user" && line[value_begin..value_end].contains("[mailbox:") {
+            search = value_end;
             continue;
         }
         output.push_str(&line[cursor..value_begin]);
@@ -1191,6 +1215,21 @@ mod tests {
         assert!(!sanitized.contains("msg-42@example.test"));
         assert_eq!(sanitized.matches("[mailbox:").count(), 2);
         assert!(sanitized.contains("Login user=<[mailbox:"));
+    }
+
+    #[test]
+    fn diagnostic_lines_redact_bare_account_and_username_values() {
+        let sanitized = sanitize_private_metadata(
+            "Login user=<admin> username=night-operator source_user:archive account_name='billing'",
+        );
+
+        for private_value in ["admin", "night-operator", "archive", "billing"] {
+            assert!(!sanitized.contains(private_value));
+        }
+        assert!(sanitized.contains("user=[REDACTED]"));
+        assert!(sanitized.contains("username=[REDACTED]"));
+        assert!(sanitized.contains("source_user:[REDACTED]"));
+        assert!(sanitized.contains("account_name='[REDACTED]'"));
     }
 
     #[test]
