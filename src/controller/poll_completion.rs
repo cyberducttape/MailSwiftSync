@@ -102,15 +102,17 @@ impl App {
                 };
                 // A transfer that completed without evidence records why
                 // verification fell short, including any safety limit.
-                let verification_failure =
-                    (succeeded && !run_context.dry_run && terminal_evidence.is_none())
-                        .then_some(self.pending_verification_failure.as_deref())
-                        .flatten();
+                let verification_missing =
+                    succeeded && !run_context.dry_run && terminal_evidence.is_none();
                 let detail = r.as_ref().err().map_or_else(
                     || {
-                        verification_failure
-                            .map(crate::controller::failure::incomplete_verification_detail)
-                            .unwrap_or_default()
+                        if verification_missing {
+                            crate::controller::failure::completed_without_verification_detail(
+                                self.pending_verification_failure.as_deref(),
+                            )
+                        } else {
+                            String::new()
+                        }
                     },
                     |error| {
                         let provider = crate::controller::failure::provider_for_sided_error(

@@ -6,6 +6,9 @@
   the qualified Dovecot package versions, and scan PR/release images with
   checksum-pinned Trivy; retain full CVE reports and scanner/database identity,
   and block fixable HIGH or CRITICAL findings.
+- Persist an explicit verification-incomplete reason when a completed live
+  transfer emits neither verification evidence nor a diagnostic, so attention
+  runs cannot have an empty terminal detail.
 - Refresh the locked Linux D-Bus dependency patch releases. RustSec still
   classifies `zbus_names`, `zvariant`, and `zvariant_derive` as unmaintained
   (RUSTSEC-2026-0371, -0370, and -0372); they remain transitive desktop,
