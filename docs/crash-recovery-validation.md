@@ -34,9 +34,26 @@ and repeatable, and a new journal would add its own failure states.
 
 ### Current-head local process and ledger fault drills
 
-On 2026-10-17, the repository's `process-supervision-chaos-smoke.sh`,
-`controller-recovery-smoke.sh`, and `controller-chaos-smoke.sh` all passed
-against the normal debug binary built from commit
+On 2026-10-17, the same three drills were rerun against a debug binary built
+from commit `c0bbd127b4912b97b3e09570fdf75cd2ca54916c` with Rust 1.92.0. The
+binary reported that full commit and had SHA-256
+`1b1a4a1f358c17c5e5426298a4dfc5caf89c71853e98b3321734bb3560ef49d1`.
+`process-supervision-chaos-smoke.sh` proved missing and invalid release tokens
+did not start the fake engine, while a valid `GO` token did. The controller
+recovery drill killed the controller and engine in separate phases, then
+confirmed the interrupted run remained durable and was classified for review.
+The controller chaos drill injected `RLIMIT_FSIZE` during ledger creation,
+checked that the ledger reopened after lifting the limit, rejected truncated
+and corrupt backups without replacing live state, and restored a verified
+backup over a deliberately corrupted ledger. All three scripts passed on
+Ubuntu 26.04.1 x86_64 (kernel `7.0.0-38-generic`). These use disposable local
+fixtures and a fake engine; `RLIMIT_FSIZE` is not a physically full filesystem.
+They do not qualify imapsync/Dovecot behavior, host reboot, power loss, or
+storage-controller cache durability.
+
+Earlier on 2026-10-17, the repository's `process-supervision-chaos-smoke.sh`,
+`controller-recovery-smoke.sh`, and `controller-chaos-smoke.sh` passed against
+the normal debug binary built from commit
 `5a7129642d42f7b21b022d6601a81634a758cc1a` (MailSwiftSync 0.1.0-alpha.1;
 SHA-256 `04af4380a9dcbf9721cf44b9e0e7ff228f7a308d20fc38c0ee193ea08283f1d7`).
 The build embedded that full commit SHA. The host was Ubuntu 26.04.1 x86_64,
