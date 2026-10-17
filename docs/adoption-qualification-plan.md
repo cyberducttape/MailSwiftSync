@@ -31,6 +31,23 @@ The following reproducible lab runs are retained as engineering evidence
 only; they do not satisfy the required size matrix, direct-imapsync comparison,
 provider qualification, or signed-result acceptance criteria.
 
+### 2026-10-17: packaged verification-provenance and recovery regression run
+
+| Field | Observed value |
+|---|---|
+| GitHub Actions run / commit | [38990560765](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38990560765) / `310b2e33d993c10a5c7f4e382b12fc47cdc2fa1d` (reporting fix in parent `9c1319b28016398f4f022e7cbbd1a5eb5d1499a2`) |
+| Runner / fixture | `ubuntu-24.04`; packaged runtime; disposable generic IMAP backed by Dovecot `2.3.19.1 (9b53102964)` |
+| Packaged imapsync | `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875` |
+| Migration evidence | Initial 16/16 and post-delta 17/17 messages; zero missing, extra, modified, failed, or unmatched; FLAGS 100% covered; Level 2 metadata only, bodies not compared; cutover readiness not established. |
+| Consistency evidence | Exported customer proofs contain the live transfer-attempt scan intervals and `unchanged_at_revalidation` for both endpoints. The post-delta export separately identifies its standalone verification run and second transfer attempt. These sequential cursor checks are not an atomic snapshot. |
+| Fault coverage | Packaged OAuth reconnect callback, real-server transfer, controller crash/recovery, ledger size-limit/corruption/restore, and destination write-limit fault all passed. |
+| Artifacts | [Packaged IMAP artifact 12085675391](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38990560765/artifacts/12085675391), uploaded archive SHA-256 `c39fa2402c28852f7d74e8588ffb542b71fd7d0cc8d2ff370529f8f25d0c2f0d`; [native Dovecot artifact 12084747899](https://github.com/cyberducttape/MailSwiftSync/actions/runs/38990560765/artifacts/12084747899). Initial proof SHA-256 `6d1a92d455d856caf3985b6795eef65223ec2db385e4f70a2bd91beea1678dd1`; post-delta proof SHA-256 `2cc54a4571aff381e5772134526679ce122c25d8dadc8bbba2645fa0bcabc377`. |
+
+This is unsigned generic-lab evidence. It validates report provenance and the
+listed fixture-scoped fault paths only; it is not hosted-provider qualification,
+large-mailbox evidence, body-integrity proof, a direct-engine comparison, or
+power-loss qualification.
+
 ### 2026-10-12: current-main 10k-message / 1 GiB aggregate payload run
 
 | Field | Observed value |
