@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Document subprocess reader counters and platform caveats; verify destructive
+  sync's default-off/production-policy, confirmation, same-plan preflight, and
+  durable-plan boundaries, including the absence of identity-bound approval in
+  this local single-owner product.
+- Track active subprocess reader threads and cumulative detached-reader/drain
+  timeout counts in drain-failure diagnostics; add a repeated inherited-pipe
+  regression proving released reader threads exit.
 - Replace first-match secret-option removal with validated removal of every
   generated placeholder pair; malformed/duplicate options are flagged and an
   adjacent CLI switch is preserved rather than consumed as a value.

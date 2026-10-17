@@ -56,6 +56,7 @@ unattended release:
 | Invalid release token | Engine never starts and launcher exits nonzero | `process-supervision-chaos-smoke.sh` |
 | Valid release token | Engine starts only after release; controller recovery covers recorded ownership | `process-supervision-chaos-smoke.sh` plus controller recovery lab |
 | Controller SIGKILL during a running transfer | Durable run remains for recovery; no false completion | `controller-recovery-smoke.sh` |
+| Descendant retains stdout/stderr pipes, repeated across captures | Reader drain returns within its deadline; error reports active readers, cumulative detached-reader count, and cumulative drain timeouts. Release test descendants and confirm their reader threads exit rather than accumulating. | Linux inherited-pipe integration test and repeated reader-counter unit test; Windows pipe/job behavior still requires native qualification |
 | Ledger write limit/corruption | Operation fails closed; ledger remains recoverable or restoreable | `controller-chaos-smoke.sh` |
 | PID reuse or identity mismatch | Existing process is never signalled as the old engine | Rust process-identity tests |
 | Windows parent termination | Descendants terminate with the Job Object | Windows native CI qualification |
@@ -63,6 +64,12 @@ unattended release:
 
 The first seven rows are automated or CI-qualified where noted. The final
 row remains a release blocker and cannot be inferred from process-level tests.
+Reader counts are process-local diagnostics: `active` is a live gauge,
+`detached_total` and `drain_timeouts_total` are cumulative for the controller
+lifetime, and each drain failure reports their values. They are not a durable
+fleet metric or an automatic paging integration. Unix process groups and
+Windows Job Objects bound supervised descendants differently; a pipe retained
+by a process outside that ownership boundary may outlive either supervisor.
 
 ## Real-engine concurrency matrix
 

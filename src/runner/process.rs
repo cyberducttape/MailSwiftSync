@@ -317,7 +317,7 @@ pub(crate) fn run_capture_lines(
     let out_secrets = reader_secrets.clone();
     let out_observer = observer.clone();
     let (out_reader_tx, out_reader_rx) = mpsc::sync_channel(1);
-    let out_thread = thread::spawn(move || {
+    let out_thread = crate::process::spawn_reader_thread(move || {
         let result = crate::process::collect_revocably_redacted_lines_with_callback(
             stdout,
             &out_secrets,
@@ -332,7 +332,7 @@ pub(crate) fn run_capture_lines(
     let err_secrets = reader_secrets.clone();
     let err_observer = observer;
     let (err_reader_tx, err_reader_rx) = mpsc::sync_channel(1);
-    let err_thread = thread::spawn(move || {
+    let err_thread = crate::process::spawn_reader_thread(move || {
         let result = crate::process::collect_revocably_redacted_lines_with_callback(
             stderr,
             &err_secrets,

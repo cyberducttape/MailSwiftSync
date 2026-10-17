@@ -149,7 +149,8 @@ fn oauth_refresh_docs_disclose_the_windows_callback_boundary() {
     let security = fs::read_to_string("docs/wiki/Security-and-profiles.md")
         .expect("security guide should exist");
     let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
-        .expect("production runbook should exist");
+        .expect("production runbook should exist")
+        .replace('\n', " ");
 
     for document in [
         &readme, &release, &alpha, &service, &bulk, &security, &runbook,
@@ -432,6 +433,26 @@ fn security_docs_preserve_tls_stack_and_customer_isolation_boundaries() {
         assert!(
             runbook.contains(isolation),
             "missing customer isolation control: {isolation}"
+        );
+    }
+}
+
+#[test]
+fn destructive_sync_docs_require_plan_bound_local_confirmation() {
+    let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
+        .expect("production runbook should exist")
+        .replace('\n', " ");
+    for requirement in [
+        "disabled in the default profile",
+        "production organization policy rejects",
+        "separate destructive confirmation",
+        "same plan fingerprint",
+        "immutable run snapshot records the endpoints",
+        "no authenticated operator identity",
+    ] {
+        assert!(
+            runbook.contains(requirement),
+            "missing destructive-operation guard: {requirement}"
         );
     }
 }
