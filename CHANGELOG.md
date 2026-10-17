@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Clarify the Basic/Standard/Forensic evidence contract, exact RFC822 body-hash
+  semantics, and partial-coverage limits; expand the still-open hypervisor
+  power-cut matrix to include runtime secrets, checkpoints, evidence commits,
+  report signing, and explicit recovery outcomes.
 - Reject imapsync `--useuid` plus `--usecache` plans under production
   organization policy because an interrupted in-flight APPEND can duplicate a
   message on resume; compatibility and lab policies retain the explicitly

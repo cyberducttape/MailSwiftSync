@@ -359,6 +359,38 @@ fn crash_recovery_docs_record_current_head_local_fault_drills_with_limits() {
 }
 
 #[test]
+fn production_docs_keep_body_proof_and_power_loss_claims_bounded() {
+    let verification = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope should exist");
+    for claim in [
+        "does not establish",
+        "exact RFC822 byte sequence",
+        "must not be described as fully content-verified",
+    ] {
+        assert!(
+            verification.contains(claim),
+            "missing claim boundary: {claim}"
+        );
+    }
+
+    let durability = fs::read_to_string("docs/durability-and-concurrency-validation.md")
+        .expect("durability validation plan should exist");
+    for cut_point in [
+        "temporary runtime-secret creation",
+        "Dovecot checkpoint",
+        "verification-page/cursor commit",
+        "report signing",
+        "explicitly marked for manual intervention",
+    ] {
+        assert!(
+            durability.contains(cut_point),
+            "missing power-cut case: {cut_point}"
+        );
+    }
+    assert!(durability.contains("not substitutes for this campaign"));
+}
+
+#[test]
 fn crash_recovery_docs_bound_engine_storage_fault_claim_to_ci_fixture() {
     let recovery = fs::read_to_string("docs/crash-recovery-validation.md")
         .expect("crash-recovery validation matrix should exist");

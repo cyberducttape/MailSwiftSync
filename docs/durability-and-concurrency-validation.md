@@ -14,23 +14,32 @@ filesystem write ordering, journal recovery, or boot-time recovery.
 ## Power-loss campaign
 
 Run this campaign on an ephemeral VM with disposable source and destination
-mail systems. Start a migration, wait for a durable running state and at least
-one committed progress/evidence boundary, then cut power through the
-hypervisor rather than sending a process signal. After reboot:
+mail systems. Use hypervisor power cuts, not process signals, at each boundary
+below. Record the exact artifact digest, filesystem and mount options, SQLite
+settings, cut point, and VM image for every trial.
 
-1. Open the ledger and run integrity checks before recovery.
-2. Run `mailswiftsync recover` and record every resulting operator-attention
-   or resumable state.
-3. Resume the migration and verification using the normal workflow.
-4. Compare the final ledger, evidence, mismatch counts, certificate digest,
-   and destination inventory with a clean control run.
+| Cut point | Required post-reboot behavior |
+| --- | --- |
+| Before durable run admission; after admission but before process registration | No engine starts without durable ownership; an admitted but unstarted run is recoverable or explicitly requires review. |
+| After process identity registration but before launcher release; immediately after release | No unowned engine is mistaken for a successful run; recovery either proves process identity and ownership or leaves the run for operator review. |
+| During active transfer and while a Dovecot checkpoint is being written | No false terminal success; source/destination state and checkpoint identity are revalidated before resume. Uncertain in-flight messages are reconciled before completion. |
+| During temporary runtime-secret creation, use, and cleanup | No secret is treated as valid after an ambiguous partial write; abandoned secret material is detected and handled by the recovery procedure. |
+| During verification-page/cursor commit and terminal evidence transaction | SQLite integrity holds; page/cursor and evidence transactions are wholly committed or rolled back, with no stronger claim than recovered rows support. |
+| During checkpoint synchronization, backup creation, report signing, and atomic export | The prior durable artifact remains intact or the new artifact is complete and verifiable; partial output is never presented as a valid certificate. |
 
-Vary the cut point across admission, process registration, engine transfer,
-verification staging, evidence commit, backup creation, and atomic export.
-Repeat hundreds of cuts per supported filesystem/runtime class, retain the VM
-image, ledger backup, recovery JSON, and final comparison for every failure,
-and fail the campaign on silent completion, unreadable state, unexpected data
-loss, or evidence stronger than the observed coverage.
+After each reboot, open the ledger and run integrity checks before recovery;
+run `mailswiftsync recover` and record every operator-attention or resumable
+state; resume only when ownership and checkpoint provenance are established;
+then compare the ledger, evidence, mismatch counts, certificate digest,
+secret-file state, and destination inventory with a clean control run.
+
+Acceptance: every interrupted job is safely repeatable, recoverable, or
+explicitly marked for manual intervention. No trial may report success from
+process exit alone, reuse an ambiguous checkpoint, or claim evidence stronger
+than recovered observations support. Retain the VM image, ledger backup,
+recovery JSON, and final comparison. Exercise every boundary repeatedly across
+supported filesystem/runtime classes; process kills and SQLite unit tests are
+not substitutes for this campaign.
 
 Until this campaign has run, the release claim is limited to controller
 crash/process-loss and storage-fault recovery. It must not be described as

@@ -4,6 +4,28 @@ This document separates implementation admission limits from measured scale
 and provider qualification. A configured ceiling is not a claim that every
 provider, mailbox shape, or host has been qualified at that size.
 
+## Verification policy and claim boundaries
+
+The product exposes evidence methods rather than three interchangeable
+“verified” badges. This mapping clarifies Basic, Standard, and Forensic policy
+tiers without overstating what each one proves:
+
+| Policy tier | Current evidence method | Establishes | Does not establish |
+| --- | --- | --- | --- |
+| Basic | Aggregate/engine evidence | Observed folder, message, and byte totals within the engine's reported scope | Individual message identity, FLAGS fidelity, or message content equality |
+| Standard | Per-message metadata reconciliation | Reconciled message identities and modeled metadata; FLAGS/keywords only where their evidence coverage is complete | RFC822 body or attachment equality |
+| Forensic | Bounded body-hash verification, in addition to metadata pairing | SHA-256 equality of exact fetched RFC822 bytes for every message admitted to that run's complete bounded scope | A universal full-mailbox claim when any message is outside limits; provider qualification; unrelated mailbox state such as ACLs, subscriptions, or service behavior |
+
+Forensic hashing does not normalize MIME or rewrite message content before
+hashing: it compares the exact RFC822 byte sequence returned by each IMAP
+server. Bodies are fetched only after metadata reconciliation establishes the
+pairing. If a required body cannot be fetched, exceeds a configured limit, or
+the total scope exceeds budget, the run fails closed or remains incomplete; it
+must not be described as fully content-verified. “Forensic” is the UI policy
+name, not a claim that every message in every mailbox was covered. Customer and
+operator outputs must retain the explicit Level 3 “bounded content fingerprints”
+label and coverage/exception counts.
+
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
 | Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
