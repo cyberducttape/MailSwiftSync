@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Compile every nightly fuzz target locally and mark intentionally unused
+  provider identity helpers in the provider-error fuzz harness, keeping the
+  full parser/safety-target build warning-free.
 - Request a TLS 1.2-or-newer protocol floor on both encrypted imapsync
   connections, matching the native Rustls probe; make the packaged IMAP lab's
   Dovecot server floor explicit and add a packaged IO::Socket::SSL smoke test
