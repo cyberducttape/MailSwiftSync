@@ -3,10 +3,10 @@
 ## Unreleased
 
 - Request a TLS 1.2-or-newer protocol floor on both encrypted imapsync
-  connections, matching the native Rustls probe, and add argument-level
-  regressions. Exact packaged Perl/IO::Socket::SSL enforcement, downgrade
-  rejection, and negotiated-protocol evidence remain integration qualification
-  gates.
+  connections, matching the native Rustls probe; make the packaged IMAP lab's
+  Dovecot server floor explicit and add argument/configuration regressions.
+  Exact packaged Perl/IO::Socket::SSL enforcement, TLS 1.0/1.1 rejection, and
+  negotiated-protocol evidence remain integration qualification gates.
 - Repeat the complete durable typical-shape verification benchmark matrix on
   the current clean head through 1,000,000 messages per endpoint; record the
   test-harness and release-binary digests, verify the binary embeds the full

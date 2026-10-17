@@ -449,6 +449,17 @@ fn security_docs_preserve_tls_stack_and_customer_isolation_boundaries() {
 }
 
 #[test]
+fn packaged_imapsync_lab_uses_an_explicit_tls_12_server_floor() {
+    let harness = fs::read_to_string("scripts/imap-integration-smoke.sh")
+        .expect("IMAP integration harness should exist");
+    assert!(
+        harness.contains("ssl_min_protocol = TLSv1.2")
+            && harness.contains("dovecot_ssl_min_protocol=TLSv1.2"),
+        "the packaged-engine integration artifact must state and enforce the TLS 1.2 fixture floor"
+    );
+}
+
+#[test]
 fn destructive_sync_docs_require_plan_bound_local_confirmation() {
     let runbook = fs::read_to_string("docs/wiki/Production-runbook.md")
         .expect("production runbook should exist")
