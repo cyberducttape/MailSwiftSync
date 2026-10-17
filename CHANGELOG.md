@@ -5,6 +5,9 @@
 - Reject migration plans whose source and destination resolve to the same
   normalized IMAP host, effective port, and case-folded username, while
   allowing distinct IMAP services on different ports of one host.
+- Normalize IPv4-mapped IPv6 endpoint literals to their IPv4 identity so
+  self-copy and destination-collision checks cannot be bypassed by address
+  spelling alone.
 - Treat the same normalized IMAP host and username as one mailbox identity in
   the provider-smoke self-copy guard regardless of port, while still
   validating the configured ports; cover a 143/993 alias collision.

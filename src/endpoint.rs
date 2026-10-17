@@ -136,7 +136,10 @@ fn destination_identity(
         return Err("destination endpoint port must be between 1 and 65535".into());
     }
     let host = match host.parse::<std::net::IpAddr>() {
-        Ok(address) => address.to_string(),
+        Ok(std::net::IpAddr::V4(address)) => address.to_string(),
+        Ok(std::net::IpAddr::V6(address)) => address
+            .to_ipv4_mapped()
+            .map_or_else(|| address.to_string(), |mapped| mapped.to_string()),
         Err(_) => host.trim_end_matches('.').to_ascii_lowercase(),
     };
     let mailbox = if force_casefold || mailbox_case_insensitive_for_host(&host) {
@@ -278,6 +281,21 @@ mod tests {
                 .unwrap(),
             "endpoint:2001:db8::1:143:User@example.test"
         );
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_and_ipv4_share_destination_identity() {
+        let ipv4 =
+            canonical_destination_identity("user@example.test", "192.0.2.10", "imaps", "").unwrap();
+        let mapped_dotted =
+            canonical_destination_identity("user@example.test", "[::ffff:192.0.2.10]", "imaps", "")
+                .unwrap();
+        let mapped_hex =
+            canonical_destination_identity("user@example.test", "[::ffff:c000:20a]", "imaps", "")
+                .unwrap();
+
+        assert_eq!(ipv4, mapped_dotted);
+        assert_eq!(ipv4, mapped_hex);
     }
 
     #[test]
