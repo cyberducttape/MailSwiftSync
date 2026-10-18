@@ -371,17 +371,21 @@ impl MessageMetadataStage {
 
     #[allow(dead_code)]
     pub(crate) fn finish(&mut self) -> Result<(), String> {
-        self.retain_on_drop = false;
-        let mut errors = Vec::new();
         if let Some(connection) = self.connection.take() {
             match connection.close() {
                 Ok(()) => {}
                 Err((connection, error)) => {
                     self.connection = Some(connection);
-                    errors.push(format!("could not close verification stage: {error}"));
+                    // Keep the durable stage if SQLite could not close it.
+                    // Deleting its pathname while the connection is still
+                    // live can unlink recoverable state (and can race with
+                    // SQLite's eventual sidecar cleanup).
+                    return Err(format!("could not close verification stage: {error}"));
                 }
             }
         }
+        self.retain_on_drop = false;
+        let mut errors = Vec::new();
         if let Some(path) = self.path.as_ref() {
             errors.extend(cleanup_stage_files(path, self.remove_parent_on_cleanup));
         }
@@ -1967,6 +1971,48 @@ mod tests {
         assert_eq!(stage.folder_cursors().unwrap()[0].last_uid, 0);
         stage.finish().unwrap();
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn failed_close_preserves_durable_verification_stage() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+
+        // Hold a statement outside rusqlite's statement tracking so close()
+        // reports SQLITE_BUSY, as it can when a live SQLite handle remains.
+        let mut statement = std::ptr::null_mut();
+        let sql = c"SELECT 1";
+        // SAFETY: `stage` owns a live SQLite connection, `sql` is a valid
+        // NUL-terminated query, and the statement pointer is finalized below.
+        let result = unsafe {
+            rusqlite::ffi::sqlite3_prepare_v2(
+                stage.connection_ref().unwrap().handle(),
+                sql.as_ptr(),
+                -1,
+                &mut statement,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(result, rusqlite::ffi::SQLITE_OK);
+
+        let error = stage.finish().unwrap_err();
+        assert!(error.contains("could not close verification stage"));
+        assert!(path.exists(), "failed close must retain the durable stage");
+
+        // SAFETY: `statement` was successfully prepared above and has not
+        // been finalized or invalidated by the failed close.
+        assert_eq!(
+            unsafe { rusqlite::ffi::sqlite3_finalize(statement) },
+            rusqlite::ffi::SQLITE_OK
+        );
+        drop(stage);
+        assert!(
+            path.exists(),
+            "drop after failed close must not delete the stage"
+        );
+
+        let _ = cleanup_stage_files(&path, true);
     }
 
     #[test]
