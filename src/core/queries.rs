@@ -92,6 +92,7 @@ impl StateStore {
     /// Test for automation-safe work without materializing mailbox rows. This
     /// is intentionally separate from the bounded status projection: service
     /// supervision must not mistake a truncated first page for an idle queue.
+    #[cfg(test)]
     pub fn project_has_automation_safe_batch_work(
         &self,
         project_id: &str,
@@ -101,6 +102,33 @@ impl StateStore {
             [project_id],
             |row| row.get(0),
         )
+    }
+
+    /// Return the oldest project with automation-safe durable batch work.
+    /// Supervision must search the whole ledger rather than assuming the
+    /// newest project is the only active queue. Stable creation ordering also
+    /// prevents newer idle projects from hiding older pending work.
+    pub fn oldest_project_with_automation_safe_batch_work(
+        &self,
+    ) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT p.id FROM projects p
+                 WHERE length(trim(p.name)) > 0
+                   AND EXISTS (
+                     SELECT 1 FROM mailbox_jobs m
+                     LEFT JOIN batch_plans b ON b.id=m.batch_plan_id
+                     WHERE m.project_id=p.id
+                       AND COALESCE(m.config,b.config) IS NOT NULL
+                       AND length(trim(COALESCE(m.config,b.config))) > 0
+                       AND (m.state IN ('queued','ready','completed','delta_required','cancelled')
+                            OR (m.state='failed' AND m.attention_reason IN ('transport_failed','capacity_limited')))
+                   )
+                 ORDER BY p.created_at ASC, p.rowid ASC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
     }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection

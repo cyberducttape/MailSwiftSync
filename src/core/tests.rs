@@ -3641,6 +3641,78 @@ fn automation_work_query_is_exact_without_materializing_rows() {
 }
 
 #[test]
+fn supervisor_finds_older_actionable_projects_and_moves_on_after_completion() {
+    let directory = crate::credentials::create_secret_directory().unwrap();
+    let path = directory.join("supervisor.db");
+    let db = StateStore::open(&path).unwrap();
+    let (older, older_jobs) = db
+        .create_project_with_mailbox_configs(
+            "older actionable project",
+            "source-a",
+            "destination-a",
+            &[("one".into(), "one".into(), "engine = \"imap\"".into())],
+        )
+        .unwrap();
+    let (newer, newer_jobs) = db
+        .create_project_with_mailbox_configs(
+            "newer project",
+            "source-b",
+            "destination-b",
+            &[("two".into(), "two".into(), "engine = \"imap\"".into())],
+        )
+        .unwrap();
+    db.set_mailbox_state(&older_jobs[0], "queued").unwrap();
+    db.set_mailbox_state(&newer_jobs[0], "queued").unwrap();
+
+    assert_eq!(
+        db.oldest_project_with_automation_safe_batch_work()
+            .unwrap()
+            .as_deref(),
+        Some(older.id.as_str()),
+        "a newer project must not hide older actionable work"
+    );
+    drop(db);
+
+    // Selection is entirely ledger-derived, so a restart preserves the same
+    // deterministic next project rather than reverting to latest_project().
+    let db = StateStore::open(&path).unwrap();
+    assert_eq!(
+        db.oldest_project_with_automation_safe_batch_work()
+            .unwrap()
+            .as_deref(),
+        Some(older.id.as_str()),
+        "restart must not strand an older queue behind a newer idle project"
+    );
+
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+            [&older_jobs[0]],
+        )
+        .unwrap();
+    assert_eq!(
+        db.oldest_project_with_automation_safe_batch_work()
+            .unwrap()
+            .as_deref(),
+        Some(newer.id.as_str()),
+        "once the older project is settled, the next eligible project is selected"
+    );
+
+    db.connection
+        .execute(
+            "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+            [&newer_jobs[0]],
+        )
+        .unwrap();
+    assert_eq!(
+        db.oldest_project_with_automation_safe_batch_work().unwrap(),
+        None
+    );
+    drop(db);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn latest_run_summary_is_queryable_for_audit_reports() {
     let db = StateStore::in_memory().unwrap();
     let project = db.create_project("audit", "source", "destination").unwrap();

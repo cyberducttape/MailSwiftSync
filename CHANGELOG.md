@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Make unattended supervision select the oldest project with automation-safe
+  batch work across the whole ledger, restore that project explicitly, and
+  advance to the next eligible project after settlement. This prevents a newer
+  idle (or corrupt) project from hiding older queued migrations; add restart and
+  multi-project fairness regressions.
+- Normalize snapshot file paths without allowing `..` components to escape an
+  absolute root, and label simultaneous missing/extra/modified snapshot
+  differences as `mixed` in both in-memory and streamed reports.
+- Classify supervisor SQLite retry conditions by rusqlite error code instead
+  of parsing vendor-dependent error text.
 - Improve desktop review flow: responsive overview and evidence cards,
   blocker-first preflight groups, a guided verification empty state, and
   contextual next steps and side-by-side folder/UID details for message
