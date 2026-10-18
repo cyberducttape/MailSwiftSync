@@ -862,6 +862,7 @@ pub(crate) fn headless_batch_execute_selected(
         diagnostic_log,
         None,
         None,
+        None,
     )
 }
 
@@ -869,8 +870,9 @@ fn headless_batch_execute_project(
     state_path: &std::path::Path,
     project_id: &str,
     acknowledge_destination_loss: bool,
-) -> Result<String, String> {
-    headless_batch_execute_selected_inner(
+) -> Result<String, HeadlessBatchError> {
+    let mut instance_owned = false;
+    match headless_batch_execute_selected_inner(
         state_path,
         true,
         None,
@@ -878,7 +880,29 @@ fn headless_batch_execute_project(
         None,
         Some(project_id),
         None,
-    )
+        Some(&mut instance_owned),
+    ) {
+        Err(_message) if instance_owned => Err(HeadlessBatchError::InstanceOwned),
+        Err(message) => Err(HeadlessBatchError::Message(message)),
+        Ok(message) => Ok(message),
+    }
+}
+
+#[derive(Debug)]
+enum HeadlessBatchError {
+    InstanceOwned,
+    Message(String),
+}
+
+impl std::fmt::Display for HeadlessBatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InstanceOwned => {
+                formatter.write_str("another MailSwiftSync controller owns the ledger")
+            }
+            Self::Message(message) => formatter.write_str(message),
+        }
+    }
 }
 
 /// Run the approved cutover stage only if it is still the same stage after
@@ -898,6 +922,7 @@ pub(crate) fn headless_cutover_batch_execute(
         None,
         None,
         Some((project_id, expected_stage)),
+        None,
     )
 }
 
@@ -945,6 +970,7 @@ pub(crate) fn validate_cutover_run_admission(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Keeps the supervisor's typed ownership signal local.
 fn headless_batch_execute_selected_inner(
     state_path: &std::path::Path,
     live: bool,
@@ -953,9 +979,18 @@ fn headless_batch_execute_selected_inner(
     diagnostic_log: Option<&std::path::Path>,
     queue_project_override: Option<&str>,
     cutover_guard: Option<(&str, core::CutoverStage)>,
+    instance_owned: Option<&mut bool>,
 ) -> Result<String, String> {
     let mut app = App::try_from_state_path_for_project(Some(state_path), queue_project_override)
         .map_err(|failure| failure.to_string())?;
+    if app.instance_lock_busy {
+        if let Some(instance_owned) = instance_owned {
+            *instance_owned = true;
+        }
+        return Err(
+            "durable state is unavailable because another controller owns the ledger".into(),
+        );
+    }
     if let Some(directory) = diagnostic_log {
         app.diagnostic_logger = Some(std::sync::Arc::new(crate::DiagnosticLogger::create(
             directory,
@@ -1251,14 +1286,11 @@ pub(crate) fn headless_supervise(
                 completed_passes = completed_passes.saturating_add(1);
                 eprintln!("{message}");
             }
-            Err(error)
-                if error.contains("Another MailSwiftSync instance holds the project database")
-                    || error.contains("durable SQLite state is unavailable") =>
-            {
-                eprintln!("Migration supervisor waiting for durable controller ownership: {error}");
+            Err(HeadlessBatchError::InstanceOwned) => {
+                eprintln!("Migration supervisor waiting for durable controller ownership");
                 thread::sleep(poll_interval);
             }
-            Err(error) => return Err(error),
+            Err(HeadlessBatchError::Message(error)) => return Err(error),
         }
     }
 }

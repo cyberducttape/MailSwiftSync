@@ -941,6 +941,26 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_detail_status_covers_every_difference_dimension_combination() {
+        let cases = [
+            ((1, 0, 0), "missing"),
+            ((0, 1, 0), "extra"),
+            ((0, 0, 1), "modified"),
+            ((1, 1, 0), "mixed"),
+            ((1, 0, 1), "mixed"),
+            ((0, 1, 1), "mixed"),
+            ((1, 1, 1), "mixed"),
+        ];
+        for ((missing, extra, modified), expected_status) in cases {
+            assert_eq!(
+                difference_status(missing, extra, modified),
+                expected_status,
+                "counters missing={missing}, extra={extra}, modified={modified}"
+            );
+        }
+    }
+
+    #[test]
     fn detects_missing_extra_and_modified_records() {
         let source = serde_json::json!({"messages":[
             {"account":"a","folder":"INBOX","uidvalidity":1,"uid":1,"sha256":"a"},

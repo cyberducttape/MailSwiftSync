@@ -41,8 +41,8 @@ it on the target distribution.
 Before enabling it, verify the binary and ledger as the service account:
 
 ```text
-sudo -u mailswiftsync /usr/local/bin/mailswiftsync --version
-sudo -u mailswiftsync /usr/local/bin/mailswiftsync status /var/lib/mailswiftsync/state.db
+sudo -u mailswiftsync /usr/bin/mailswiftsync --version
+sudo -u mailswiftsync /usr/bin/mailswiftsync status /var/lib/mailswiftsync/state.db
 sudo systemctl daemon-reload
 sudo systemctl enable --now mailswiftsync-supervise.service
 sudo journalctl -u mailswiftsync-supervise.service -f

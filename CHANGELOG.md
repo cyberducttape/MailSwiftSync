@@ -12,6 +12,11 @@
   differences as `mixed` in both in-memory and streamed reports.
 - Classify supervisor SQLite retry conditions by rusqlite error code instead
   of parsing vendor-dependent error text.
+- Carry ledger lock contention as a typed supervisor condition, so permission,
+  corruption, and other permanent ownership failures are not retried based on
+  diagnostic wording. Align Linux service preflight commands with the unit's
+  `/usr/bin/mailswiftsync` executable path and cover every snapshot difference
+  status combination.
 - Improve desktop review flow: responsive overview and evidence cards,
   blocker-first preflight groups, a guided verification empty state, and
   contextual next steps and side-by-side folder/UID details for message

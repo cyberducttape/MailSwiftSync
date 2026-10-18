@@ -335,6 +335,21 @@ impl<T: Read> PipePolling for T {
 #[derive(Debug)]
 pub(crate) struct InstanceLock(std::fs::File);
 
+#[derive(Debug)]
+pub(crate) enum InstanceLockError {
+    Busy(String),
+    Other(String),
+}
+
+impl std::fmt::Display for InstanceLockError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy(message) => formatter.write_str(message),
+            Self::Other(message) => formatter.write_str(message),
+        }
+    }
+}
+
 impl Drop for InstanceLock {
     fn drop(&mut self) {
         let _ = self.0.unlock();
@@ -417,21 +432,22 @@ pub(crate) fn attach_child_supervisor(child: &Child) -> std::io::Result<ChildSup
 }
 
 pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, String> {
-    let lock_path = state_path.with_extension("lock");
-    acquire_named_lock(
-        &lock_path,
-        "Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.",
-    )
+    acquire_instance_lock_classified(state_path).map_err(|error| error.to_string())
 }
 
-/// Acquire an exclusive owner-only lock at an exact path for a shared
-/// application resource other than a project ledger (for example a rotating
-/// OAuth refresh credential).
-pub(crate) fn acquire_named_lock(
-    lock_path: &Path,
-    busy_message: &str,
-) -> Result<InstanceLock, String> {
-    acquire_named_lock_with_timeout(lock_path, busy_message, Duration::ZERO)
+pub(crate) fn acquire_instance_lock_classified(
+    state_path: &Path,
+) -> Result<InstanceLock, InstanceLockError> {
+    let lock_path = state_path.with_extension("lock");
+    acquire_instance_lock_path(&lock_path)
+}
+
+fn acquire_instance_lock_path(lock_path: &Path) -> Result<InstanceLock, InstanceLockError> {
+    acquire_lock_with_timeout_classified(
+        lock_path,
+        "Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.",
+        Duration::ZERO,
+    )
 }
 
 pub(crate) fn acquire_named_lock_with_timeout(
@@ -439,6 +455,15 @@ pub(crate) fn acquire_named_lock_with_timeout(
     busy_message: &str,
     timeout: Duration,
 ) -> Result<InstanceLock, String> {
+    acquire_lock_with_timeout_classified(lock_path, busy_message, timeout)
+        .map_err(|error| error.to_string())
+}
+
+fn acquire_lock_with_timeout_classified(
+    lock_path: &Path,
+    busy_message: &str,
+    timeout: Duration,
+) -> Result<InstanceLock, InstanceLockError> {
     #[cfg(unix)]
     let file = {
         use std::os::unix::fs::OpenOptionsExt;
@@ -457,18 +482,26 @@ pub(crate) fn acquire_named_lock_with_timeout(
         .read(true)
         .write(true)
         .open(lock_path);
-    let file = file.map_err(|error| format!("could not open application lock: {error}"))?;
+    let file = file.map_err(|error| {
+        InstanceLockError::Other(format!("could not open application lock: {error}"))
+    })?;
     if !file
         .metadata()
-        .map_err(|error| format!("could not inspect application lock: {error}"))?
+        .map_err(|error| {
+            InstanceLockError::Other(format!("could not inspect application lock: {error}"))
+        })?
         .is_file()
     {
-        return Err("application lock is not a regular file".to_owned());
+        return Err(InstanceLockError::Other(
+            "application lock is not a regular file".to_owned(),
+        ));
     }
     #[cfg(any(unix, windows))]
-    crate::credentials::restrict_open_file_permissions(&file).map_err(|error| error.to_string())?;
+    crate::credentials::restrict_open_file_permissions(&file)
+        .map_err(|error| InstanceLockError::Other(error.to_string()))?;
     #[cfg(all(not(unix), not(windows)))]
-    crate::credentials::restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
+    crate::credentials::restrict_file_permissions(&lock_path)
+        .map_err(|error| InstanceLockError::Other(error.to_string()))?;
     let deadline = std::time::Instant::now() + timeout;
     loop {
         match file.try_lock_exclusive() {
@@ -477,7 +510,7 @@ pub(crate) fn acquire_named_lock_with_timeout(
                 if std::time::Instant::now() >= deadline {
                     // Explicitly close a denied contender before returning.
                     drop(file);
-                    return Err(busy_message.to_owned());
+                    return Err(InstanceLockError::Busy(busy_message.to_owned()));
                 }
                 thread::sleep(
                     Duration::from_millis(25)
@@ -485,7 +518,9 @@ pub(crate) fn acquire_named_lock_with_timeout(
                 );
             }
             Err(error) => {
-                return Err(format!("could not acquire application lock: {error}"));
+                return Err(InstanceLockError::Other(format!(
+                    "could not acquire application lock: {error}"
+                )));
             }
         }
     }

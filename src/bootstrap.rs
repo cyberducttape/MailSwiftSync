@@ -109,7 +109,10 @@ impl App {
                 });
         let instance_lock = state_path
             .as_ref()
-            .map(|path| acquire_instance_lock(path.as_path()));
+            .map(|path| crate::process::acquire_instance_lock_classified(path.as_path()));
+        let instance_lock_busy = instance_lock.as_ref().is_some_and(|result| {
+            matches!(result, Err(crate::process::InstanceLockError::Busy(_)))
+        });
         let (store, mut persistence_warning) = match (state_path.as_ref(), instance_lock.as_ref()) {
             (Some(path), Some(Ok(_))) => match core::StateStore::open(path) {
                 Ok(store) => (store, None),
@@ -442,6 +445,7 @@ impl App {
             _instance_lock: instance_lock.and_then(Result::ok),
             process_review_required: unverified_process_count > 0,
             persistence_available: persistence_warning.is_none(),
+            instance_lock_busy,
             profile_available: profile_warning.is_none(),
             selected_project_id: restored_bulk_project_id
                 .clone()

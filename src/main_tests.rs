@@ -2593,6 +2593,10 @@ fn state_lock_prevents_two_instances_and_releases_on_drop() {
     let state_path =
         std::env::temp_dir().join(format!("mailswiftsync-lock-{}.db", uuid::Uuid::new_v4()));
     let first = acquire_instance_lock(&state_path).unwrap();
+    assert!(matches!(
+        crate::process::acquire_instance_lock_classified(&state_path),
+        Err(crate::process::InstanceLockError::Busy(_))
+    ));
     assert!(
         acquire_instance_lock(&state_path)
             .unwrap_err()
