@@ -6,8 +6,9 @@
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
   Windows. Keep expert `imapsync --useuid/--usecache` settings confined to the
-  explicit recovery drill; the standard packaged integration uses the
-  production-safe defaults.
+  explicit recovery drill. The clean default-imapsync integration fixture no
+  longer includes duplicate Message-IDs that upstream intentionally skips;
+  verification still fails closed when such omissions occur.
 - Make unattended supervision select the oldest project with automation-safe
   batch work across the whole ledger, restore that project explicitly, and
   advance to the next eligible project after settlement. This prevents a newer
