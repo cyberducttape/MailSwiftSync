@@ -17,6 +17,9 @@
   diagnostic wording. Align Linux service preflight commands with the unit's
   `/usr/bin/mailswiftsync` executable path and cover every snapshot difference
   status combination.
+- Define MSP alert severities, response owners, and polling limitations for
+  the existing local metrics/status snapshots; explicitly identify operational
+  signals that still require direct review rather than implying coverage.
 - Improve desktop review flow: responsive overview and evidence cards,
   blocker-first preflight groups, a guided verification empty state, and
   contextual next steps and side-by-side folder/UID details for message
