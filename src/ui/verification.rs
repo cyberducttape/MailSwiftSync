@@ -12,16 +12,44 @@ impl App {
             self.language.message("ui.verification"),
             self.language.message("ui.do-not-trust-a-completed-process-until-the-destination-reconciles-with-the-source"),
         );
-        crate::ui::card(ui, |ui| {
-            ui.heading(self.language.message("ui.verification-levels"));
-            for key in [
-                "ui.verification-level-1-description",
-                "ui.verification-level-2-description",
-                "ui.verification-level-3-description",
-            ] {
-                ui.label(self.language.message(key));
-            }
-        });
+        if self.active_project_id().is_none() {
+            crate::ui::card(ui, |ui| {
+                ui.heading(self.language.message("ui.verification-empty-title"));
+                ui.label(self.language.message("ui.verification-empty-description"));
+                ui.add_space(10.0);
+                ui.horizontal_wrapped(|ui| {
+                    if crate::ui::primary_button(
+                        ui,
+                        self.language.message("ui.configure-source-and-destination"),
+                    )
+                    .clicked()
+                    {
+                        self.active_view = crate::ui::WorkspaceView::Plan;
+                    }
+                    if ui
+                        .button(self.language.message("ui.import-mailbox-list"))
+                        .clicked()
+                    {
+                        self.active_view = crate::ui::WorkspaceView::Mailboxes;
+                    }
+                });
+            });
+        }
+        egui::CollapsingHeader::new(self.language.message("ui.verification-levels"))
+            .id_salt("verification_levels_guide")
+            .show(ui, |ui| {
+                for key in [
+                    "ui.verification-level-1-description",
+                    "ui.verification-level-2-description",
+                    "ui.verification-level-3-description",
+                ] {
+                    ui.label(self.language.message(key));
+                }
+            });
+        ui.add_space(10.0);
+        if self.active_project_id().is_none() {
+            return;
+        }
         crate::ui::card(ui, |ui| {
             ui.heading(self.language.message("ui.verification-and-audit-report"));
             ui.label(RichText::new(self.language.message("ui.the-transfer-engine-is-only-one-part-of-the-migration-this-report-is-the-op-9798e5abba")).color(self.theme_colors().text_secondary));
@@ -115,7 +143,7 @@ impl App {
                     ui.label(
                         self.language
                             .message("ui.terminal-verification-results-count")
-                            .replace("{}", &mailbox_counts.verified.to_string())
+                            .replacen("{}", &mailbox_counts.verified.to_string(), 1)
                             .replacen("{}", &mailbox_counts.total.to_string(), 1)
                             .replacen("{}", &mailbox_counts.needs_review.to_string(), 1),
                     );

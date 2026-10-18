@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Improve desktop review flow: responsive overview and evidence cards,
+  blocker-first preflight groups, a guided verification empty state, and
+  contextual next steps and side-by-side folder/UID details for message
+  differences. Difference tables scroll horizontally on narrow windows;
+  verification level descriptions collapse to keep results prominent.
+- Put the current migration phase and next action above scheduling details;
+  fix verification totals substituting the verified count into every field.
+  Recovery read errors now offer retry instead of showing an empty success
+  state. Refresh Retro 80s README screenshots from the running application
+  using an isolated synthetic fixture and a reproducible capture script.
+- Preserve durable verification staging when SQLite refuses to close,
+  including during subsequent drop; cover the failure with a live-statement
+  SQLITE_BUSY regression test.
 - Export durable transfer-attempt outcome counts as a gauge rather than a
   counter: unfinished attempts change label when they reach a terminal outcome,
   so the series is not monotonic and must not carry a Prometheus `_total` name.

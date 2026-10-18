@@ -184,19 +184,18 @@ impl crate::App {
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
             crate::ui::section_label(ui, language.message("ui.mailbox-migration-evidence"));
-            ui.columns(card.facts.len(), |columns| {
-                for (column, fact) in columns.iter_mut().zip(card.facts.iter()) {
-                    column.label(
-                        RichText::new(language.message(fact.label))
-                            .strong()
-                            .family(crate::ui::fonts::medium()),
-                    );
-                    let status = match &fact.detail {
-                        Some(detail) => format!("{} ({detail})", language.message(fact.status)),
-                        None => language.message(fact.status).to_owned(),
-                    };
-                    column.label(RichText::new(status).color(tone_color(fact.tone)));
-                }
+            crate::ui::responsive_columns(ui, card.facts.len(), 160.0, |column, index| {
+                let fact = &card.facts[index];
+                column.label(
+                    RichText::new(language.message(fact.label))
+                        .strong()
+                        .family(crate::ui::fonts::medium()),
+                );
+                let status = match &fact.detail {
+                    Some(detail) => format!("{} ({detail})", language.message(fact.status)),
+                    None => language.message(fact.status).to_owned(),
+                };
+                column.label(RichText::new(status).color(tone_color(fact.tone)));
             });
             ui.add_space(6.0);
             ui.label(
@@ -253,6 +252,12 @@ impl crate::App {
                 );
                 if let Some(error) = &self.mismatch_inspector.error {
                     ui.label(RichText::new(error).color(colors.danger));
+                    if ui
+                        .button(language.message("ui.retry-evidence-read"))
+                        .clicked()
+                    {
+                        self.mismatch_inspector.stale = true;
+                    }
                     return;
                 }
                 let folders = folder_rows(&self.mismatch_inspector.summary);
@@ -266,46 +271,51 @@ impl crate::App {
                 );
                 let unknown = language.message("ui.unknown-folder");
                 let mut filter = self.mismatch_inspector.filter.clone();
-                egui::Grid::new(("mismatch_folders", job_id))
-                    .striped(true)
-                    .num_columns(TYPES.len() + 1)
+                egui::ScrollArea::horizontal()
+                    .id_salt(("mismatch_folder_scroll", job_id))
                     .show(ui, |ui| {
-                        let all = ui.selectable_label(
-                            filter.folder_digest.is_none(),
-                            RichText::new(language.message("ui.all-folders"))
-                                .strong()
-                                .family(crate::ui::fonts::medium()),
-                        );
-                        crate::ui::name_control(&all, language.message("ui.all-folders"));
-                        if all.clicked() {
-                            filter.folder_digest = None;
-                        }
-                        for mismatch_type in TYPES {
-                            ui.label(
-                                RichText::new(language.message(type_key(mismatch_type)))
-                                    .strong()
-                                    .family(crate::ui::fonts::medium()),
-                            );
-                        }
-                        ui.end_row();
-                        for (digest, counts) in &folders {
-                            let label = self.observed_folder_names.label(Some(digest), unknown);
-                            let response = ui.selectable_label(
-                                filter.folder_digest.as_deref() == Some(digest.as_str()),
-                                &label,
-                            );
-                            crate::ui::name_control(&response, &label);
-                            if response.clicked() {
-                                filter.folder_digest = Some(digest.clone());
-                            }
-                            for count in counts {
-                                ui.label(count.to_string());
-                            }
-                            ui.end_row();
-                        }
+                        egui::Grid::new(("mismatch_folders", job_id))
+                            .striped(true)
+                            .num_columns(TYPES.len() + 1)
+                            .show(ui, |ui| {
+                                let all = ui.selectable_label(
+                                    filter.folder_digest.is_none(),
+                                    RichText::new(language.message("ui.all-folders"))
+                                        .strong()
+                                        .family(crate::ui::fonts::medium()),
+                                );
+                                crate::ui::name_control(&all, language.message("ui.all-folders"));
+                                if all.clicked() {
+                                    filter.folder_digest = None;
+                                }
+                                for mismatch_type in TYPES {
+                                    ui.label(
+                                        RichText::new(language.message(type_key(mismatch_type)))
+                                            .strong()
+                                            .family(crate::ui::fonts::medium()),
+                                    );
+                                }
+                                ui.end_row();
+                                for (digest, counts) in &folders {
+                                    let label =
+                                        self.observed_folder_names.label(Some(digest), unknown);
+                                    let response = ui.selectable_label(
+                                        filter.folder_digest.as_deref() == Some(digest.as_str()),
+                                        &label,
+                                    );
+                                    crate::ui::name_control(&response, &label);
+                                    if response.clicked() {
+                                        filter.folder_digest = Some(digest.clone());
+                                    }
+                                    for count in counts {
+                                        ui.label(count.to_string());
+                                    }
+                                    ui.end_row();
+                                }
+                            });
                     });
                 let mut export = false;
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let selected = filter
                         .mismatch_type
                         .map_or(language.message("ui.all-difference-types"), |value| {
@@ -343,38 +353,77 @@ impl crate::App {
                 if self.mismatch_inspector.stale {
                     self.mismatch_inspector.load(&self.store);
                 }
-                egui::Grid::new(("mismatch_rows", job_id))
-                    .striped(true)
-                    .num_columns(5)
+                if let Some(error) = &self.mismatch_inspector.error {
+                    ui.label(RichText::new(error).color(colors.danger));
+                    if ui
+                        .button(language.message("ui.retry-evidence-read"))
+                        .clicked()
+                    {
+                        self.mismatch_inspector.stale = true;
+                    }
+                    return;
+                }
+                let guidance = match self.mismatch_inspector.filter.mismatch_type {
+                    Some(MismatchType::Missing) => "ui.difference-help-missing",
+                    Some(MismatchType::Extra | MismatchType::Duplicated) => {
+                        "ui.difference-help-extra"
+                    }
+                    Some(MismatchType::PresentWrongFolder) => "ui.difference-help-folder",
+                    Some(MismatchType::MessageIdOnly) => "ui.difference-help-changed",
+                    None => "ui.difference-help-all",
+                };
+                ui.add_space(8.0);
+                ui.label(RichText::new(language.message(guidance)).color(colors.text_secondary));
+                ui.add_space(8.0);
+                egui::ScrollArea::horizontal()
+                    .id_salt(("mismatch_row_scroll", job_id))
                     .show(ui, |ui| {
-                        for key in [
-                            "ui.difference-type",
-                            "ui.folders",
-                            "ui.source-uid",
-                            "ui.destination-uid",
-                            "ui.size-and-date",
-                        ] {
-                            ui.label(
-                                RichText::new(language.message(key))
-                                    .strong()
-                                    .family(crate::ui::fonts::medium()),
-                            );
-                        }
-                        ui.end_row();
-                        for mismatch in &self.mismatch_inspector.rows {
-                            ui.label(language.message(type_key(mismatch.mismatch_type)));
-                            ui.label(folder_text(&self.observed_folder_names, mismatch, unknown));
-                            ui.label(uid_text(mismatch.source_uidvalidity, &mismatch.source_uid));
-                            ui.label(uid_text(
-                                mismatch.destination_uidvalidity,
-                                &mismatch.dest_uid,
-                            ));
-                            ui.label(size_and_date_text(mismatch));
-                            ui.end_row();
-                        }
+                        egui::Grid::new(("mismatch_rows", job_id))
+                            .striped(true)
+                            .num_columns(4)
+                            .show(ui, |ui| {
+                                for key in [
+                                    "ui.difference-type",
+                                    "ui.source-folder",
+                                    "ui.destination-folder",
+                                    "ui.size-and-date",
+                                ] {
+                                    ui.label(
+                                        RichText::new(language.message(key))
+                                            .strong()
+                                            .family(crate::ui::fonts::medium()),
+                                    );
+                                }
+                                ui.end_row();
+                                for mismatch in &self.mismatch_inspector.rows {
+                                    ui.label(language.message(type_key(mismatch.mismatch_type)));
+                                    ui.vertical(|ui| {
+                                        ui.label(self.observed_folder_names.label(
+                                            mismatch.source_folder_digest.as_deref(),
+                                            unknown,
+                                        ));
+                                        ui.small(uid_text(
+                                            mismatch.source_uidvalidity,
+                                            &mismatch.source_uid,
+                                        ));
+                                    });
+                                    ui.vertical(|ui| {
+                                        ui.label(self.observed_folder_names.label(
+                                            mismatch.destination_folder_digest.as_deref(),
+                                            unknown,
+                                        ));
+                                        ui.small(uid_text(
+                                            mismatch.destination_uidvalidity,
+                                            &mismatch.dest_uid,
+                                        ));
+                                    });
+                                    ui.label(size_and_date_text(mismatch));
+                                    ui.end_row();
+                                }
+                            });
                     });
                 let inspector = &mut self.mismatch_inspector;
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let previous = ui.add_enabled(
                         !inspector.previous.is_empty(),
                         egui::Button::new(language.message("ui.previous")),
@@ -414,21 +463,6 @@ impl crate::App {
                 self.observed_folder_names.name(digest).map(str::to_owned)
             })
             .map(|_| ())
-    }
-}
-
-fn folder_text(names: &ObservedFolderNames, mismatch: &StoredMismatch, unknown: &str) -> String {
-    match (
-        mismatch.source_folder_digest.as_deref(),
-        mismatch.destination_folder_digest.as_deref(),
-    ) {
-        (Some(source), Some(destination)) if source != destination => format!(
-            "{} → {}",
-            names.label(Some(source), unknown),
-            names.label(Some(destination), unknown)
-        ),
-        (Some(folder), _) | (None, Some(folder)) => names.label(Some(folder), unknown),
-        (None, None) => names.label(None, unknown),
     }
 }
 

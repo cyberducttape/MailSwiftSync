@@ -178,6 +178,8 @@ impl App {
             }
             Err(error) => {
                 self.recovery.error = Some(format!("Could not read recovery state: {error}"));
+                self.recovery.loaded = Some((project_id.to_owned(), Instant::now()));
+                return;
             }
         }
         let still_present = self
@@ -272,6 +274,13 @@ impl App {
         self.refresh_recovery(&project_id);
         if let Some(error) = &self.recovery.error {
             ui.colored_label(colors.danger, error);
+            if ui
+                .button(self.language.message("ui.retry-evidence-read"))
+                .clicked()
+            {
+                self.recovery.invalidate();
+            }
+            return;
         }
         if self.recovery.groups.is_empty() {
             crate::ui::card(ui, |ui| {
@@ -279,6 +288,12 @@ impl App {
                     RichText::new(self.language.message("ui.recovery-nothing"))
                         .color(colors.success),
                 );
+                if ui
+                    .button(self.language.message("ui.review-verification"))
+                    .clicked()
+                {
+                    self.active_view = WorkspaceView::Verification;
+                }
             });
             return;
         }
