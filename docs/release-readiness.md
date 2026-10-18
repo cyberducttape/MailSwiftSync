@@ -147,15 +147,19 @@ reconciliation as successful.
   mailbox statuses to an explicitly marked 1,000-row sample.
 - Headless preflight/live and batch commands support opt-in
   `--diagnostic-log <directory>` transcripts. Each batch child has a separate
-  file; project and mailbox job IDs are hashed in filenames and project IDs are
-  pseudonymized in transcript headers. Engine output is redacted for known
-  secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB per
-  file / 128 MiB per directory, with
-  retention capped at 20 completed files. These plaintext logs can still
+  file; filenames and headers use type-separated, per-logger HMAC pseudonyms
+  for project, run, and mailbox-job IDs. The random pseudonym key exists only
+  in memory and is zeroized when the logger is dropped, so identifiers are not
+  directly correlatable across logger sessions. Engine output is redacted for
+  known secrets, secret-shaped fields, and URI userinfo, and bounded to 8 MiB
+  per file / 128 MiB per directory, with
+  retention capped at 20 completed files. Shutdown waits at most two seconds
+  for the logger thread, then detaches it if filesystem I/O is still stalled;
+  diagnostic output may be incomplete in that case. These plaintext logs can still
   contain provider, mailbox, folder, and message metadata in free-form engine
-  prose; email/Message-ID values and structured mailbox/folder key-value
-  fields are pseudonymized or redacted, but this is not complete semantic
-  anonymization. Transcript contents
+  prose; email/Message-ID values use per-logger keyed pseudonyms and structured
+  mailbox/folder key-value fields are pseudonymized or redacted, but this is not
+  complete semantic anonymization. Transcript contents
   are not account-pseudonymized, encrypted, or compressed, and support bundles
   do not collect them. Operators must select and handle logs explicitly.
   Logging is disabled by default. Newly created directories are restricted;
@@ -392,6 +396,40 @@ reconciliation as successful.
 - Timeout, cancellation, child-process-only imapsync passfile credentials, fresh dual-IMAPS authentication before live imapsync launches, and documented Dovecot process-visibility limits.
 
 ## Required before calling it production-ready
+
+### Controller and SQLite workload qualification
+
+The controller is intentionally retained as a single-host design. Mailbox
+state edges are centralized in `valid_mailbox_transition`; terminal run/evidence
+operations use guarded, transactional updates; the batch scheduler parks
+cooling-down work outside worker slots and serves eligible source tenants
+round-robin. A worker that panics leaves unresolved jobs in operator-review
+state rather than manufacturing completion. These are code-level invariants,
+not proof against every simultaneous cancellation/completion or storage-fault
+interleaving; retain focused race and fault-injection tests when changing those
+paths.
+
+SQLite is configured for WAL and a 5-second busy timeout, and batched event
+write failures report elapsed write time and batch size. The product does not
+yet expose a sustained successful-write latency distribution, lock-wait
+histogram, WAL high-water mark/checkpoint duration, or bytes of durable state
+per migrated message. Before increasing local worker limits or advertising
+large queue capacity, benchmark these against representative progress-event,
+verification-stage, and evidence workloads. Include active backup, controller
+restart, and SQLITE_BUSY/SQLITE_FULL cases; do not infer capacity from the
+database's suitability for a lower-volume local controller.
+
+Batch verification currently runs inside the admitted mailbox worker attempt
+and retains that attempt's provider-rate admission through verification. There
+is no independently configured transfer/verification concurrency pool, and
+the adaptive limiter responds to capacity/error signals rather than optimizing
+for completed-and-verified messages per unit time. This intentionally bounds
+combined pressure but can make long verification scans occupy transfer
+capacity. A future split budget must be measured against provider throttling
+and must preserve same-destination exclusion. Qualification reports should
+measure engine transfer throughput and verification throughput, request
+volume, provider cooldown time, and end-to-end verified mailbox completion
+separately; do not claim adaptive useful-throughput optimization today.
 
 - **100k-row desktop scale gate:** the importer accepts up to 100,000 rows.
   Imported rows now retain only mailbox identity/credential deltas and share
@@ -651,7 +689,7 @@ reconciliation as successful.
 - Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints retain the opaque engine state but are now envelope-bound to a complete source/destination mailbox UIDVALIDITY digest; legacy or incomplete-context checkpoints fail closed.
 - A complete per-message imapsync transfer manifest is not currently implemented. Aggregate progress checkpoints remain operational telemetry; imapsync retries may rediscover already-present messages. Do not use human-readable copy lines as a skip index until a qualified engine acknowledgment contract supplies stable message identity and UIDVALIDITY-bound invalidation.
 - Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
-- Independent metadata-level message mismatch reporting and reconciliation is wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. Verification staging is private and retains recovery context across a controller interruption, but retained pages and body fingerprints are discarded before the next scan. Each cursor records the folder's SELECT snapshot (UIDVALIDITY, UIDNEXT, EXISTS); after interruption, staged rows are discarded and the folder is fully rescanned whether the snapshot matches or changed, because FLAGS can mutate independently of those snapshot values. The cursor therefore records recovery context but does not permit reuse of previously fetched pages. A folder completes only when its freshly staged row count equals the snapshot's EXISTS. An explicit forensic mode now fetches bounded RFC822 bodies, retains SHA-256 fingerprints for both sides, and emits `body_hash` evidence only when coverage and total-byte limits hold. The default path remains metadata-only; representative live body-hash evidence and live-provider/large-mailbox qualification remain outstanding.
+- Independent metadata-level message mismatch reporting and reconciliation is wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. Verification staging is private and retains committed metadata pages across controller interruption. On retry, reconciliation state and prior body fingerprints are invalidated, fresh endpoint folder inventories are loaded, and rows for folders no longer selectable are pruned. A completed metadata folder is reused only when a fresh SELECT exactly matches the stored UIDVALIDITY, UIDNEXT, EXISTS, and tracked HIGHESTMODSEQ snapshot and the staged row count equals EXISTS. An incomplete folder prefix resumes at the next sequence only when that same tracked snapshot matches and its committed page/cursor records are consistent; absent MODSEQ, snapshot drift, or an inconsistent prefix restarts the folder from sequence one. Every reused or resumed folder is selected again before acceptance, so saved-page presence alone never establishes evidence. Body-hash pages are always refetched. A folder completes only when its staged row count equals the snapshot's EXISTS. An explicit forensic mode fetches bounded RFC822 bodies and emits `body_hash` evidence only when coverage and total-byte limits hold. The default path remains metadata-only; representative live body-hash evidence and live-provider/large-mailbox qualification remain outstanding.
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is covered by `scripts/engine-storage-fault-smoke.sh`.
 - Production gatekeeper handshake qualification is covered by `scripts/process-supervision-chaos-smoke.sh`: a launcher with no durable release token or an invalid token never starts the engine, while the exact `GO\n` release token does. Live transfers also pass the planned executable digest through the gatekeeper, which re-hashes the engine after the release acknowledgement and refuses a changed binary; a Unix binary-level regression test replaces the engine while the launcher is waiting and verifies that the replacement never runs. This narrows the post-admission replacement window but does not provide kernel-level fd-based execution or substitute for the required hypervisor power-cut campaign.
@@ -696,3 +734,87 @@ The previous unmaintained `ttf-parser 0.25.1` warning is resolved: the current
 Linux Wayland configuration disables winit's default `ab_glyph` renderer and
 the lockfile no longer contains `ttf-parser`. Release qualification must
 recheck the XLSX ZIP/XML path before publishing artifacts.
+
+The 2026-10-17 `cargo audit --deny yanked` run over both `Cargo.lock` and
+`fuzz/Cargo.lock` reported no vulnerable or yanked crates. The application
+lockfile still emits three unmaintained-crate warnings at the refreshed
+versions: `zvariant 5.15.1`
+([RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html)),
+`zbus_names 4.3.5`
+([RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html)),
+and `zvariant_derive 5.15.1`
+([RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)).
+Updating to the newest compatible patches did not clear these notices. The
+current lockfile reaches them through both Linux Secret Service keyring support
+and the Linux accessibility stack. These are maintenance notices, not
+published vulnerability findings. Upstream states that this functionality was
+merged into `zbus` 6.0 and the standalone crates will receive no further
+releases ([upstream migration notice](https://github.com/z-galaxy/zbus/issues/2043)).
+The current `keyring` and GUI/accessibility dependency graph still resolves the
+older crate family; do not claim this exposure is remediated merely because
+`cargo deny check advisories` succeeds. Track compatible parent-crate updates,
+then qualify Linux keyring behavior and accessibility before removing this
+notice. Re-run both audit tools against the exact release lockfile.
+
+The repository's GitHub security settings were also checked on 2026-10-17:
+Dependabot security alerts and security updates are disabled. The repository
+does contain weekly Dependabot update configuration and a scheduled dependency
+audit workflow, but neither is a substitute for GitHub's per-advisory alerts
+and automated security-update PRs. A repository administrator must enable
+Dependabot alerts and security updates, then verify the settings and resulting
+alerts before GA; this workspace's GitHub authorization cannot change that
+repository-level setting.
+
+The same settings snapshot shows GitHub secret scanning enabled but push
+protection and non-provider-pattern scanning disabled. Therefore, enabled
+secret scanning must not be described as push-time prevention or coverage of
+all credential formats. Before GA, a repository administrator should enable
+push protection and non-provider-pattern scanning where available, review any
+existing findings, and verify the effective settings. Secret scanning
+validity checks are also disabled; this does not change code-side credential
+handling but limits GitHub's ability to identify known active credentials.
+
+### External runtime engine and image findings
+
+The final-image SPDX inventory enumerates Debian packages from the built
+runtime image, including the installed imapsync `.deb`, Perl, and packaged Perl
+modules. The PR container build and release SBOM workflows now scan the exact
+built runtime image with Trivy 0.76.0, whose Linux archive is version- and
+SHA-256-pinned in `scripts/install-pinned-trivy.sh`. They retain the complete
+JSON vulnerability report and a scanner/database version-and-timestamp
+sidecar, and fail on fixable HIGH or CRITICAL findings; unfixed findings remain
+visible and require an explicit disposition before a GA claim. The release
+workflow also includes the scan report and sidecar in its attested and
+published evidence. RustSec and `cargo-deny` cover the Rust lockfiles,
+while `pip-audit` covers the listed Python qualification helpers. A green scan
+is a time-bounded result for the exact built image and vulnerability database,
+not a guarantee against future advisories.
+
+A local Trivy 0.76.0 scan of the pinned Debian base image alone on 2026-10-17
+(`debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251`,
+Trivy vulnerability DB v2 updated 2026-10-16 01:13 UTC) identified 65
+vulnerabilities, including eight fixable HIGH/CRITICAL findings in the base
+package set. This was not a scan of the complete runtime image and is not
+release evidence. The Docker build now applies available Debian package
+upgrades while holding the specifically qualified Dovecot packages at their
+declared version; the first complete-image CI report must confirm the result
+and be reviewed for any remaining findings.
+
+The Docker build pins imapsync `2.314` and verifies the downloaded Debian
+artifact against a repository-pinned SHA-256. This detects an artifact that
+does not match the expected bytes, but does not independently establish who
+published those bytes or provide upstream provenance. The current process has
+not established a verifiable upstream signature/attestation for that `.deb`.
+Record this as an upstream-provenance limitation rather than implying the
+checksum is a publisher signature.
+
+For every imapsync version update, review the upstream release and artifact
+source, independently verify the candidate checksum, update the version and
+digest together, and review the generated image SBOM and vulnerability
+findings. Then run the packaged imapsync integration, OAuth refresh callback,
+recovery/interruption, and TLS-policy tests against that exact candidate;
+update the qualified engine version and compatibility evidence only after
+those tests pass. The current packaged integration suite qualifies the pinned
+version used by that run; it does not automatically qualify a future engine
+update. Reproducibility of the externally distributed Perl package is not
+claimed.

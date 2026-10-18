@@ -33,12 +33,16 @@ capabilities, restricts address families to Unix and IP networking, makes
 system paths read-only, and limits writes to the ledger directory. These
 systemd restrictions do not isolate the engine from data accessible to the
 worker UID; keep that account dedicated and unprivileged.
+CI runs `systemd-analyze --threshold=40 --offline=yes security` against the
+canonical unit and fails if its exposure exceeds 4.0/10.0. Treat this score as
+a regression gate, not as a substitute for reviewing the unit and qualifying
+it on the target distribution.
 
 Before enabling it, verify the binary and ledger as the service account:
 
 ```text
-sudo -u mailswiftsync /usr/local/bin/mailswiftsync --version
-sudo -u mailswiftsync /usr/local/bin/mailswiftsync status /var/lib/mailswiftsync/state.db
+sudo -u mailswiftsync /usr/bin/mailswiftsync --version
+sudo -u mailswiftsync /usr/bin/mailswiftsync status /var/lib/mailswiftsync/state.db
 sudo systemctl daemon-reload
 sudo systemctl enable --now mailswiftsync-supervise.service
 sudo journalctl -u mailswiftsync-supervise.service -f

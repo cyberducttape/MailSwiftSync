@@ -151,6 +151,12 @@ pub struct StateStore {
 }
 
 impl StateStore {
+    /// Begin a read transaction so a multi-query status projection observes
+    /// one committed ledger snapshot even while a controller is writing.
+    pub(crate) fn begin_read_snapshot(&self) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+        self.connection.unchecked_transaction()
+    }
+
     /// Give every mailbox of a project one completed child run, as a
     /// 100k-row batch has after a pass. Scale benchmarks
     /// need this: presented queue states depend on each row's runs.

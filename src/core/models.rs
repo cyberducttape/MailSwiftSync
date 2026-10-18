@@ -51,6 +51,7 @@ pub struct MailboxStatusPage {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct MailboxStateCounts {
     pub total: usize,
+    pub queued: usize,
     pub ready: usize,
     pub running: usize,
     pub verified: usize,

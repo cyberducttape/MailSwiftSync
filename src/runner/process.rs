@@ -95,9 +95,38 @@ pub(super) fn execution_command(
     Ok(command)
 }
 
-/// Unit-test binaries do not dispatch through the application CLI, so retain
-/// direct execution there while production binaries always use the gate.
-#[cfg(test)]
+/// Unit-test binaries do not dispatch through the application CLI. On Unix,
+/// use a tiny stdin-gated shell trampoline to exercise the same durable
+/// registration/release boundary as the production internal launcher.
+#[cfg(all(test, unix))]
+pub(super) fn execution_command(
+    executable: &str,
+    args: &[String],
+    env: &[(String, SecretString)],
+    _expected_identity: Option<&str>,
+) -> Result<Command, String> {
+    let launch_executable = hardened_executable_path(executable)?;
+    let mut command = Command::new("/bin/sh");
+    crate::process::apply_engine_environment(&mut command);
+    let engine_env = filtered_engine_env(env);
+    command
+        .arg("-c")
+        .arg("IFS= read -r gate || exit 125; [ \"$gate\" = GO ] || exit 125; exec \"$@\"")
+        .arg("mailswiftsync-test-launcher")
+        .arg(launch_executable)
+        .args(args)
+        .envs(engine_env)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    Ok(command)
+}
+
+/// Windows unit-test binaries do not dispatch through the application CLI;
+/// keep direct execution there. Native Windows process-containment behavior
+/// remains covered by its dedicated runtime qualification jobs.
+#[cfg(all(test, not(unix)))]
 pub(super) fn execution_command(
     executable: &str,
     args: &[String],
@@ -152,6 +181,33 @@ pub(super) fn release_engine(
             .map_err(|error| format!("could not signal the internal launcher: {error}"))?;
     }
     Ok(())
+}
+
+pub(super) fn release_engine_with_limiter(
+    release_stdin: &mut Option<std::process::ChildStdin>,
+    launch_limiter: Option<(
+        &crate::process::ProcessLaunchLimiter,
+        &crate::controller::rate_domains::RateDomainPath,
+    )>,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let Some((limiter, path)) = launch_limiter else {
+        return release_engine(release_stdin);
+    };
+    match limiter.launch_scoped(path, cancel, || release_engine(release_stdin)) {
+        Some(result) => result,
+        None => {
+            // Closing the pipe makes an unreleased gatekeeper exit instead
+            // of waiting indefinitely after cancellation or poisoned limiter
+            // state. The caller supervises and reaps that child.
+            drop(release_stdin.take());
+            Err(if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                "engine release cancelled before process start".into()
+            } else {
+                "engine release refused: process-start limiter unavailable".into()
+            })
+        }
+    }
 }
 
 /// Entry point used only by the production binary's internal launcher mode.
@@ -317,7 +373,7 @@ pub(crate) fn run_capture_lines(
     let out_secrets = reader_secrets.clone();
     let out_observer = observer.clone();
     let (out_reader_tx, out_reader_rx) = mpsc::sync_channel(1);
-    let out_thread = thread::spawn(move || {
+    let out_thread = crate::process::spawn_reader_thread(move || {
         let result = crate::process::collect_revocably_redacted_lines_with_callback(
             stdout,
             &out_secrets,
@@ -332,7 +388,7 @@ pub(crate) fn run_capture_lines(
     let err_secrets = reader_secrets.clone();
     let err_observer = observer;
     let (err_reader_tx, err_reader_rx) = mpsc::sync_channel(1);
-    let err_thread = thread::spawn(move || {
+    let err_thread = crate::process::spawn_reader_thread(move || {
         let result = crate::process::collect_revocably_redacted_lines_with_callback(
             stderr,
             &err_secrets,
@@ -428,6 +484,126 @@ pub(crate) fn process_supervision_debug_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_launch_limiter_paces_gatekeeper_release_after_registration() {
+        use crate::controller::rate_domains::{RateDomainPath, SideIdentity};
+        use std::time::Instant;
+
+        const WORKERS: usize = 4;
+        const STARTS_PER_SECOND: usize = 2;
+        let source = SideIdentity {
+            endpoint: "source.example:993",
+            user: "source@example.test",
+            tenant: "",
+            principal: "",
+        };
+        let destination = SideIdentity {
+            endpoint: "destination.example:993",
+            user: "destination@example.test",
+            tenant: "",
+            principal: "",
+        };
+        let path = RateDomainPath::new(&source, &destination);
+        let limiter = Arc::new(crate::process::ProcessLaunchLimiter::new(STARTS_PER_SECOND));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let start = Arc::new(std::sync::Barrier::new(WORKERS));
+        let release_times = Arc::new(Mutex::new(Vec::with_capacity(WORKERS)));
+
+        let releasers = (0..WORKERS)
+            .map(|_| {
+                let limiter = Arc::clone(&limiter);
+                let cancel = Arc::clone(&cancel);
+                let start = Arc::clone(&start);
+                let path = path.clone();
+                let release_times = Arc::clone(&release_times);
+                thread::spawn(move || {
+                    start.wait();
+                    limiter
+                        .launch_scoped(&path, &cancel, || {
+                            release_times.lock().unwrap().push(Instant::now());
+                            Ok::<(), ()>(())
+                        })
+                        .expect("an uncancelled launch must be admitted")
+                        .expect("the release callback succeeds");
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for releaser in releasers {
+            releaser.join().unwrap();
+        }
+        let mut release_times = release_times.lock().unwrap().clone();
+        release_times.sort_unstable();
+        assert_eq!(release_times.len(), WORKERS);
+        assert!(
+            release_times
+                .windows(2)
+                .all(|window| window[1].duration_since(window[0]) >= Duration::from_millis(400)),
+            "simultaneously acknowledged gatekeepers must receive paced release permits"
+        );
+    }
+
+    #[test]
+    fn queued_engine_release_observes_cancellation_before_consuming_a_token() {
+        use crate::controller::rate_domains::{RateDomainPath, SideIdentity};
+
+        let source = SideIdentity {
+            endpoint: "source.example:993",
+            user: "source@example.test",
+            tenant: "",
+            principal: "",
+        };
+        let destination = SideIdentity {
+            endpoint: "destination.example:993",
+            user: "destination@example.test",
+            tenant: "",
+            principal: "",
+        };
+        let path = RateDomainPath::new(&source, &destination);
+        let limiter = Arc::new(crate::process::ProcessLaunchLimiter::new(1));
+        let first_cancel = Arc::new(AtomicBool::new(false));
+        let second_cancel = Arc::new(AtomicBool::new(false));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (unblock_tx, unblock_rx) = mpsc::sync_channel(1);
+        let first_limiter = Arc::clone(&limiter);
+        let first_path = path.clone();
+        let first_cancel_for_thread = Arc::clone(&first_cancel);
+        let first = thread::spawn(move || {
+            first_limiter.launch_scoped(&first_path, &first_cancel_for_thread, || {
+                entered_tx.send(()).unwrap();
+                unblock_rx.recv().unwrap();
+                Ok::<_, ()>(())
+            })
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first engine release should enter its bounded closure");
+
+        let (second_entered_tx, second_entered_rx) = mpsc::sync_channel(1);
+        let second_limiter = Arc::clone(&limiter);
+        let second_cancel_for_thread = Arc::clone(&second_cancel);
+        let second_path = path.clone();
+        let closure_called = Arc::new(AtomicBool::new(false));
+        let closure_called_by_thread = Arc::clone(&closure_called);
+        let second = thread::spawn(move || {
+            second_entered_tx.send(()).unwrap();
+            second_limiter.launch_scoped(&second_path, &second_cancel_for_thread, || {
+                closure_called_by_thread.store(true, Ordering::Relaxed);
+                Ok::<_, ()>(())
+            })
+        });
+        second_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second engine release should queue behind the shared limiter");
+        second_cancel.store(true, Ordering::Relaxed);
+        unblock_tx.send(()).unwrap();
+
+        assert_eq!(first.join().unwrap(), Some(Ok(())));
+        assert_eq!(second.join().unwrap(), None);
+        assert!(!closure_called.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn reader_result_join_is_bounded_when_a_pipe_drainer_does_not_finish() {

@@ -99,17 +99,76 @@ outcome: `completed`, `delta_required`, `failed:<class>` such as
 `failed:capacity` for provider throttling or connection limits and
 `failed:transport` for network failures, or `unfinished` for running or
 interrupted attempts), and `verification_outcomes` (current outcome per
-mailbox with evidence). `verification_method_outcomes` provides the same
+mailbox with evidence). `unfinished_attempt_messages_copied` and
+`unfinished_attempt_bytes_copied` sum the last durable progress checkpoint
+for each attempt that lacks a terminal outcome. These snapshots can be stale
+and retries can repeat work; they are neither unique mailbox coverage nor a
+throughput measure. `verification_method_outcomes` provides the same
 current evidence counts as `method:outcome` keys (for example,
 `metadata_reconciliation:exact_metadata_match` versus
 `native_dovecot:exact_metadata_match`) so aggregate totals are not mistaken for
-per-message reconciliation. Mailbox state counts and `attention_reason_counts`
-give the recovery backlog. Alert on rates between successive polls rather than
-on absolute totals.
+per-message reconciliation. `verification_message_findings` carries current
+missing, extra, modified, and probable-match counts from each mailbox's latest
+evidence. Mailbox state counts and `attention_reason_counts` give the recovery
+backlog. Alert on rates between successive polls rather than on absolute
+totals.
 
 `schema_version` is the SQLite ledger schema version. It changes whenever the
 storage schema migrates and is **not** a compatibility signal: dispatch on
 `format` and `format_version` instead.
+
+### SRE operational coverage and limits
+
+The versioned status JSON is the supported machine-readable polling surface;
+it is not a Prometheus exposition endpoint. Its current fields map to the
+five operator questions as follows:
+
+| Operator question | Durable status evidence | Limitation |
+|---|---|---|
+| Which migrations are active? | `aggregate_mailbox_state_counts.running` and bounded `active_processes` records (`run_id`, `job_id`, PID and executable identity); per-project summaries also include mailbox-state counts | `active_processes_truncated` must be checked. A durable `running` row and a process record are distinct facts; validate ownership before acting on a PID |
+| Which are making useful progress? | Durable transfer-attempt/checkpoint history; the metrics snapshot also includes unfinished-attempt copied-message and byte gauges | Gauges are last committed checkpoints, can be stale, and may count retry work more than once. They do not prove recent progress or a transfer rate; compare successive snapshots |
+| Which are blocked or retrying? | `operations.retried_attempts`, `attempt_outcomes` (including `failed:capacity`), mailbox states, and `attention_reason_counts` | `retried_attempts` is cumulative, not a current retry gauge. The status contract does not expose a complete retry timer queue or live provider cooldown state |
+| Which have unverified or inconsistent results? | `verification_outcomes`, `verification_method_outcomes`, mailbox states, and durable evidence/reverify outputs | Consumers must retain proof method and outcome separately; transfer completion is not verification |
+| Which require human intervention? | `aggregate_mailbox_state_counts.needs_review` and `attention_reason_counts`; detailed status provides bounded mailbox rows | Detail is bounded/truncated. Use the durable ledger and evidence workflow for case-level investigation |
+
+`mailswiftsync metrics <state.db>` emits a one-shot Prometheus text snapshot
+from one local ledger. It is a bounded projection, not a network listener or a
+distributed exporter. Each status and metrics projection reads its ledger
+inside one SQLite read transaction, so separate gauges in the same response
+reflect one committed ledger snapshot. A fleet response snapshots each ledger
+independently, not all ledgers atomically. The command refuses to emit output
+if its project or process projection is truncated. It emits no project,
+mailbox, run, customer, or endpoint labels. The metric contract is:
+
+| Metric | Type | Meaning and limits |
+|---|---|---|
+| `mailswiftsync_mailbox_jobs{state}` | Gauge | Current durable job counts for `total`, `queued`, `ready`, `running`, `verified`, and `needs_review`. `running` includes claimed work; `verified` includes explicitly accepted exceptions. |
+| `mailswiftsync_registered_engine_processes` | Gauge | Durable process registrations, not a process-liveness check. Validate process ownership before acting on a PID. |
+| `mailswiftsync_transfer_attempts_total` | Counter | Cumulative transfer attempts recorded in the projected ledger. |
+| `mailswiftsync_transfer_retries_total` | Counter | Cumulative attempts after the first attempt of a pass. |
+| `mailswiftsync_unfinished_attempt_messages_copied` | Gauge | Latest durable copied-message snapshots summed across attempts without terminal outcomes. Retries can repeat work, so this is not unique mailbox coverage. |
+| `mailswiftsync_unfinished_attempt_bytes_copied` | Gauge | Byte counterpart, also a persisted snapshot rather than a transfer rate or lifetime total. |
+| `mailswiftsync_transfer_attempt_outcomes{outcome}` | Gauge | Current durable counts by terminal or unfinished outcome. An attempt can move from `unfinished` to a terminal label, so this is not monotonic and must not be modeled as a counter. Unknown values collapse to `other`; `failed:capacity` is a capacity category, not a provider-throttle event counter. |
+| `mailswiftsync_verification_mailboxes{method,outcome}` | Gauge | Current persisted mailbox evidence counts, not message counts. Labels use fixed allowlists; unknown values collapse to `other`. |
+| `mailswiftsync_verification_message_findings{kind}` | Gauge | Current latest-evidence counts by `missing`, `extra`, `modified`, or `probable`; probable matches are not confirmed differences. |
+
+Progress gauges reflect the last committed checkpoint for attempts still
+lacking a terminal outcome; they can be stale after a crash and do not prove
+recent activity. Compare successive snapshots to determine whether these
+gauges are moving. These metrics do not include process-local transfer rates,
+adaptive cooldown state, reader-drain timeout totals, SQLite transaction
+latency, or host CPU/RSS/disk. Do not infer process liveness from ledger
+counters. `fleet-status` aggregates local ledgers; it is not distributed worker
+discovery or a central control plane. The durable webhook outbox can deliver
+lifecycle/status events, but does not replace polling for current gauges or
+provide centralized operator identity.
+
+For local monitoring, invoke the command through a restricted Prometheus
+textfile-collector/task integration rather than exposing a new network
+listener. For JSON automation, continue polling `status --summary` (or
+`fleet-status` for explicitly isolated local ledgers), check `format` and
+`format_version`, and calculate rates from successive snapshots only for
+monotonically cumulative counters.
 
 ### Compatibility policy
 

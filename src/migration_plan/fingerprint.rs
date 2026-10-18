@@ -28,10 +28,21 @@ impl Form {
             }
         };
         if self.engine() == core::Engine::ImapSync {
-            remove_option(&mut args, "--password1");
-            remove_option(&mut args, "--password2");
-            remove_option(&mut args, "--oauthaccesstoken1");
-            remove_option(&mut args, "--oauthaccesstoken2");
+            let mut malformed_secret_arguments = false;
+            for option in [
+                "--password1",
+                "--password2",
+                "--oauthaccesstoken1",
+                "--oauthaccesstoken2",
+            ] {
+                malformed_secret_arguments |=
+                    remove_placeholder_options(&mut args, option, "••••••••").is_err();
+            }
+            if malformed_secret_arguments {
+                // Preserve plan identity while ensuring unexpected argument
+                // material is never copied into this durable fingerprint.
+                args.push("--invalid-generated-secret-argument-shape".into());
+            }
         }
         format!(
             "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\nsource-rate-tenant={}\ndestination-rate-tenant={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-ca-bundle-sha256={}\ndestination-ca-bundle={}\ndestination-ca-bundle-sha256={}\nsource-certificate-pin={}\ndestination-certificate-pin={}\nexecution-executable-sha256={}\ndovecot-config-sha256={}\nbody-hash-verification={}\nbody-hash-max-bytes={}\nbody-hash-max-total-bytes={}",

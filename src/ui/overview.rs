@@ -113,12 +113,6 @@ impl App {
             has_project: project.is_some(),
             plan_complete: configured == total,
         });
-        if has_bulk_jobs {
-            self.command_center_card(ui, batch_summary);
-            ui.add_space(16.0);
-            self.waves_card(ui);
-            ui.add_space(16.0);
-        }
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
             self.lifecycle_card(
@@ -132,34 +126,77 @@ impl App {
         });
         ui.add_space(16.0);
 
-        ui.columns(3, |columns| {
-            crate::ui::card(&mut columns[0], |ui| {
-                ui.set_min_width(ui.available_width());
-                crate::ui::section_label(ui, self.language.message("ui.project-status"));
-                ui.label(RichText::new(if project.is_some() {
-                    self.language.message("ui.project-created")
-                } else if has_bulk_jobs {
-                    self.language.message("ui.batch-queue-loaded")
-                } else {
-                    self.language.message("ui.no-project-yet")
-                }).size(17.0).strong().family(crate::ui::fonts::semibold()));
-                ui.label(RichText::new(if project.is_some() {
-                    self.language.message("ui.state-is-durable-and-ready-for-review")
-                } else if has_bulk_jobs {
-                    self.language.message("ui.review-the-imported-rows-then-run-a-durable-preflight")
-                } else {
-                    self.language.message("ui.start-by-configuring-endpoints-or-importing-a-mailbox-list")
-                }).color(colors.text_secondary));
-            });
-            crate::ui::card(&mut columns[1], |ui| {
-                ui.set_min_width(ui.available_width());
-                crate::ui::section_label(ui, self.language.message("ui.mailboxes-814bfa48"));
-                if !has_mailboxes {
-                    ui.label(RichText::new(self.language.message("ui.none-configured")).size(17.0).strong().family(crate::ui::fonts::semibold()));
-                    ui.label(RichText::new(self.language.message("ui.use-mailboxes-to-review-scope-before-running-anything")).color(colors.text_secondary));
-                } else if !has_durable_jobs {
-                    ui.label(RichText::new(self.language.message("ui.mailbox-jobs-in-scope").replace("{}", &batch_summary.total.to_string())).size(17.0).strong().family(crate::ui::fonts::semibold()));
+        if has_bulk_jobs {
+            self.command_center_card(ui, batch_summary);
+            ui.add_space(12.0);
+            egui::CollapsingHeader::new(self.language.message("ui.migration-waves"))
+                .id_salt("overview_wave_schedule")
+                .show(ui, |ui| self.waves_card(ui));
+            ui.add_space(16.0);
+        }
+
+        crate::ui::responsive_columns(ui, 3, 250.0, |ui, index| match index {
+            0 => {
+                crate::ui::card(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    crate::ui::section_label(ui, self.language.message("ui.project-status"));
                     ui.label(
+                        RichText::new(if project.is_some() {
+                            self.language.message("ui.project-created")
+                        } else if has_bulk_jobs {
+                            self.language.message("ui.batch-queue-loaded")
+                        } else {
+                            self.language.message("ui.no-project-yet")
+                        })
+                        .size(17.0)
+                        .strong()
+                        .family(crate::ui::fonts::semibold()),
+                    );
+                    ui.label(
+                        RichText::new(if project.is_some() {
+                            self.language
+                                .message("ui.state-is-durable-and-ready-for-review")
+                        } else if has_bulk_jobs {
+                            self.language
+                                .message("ui.review-the-imported-rows-then-run-a-durable-preflight")
+                        } else {
+                            self.language.message(
+                                "ui.start-by-configuring-endpoints-or-importing-a-mailbox-list",
+                            )
+                        })
+                        .color(colors.text_secondary),
+                    );
+                });
+            }
+            1 => {
+                crate::ui::card(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    crate::ui::section_label(ui, self.language.message("ui.mailboxes-814bfa48"));
+                    if !has_mailboxes {
+                        ui.label(
+                            RichText::new(self.language.message("ui.none-configured"))
+                                .size(17.0)
+                                .strong()
+                                .family(crate::ui::fonts::semibold()),
+                        );
+                        ui.label(
+                            RichText::new(self.language.message(
+                                "ui.use-mailboxes-to-review-scope-before-running-anything",
+                            ))
+                            .color(colors.text_secondary),
+                        );
+                    } else if !has_durable_jobs {
+                        ui.label(
+                            RichText::new(
+                                self.language
+                                    .message("ui.mailbox-jobs-in-scope")
+                                    .replace("{}", &batch_summary.total.to_string()),
+                            )
+                            .size(17.0)
+                            .strong()
+                            .family(crate::ui::fonts::semibold()),
+                        );
+                        ui.label(
                         RichText::new(self.language
                             .text("{} imported · {} queued · {} preflight · {} ready · {} attention · {} unresolved")
                             .replacen("{}", &batch_summary.imported.to_string(), 1)
@@ -170,41 +207,69 @@ impl App {
                             .replacen("{}", &batch_summary.unresolved().to_string(), 1))
                         .color(colors.text_secondary),
                     );
-                    ui.label(RichText::new(self.language.message("ui.imported-rows-are-not-durable-until-preflight-admission-succeeds")).small().color(colors.text_secondary));
-                } else {
-                    ui.label(RichText::new(self.language.message("ui.total").replace("{}", &mailbox_counts.total.to_string())).size(17.0).strong().family(crate::ui::fonts::semibold()));
-                    ui.label(
-                        RichText::new(self.language
-                            .text("{} ready · {} running · {} verified")
-                            .replacen("{}", &mailbox_counts.ready.to_string(), 1)
-                            .replacen("{}", &mailbox_counts.running.to_string(), 1)
-                            .replacen("{}", &mailbox_counts.verified.to_string(), 1))
-                        .color(colors.text_secondary),
-                    );
-                    if attention_count > 0 {
+                        ui.label(RichText::new(self.language.message("ui.imported-rows-are-not-durable-until-preflight-admission-succeeds")).small().color(colors.text_secondary));
+                    } else {
                         ui.label(
-                            RichText::new(self.language.message("ui.require-operator-attention").replace("{}", &attention_count.to_string()))
-                                .color(colors.danger),
+                            RichText::new(
+                                self.language
+                                    .message("ui.total")
+                                    .replace("{}", &mailbox_counts.total.to_string()),
+                            )
+                            .size(17.0)
+                            .strong()
+                            .family(crate::ui::fonts::semibold()),
                         );
+                        ui.label(
+                            RichText::new(
+                                self.language
+                                    .text("{} ready · {} running · {} verified")
+                                    .replacen("{}", &mailbox_counts.ready.to_string(), 1)
+                                    .replacen("{}", &mailbox_counts.running.to_string(), 1)
+                                    .replacen("{}", &mailbox_counts.verified.to_string(), 1),
+                            )
+                            .color(colors.text_secondary),
+                        );
+                        if attention_count > 0 {
+                            ui.label(
+                                RichText::new(
+                                    self.language
+                                        .message("ui.require-operator-attention")
+                                        .replace("{}", &attention_count.to_string()),
+                                )
+                                .color(colors.danger),
+                            );
+                        }
                     }
-                }
-            });
-            crate::ui::card(&mut columns[2], |ui| {
-                ui.set_min_width(ui.available_width());
-                crate::ui::section_label(ui, self.language.message("ui.evidence-c0f115f0"));
-                ui.label(RichText::new(if proof_ready {
-                    self.language.message("ui.customer-proof-ready")
-                } else if project.is_some() {
-                    self.language.message("ui.review-required")
-                } else {
-                    self.language.message("ui.not-available")
-                }).size(17.0).strong().family(crate::ui::fonts::semibold()).color(if proof_ready { colors.success } else { colors.text_primary }));
-                ui.label(RichText::new(if proof_ready {
+                });
+            }
+            _ => {
+                crate::ui::card(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    crate::ui::section_label(ui, self.language.message("ui.evidence-c0f115f0"));
+                    ui.label(
+                        RichText::new(if proof_ready {
+                            self.language.message("ui.customer-proof-ready")
+                        } else if project.is_some() {
+                            self.language.message("ui.review-required")
+                        } else {
+                            self.language.message("ui.not-available")
+                        })
+                        .size(17.0)
+                        .strong()
+                        .family(crate::ui::fonts::semibold())
+                        .color(if proof_ready {
+                            colors.success
+                        } else {
+                            colors.text_primary
+                        }),
+                    );
+                    ui.label(RichText::new(if proof_ready {
                     self.language.message("ui.open-verification-to-export-the-customer-safe-evidence-artifact")
                 } else {
                     self.language.message("ui.open-verification-to-review-evidence-customer-proof-remains-gated-until-the-8e499fb7b4")
                 }).color(colors.text_secondary));
-            });
+                });
+            }
         });
         ui.add_space(16.0);
 
@@ -1037,60 +1102,55 @@ impl App {
                 );
             } else {
                 let mut open_plan = false;
-                egui::Grid::new("overview_preflight_controls")
-                    .striped(true)
+                use crate::controller::PreflightCheckStatus::{Blocked, Passed, Unknown};
+                for (status, key, color) in [
+                    (Blocked, "ui.readiness-blocked", self.theme_colors().danger),
+                    (Unknown, "ui.readiness-unknown", self.theme_colors().warning),
+                    (Passed, "ui.readiness-passed", self.theme_colors().success),
+                ] {
+                    let count = self
+                        .preflight
+                        .iter()
+                        .filter(|(_, _, value)| *value == status)
+                        .count();
+                    if count == 0 {
+                        continue;
+                    }
+                    egui::CollapsingHeader::new(
+                        RichText::new(format!("{} · {count}", self.language.message(key)))
+                            .color(color),
+                    )
+                    .id_salt(("preflight_group", key))
+                    .default_open(status != Passed)
                     .show(ui, |ui| {
-                        crate::ui::table_header(ui, self.language.message("ui.check"));
-                        crate::ui::table_header(ui, self.language.message("ui.result"));
-                        crate::ui::table_header(ui, self.language.message("ui.action"));
-                        ui.end_row();
-                        for (name, detail, check_status) in &self.preflight {
-                            let (symbol, color) = match check_status {
-                                crate::controller::PreflightCheckStatus::Passed => {
-                                    ("✓", self.theme_colors().success)
-                                }
-                                crate::controller::PreflightCheckStatus::Blocked => {
-                                    ("!", self.theme_colors().danger)
-                                }
-                                crate::controller::PreflightCheckStatus::Unknown => {
-                                    ("?", self.theme_colors().warning)
-                                }
-                            };
-                            let status = ui.label(RichText::new(symbol).color(color));
-                            if *check_status == crate::controller::PreflightCheckStatus::Blocked {
-                                status.on_hover_text(self.language.message(
-                                    "ui.preflight-check-not-satisfied-may-block-readiness",
-                                ));
-                            }
+                        for (name, detail, _) in self
+                            .preflight
+                            .iter()
+                            .filter(|(_, _, value)| *value == status)
+                        {
                             ui.label(
                                 RichText::new(name)
                                     .strong()
                                     .family(crate::ui::fonts::medium()),
                             );
                             ui.label(detail);
-                            if *check_status == crate::controller::PreflightCheckStatus::Blocked {
-                                let fix_button = ui.add_enabled(
-                                    !self.running() && !self.workspace_read_only,
-                                    egui::Button::new(self.language.message("ui.fix-in-plan")),
-                                );
-                                if fix_button
+                            if status == Blocked
+                                && ui
+                                    .add_enabled(
+                                        !self.running() && !self.workspace_read_only,
+                                        egui::Button::new(self.language.message("ui.fix-in-plan")),
+                                    )
                                     .on_hover_text(
                                         self.language.message("ui.fix-preflight-plan-tooltip"),
                                     )
                                     .clicked()
-                                {
-                                    open_plan = true;
-                                }
-                            } else if *check_status
-                                == crate::controller::PreflightCheckStatus::Unknown
                             {
-                                ui.label(self.language.text("Confirm capacity with provider"));
-                            } else {
-                                ui.label(self.language.message("ui.not-applicable"));
+                                open_plan = true;
                             }
-                            ui.end_row();
+                            ui.add_space(8.0);
                         }
                     });
+                }
                 if open_plan {
                     self.active_view = WorkspaceView::Plan;
                 }
@@ -1169,7 +1229,7 @@ impl App {
             .iter()
             .position(|(phase, _, _)| *phase == current)
             .unwrap_or(usize::MAX);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             crate::ui::section_label(ui, self.language.message("ui.migration-lifecycle"));
             if current == core::Phase::Attention {
                 crate::ui::pill(
@@ -1177,6 +1237,8 @@ impl App {
                     self.language.message("ui.attention-required"),
                     colors.danger,
                 );
+            } else if let Some((_, title_key, _)) = LIFECYCLE.get(current_index) {
+                crate::ui::pill(ui, self.language.message(title_key), colors.info);
             }
         });
         if first_run {
@@ -1200,7 +1262,12 @@ impl App {
                 )
             })
             .collect::<Vec<_>>();
-        crate::ui::stepper(ui, &steps, colors.success, colors.info);
+        egui::CollapsingHeader::new(self.language.message("ui.migration-stages"))
+            .id_salt("overview_lifecycle_steps")
+            .default_open(first_run)
+            .show(ui, |ui| {
+                crate::ui::stepper(ui, &steps, colors.success, colors.info)
+            });
         ui.add_space(10.0);
         ui.label(
             RichText::new(self.language.message("ui.recommended-next-step"))

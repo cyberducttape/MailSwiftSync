@@ -2,6 +2,177 @@
 
 ## Unreleased
 
+- Stabilize native runtime CI by testing launch-limiter pacing at the permit
+  boundary instead of relying on child-process scheduling, and enforce LF
+  endings for Markdown so documentation assertions behave consistently on
+  Windows. Keep expert `imapsync --useuid/--usecache` settings confined to the
+  explicit recovery drill. The clean default-imapsync integration fixture no
+  longer includes duplicate Message-IDs that upstream intentionally skips;
+  verification still fails closed when such omissions occur. Widen the
+  scheduler-level anti-burst test interval so loaded macOS runners do not
+  mistake delayed child cleanup for an unpaced release.
+- Make unattended supervision select the oldest project with automation-safe
+  batch work across the whole ledger, restore that project explicitly, and
+  advance to the next eligible project after settlement. This prevents a newer
+  idle (or corrupt) project from hiding older queued migrations; add restart and
+  multi-project fairness regressions.
+- Normalize snapshot file paths without allowing `..` components to escape an
+  absolute root, and label simultaneous missing/extra/modified snapshot
+  differences as `mixed` in both in-memory and streamed reports.
+- Classify supervisor SQLite retry conditions by rusqlite error code instead
+  of parsing vendor-dependent error text.
+- Carry ledger lock contention as a typed supervisor condition, so permission,
+  corruption, and other permanent ownership failures are not retried based on
+  diagnostic wording. Align Linux service preflight commands with the unit's
+  `/usr/bin/mailswiftsync` executable path and cover every snapshot difference
+  status combination.
+- Define MSP alert severities, response owners, and polling limitations for
+  the existing local metrics/status snapshots; explicitly identify operational
+  signals that still require direct review rather than implying coverage.
+- Improve desktop review flow: responsive overview and evidence cards,
+  blocker-first preflight groups, a guided verification empty state, and
+  contextual next steps and side-by-side folder/UID details for message
+  differences. Difference tables scroll horizontally on narrow windows;
+  verification level descriptions collapse to keep results prominent.
+- Put the current migration phase and next action above scheduling details;
+  fix verification totals substituting the verified count into every field.
+  Recovery read errors now offer retry instead of showing an empty success
+  state. Refresh Retro 80s README screenshots from the running application
+  using an isolated synthetic fixture and a reproducible capture script.
+- Preserve durable verification staging when SQLite refuses to close,
+  including during subsequent drop; cover the failure with a live-statement
+  SQLITE_BUSY regression test.
+- Export durable transfer-attempt outcome counts as a gauge rather than a
+  counter: unfinished attempts change label when they reach a terminal outcome,
+  so the series is not monotonic and must not carry a Prometheus `_total` name.
+- Apply available Debian security upgrades to the runtime image while holding
+  the qualified Dovecot package versions, and scan PR/release images with
+  checksum-pinned Trivy; retain full CVE reports and scanner/database identity,
+  and block fixable HIGH or CRITICAL findings.
+- Persist an explicit verification-incomplete reason when a completed live
+  transfer emits neither verification evidence nor a diagnostic, so attention
+  runs cannot have an empty terminal detail; apply the same rule to batch
+  mailboxes and include known plan limitations in their durable detail.
+- Refresh the locked Linux D-Bus dependency patch releases. RustSec still
+  classifies `zbus_names`, `zvariant`, and `zvariant_derive` as unmaintained
+  (RUSTSEC-2026-0371, -0370, and -0372); they remain transitive desktop,
+  accessibility, and keyring dependencies, with no compatible replacement
+  selected.
+- Exercise the LIST fuzz target through the production budgeted streaming
+  reader, fixing a fuzz-only compile failure and ensuring the harness covers
+  the same bounded parser path used by live verification.
+- Rerun process ownership, controller crash recovery, and ledger write/corrupt-
+  restore fault drills on the current commit; record the binary digest and
+  retain the explicit boundary between local fault fixtures and power-loss or
+  live-engine qualification.
+- Compile every nightly fuzz target locally and mark intentionally unused
+  provider identity helpers in the provider-error fuzz harness, keeping the
+  full parser/safety-target build warning-free.
+- Request a TLS 1.2-or-newer protocol floor on both encrypted imapsync
+  connections, matching the native Rustls probe; make the packaged IMAP lab's
+  Dovecot server floor explicit and add a packaged IO::Socket::SSL smoke test
+  with forced TLS 1.0/1.1 rejection baselines and a TLS 1.2 success case.
+  End-to-end imapsync protocol enforcement and negotiated-protocol evidence
+  remain integration qualification gates.
+- Record a full durable typical-shape verification benchmark matrix on commit
+  `478fe7bbdf37e8aa010b9f1ff36964cc9a2b3ebf` through 1,000,000 messages per
+  endpoint. The release CLI reports the full source revision; harness and
+  release-binary SHA-256 values and per-size reconciliation/RSS/stage/journal
+  metrics are in `docs/verification-envelope.md`. This is synthetic SQLite
+  evidence only, not provider, IMAP transfer, concurrent-worker, or final-
+  evidence-commit qualification.
+- Add a bounded, privacy-preserving one-shot Prometheus text snapshot for
+  durable local-ledger job, transfer-attempt, and verification counts. It
+  refuses truncated projections and labels no customer-controlled identities;
+  document that registered processes are not a liveness check and that
+  process-local throughput, host resources, provider throttles, and SQLite
+  latency are not exported.
+- Add the queued mailbox-job count to status summary and fleet-status JSON as
+  an additive field in the existing versioned contract.
+- Export last durable progress snapshots for unfinished transfer attempts as
+  gauges, explicitly distinguishing retryable attempt work from unique mailbox
+  coverage, throughput, and freshness.
+- Export current durable verification finding counts by missing, extra,
+  modified, and probable-match category; keep lower-confidence probable matches
+  distinct from confirmed differences.
+- Read status projections from one SQLite transaction snapshot so concurrent
+  controller commits cannot mix ledger moments within a response; document
+  that fleet snapshots remain independent per ledger.
+- Map the five SRE operations questions to the versioned durable status fields,
+  and explicitly distinguish current gauges from process-local telemetry,
+  cumulative counters, and metrics not yet exported. Document the absence of a
+  Prometheus contract and prohibit sensitive high-cardinality labels.
+- Separate existing adversarial-security test coverage from outstanding
+  release-specific penetration qualification, and state explicitly that the
+  webhook/OAuth egress guard does not make generic IMAP endpoints safe for a
+  remotely accessible service.
+- Document controller state/ownership safeguards and the unqualified areas:
+  SQLite successful-write/WAL workload metrics, independent transfer and
+  verification budgets, and adaptive optimization for verified throughput.
+- Clarify supply-chain evidence boundaries: the final-image SPDX inventory is
+  not an OS/Perl vulnerability scan, and the pinned imapsync checksum is not
+  upstream publisher provenance. Document the version-update qualification
+  sequence and keep these as explicit GA release gates.
+- Keep the migration configuration fingerprint independent of secret bytes
+  while testing that static-secret rotation changes the process-local preflight
+  credential binding; add an exact-image CI check for Docker state-volume
+  persistence versus ephemeral runtime files. Clarify that OAuth recovery
+  records are owner-only but unencrypted, and that container-volume smoke tests
+  do not qualify SQLite recovery, backups, or host power-loss durability.
+- Document subprocess reader counters and platform caveats; verify destructive
+  sync's default-off/production-policy, confirmation, same-plan preflight, and
+  durable-plan boundaries, including the absence of identity-bound approval in
+  this local single-owner product.
+- Track active subprocess reader threads and cumulative detached-reader/drain
+  timeout counts in drain-failure diagnostics; add a repeated inherited-pipe
+  regression proving released reader threads exit.
+- Replace first-match secret-option removal with validated removal of every
+  generated placeholder pair; malformed/duplicate options are flagged and an
+  adjacent CLI switch is preserved rather than consumed as a value.
+- Expand production qualification scenarios for TLS behavior in both the Rustls
+  probe and actual imapsync transfer/reconnect paths, and make the interim
+  one-customer-per-OS-security-boundary operating rule explicit for MSP pilots.
+- Clarify the Basic/Standard/Forensic evidence contract, exact RFC822 body-hash
+  semantics, and partial-coverage limits; expand the still-open hypervisor
+  power-cut matrix to include runtime secrets, checkpoints, evidence commits,
+  report signing, and explicit recovery outcomes.
+- Reject imapsync `--useuid` plus `--usecache` plans under production
+  organization policy because an interrupted in-flight APPEND can duplicate a
+  message on resume; compatibility and lab policies retain the explicitly
+  acknowledged path with independent verification.
+- Use a random, zeroized per-logger HMAC key and type-separated pseudonyms for
+  diagnostic project, run, mailbox-job, email, and Message-ID identifiers;
+  avoid dictionary-recoverable plain hashes and raw run IDs in transcript paths
+  and headers.
+- Correct the release-readiness verification-resume description and add a
+  regression check for tracked-snapshot metadata reuse versus always-refetched
+  body proofs.
+- Bound diagnostic-writer shutdown when filesystem I/O stalls; optional
+  transcript output may be incomplete rather than holding controller shutdown.
+- Re-run the complete durable verification reconciliation matrix on the current
+  revision through 1,000,000 messages per endpoint; record per-phase I/O, peak
+  RSS, stage/journal growth, FLAGS work, and restart timings without presenting
+  synthetic SQLite performance as provider or transfer qualification.
+- Exercise duplicate-ID, absent-ID, and mismatch-heavy reconciliation through
+  1,000,000 records per endpoint on the same current revision; record the
+  shape-dependent disk and latency costs while keeping them explicitly separate
+  from provider and end-to-end migration qualification.
+- Re-run the release-gatekeeper, controller-crash, engine-SIGKILL, bounded
+  storage-failure, corrupt-restore, and backup-recovery drills against an
+  artifact embedding the current full commit SHA; record its digest while
+  keeping power-loss and real filesystem-full qualification explicitly open.
+- Inject `SQLITE_FULL` midway through terminal evidence plus 4,000 streamed
+  mismatch rows; prove the run/mailbox/evidence transaction rolls back wholly
+  and retries successfully after storage capacity is restored.
+- Reuse the verifier's preallocated SHA-256 hex encoder for synthetic header
+  identities, avoiding per-byte formatting allocations while preserving the
+  stable identity encoding.
+- Reject migration plans whose source and destination resolve to the same
+  normalized IMAP host, effective port, and case-folded username, while
+  allowing distinct IMAP services on different ports of one host.
+- Normalize IPv4-mapped IPv6 endpoint literals to their IPv4 identity so
+  self-copy and destination-collision checks cannot be bypassed by address
+  spelling alone.
 - Treat the same normalized IMAP host and username as one mailbox identity in
   the provider-smoke self-copy guard regardless of port, while still
   validating the configured ports; cover a 143/993 alias collision.
@@ -18,6 +189,8 @@
   current-head repeat run and validate each exported proof digest.
 - Keep secret-shaped diagnostic redaction fixtures out of assertion failure
   messages so a failing test cannot echo the fixture into CI logs.
+- Redact bare usernames and account identifiers in diagnostic transcripts,
+  while preserving already-pseudonymized mailbox identifiers.
 - Align the Fedora RPM install smoke test and service deployment guide with the
   package's nested `docs/distribution` paths, and assert the RPM, workflow, and
   operator guide agree.
@@ -112,14 +285,42 @@
 - Bound unbudgeted STARTTLS handshakes with an absolute deadline, and commit
   each durable verification page together with its progress cursor to avoid an
   extra SQLite synchronization and inconsistent intermediate checkpoint.
+- Resume committed durable metadata prefixes after interruption only when a
+  fresh SELECT exactly matches UIDVALIDITY, UIDNEXT, EXISTS, and tracked
+  HIGHESTMODSEQ; complete folders may be reused, while drifted/untracked
+  prefixes and all body fingerprints require fresh fetches.
 - Consume bounded literal values in IMAP LIST extension data without treating
   them as mailbox names, including parenthesized extensions whose closing
   delimiters immediately follow literal bytes; reject aggregate extension-
   literal data beyond the inventory limit. Reduce body-fingerprint and FETCH
   protocol-text temporary allocations, and reject a projected metadata-page
   overrun before issuing the metadata UID FETCH or staging its records.
-  Interrupted scans still rescan: retained pages are not reused until a
-  snapshot-bound resume protocol is qualified.
+  Interrupted metadata scans resume only from committed prefixes with an
+  identical tracked snapshot; otherwise they restart from the first page.
+- Apply one absolute deadline across native TLS capability and destination-
+  readiness probes, including DNS/TCP setup, STARTTLS, authentication, and
+  follow-up IMAP commands; report probe timeouts separately from verification
+  resource-limit failures.
+- Rerun process-release, controller-crash/recovery, and ledger corruption /
+  storage-fault drills on a binary embedding the current full commit SHA; record
+  the digest and host details while retaining the explicit non-coverage of
+  provider behavior, real filesystem exhaustion, and host power loss.
+- Record the newly reported RustSec informational unmaintained notices for the
+  transitive `zvariant`, `zbus_names`, and `zvariant_derive` crates. No
+  vulnerability or yanked crate was reported; compatible parent-crate migration
+  and Linux keyring/accessibility qualification remain open.
+- Record that GitHub Dependabot alerts and security updates are disabled for
+  this repository despite weekly update configuration and scheduled audit CI;
+  enabling and verifying the repository-level controls is an administrator
+  release gate.
+- Record that GitHub secret scanning is enabled but push protection and
+  non-provider-pattern scanning are disabled; distinguish detection from
+  push-time prevention and retain the required administrator configuration as
+  a release gate.
+- Pace provider-facing engine release only after its durable process
+  registration acknowledgement, so gatekeepers accumulated during slow
+  registration cannot open IMAP sessions in a burst; add a concurrent delayed-
+  acknowledgement regression using the Unix test gatekeeper.
 - Allow operators to refresh an expired source-quiescence attestation during
   Catch-up, so it can authorize the transition to Final Delta without reopening
   or recreating the managed cutover workflow.
@@ -1647,8 +1848,9 @@ operator distribution archives.
   credential, tenant, provider, global) with AIMD concurrency, escalating to
   a broader domain only after distinct children are throttled, so one
   tenant's throttling no longer pauses another on the same endpoints.
-- The batch process-start limiter now takes its token immediately before
-  spawn, so workers released together cannot start engines in a burst.
+- The batch process-start limiter takes its token at the engine-release
+  boundary after durable registration, so delayed acknowledgements cannot
+  release several gatekeepers into a provider-facing burst.
 - Startup no longer panics when neither durable nor temporary state can be
   opened; it shows a fatal screen (or exits 1 headless) with both errors.
 - Verification levels and the `install-engine` capability are checked

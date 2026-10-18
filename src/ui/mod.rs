@@ -100,6 +100,32 @@ pub(crate) fn card<R>(
         })
 }
 
+/// Reflow summary cards using logical points, so larger text and narrow
+/// windows get fewer columns without shrinking their content.
+pub(crate) fn responsive_columns(
+    ui: &mut egui::Ui,
+    count: usize,
+    minimum_width: f32,
+    mut contents: impl FnMut(&mut egui::Ui, usize),
+) {
+    if count == 0 {
+        return;
+    }
+    let spacing = ui.spacing().item_spacing.x;
+    let columns =
+        (((ui.available_width() + spacing) / (minimum_width + spacing)) as usize).clamp(1, count);
+    for start in (0..count).step_by(columns) {
+        if start > 0 {
+            ui.add_space(10.0);
+        }
+        ui.columns(columns, |cells| {
+            for (offset, cell) in cells.iter_mut().enumerate().take(count - start) {
+                contents(cell, start + offset);
+            }
+        });
+    }
+}
+
 /// The one emphasised action in a section, filled with the accent colour.
 pub(crate) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let visuals = ui.visuals();

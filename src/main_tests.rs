@@ -992,6 +992,11 @@ fn credential_fingerprint_changes_without_exposing_secret_material() {
         first.credential_fingerprint(),
         second.credential_fingerprint()
     );
+    assert_eq!(first.plan_fingerprint(), second.plan_fingerprint());
+    assert_ne!(
+        first.credential_binding_fingerprint(),
+        second.credential_binding_fingerprint()
+    );
     assert!(!first.credential_fingerprint().contains("source-one"));
     assert!(!first.credential_fingerprint().contains("destination-one"));
 }
@@ -2453,14 +2458,9 @@ fn imap_preflight_requires_tagged_ok_responses() {
 }
 
 #[test]
-fn removing_secret_options_removes_values_starting_with_dashes() {
-    let mut args = vec![
-        "--password1".into(),
-        "--looks-like-an-option".into(),
-        "--host".into(),
-        "mail".into(),
-    ];
-    remove_option(&mut args, "--password1");
+fn removing_secret_options_preserves_adjacent_flags_when_values_are_missing() {
+    let mut args = vec!["--password1".into(), "--host".into(), "mail".into()];
+    assert!(remove_placeholder_options(&mut args, "--password1", "••••••••").is_err());
     assert_eq!(args, ["--host", "mail"]);
 }
 
@@ -2593,6 +2593,10 @@ fn state_lock_prevents_two_instances_and_releases_on_drop() {
     let state_path =
         std::env::temp_dir().join(format!("mailswiftsync-lock-{}.db", uuid::Uuid::new_v4()));
     let first = acquire_instance_lock(&state_path).unwrap();
+    assert!(matches!(
+        crate::process::acquire_instance_lock_classified(&state_path),
+        Err(crate::process::InstanceLockError::Busy(_))
+    ));
     assert!(
         acquire_instance_lock(&state_path)
             .unwrap_err()

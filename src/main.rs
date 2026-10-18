@@ -44,7 +44,7 @@ mod windows_private;
 #[cfg(test)]
 use atomic_artifact::write_private_atomic;
 #[cfg(test)]
-use command::{parse_shell_words, remove_option};
+use command::{parse_shell_words, remove_placeholder_options};
 #[cfg(test)]
 use controller::batch_admission::canonical_destination_identity;
 #[cfg(test)]

@@ -56,6 +56,16 @@ impl App {
     pub(crate) fn try_from_state_path(
         state_override: Option<&std::path::Path>,
     ) -> Result<Self, BootstrapFailure> {
+        Self::try_from_state_path_for_project(state_override, None)
+    }
+
+    /// Restore one explicitly selected durable project. Headless supervision
+    /// uses this to attach the queue chosen from across the ledger rather than
+    /// letting the newest GUI project determine which batch may run.
+    pub(crate) fn try_from_state_path_for_project(
+        state_override: Option<&std::path::Path>,
+        project_id_override: Option<&str>,
+    ) -> Result<Self, BootstrapFailure> {
         let appearance = AppearancePreferences::load();
         let state_path_result = match state_override {
             Some(path) => Ok(path.to_owned()),
@@ -99,7 +109,10 @@ impl App {
                 });
         let instance_lock = state_path
             .as_ref()
-            .map(|path| acquire_instance_lock(path.as_path()));
+            .map(|path| crate::process::acquire_instance_lock_classified(path.as_path()));
+        let instance_lock_busy = instance_lock.as_ref().is_some_and(|result| {
+            matches!(result, Err(crate::process::InstanceLockError::Busy(_)))
+        });
         let (store, mut persistence_warning) = match (state_path.as_ref(), instance_lock.as_ref()) {
             (Some(path), Some(Ok(_))) => match core::StateStore::open(path) {
                 Ok(store) => (store, None),
@@ -248,8 +261,20 @@ impl App {
             form.profile.destination_tls = default_destination_tls();
         }
         let restored_project = if persistence_warning.is_none() {
-            match store.latest_project() {
-                Ok(project) => project,
+            let restored = match project_id_override {
+                Some(project_id) => store.project(project_id),
+                None => store.latest_project(),
+            };
+            match restored {
+                Ok(Some(project)) => Some(project),
+                Ok(None) if project_id_override.is_some() => {
+                    persistence_warning = Some(format!(
+                        "Selected project {} is unavailable; execution is blocked",
+                        project_id_override.unwrap_or_default()
+                    ));
+                    None
+                }
+                Ok(None) => None,
                 Err(error) => {
                     persistence_warning = Some(format!(
                         "Persistent project restore failed; execution is blocked: {error}"
@@ -420,6 +445,7 @@ impl App {
             _instance_lock: instance_lock.and_then(Result::ok),
             process_review_required: unverified_process_count > 0,
             persistence_available: persistence_warning.is_none(),
+            instance_lock_busy,
             profile_available: profile_warning.is_none(),
             selected_project_id: restored_bulk_project_id
                 .clone()
@@ -617,6 +643,44 @@ mod tests {
         }));
         drop(app);
         std::fs::remove_file(blocker).unwrap();
+    }
+
+    #[test]
+    fn explicit_project_restore_ignores_an_unrelated_newer_corrupt_batch() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let state_path = directory.join("state.db");
+        let profile = toml::to_string(&Profile::default()).unwrap();
+        let (older, _) = core::StateStore::open(&state_path)
+            .unwrap()
+            .create_project_with_mailbox_configs(
+                "older approved batch",
+                "source-a",
+                "destination-a",
+                &[("one".into(), "one".into(), profile.clone())],
+            )
+            .unwrap();
+        let (_, newer_jobs) = core::StateStore::open(&state_path)
+            .unwrap()
+            .create_project_with_mailbox_configs(
+                "newer corrupt batch",
+                "source-b",
+                "destination-b",
+                &[("two".into(), "two".into(), profile)],
+            )
+            .unwrap();
+        rusqlite::Connection::open(&state_path)
+            .unwrap()
+            .execute(
+                "UPDATE mailbox_jobs SET config='not = [' WHERE id=?1",
+                [&newer_jobs[0]],
+            )
+            .unwrap();
+
+        let app = App::try_from_state_path_for_project(Some(&state_path), Some(&older.id)).unwrap();
+        assert!(app.persistence_available);
+        assert_eq!(app.queue.project_id(), Some(older.id.as_str()));
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

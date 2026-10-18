@@ -8,6 +8,15 @@ locked-down host and ledger per customer and keep an operator responsible for
 each live migration window. MailSwiftSync remains a technical preview, not a
 generally supported migration service.
 
+Treat that separation as an operating-system security boundary, not a naming
+convention: use a dedicated VM or host and dedicated unprivileged OS account per
+customer trust domain. Isolate the ledger, configuration/policy, runtime and
+temporary credential directories, logs, evidence exports, backups, and signing
+keys; enforce owner-only permissions and customer-specific retention. Do not
+share an interactive OS account or grant operators access to another customer's
+workspace. If the MSP cannot enforce that boundary, do not place those customers'
+mailboxes in the same MailSwiftSync deployment.
+
 For the host-level command sequence and recovery mechanics, use the
 [production migration runbook](wiki/Production-runbook.md). This document adds
 the MSP project, approval, and support controls around that procedure.
@@ -110,6 +119,45 @@ mailbox is complete, needs a delta, or requires operator review.
 - Keep credentials in the supported OS keyring/OAuth storage. Never place
   passwords, access tokens, or refresh tokens in tickets, CSV files, command
   arguments, chat, or support bundles.
+
+### Monitoring and alert ownership
+
+Assign one named migration operator as the live-window responder and one
+service owner for ledger, host, backup, and webhook health before the wave
+starts. The customer's change owner receives impact/escalation notices; they
+do not receive raw mailbox metadata by default. Record the on-call route and
+acknowledgement target in the customer change record. The following is the
+initial severity policy; tune timing to the approved maintenance window and
+customer SLO rather than treating these intervals as product guarantees.
+
+| Severity / response | Trigger | Owner and action |
+|---|---|---|
+| Page during the live window | A mailbox enters `needs_review`, `verification_difference`, `failed`, or `verification_failed`; required cutover/verification evidence is incomplete; process ownership is uncertain; or destination mutation is unexpected | Migration operator acknowledges promptly, stops new wave admission, preserves the ledger and host, and follows incident recovery before any retry. Notify the customer change owner when impact or the approved window is at risk. |
+| Page service owner | Ledger cannot be read, is corrupt, persistence becomes unavailable, the systemd unit repeatedly restarts, or the state/staging filesystem approaches the site's reserved emergency headroom | Service owner protects the host and ledger, checks disk/WAL and backup health, and prevents further admission until durability is restored. Do not delete SQLite sidecars or lock files as remediation. |
+| Page integration owner when workflow-critical | A webhook reaches `dead_letter` and that delivery is required for a customer approval, cutover, or incident handoff | Integration owner checks the durable outbox and receiver idempotency; use ledger/status evidence as the source of truth while delivery is repaired. A webhook failure must not silently approve or close a migration. |
+| Same-day ticket | Automation-safe work remains queued beyond the change's agreed queue-start target; retries/cooldowns threaten the migration window; a non-critical webhook is dead-lettered; or provider throttling materially reduces useful progress | Migration operator reviews status and provider-domain telemetry, updates the ETA/decision owner, and records whether to wait, narrow the wave, or reschedule. Never raise concurrency blindly. |
+| Next-business-day review | An intended provider pair remains unqualified, a plan relies on unsupported provider signatures/transforms, or a verification dimension is partial/not checked | Service owner updates the qualification register and customer-facing scope statement. These conditions block a new customer promise for that route even when no live incident exists. |
+
+For polling, use the versioned `status --summary`/`fleet-status` JSON and
+`metrics <state.db>` Prometheus text snapshot through a restricted local
+textfile-collector or scheduled task. Atomically replace the collector file;
+do not expose the ledger or add a network listener solely for scraping. Check
+format/version and truncation flags, and alert on unreadable ledgers rather
+than dropping them from fleet totals. The snapshot exposes durable job states,
+attempt outcomes, verification results/findings, and registered process
+counts; process registrations are not liveness checks. Compare successive
+checkpoint gauges to identify stalled progress, with a grace period appropriate
+to the provider and expected message size.
+
+Queue age by project, current retry timers/provider cooldowns, OAuth/credential
+health, unsupported provider-signature counts, webhook dead-letter counts,
+SQLite transaction latency, WAL/staging bytes, and host CPU/RSS/disk are not all
+part of the current Prometheus snapshot. Until a separately reviewed collector
+provides those signals, assign an operator to check the corresponding durable
+status, outbox, credential/keyring, and host filesystem directly at wave start
+and closeout; do not create a green alert from missing telemetry. In particular,
+the application process being alive or a project being idle does not establish
+that every approved queue is empty or healthy.
 
 ## 4. Incident and recovery ownership
 

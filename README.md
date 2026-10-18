@@ -10,7 +10,21 @@
 
 ![Migration plan — Retro 80s Neon theme](docs/wiki/assets/migration-plan.png)
 
-> Documentation images are current workflow previews, not pixel-accurate screenshots of the egui interface. They illustrate the intended operator flow and emphasize explicit safety state, lifecycle visibility, redacted command review, and diagnostics.
+> Screenshots show the running desktop application in the Retro 80s Neon theme, using synthetic demo data and an isolated workspace.
+
+<details>
+<summary>Overview and verification workspace</summary>
+
+![Migration overview — current phase and next action](docs/wiki/assets/migration-overview.png)
+
+![Verification — guidance before selecting a project](docs/wiki/assets/verification-review.png)
+
+</details>
+
+To refresh these images on an X11/XWayland desktop, run `cargo build --locked`
+followed by `python3 scripts/capture-ui-previews.py`. The capture script uses
+temporary state and configuration; it requires `xwininfo`, `xprop`, and
+ImageMagick's `import` command.
 
 > [!IMPORTANT]
 > **Your source mailbox is never deleted from or modified.** MailSwiftSync only ever writes to the destination; there is no option anywhere in the interface, CLI, or Extra imapsync options field to delete or alter source messages, and destructive-deletion flags are explicitly rejected from that field. Two plan choices can remove state that exists only on the **destination**: imapsync's `--delete2` (off by default), which removes destination messages missing from the source, and the Dovecot **Initial mirror** and **Incremental mirror** strategies, which run `doveadm backup` and force the destination to match the source, removing or replacing destination-only messages and mailboxes. MailSwiftSync derives one destination mutation policy from the whole plan (additive, merge preserving destination, destination mirror, or delete destination-only messages) and uses it everywhere: the Plan page, preflight review, single and batch live confirmations, the Mailboxes review drawer, run records, operator reports, and the CLI. Any plan that can remove destination state is shown in red and requires an explicit acknowledgement before a live run: a checkbox in the GUI, or `--acknowledge-destination-loss` for `headless live`, `headless batch-live`, and `supervise`. MailSwiftSync cannot prove the destination is empty beforehand, because Dovecot warns against opening the target mailbox store before the first sync. Any future source-deletion capability would be off by default and called out in red the same way.
@@ -362,13 +376,18 @@ mailswiftsync oauth-authorize google|microsoft|custom <keyring-id> --client-id <
 
 For opt-in headless incident troubleshooting, preflight/live and batch
 commands may receive `--diagnostic-log /secure/directory`. Batch execution
-writes each child mailbox run to its own owner-only transcript; filenames use
-stable hashes of the project and mailbox job IDs rather than those identifiers
-themselves. Transcript headers use the same project pseudonym. Transcripts are
+writes each child mailbox run to its own owner-only transcript; filenames and
+headers use type-separated HMAC pseudonyms of project, run, and mailbox job IDs
+rather than those identifiers themselves. A random key is kept only in memory
+for that diagnostic logger, so pseudonyms remain joinable within its transcripts
+but are not directly comparable across logger sessions. Transcripts are
 secret-redacted, capped at 8 MiB per file and 128 MiB per directory, and
 retention is limited to the newest 20 files when runs finish. Email and
-Message-ID-like values in persisted transcript lines are replaced with stable
-per-value pseudonyms; other provider, folder, and message metadata may remain.
+Message-ID-like values in persisted transcript lines use keyed per-value
+pseudonyms; other provider, folder, and message metadata may remain. If the
+diagnostic filesystem stalls, logger shutdown waits at most two seconds before
+detaching its writer; the last queued transcript lines may then be incomplete,
+but controller shutdown remains bounded.
 The option still prints a warning because logs are plaintext, not encrypted or
 compressed, and the sanitized support bundle does not include them. Select
 logs manually for any support handoff and securely remove them after

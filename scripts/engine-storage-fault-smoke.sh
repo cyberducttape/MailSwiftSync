@@ -278,6 +278,8 @@ state="$app_runtime/state.db"
 export XDG_CONFIG_HOME="$app_runtime/config"
 mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
 chmod 0700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/mailswiftsync"
+printf 'profile = "lab"\n' > "$XDG_CONFIG_HOME/mailswiftsync/organization-policy.toml"
+chmod 0600 "$XDG_CONFIG_HOME/mailswiftsync/organization-policy.toml"
 cat > "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" <<EOF
 name = "Storage fault lab"
 source_host = "127.0.0.1"

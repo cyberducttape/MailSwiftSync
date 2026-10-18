@@ -578,6 +578,17 @@ pub(crate) fn incomplete_verification_detail(error: &str) -> String {
     }
 }
 
+/// Produce a durable explanation when a live transfer completed but no
+/// verification evidence was committed. Normally the verifier supplies its
+/// own diagnostic; retain a useful attention reason if that event was lost or
+/// the execution path failed to emit one.
+pub(crate) fn completed_without_verification_detail(error: Option<&str>) -> String {
+    let error = error
+        .filter(|error| !error.trim().is_empty())
+        .unwrap_or("verification produced neither evidence nor a failure detail");
+    incomplete_verification_detail(error)
+}
+
 /// Bound a verifier error for durable storage without losing its limit tag.
 pub(crate) fn bounded_verification_error(error: &str, max_chars: usize) -> String {
     let error = match core::VerificationLimit::from_detail(error) {
@@ -622,6 +633,17 @@ mod tests {
         assert!(
             super::incomplete_verification_detail("connection reset")
                 .starts_with("[attention_reason=verification_incomplete] ")
+        );
+        let no_diagnostic = super::completed_without_verification_detail(None);
+        assert!(no_diagnostic.starts_with("[attention_reason=verification_incomplete] "));
+        assert!(no_diagnostic.contains("produced neither evidence nor a failure detail"));
+        assert!(
+            super::completed_without_verification_detail(Some("  "))
+                .contains("produced neither evidence nor a failure detail")
+        );
+        assert!(
+            super::completed_without_verification_detail(Some("connection reset"))
+                .contains("connection reset")
         );
         let long = format!(
             "{} {}",

@@ -488,6 +488,46 @@ fn failed_preflight_remediation_opens_the_plan_from_the_keyboard() {
 }
 
 #[test]
+fn recovery_read_failure_never_reports_nothing_to_recover() {
+    let mut harness = Harness::new(1.0, false);
+    crate::ui::debug_scene::demo_data(&mut harness.app);
+    harness.app.active_view = WorkspaceView::Recovery;
+    let connection = rusqlite::Connection::open(harness.state_directory.join("state.db")).unwrap();
+    connection
+        .execute_batch("ALTER TABLE mailbox_jobs RENAME TO unavailable_mailbox_jobs")
+        .unwrap();
+    let nodes = harness.tree();
+    let labels = nodes
+        .values()
+        .filter_map(|node| node.label().or_else(|| node.value()))
+        .collect::<Vec<_>>();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("Could not read recovery state"))
+    );
+    assert!(labels.iter().any(|label| label.contains("Retry loading")));
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.contains(harness.app.language.message("ui.recovery-nothing")))
+    );
+}
+
+#[test]
+fn verification_summary_keeps_verified_total_and_review_counts_distinct() {
+    let mut harness = Harness::new(1.0, false);
+    crate::ui::debug_scene::demo_data(&mut harness.app);
+    harness.app.active_view = WorkspaceView::Verification;
+    let nodes = harness.tree();
+    assert!(nodes.values().any(|node| {
+        node.label()
+            .or_else(|| node.value())
+            .is_some_and(|label| label.contains("2 of 12 mailboxes verified · 2 require review"))
+    }));
+}
+
+#[test]
 fn live_batch_confirmation_shows_cutover_readiness() {
     let mut harness = Harness::new(1.0, false);
     crate::ui::debug_scene::demo_data(&mut harness.app);

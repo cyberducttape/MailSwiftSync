@@ -16,6 +16,9 @@ use crate::ui::WorkspaceView;
 
 #[cfg(debug_assertions)]
 pub(crate) fn apply(app: &mut App) {
+    if std::env::var("MAILSWIFTSYNC_DEBUG_THEME").as_deref() == Ok("retro80s") {
+        app.theme = crate::ui::ThemeKind::Retro80sNeon;
+    }
     if std::env::var_os("MAILSWIFTSYNC_DEBUG_DEMO").is_some() {
         demo_data(app);
     }

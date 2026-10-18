@@ -270,6 +270,9 @@ pub(crate) fn headless_status(
     selected_project_id: Option<&str>,
 ) -> Result<HeadlessStatus, String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let snapshot = store
+        .begin_read_snapshot()
+        .map_err(|error| error.to_string())?;
     let total_projects = if let Some(project_id) = selected_project_id {
         usize::from(
             store
@@ -343,7 +346,7 @@ pub(crate) fn headless_status(
     let (active_processes, active_processes_truncated) = store
         .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
         .map_err(|error| error.to_string())?;
-    Ok(HeadlessStatus {
+    let status = HeadlessStatus {
         format: STATUS_FORMAT,
         format_version: AUTOMATION_FORMAT_VERSION,
         schema_version: core::CURRENT_SCHEMA_VERSION,
@@ -353,7 +356,9 @@ pub(crate) fn headless_status(
         total_projects,
         projects_truncated: result.len() < total_projects,
         projects: result,
-    })
+    };
+    snapshot.commit().map_err(|error| error.to_string())?;
+    Ok(status)
 }
 
 /// Emit a bounded status projection for large ledgers. Unlike detailed
@@ -364,6 +369,9 @@ pub(crate) fn headless_status_summary(
     selected_project_id: Option<&str>,
 ) -> Result<HeadlessStatusSummary, String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let snapshot = store
+        .begin_read_snapshot()
+        .map_err(|error| error.to_string())?;
     let total_projects = if let Some(project_id) = selected_project_id {
         usize::from(
             store
@@ -429,7 +437,7 @@ pub(crate) fn headless_status_summary(
     let (active_processes, active_processes_truncated) = store
         .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
         .map_err(|error| error.to_string())?;
-    Ok(HeadlessStatusSummary {
+    let summary = HeadlessStatusSummary {
         format: STATUS_SUMMARY_FORMAT,
         format_version: AUTOMATION_FORMAT_VERSION,
         schema_version: core::CURRENT_SCHEMA_VERSION,
@@ -440,7 +448,9 @@ pub(crate) fn headless_status_summary(
         projects_truncated: summaries.len() < total_projects,
         aggregate_mailbox_state_counts,
         projects: summaries,
-    })
+    };
+    snapshot.commit().map_err(|error| error.to_string())?;
+    Ok(summary)
 }
 
 const FLEET_MAX_LEDGER_CANDIDATES: usize = 10_000;
@@ -834,17 +844,6 @@ pub(crate) fn headless_execute_with_credentials(
     ))
 }
 
-/// Drive the existing durable batch worker without a GUI. Only queues already
-/// restored from the ledger are accepted; importing or silently reconstructing
-/// a partial batch in automation would make the scope ambiguous.
-pub(crate) fn headless_batch_execute(
-    state_path: &std::path::Path,
-    live: bool,
-    acknowledge_destination_loss: bool,
-) -> Result<String, String> {
-    headless_batch_execute_selected(state_path, live, None, acknowledge_destination_loss, None)
-}
-
 /// Execute only the requested durable batch jobs. This is the automation
 /// boundary for selective remediation: unknown IDs are rejected rather than
 /// silently broadening a repair run to the whole queue.
@@ -862,7 +861,48 @@ pub(crate) fn headless_batch_execute_selected(
         acknowledge_destination_loss,
         diagnostic_log,
         None,
+        None,
+        None,
     )
+}
+
+fn headless_batch_execute_project(
+    state_path: &std::path::Path,
+    project_id: &str,
+    acknowledge_destination_loss: bool,
+) -> Result<String, HeadlessBatchError> {
+    let mut instance_owned = false;
+    match headless_batch_execute_selected_inner(
+        state_path,
+        true,
+        None,
+        acknowledge_destination_loss,
+        None,
+        Some(project_id),
+        None,
+        Some(&mut instance_owned),
+    ) {
+        Err(_message) if instance_owned => Err(HeadlessBatchError::InstanceOwned),
+        Err(message) => Err(HeadlessBatchError::Message(message)),
+        Ok(message) => Ok(message),
+    }
+}
+
+#[derive(Debug)]
+enum HeadlessBatchError {
+    InstanceOwned,
+    Message(String),
+}
+
+impl std::fmt::Display for HeadlessBatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InstanceOwned => {
+                formatter.write_str("another MailSwiftSync controller owns the ledger")
+            }
+            Self::Message(message) => formatter.write_str(message),
+        }
+    }
 }
 
 /// Run the approved cutover stage only if it is still the same stage after
@@ -880,7 +920,9 @@ pub(crate) fn headless_cutover_batch_execute(
         None,
         acknowledge_destination_loss,
         None,
+        None,
         Some((project_id, expected_stage)),
+        None,
     )
 }
 
@@ -928,16 +970,27 @@ pub(crate) fn validate_cutover_run_admission(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Keeps the supervisor's typed ownership signal local.
 fn headless_batch_execute_selected_inner(
     state_path: &std::path::Path,
     live: bool,
     requested_ids: Option<&HashSet<String>>,
     acknowledge_destination_loss: bool,
     diagnostic_log: Option<&std::path::Path>,
+    queue_project_override: Option<&str>,
     cutover_guard: Option<(&str, core::CutoverStage)>,
+    instance_owned: Option<&mut bool>,
 ) -> Result<String, String> {
-    let mut app =
-        App::try_from_state_path(Some(state_path)).map_err(|failure| failure.to_string())?;
+    let mut app = App::try_from_state_path_for_project(Some(state_path), queue_project_override)
+        .map_err(|failure| failure.to_string())?;
+    if app.instance_lock_busy {
+        if let Some(instance_owned) = instance_owned {
+            *instance_owned = true;
+        }
+        return Err(
+            "durable state is unavailable because another controller owns the ledger".into(),
+        );
+    }
     if let Some(directory) = diagnostic_log {
         app.diagnostic_logger = Some(std::sync::Arc::new(crate::DiagnosticLogger::create(
             directory,
@@ -1200,36 +1253,23 @@ pub(crate) fn headless_supervise(
         }
         let store = match core::StateStore::open_readonly(state_path) {
             Ok(store) => store,
-            Err(error) if supervisor_should_retry_storage_error(&error.to_string()) => {
+            Err(error) if supervisor_should_retry_storage_error(&error) => {
                 eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
                 thread::sleep(poll_interval);
                 continue;
             }
             Err(error) => return Err(error.to_string()),
         };
-        let latest_project = match store.latest_project() {
+        let actionable_project = match store.oldest_project_with_automation_safe_batch_work() {
             Ok(project) => project,
-            Err(error) if supervisor_should_retry_storage_error(&error.to_string()) => {
+            Err(error) if supervisor_should_retry_storage_error(&error) => {
                 eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
                 thread::sleep(poll_interval);
                 continue;
             }
             Err(error) => return Err(error.to_string()),
         };
-        let actionable = match latest_project
-            .filter(|project| !project.name.trim().is_empty())
-            .map(|project| store.project_has_automation_safe_batch_work(&project.id))
-            .transpose()
-        {
-            Ok(actionable) => actionable.unwrap_or(false),
-            Err(error) if supervisor_should_retry_storage_error(&error.to_string()) => {
-                eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
-                thread::sleep(poll_interval);
-                continue;
-            }
-            Err(error) => return Err(error.to_string()),
-        };
-        if !actionable {
+        let Some(project_id) = actionable_project else {
             idle_polls = idle_polls.saturating_add(1);
             if max_idle_polls != 0 && idle_polls >= max_idle_polls {
                 return Ok(format!(
@@ -1238,31 +1278,33 @@ pub(crate) fn headless_supervise(
             }
             thread::sleep(poll_interval);
             continue;
-        }
+        };
         idle_polls = 0;
-        match headless_batch_execute(state_path, true, acknowledge_destination_loss) {
+        match headless_batch_execute_project(state_path, &project_id, acknowledge_destination_loss)
+        {
             Ok(message) => {
                 completed_passes = completed_passes.saturating_add(1);
                 eprintln!("{message}");
             }
-            Err(error)
-                if error.contains("Another MailSwiftSync instance holds the project database")
-                    || error.contains("durable SQLite state is unavailable") =>
-            {
-                eprintln!("Migration supervisor waiting for durable controller ownership: {error}");
+            Err(HeadlessBatchError::InstanceOwned) => {
+                eprintln!("Migration supervisor waiting for durable controller ownership");
                 thread::sleep(poll_interval);
             }
-            Err(error) => return Err(error),
+            Err(HeadlessBatchError::Message(error)) => return Err(error),
         }
     }
 }
 
-fn supervisor_should_retry_storage_error(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("database is locked")
-        || error.contains("database is busy")
-        || error.contains("sqlite_busy")
-        || error.contains("temporarily unavailable")
+fn supervisor_should_retry_storage_error(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(code, _)
+            if matches!(
+                code.code,
+                rusqlite::ffi::ErrorCode::DatabaseBusy
+                    | rusqlite::ffi::ErrorCode::DatabaseLocked
+            )
+    )
 }
 
 pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {
@@ -1506,16 +1548,25 @@ mod tests {
     #[test]
     fn supervisor_retries_transient_storage_contention_but_not_corruption() {
         assert!(super::supervisor_should_retry_storage_error(
-            "database is locked (SQLITE_BUSY)"
+            &rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                Some("vendor-specific wording".into()),
+            )
         ));
         assert!(super::supervisor_should_retry_storage_error(
-            "temporarily unavailable: database is busy"
+            &rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_LOCKED),
+                None,
+            )
         ));
         assert!(!super::supervisor_should_retry_storage_error(
-            "database disk image is malformed"
+            &rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                Some("database is locked".into()),
+            )
         ));
         assert!(!super::supervisor_should_retry_storage_error(
-            "permission denied"
+            &rusqlite::Error::InvalidQuery
         ));
     }
 }

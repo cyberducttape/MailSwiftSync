@@ -115,6 +115,9 @@ pub(crate) struct App {
     /// the operator confirms the host has been checked.
     pub(crate) process_review_required: bool,
     pub(crate) persistence_available: bool,
+    /// True only when the durable ledger is owned by another process. Kept
+    /// typed so supervisors do not infer retry policy from diagnostics text.
+    pub(crate) instance_lock_busy: bool,
     pub(crate) profile_available: bool,
     /// The project currently selected by the operator for views and exports.
     /// This is deliberately separate from `active_run`, which is execution

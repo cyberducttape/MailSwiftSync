@@ -129,75 +129,83 @@ impl App {
                 .family(crate::ui::fonts::semibold()),
             );
             ui.add_space(6.0);
-            ui.columns(2, |columns| {
-                let buckets: [(&str, &str, usize, Color32, &'static str); 5] = [
-                    (
-                        "✓",
-                        "ui.bucket-completed",
-                        counts.completed,
-                        colors.success,
-                        "completed",
-                    ),
-                    (
-                        "▶",
-                        "ui.bucket-migrating",
-                        counts.migrating,
-                        colors.info,
-                        "migrating",
-                    ),
-                    (
-                        "⏸",
-                        "ui.bucket-retrying",
-                        counts.retrying,
-                        colors.warning,
-                        "retrying",
-                    ),
-                    (
-                        "⚠",
-                        "ui.bucket-needs-attention",
-                        counts.needs_attention,
-                        colors.danger,
-                        "needs_attention",
-                    ),
-                    (
-                        "○",
-                        "ui.bucket-waiting",
-                        counts.waiting,
-                        colors.text_secondary,
-                        "waiting",
-                    ),
-                ];
-                // A grid keeps every count on its label's baseline.
-                egui::Grid::new("command_center_buckets")
-                    .num_columns(2)
-                    .spacing([24.0, 8.0])
-                    .show(&mut columns[0], |ui| {
-                        for (glyph, key, count, color, filter) in buckets {
-                            let label = self.language.message(key);
-                            let tint = if count > 0 {
-                                color
-                            } else {
-                                colors.text_secondary
-                            };
-                            let size = egui::TextStyle::Body.resolve(ui.style()).size;
-                            let text =
-                                crate::ui::status_text(&format!("{glyph}  {label}"), tint, size);
-                            let response = ui
-                                .add_enabled(count > 0, egui::Button::new(text).frame(false))
-                                .on_hover_text(self.language.message("ui.bucket-open-filtered"));
-                            crate::ui::name_control(&response, &format!("{label}: {count}"));
-                            if response.clicked() {
-                                open_filter = Some(filter);
+            crate::ui::responsive_columns(ui, 2, 420.0, |ui, index| {
+                if index == 0 {
+                    let buckets: [(&str, &str, usize, Color32, &'static str); 5] = [
+                        (
+                            "✓",
+                            "ui.bucket-completed",
+                            counts.completed,
+                            colors.success,
+                            "completed",
+                        ),
+                        (
+                            "▶",
+                            "ui.bucket-migrating",
+                            counts.migrating,
+                            colors.info,
+                            "migrating",
+                        ),
+                        (
+                            "⏸",
+                            "ui.bucket-retrying",
+                            counts.retrying,
+                            colors.warning,
+                            "retrying",
+                        ),
+                        (
+                            "⚠",
+                            "ui.bucket-needs-attention",
+                            counts.needs_attention,
+                            colors.danger,
+                            "needs_attention",
+                        ),
+                        (
+                            "○",
+                            "ui.bucket-waiting",
+                            counts.waiting,
+                            colors.text_secondary,
+                            "waiting",
+                        ),
+                    ];
+                    // A grid keeps every count on its label's baseline.
+                    egui::Grid::new("command_center_buckets")
+                        .num_columns(2)
+                        .spacing([24.0, 8.0])
+                        .show(ui, |ui| {
+                            for (glyph, key, count, color, filter) in buckets {
+                                let label = self.language.message(key);
+                                let tint = if count > 0 {
+                                    color
+                                } else {
+                                    colors.text_secondary
+                                };
+                                let size = egui::TextStyle::Body.resolve(ui.style()).size;
+                                let text = crate::ui::status_text(
+                                    &format!("{glyph}  {label}"),
+                                    tint,
+                                    size,
+                                );
+                                let response = ui
+                                    .add_enabled(count > 0, egui::Button::new(text).frame(false))
+                                    .on_hover_text(
+                                        self.language.message("ui.bucket-open-filtered"),
+                                    );
+                                crate::ui::name_control(&response, &format!("{label}: {count}"));
+                                if response.clicked() {
+                                    open_filter = Some(filter);
+                                }
+                                ui.label(
+                                    RichText::new(count.to_string())
+                                        .strong()
+                                        .family(crate::ui::fonts::medium()),
+                                );
+                                ui.end_row();
                             }
-                            ui.label(
-                                RichText::new(count.to_string())
-                                    .strong()
-                                    .family(crate::ui::fonts::medium()),
-                            );
-                            ui.end_row();
-                        }
-                    });
-                let right = &mut columns[1];
+                        });
+                    return;
+                }
+                let right = ui;
                 let transferred_detail = self
                     .language
                     .message("ui.command-center-transferred-detail")

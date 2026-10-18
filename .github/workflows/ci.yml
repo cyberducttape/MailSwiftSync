@@ -48,7 +48,7 @@ jobs:
       - run: cargo fmt --check
       - name: Analyze systemd supervisor security profile
         run: >-
-          systemd-analyze security --offline=yes
+          systemd-analyze --threshold=40 --offline=yes security
           docs/distribution/mailswiftsync-supervise.service --no-pager
       - name: Verify documentation claims against capability manifest
         run: |
@@ -102,6 +102,34 @@ jobs:
           scripts/verify-deb-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.deb' -print -quit)"
           MAILSWIFTSYNC_PACKAGE_BINARY=target/debug/mailswiftsync scripts/package-rpm.sh "$RUNNER_TEMP/packages"
           scripts/verify-rpm-package.sh "$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.rpm' -print -quit)"
+      - name: Install, run, and remove Debian package without deleting migration data
+        run: |
+          set -euo pipefail
+          package="$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$package"
+          if sudo dpkg-query -W -f='${Status}' mailswiftsync 2>/dev/null | grep -q 'install ok installed'; then
+            echo 'MailSwiftSync was already installed on the CI runner' >&2
+            exit 1
+          fi
+          if sudo test -e /var/lib/mailswiftsync; then
+            echo 'MailSwiftSync state directory already exists on the CI runner' >&2
+            exit 1
+          fi
+          sudo install -d -m 0700 /var/lib/mailswiftsync
+          printf 'preserve-me\n' | sudo tee /var/lib/mailswiftsync/state-sentinel >/dev/null
+          cleanup() {
+            sudo dpkg -r mailswiftsync >/dev/null 2>&1 || true
+            sudo rm -f /var/lib/mailswiftsync/state-sentinel
+            sudo rmdir /var/lib/mailswiftsync 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sudo dpkg -i "$package"
+          mailswiftsync --version
+          test -x /usr/bin/mailswiftsync
+          test -f /usr/share/doc/mailswiftsync/docs/distribution/SERVICE.md
+          sudo dpkg -r mailswiftsync
+          test ! -e /usr/bin/mailswiftsync
+          test "$(sudo cat /var/lib/mailswiftsync/state-sentinel)" = preserve-me
       - name: Install, run, and remove the RPM on Fedora
         run: |
           # fedora:42, pinned by image-index digest.
@@ -159,14 +187,10 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
-        with:
-          toolchain: 1.92.0
-          components: llvm-tools-preview
-      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 2026-10-02 nightly; required by LLVM branch instrumentation
-        with:
-          toolchain: nightly-2026-10-02
-          components: llvm-tools-preview
+      - name: Install pinned coverage toolchains
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal --component llvm-tools-preview
+          rustup toolchain install nightly-2026-10-02 --profile minimal --component llvm-tools-preview
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --version 0.9.1 --locked
       - name: Generate stable-toolchain line LCOV report
@@ -335,6 +359,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build container image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:ci .
+      - name: Verify container state and runtime persistence boundary
+        run: bash scripts/container-persistence-smoke.sh mailswiftsync:ci
       - name: Smoke-test container CLI
         run: docker run --rm mailswiftsync:ci --version
       - name: Smoke-test bundled imapsync
@@ -343,3 +369,22 @@ jobs:
         run: docker run --rm --entrypoint dovecot mailswiftsync:ci --version
       - name: Smoke-test bundled doveadm
         run: docker run --rm --entrypoint doveadm mailswiftsync:ci pw -s SHA512-CRYPT -p smoke
+      - name: Install checksum-pinned Trivy
+        shell: bash
+        run: |
+          trivy_dir="$(bash scripts/install-pinned-trivy.sh "$RUNNER_TEMP/mailswiftsync-trivy")"
+          echo "$trivy_dir" >> "$GITHUB_PATH"
+      - name: Scan runtime image for vulnerabilities
+        run: >-
+          bash scripts/scan-runtime-image.sh mailswiftsync:ci
+          "$RUNNER_TEMP/mailswiftsync-image-vulnerability-report.json"
+      - name: Preserve runtime image vulnerability report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-image-vulnerability-report
+          path: |
+            ${{ runner.temp }}/mailswiftsync-image-vulnerability-report.json
+            ${{ runner.temp }}/mailswiftsync-image-vulnerability-report.scanner.txt
+          if-no-files-found: warn
+          retention-days: 30

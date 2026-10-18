@@ -338,6 +338,8 @@ state="$workspace/state.db"
 export XDG_CONFIG_HOME="$workspace/config"
 mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
 chmod 0700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/mailswiftsync"
+printf 'profile = "lab"\n' > "$XDG_CONFIG_HOME/mailswiftsync/organization-policy.toml"
+chmod 0600 "$XDG_CONFIG_HOME/mailswiftsync/organization-policy.toml"
 
 toml_quote() {
   local LC_ALL=C value="$1"

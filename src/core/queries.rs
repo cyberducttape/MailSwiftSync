@@ -92,6 +92,7 @@ impl StateStore {
     /// Test for automation-safe work without materializing mailbox rows. This
     /// is intentionally separate from the bounded status projection: service
     /// supervision must not mistake a truncated first page for an idle queue.
+    #[cfg(test)]
     pub fn project_has_automation_safe_batch_work(
         &self,
         project_id: &str,
@@ -101,6 +102,33 @@ impl StateStore {
             [project_id],
             |row| row.get(0),
         )
+    }
+
+    /// Return the oldest project with automation-safe durable batch work.
+    /// Supervision must search the whole ledger rather than assuming the
+    /// newest project is the only active queue. Stable creation ordering also
+    /// prevents newer idle projects from hiding older pending work.
+    pub fn oldest_project_with_automation_safe_batch_work(
+        &self,
+    ) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT p.id FROM projects p
+                 WHERE length(trim(p.name)) > 0
+                   AND EXISTS (
+                     SELECT 1 FROM mailbox_jobs m
+                     LEFT JOIN batch_plans b ON b.id=m.batch_plan_id
+                     WHERE m.project_id=p.id
+                       AND COALESCE(m.config,b.config) IS NOT NULL
+                       AND length(trim(COALESCE(m.config,b.config))) > 0
+                       AND (m.state IN ('queued','ready','completed','delta_required','cancelled')
+                            OR (m.state='failed' AND m.attention_reason IN ('transport_failed','capacity_limited')))
+                   )
+                 ORDER BY p.created_at ASC, p.rowid ASC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
     }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
@@ -254,15 +282,16 @@ impl StateStore {
 
     pub fn mailbox_state_counts(&self, project_id: &str) -> rusqlite::Result<MailboxStateCounts> {
         self.connection.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            "SELECT COUNT(*), SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
             [project_id],
             |row| {
                 Ok(MailboxStateCounts {
                     total: sqlite_usize(row.get(0)?)?,
-                    ready: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
-                    running: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
-                    verified: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
-                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    queued: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
+                    ready: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
+                    running: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
+                    verified: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(5)?.unwrap_or(0))?,
                 })
             },
         )
@@ -270,15 +299,16 @@ impl StateStore {
 
     pub fn all_mailbox_state_counts(&self) -> rusqlite::Result<MailboxStateCounts> {
         self.connection.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs",
+            "SELECT COUNT(*), SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state='verified' OR (state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)) THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs",
             [],
             |row| {
                 Ok(MailboxStateCounts {
                     total: sqlite_usize(row.get(0)?)?,
-                    ready: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
-                    running: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
-                    verified: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
-                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    queued: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
+                    ready: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
+                    running: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
+                    verified: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
+                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(5)?.unwrap_or(0))?,
                 })
             },
         )

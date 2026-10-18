@@ -13,7 +13,7 @@ pub(crate) use saved_profile::*;
 use validation::validate_certificate_pin;
 
 use crate::atomic_artifact::write_private_atomic;
-use crate::command::remove_option;
+use crate::command::remove_placeholder_options;
 use crate::imap_probe::{command_endpoint_parts, command_port};
 use crate::{
     DOVECOT_SYNC_LOCK_WAIT_SECONDS, core, create_secret_directory,
@@ -390,6 +390,67 @@ mod tests {
                 .unwrap_err()
                 .contains("Source provider tenant scope")
         );
+    }
+
+    #[test]
+    fn migration_plan_rejects_same_source_and_destination_mailbox_at_same_endpoint() {
+        let mut form = Form::default();
+        form.profile.source_host = "IMAP.Example.test.".into();
+        form.profile.source_port = "19143".into();
+        form.profile.source_user = "User@example.test".into();
+        form.profile.destination_host = "imap.example.test".into();
+        form.profile.destination_port = "19143".into();
+        form.profile.destination_user = "user@example.test".into();
+
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("same IMAP mailbox"), "{error}");
+        assert!(error.contains("same normalized host and port"), "{error}");
+    }
+
+    #[test]
+    fn migration_plan_rejects_ipv4_and_its_mapped_ipv6_alias_as_self_copy() {
+        let mut form = Form::default();
+        form.profile.source_host = "192.0.2.10".into();
+        form.profile.source_user = "user@example.test".into();
+        form.profile.destination_host = "[::ffff:c000:20a]".into();
+        form.profile.destination_user = "USER@example.test".into();
+
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("same IMAP mailbox"), "{error}");
+    }
+
+    #[test]
+    fn migration_plan_rejects_plain_source_and_starttls_destination_on_same_default_port() {
+        let mut form = Form::default();
+        form.profile.source_host = "mail.example.test".into();
+        form.profile.source_tls = "plain".into();
+        form.profile.allow_insecure_source_transport = true;
+        form.profile.source_user = "same@example.test".into();
+        form.profile.destination_host = "MAIL.example.test.".into();
+        form.profile.destination_tls = "starttls".into();
+        form.profile.destination_user = "SAME@example.test".into();
+
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("same IMAP mailbox"), "{error}");
+    }
+
+    #[test]
+    fn migration_plan_allows_distinct_mailboxes_or_distinct_hosts() {
+        let mut form = Form::default();
+        form.profile.source_host = "imap.example.test:993".into();
+        form.profile.source_user = "source@example.test".into();
+        form.profile.destination_host = "imap.example.test:143".into();
+        form.profile.destination_user = "destination@example.test".into();
+        assert!(form.validate_internal(false).is_ok());
+
+        // Separate IMAP services on one host are a valid source/destination
+        // pair (for example, isolated Dovecot instances in the integration
+        // lab). Endpoint identity must include the effective port.
+        form.profile.destination_user = "source@example.test".into();
+        assert!(form.validate_internal(false).is_ok());
+
+        form.profile.destination_host = "other.example.test:143".into();
+        assert!(form.validate_internal(false).is_ok());
     }
 
     #[test]

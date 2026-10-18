@@ -769,11 +769,22 @@ pub struct ProjectOperationMetrics {
     /// `failed:<class>` such as `failed:capacity` for provider throttling,
     /// or `unfinished` for running or interrupted attempts).
     pub attempt_outcomes: std::collections::BTreeMap<String, usize>,
+    /// Sum of the latest durable engine progress snapshots for attempts that
+    /// do not yet have a terminal outcome. Retries may repeat work, so this is
+    /// attempt progress rather than unique mailbox coverage.
+    pub unfinished_attempt_messages_copied: u64,
+    /// Byte counterpart to `unfinished_attempt_messages_copied`; this is a
+    /// snapshot across unfinished attempts, not a rate or lifetime total.
+    pub unfinished_attempt_bytes_copied: u64,
     /// Current verification outcome per mailbox with evidence.
     pub verification_outcomes: std::collections::BTreeMap<String, usize>,
     /// Current outcome cross-tabulated by evidence method, so an aggregate
     /// total match cannot be confused with per-message metadata or body proof.
     pub verification_method_outcomes: std::collections::BTreeMap<String, usize>,
+    /// Current message-level findings from each mailbox's latest durable
+    /// evidence row. `probable` denotes lower-confidence matches, not a
+    /// confirmed difference.
+    pub verification_message_findings: std::collections::BTreeMap<String, usize>,
 }
 
 impl StateStore {
@@ -799,6 +810,36 @@ impl StateStore {
             metrics.attempt_outcomes.insert(outcome, count);
         }
         let mut statement = self.connection.prepare(
+            "SELECT e.detail FROM transfer_passes p JOIN events e ON e.run_id=p.run_id AND e.kind='transfer_progress_checkpoint' WHERE p.project_id=?1 AND p.outcome IS NULL AND json_valid(e.detail) AND json_extract(e.detail,'$.attempt')=p.attempt AND e.id=(SELECT MAX(latest.id) FROM events latest WHERE latest.run_id=p.run_id AND latest.kind='transfer_progress_checkpoint' AND json_valid(latest.detail) AND json_extract(latest.detail,'$.attempt')=p.attempt)",
+        )?;
+        for row in statement.query_map([project_id], |row| row.get::<_, String>(0))? {
+            let detail = row?;
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&detail) else {
+                continue;
+            };
+            let Some(progress) = value.get("progress") else {
+                continue;
+            };
+            if let Some(copied) = progress
+                .get("messages_copied")
+                .and_then(serde_json::Value::as_u64)
+            {
+                metrics.unfinished_attempt_messages_copied = metrics
+                    .unfinished_attempt_messages_copied
+                    .checked_add(copied)
+                    .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+            }
+            if let Some(bytes_copied) = progress
+                .get("bytes_copied")
+                .and_then(serde_json::Value::as_u64)
+            {
+                metrics.unfinished_attempt_bytes_copied = metrics
+                    .unfinished_attempt_bytes_copied
+                    .checked_add(bytes_copied)
+                    .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+            }
+        }
+        let mut statement = self.connection.prepare(
             "SELECT e.verification_method,e.verification_outcome,COUNT(*) FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1 GROUP BY e.verification_method,e.verification_outcome",
         )?;
         for row in statement.query_map([project_id], |row| {
@@ -816,6 +857,33 @@ impl StateStore {
             metrics
                 .verification_method_outcomes
                 .insert(format!("{method}:{outcome}"), count);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1",
+        )?;
+        for row in statement.query_map([project_id], |row| {
+            Ok((
+                super::sqlite_usize(row.get(0)?)?,
+                super::sqlite_usize(row.get(1)?)?,
+                super::sqlite_usize(row.get(2)?)?,
+                super::sqlite_usize(row.get(3)?)?,
+            ))
+        })? {
+            let (missing, extra, modified, probable) = row?;
+            for (kind, count) in [
+                ("missing", missing),
+                ("extra", extra),
+                ("modified", modified),
+                ("probable", probable),
+            ] {
+                let total = metrics
+                    .verification_message_findings
+                    .entry(kind.to_owned())
+                    .or_default();
+                *total = total
+                    .checked_add(count)
+                    .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
+            }
         }
         Ok(metrics)
     }

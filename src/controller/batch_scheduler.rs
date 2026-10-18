@@ -490,6 +490,22 @@ mod tests {
             engine
         }
 
+        /// Write a fake engine that records overlapping process starts. The
+        /// short active interval is well below the launch limiter's expected
+        /// spacing in the burst regression test, so a limiter bypass creates
+        /// a durable marker without relying on event-delivery timestamps.
+        pub(super) fn overlap_detecting_engine(directory: &std::path::Path) -> std::path::PathBuf {
+            let engine = directory.join("fake-imapsync-overlap-check");
+            let directory = directory.to_string_lossy();
+            let quoted_directory = format!("'{}'", directory.replace('\'', "'\\''"));
+            let script = format!(
+                "#!/bin/sh\ndir={quoted_directory}\nactive=\"$dir/active-engine\"\nburst=\"$dir/burst-detected\"\nif ! mkdir \"$active\" 2>/dev/null; then : > \"$burst\"; else sleep 0.02; rmdir \"$active\"; fi\nexit 0\n"
+            );
+            std::fs::write(&engine, script).unwrap();
+            std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+            engine
+        }
+
         pub(super) fn temp_directory() -> std::path::PathBuf {
             let directory = std::env::temp_dir()
                 .join(format!("mailswiftsync-schedule-{}", uuid::Uuid::new_v4()));
@@ -502,6 +518,16 @@ mod tests {
             concurrency: usize,
             retry_count: usize,
             limiters: BatchLimiters,
+        ) -> Run {
+            run_with_batched_process_registration(forms, concurrency, retry_count, limiters, false)
+        }
+
+        pub(super) fn run_with_batched_process_registration(
+            forms: Vec<crate::Form>,
+            concurrency: usize,
+            retry_count: usize,
+            limiters: BatchLimiters,
+            batch_registration_replies: bool,
         ) -> Run {
             let count = forms.len();
             let jobs = forms
@@ -551,11 +577,21 @@ mod tests {
             );
             let mut starts = Vec::new();
             let mut finished = Vec::new();
+            let mut pending_process_start_replies = Vec::new();
             while let Ok(event) = rx.recv_timeout(Duration::from_secs(60)) {
                 match event {
                     Event::ProcessStarted(_, job_id, _, _, _, _, _, reply) => {
                         starts.push((job_id, Instant::now()));
-                        let _ = reply.send(Ok(()));
+                        if batch_registration_replies {
+                            pending_process_start_replies.push(reply);
+                            if pending_process_start_replies.len() == count {
+                                for reply in pending_process_start_replies.drain(..) {
+                                    let _ = reply.send(Ok(()));
+                                }
+                            }
+                        } else {
+                            let _ = reply.send(Ok(()));
+                        }
                     }
                     Event::ClaimBatch { reply, .. }
                     | Event::EngineVersion { reply, .. }
@@ -602,9 +638,12 @@ mod tests {
     fn released_provider_cooldown_does_not_burst_process_starts() {
         use crate::controller::rate_domains::DomainLevel;
         const WORKERS: usize = 4;
-        const STARTS_PER_SECOND: usize = 10;
+        // Leave ample room between admitted launches so a loaded CI runner's
+        // process scheduling cannot turn two correctly paced children into
+        // an apparent overlap.
+        const STARTS_PER_SECOND: usize = 1;
         let directory = composed::temp_directory();
-        let engine = composed::engine(&directory);
+        let engine = composed::overlap_detecting_engine(&directory);
         let forms = (0..WORKERS)
             .map(|index| composed::form(&engine, &format!("user{index}@a.example")))
             .collect::<Vec<_>>();
@@ -615,19 +654,54 @@ mod tests {
             &composed::source_domain(&forms[0], DomainLevel::Provider),
             std::time::Instant::now() + std::time::Duration::from_millis(800),
         );
+        let run_started = std::time::Instant::now();
         let run = composed::run(forms, WORKERS, 0, limiters);
-        let _ = std::fs::remove_dir_all(&directory);
+        let run_elapsed = run_started.elapsed();
 
         assert_eq!(run.starts.len(), WORKERS, "{:?}", run.finished);
+        assert!(
+            !directory.join("burst-detected").exists(),
+            "multiple fake engines overlapped, indicating an unpaced process-start burst"
+        );
+        let cooldown = std::time::Duration::from_millis(800);
         let spacing = std::time::Duration::from_secs_f64(1.0 / STARTS_PER_SECOND as f64);
-        for pair in run.starts.windows(2) {
-            let gap = pair[1].1.duration_since(pair[0].1);
-            // Allow scheduler jitter, never a burst.
-            assert!(
-                gap >= spacing.mul_f64(0.7),
-                "process starts {gap:?} apart exceed {STARTS_PER_SECOND}/s"
-            );
-        }
+        // Measure until all fake engines have exited, not when the coordinator
+        // receives ProcessStarted events. Event delivery can be delayed and
+        // bunch timestamps even when the actual spawns were correctly paced.
+        // Allow 30% scheduler jitter for each required inter-launch interval.
+        let minimum_elapsed = cooldown + spacing.mul_f64(0.7 * (WORKERS.saturating_sub(1) as f64));
+        assert!(
+            run_elapsed >= minimum_elapsed,
+            "the completed launch burst took {run_elapsed:?}, below the rate-limited minimum {minimum_elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delayed_durable_process_registration_does_not_burst_engine_releases() {
+        const WORKERS: usize = 4;
+        const STARTS_PER_SECOND: usize = 4;
+        let directory = composed::temp_directory();
+        let engine = composed::overlap_detecting_engine(&directory);
+        let forms = (0..WORKERS)
+            .map(|index| composed::form(&engine, &format!("user{index}@a.example")))
+            .collect::<Vec<_>>();
+        let run = composed::run_with_batched_process_registration(
+            forms,
+            WORKERS,
+            0,
+            composed::limiters(WORKERS, STARTS_PER_SECOND),
+            true,
+        );
+
+        assert_eq!(run.starts.len(), WORKERS, "{:?}", run.finished);
+        assert_eq!(run.finished.len(), WORKERS, "{:?}", run.finished);
+        assert!(
+            !directory.join("burst-detected").exists(),
+            "simultaneously acknowledged gatekeepers must not execute engines in a burst"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// A tenant in cooldown is parked, not held by workers: with every

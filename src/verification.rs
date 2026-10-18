@@ -594,8 +594,9 @@ mod tests {
         let mut status = DovecotStatusAccumulator::default();
         status.observe("mailbox messages=not-a-number vsize=40");
         status.observe("mailbox messages=3");
+        status.observe("messages=3 vsize=40");
         assert_eq!(status.folders, 0);
-        assert_eq!(status.malformed_lines, 2);
+        assert_eq!(status.malformed_lines, 3);
 
         let valid = DovecotStatusAccumulator {
             folders: 1,

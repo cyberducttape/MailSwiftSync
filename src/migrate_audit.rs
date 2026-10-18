@@ -394,33 +394,40 @@ fn typed_identity(item: &Value, schema: IdentitySchema) -> Result<String, String
 }
 
 fn normalize_path(path: &str) -> String {
-    let mut components = Vec::new();
+    let mut normalized = PathBuf::new();
+    let mut rooted = false;
     for component in std::path::Path::new(path).components() {
         match component {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                if components
-                    .last()
-                    .is_some_and(|value: &String| value != "..")
-                {
-                    components.pop();
-                } else {
-                    components.push("..".to_owned());
+                if normalized.file_name().is_some() {
+                    normalized.pop();
+                } else if !rooted {
+                    normalized.push("..");
                 }
             }
-            std::path::Component::Normal(value) => {
-                components.push(value.to_string_lossy().into_owned())
+            std::path::Component::Normal(value) => normalized.push(value),
+            std::path::Component::RootDir => {
+                rooted = true;
+                normalized.push(component.as_os_str());
             }
-            std::path::Component::RootDir => components.push(String::new()),
-            std::path::Component::Prefix(prefix) => {
-                components.push(prefix.as_os_str().to_string_lossy().into_owned())
-            }
+            std::path::Component::Prefix(_) => normalized.push(component.as_os_str()),
         }
     }
-    if components.len() == 1 && components[0].is_empty() {
-        return "/".to_owned();
+    normalized.to_string_lossy().replace('\\', "/")
+}
+
+fn difference_status(missing: usize, extra: usize, modified: usize) -> &'static str {
+    let dimensions = usize::from(missing > 0) + usize::from(extra > 0) + usize::from(modified > 0);
+    if dimensions > 1 {
+        "mixed"
+    } else if missing > 0 {
+        "missing"
+    } else if extra > 0 {
+        "extra"
+    } else {
+        "modified"
     }
-    components.join("/")
 }
 
 fn identity(category: &str, item: &Value) -> Result<(String, &'static str), String> {
@@ -526,7 +533,7 @@ fn compare_category(
         if details.len() < MAX_DETAILS && (missing > 0 || extra > 0 || modified > 0) {
             details.push(serde_json::json!({
                 "identity": key,
-                "status": if missing > 0 && extra == 0 { "missing" } else if extra > 0 && missing == 0 { "extra" } else { "modified" },
+                "status": difference_status(missing, extra, modified),
                 "missing": missing,
                 "extra": extra,
                 "modified": modified,
@@ -745,7 +752,7 @@ fn compare_staged_category(
                 )?;
                 details.push(serde_json::json!({
                     "identity": identity,
-                    "status": if missing > 0 && extra == 0 { "missing" } else if extra > 0 && missing == 0 { "extra" } else { "modified" },
+                    "status": difference_status(missing, extra, modified),
                     "missing": missing,
                     "extra": extra,
                     "modified": modified,
@@ -883,6 +890,76 @@ pub(crate) fn compare_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_path_parent_components_never_escape_filesystem_root() {
+        assert_eq!(normalize_path("/a/../../b"), "/b");
+        assert_eq!(normalize_path("/../../b"), "/b");
+        assert_eq!(normalize_path("a/../../b"), "../b");
+        assert_eq!(normalize_path("../../b"), "../../b");
+    }
+
+    #[test]
+    fn mixed_missing_and_modified_snapshot_differences_are_labeled_mixed() {
+        let source = serde_json::json!({"widgets":[
+            {"id":"same","value":"exact"},
+            {"id":"same","value":"changed"},
+            {"id":"same","value":"source-only"}
+        ]});
+        let destination = serde_json::json!({"widgets":[
+            {"id":"same","value":"exact"},
+            {"id":"same","value":"destination-change"}
+        ]});
+
+        let result = compare(&source, &destination).unwrap();
+        let category = &result.report["categories"]["widgets"];
+        assert_eq!(category["missing"], 1);
+        assert_eq!(category["modified"], 1);
+        assert_eq!(category["details"][0]["status"], "mixed");
+
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-migrate-audit-mixed-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let source_path = directory.join("source.json");
+        let destination_path = directory.join("destination.json");
+        let output_path = directory.join("report.json");
+        std::fs::write(&source_path, serde_json::to_vec(&source).unwrap()).unwrap();
+        std::fs::write(&destination_path, serde_json::to_vec(&destination).unwrap()).unwrap();
+        let streamed = compare_files(&source_path, &destination_path, &output_path).unwrap();
+        assert_eq!(
+            streamed.report["categories"]["widgets"]["details"][0]["status"],
+            "mixed"
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn snapshot_detail_status_covers_every_difference_dimension_combination() {
+        let cases = [
+            ((1, 0, 0), "missing"),
+            ((0, 1, 0), "extra"),
+            ((0, 0, 1), "modified"),
+            ((1, 1, 0), "mixed"),
+            ((1, 0, 1), "mixed"),
+            ((0, 1, 1), "mixed"),
+            ((1, 1, 1), "mixed"),
+        ];
+        for ((missing, extra, modified), expected_status) in cases {
+            assert_eq!(
+                difference_status(missing, extra, modified),
+                expected_status,
+                "counters missing={missing}, extra={extra}, modified={modified}"
+            );
+        }
+    }
+
     #[test]
     fn detects_missing_extra_and_modified_records() {
         let source = serde_json::json!({"messages":[
