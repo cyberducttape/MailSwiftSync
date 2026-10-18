@@ -489,16 +489,10 @@ mod tests {
     #[test]
     fn shared_launch_limiter_paces_gatekeeper_release_after_registration() {
         use crate::controller::rate_domains::{RateDomainPath, SideIdentity};
+        use std::time::Instant;
 
         const WORKERS: usize = 4;
-        const STARTS_PER_SECOND: usize = 4;
-        let directory = std::env::temp_dir().join(format!(
-            "mailswiftsync-release-rate-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir(&directory).unwrap();
-        let active = directory.join("active-engine");
-        let burst = directory.join("burst-detected");
+        const STARTS_PER_SECOND: usize = 2;
         let source = SideIdentity {
             endpoint: "source.example:993",
             user: "source@example.test",
@@ -515,55 +509,40 @@ mod tests {
         let limiter = Arc::new(crate::process::ProcessLaunchLimiter::new(STARTS_PER_SECOND));
         let cancel = Arc::new(AtomicBool::new(false));
         let start = Arc::new(std::sync::Barrier::new(WORKERS));
-        let mut children = Vec::with_capacity(WORKERS);
-        let mut releases = Vec::with_capacity(WORKERS);
+        let release_times = Arc::new(Mutex::new(Vec::with_capacity(WORKERS)));
 
-        for _ in 0..WORKERS {
-            let mut child = Command::new("/bin/sh")
-                .arg("-c")
-                .arg(
-                    "IFS= read -r gate; [ \"$gate\" = GO ] || exit 2; \
-                     if ! mkdir \"$1\" 2>/dev/null; then : > \"$2\"; \
-                     else sleep 0.1; rmdir \"$1\"; fi",
-                )
-                .arg("mailswiftsync-test-engine")
-                .arg(&active)
-                .arg(&burst)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .unwrap();
-            releases.push(child.stdin.take().unwrap());
-            children.push(child);
-        }
-
-        let releasers = releases
-            .into_iter()
-            .map(|stdin| {
+        let releasers = (0..WORKERS)
+            .map(|_| {
                 let limiter = Arc::clone(&limiter);
                 let cancel = Arc::clone(&cancel);
                 let start = Arc::clone(&start);
                 let path = path.clone();
+                let release_times = Arc::clone(&release_times);
                 thread::spawn(move || {
-                    let mut stdin = Some(stdin);
                     start.wait();
-                    release_engine_with_limiter(&mut stdin, Some((&limiter, &path)), &cancel)
+                    limiter
+                        .launch_scoped(&path, &cancel, || {
+                            release_times.lock().unwrap().push(Instant::now());
+                            Ok::<(), ()>(())
+                        })
+                        .expect("an uncancelled launch must be admitted")
+                        .expect("the release callback succeeds");
                 })
             })
             .collect::<Vec<_>>();
 
         for releaser in releasers {
-            releaser.join().unwrap().unwrap();
+            releaser.join().unwrap();
         }
-        for mut child in children {
-            assert!(child.wait().unwrap().success());
-        }
+        let mut release_times = release_times.lock().unwrap().clone();
+        release_times.sort_unstable();
+        assert_eq!(release_times.len(), WORKERS);
         assert!(
-            !burst.exists(),
-            "simultaneously acknowledged gatekeepers must not execute engines in a burst"
+            release_times
+                .windows(2)
+                .all(|window| window[1].duration_since(window[0]) >= Duration::from_millis(400)),
+            "simultaneously acknowledged gatekeepers must receive paced release permits"
         );
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
