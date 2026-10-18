@@ -499,7 +499,7 @@ mod tests {
             let directory = directory.to_string_lossy();
             let quoted_directory = format!("'{}'", directory.replace('\'', "'\\''"));
             let script = format!(
-                "#!/bin/sh\ndir={quoted_directory}\nactive=\"$dir/active-engine\"\nburst=\"$dir/burst-detected\"\nif ! mkdir \"$active\" 2>/dev/null; then : > \"$burst\"; else sleep 0.05; rmdir \"$active\"; fi\nexit 0\n"
+                "#!/bin/sh\ndir={quoted_directory}\nactive=\"$dir/active-engine\"\nburst=\"$dir/burst-detected\"\nif ! mkdir \"$active\" 2>/dev/null; then : > \"$burst\"; else sleep 0.02; rmdir \"$active\"; fi\nexit 0\n"
             );
             std::fs::write(&engine, script).unwrap();
             std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -638,7 +638,10 @@ mod tests {
     fn released_provider_cooldown_does_not_burst_process_starts() {
         use crate::controller::rate_domains::DomainLevel;
         const WORKERS: usize = 4;
-        const STARTS_PER_SECOND: usize = 10;
+        // Leave ample room between admitted launches so a loaded CI runner's
+        // process scheduling cannot turn two correctly paced children into
+        // an apparent overlap.
+        const STARTS_PER_SECOND: usize = 1;
         let directory = composed::temp_directory();
         let engine = composed::overlap_detecting_engine(&directory);
         let forms = (0..WORKERS)

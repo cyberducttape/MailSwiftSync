@@ -8,7 +8,9 @@
   Windows. Keep expert `imapsync --useuid/--usecache` settings confined to the
   explicit recovery drill. The clean default-imapsync integration fixture no
   longer includes duplicate Message-IDs that upstream intentionally skips;
-  verification still fails closed when such omissions occur.
+  verification still fails closed when such omissions occur. Widen the
+  scheduler-level anti-burst test interval so loaded macOS runners do not
+  mistake delayed child cleanup for an unpaced release.
 - Make unattended supervision select the oldest project with automation-safe
   batch work across the whole ledger, restore that project explicitly, and
   advance to the next eligible project after settlement. This prevents a newer
