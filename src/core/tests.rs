@@ -7084,8 +7084,27 @@ fn ledger_write_workload_benchmark() {
         }
         wal_max = wal_max.max(std::fs::metadata(&wal).map_or(0, |metadata| metadata.len()));
     };
+    // An operator backup (the `backup` command's own read-only connection)
+    // starts once the ledger holds history and runs while the writer
+    // continues. SQLite restarts a backup whenever another connection writes
+    // to the source, so this measures whether it can finish under load.
+    let backup_result = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let backup_started_at = mailboxes / 2;
+    let mut backup_thread = None;
     let started = Instant::now();
     for (index, job) in jobs.iter().enumerate() {
+        if index == backup_started_at {
+            let source = path.clone();
+            let destination = directory.join("backup.db");
+            let result = std::sync::Arc::clone(&backup_result);
+            backup_thread = Some(std::thread::spawn(move || {
+                let started = Instant::now();
+                let outcome = StateStore::open_readonly(&source)
+                    .and_then(|store| store.backup_to(&destination))
+                    .map(|()| started.elapsed());
+                *result.lock().unwrap() = Some(outcome.map_err(|error| error.to_string()));
+            }));
+        }
         let run = format!("bench-run-{index}");
         timed(&mut || db.begin_run(&project.id, job, &run, "imapsync"));
         for batch in 0..batches_per_run {
@@ -7115,6 +7134,15 @@ fn ledger_write_workload_benchmark() {
         });
     }
     let elapsed = started.elapsed();
+    let backup_completed_during_writes = backup_result.lock().unwrap().is_some();
+    if let Some(thread) = backup_thread {
+        thread.join().unwrap();
+    }
+    let backup_ms = match backup_result.lock().unwrap().take() {
+        Some(Ok(duration)) => duration.as_millis(),
+        Some(Err(error)) => panic!("backup during the write workload failed: {error}"),
+        None => panic!("backup thread produced no result"),
+    };
     stop.store(true, Ordering::Relaxed);
     let mut reads = readers
         .into_iter()
@@ -7137,7 +7165,8 @@ fn ledger_write_workload_benchmark() {
     };
     let migrated_messages = mailboxes as u64 * MESSAGES_PER_MAILBOX;
     eprintln!(
-        "ledger-workload mailboxes={mailboxes} writes={} elapsed_ms={} write_p50_us={} write_p95_us={} write_p99_us={} write_max_us={} read_p95_us={} reads={} busy_errors={} wal_max_kib={} checkpoint_ms={checkpoint_ms} bytes_per_mailbox={} bytes_per_million_messages={}",
+        "ledger-workload mailboxes={mailboxes} backup_ms={backup_ms} backup_blocked_by_writes={} writes={} elapsed_ms={} write_p50_us={} write_p95_us={} write_p99_us={} write_max_us={} read_p95_us={} reads={} busy_errors={} wal_max_kib={} checkpoint_ms={checkpoint_ms} bytes_per_mailbox={} bytes_per_million_messages={}",
+        u8::from(!backup_completed_during_writes),
         writes.len(),
         elapsed.as_millis(),
         percentile(&writes, 50),

@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Sustained controller write workload on a file-backed ledger while two
 # read-only connections poll it (GUI snapshot worker, status/metrics). Gates
-# write latency, lock contention, WAL growth, and durable bytes per mailbox.
+# write latency, lock contention, WAL growth, durable bytes per mailbox, and
+# whether an operator backup taken mid-workload completes while writes continue.
 # Defaults are release-host gates; override with MAILSWIFTSYNC_LEDGER_*_BUDGET
 # for a qualified host class.
 benchmark_output=$(cargo test --locked --release ledger_write_workload_benchmark -- --ignored --nocapture --test-threads=1 2>&1)
@@ -20,6 +21,8 @@ declare -a ledger_cases=(
   "busy_errors:MAILSWIFTSYNC_LEDGER_BUSY_BUDGET:0"
   "wal_max_kib:MAILSWIFTSYNC_LEDGER_WAL_BUDGET_KIB:65536"
   "bytes_per_mailbox:MAILSWIFTSYNC_LEDGER_BYTES_PER_MAILBOX_BUDGET:16384"
+  "backup_blocked_by_writes:MAILSWIFTSYNC_LEDGER_BACKUP_BLOCKED_BUDGET:0"
+  "backup_ms:MAILSWIFTSYNC_LEDGER_BACKUP_BUDGET_MS:30000"
 )
 for ledger_case in "${ledger_cases[@]}"; do
   IFS=: read -r metric budget_name default_budget <<<"$ledger_case"

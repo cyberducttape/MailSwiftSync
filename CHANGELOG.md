@@ -8,6 +8,13 @@
   mailbox (tens of gigabytes for a 100,000-mailbox project). Durable state is
   now about 3.2 KB per mailbox regardless of transfer duration. Existing
   ledgers keep their historical checkpoints.
+- Make ledger backups finish while a migration is writing. `backup` (and the
+  read-only repair copy used by status, metrics, and the GUI snapshot
+  worker) copied 128 pages per SQLite backup step, and SQLite restarts a
+  stepped backup whenever another connection writes, so a backup started
+  during a migration only completed once writes paused. The copy now reads
+  one consistent WAL snapshot in a single step; under the benchmark workload
+  it completes in about 0.1 s without delaying writes.
 - Add `scripts/benchmark-ledger-workload.sh`: a sustained controller write
   workload with concurrent read-only pollers that gates write latency
   percentiles, SQLITE_BUSY/locked failures, WAL high-water mark, and durable

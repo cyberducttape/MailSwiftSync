@@ -421,10 +421,13 @@ durable bytes per mailbox. A local release run on 2026-10-20 (Linux x86_64,
 checkpoint, and about 3.2 KB of durable ledger per mailbox. Progress
 checkpoints are superseded per attempt, so that figure no longer grows with
 transfer duration (a one-hour transfer previously left about 580 KB per
-mailbox). This is not yet a live-product latency histogram; active backup,
-controller restart, and SQLITE_FULL cases remain to be measured on the
-release host class before increasing local worker limits or advertising large
-queue capacity.
+mailbox). An operator backup started mid-workload completes in about 0.1 s
+while writes continue; before backups copied the ledger in one step, the same
+backup restarted on every concurrent write and finished only once writes
+stopped. This is not yet a live-product latency histogram; controller restart
+and SQLITE_FULL cases (the latter covered functionally by
+`controller-chaos-smoke.sh`) remain to be measured on the release host class
+before increasing local worker limits or advertising large queue capacity.
 
 Batch verification currently runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification. There
