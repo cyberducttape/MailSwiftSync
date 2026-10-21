@@ -410,14 +410,21 @@ interleaving; retain focused race and fault-injection tests when changing those
 paths.
 
 SQLite is configured for WAL and a 5-second busy timeout, and batched event
-write failures report elapsed write time and batch size. The product does not
-yet expose a sustained successful-write latency distribution, lock-wait
-histogram, WAL high-water mark/checkpoint duration, or bytes of durable state
-per migrated message. Before increasing local worker limits or advertising
-large queue capacity, benchmark these against representative progress-event,
-verification-stage, and evidence workloads. Include active backup, controller
-restart, and SQLITE_BUSY/SQLITE_FULL cases; do not infer capacity from the
-database's suitability for a lower-volume local controller.
+write failures report elapsed write time and batch size.
+`scripts/benchmark-ledger-workload.sh` drives the controller's write path
+(run admission, progress-checkpoint batches, terminal evidence commits) on a
+file-backed ledger while two read-only connections poll it, and gates write
+latency percentiles, SQLITE_BUSY/locked failures, the WAL high-water mark, and
+durable bytes per mailbox. A local release run on 2026-10-20 (Linux x86_64,
+2,000 mailboxes, 44,000 writes) measured write p50 55 µs, p99 0.8 ms, max
+2.4 ms, zero busy errors, a 4.7 MiB WAL high-water mark, a 1 ms final
+checkpoint, and about 3.2 KB of durable ledger per mailbox. Progress
+checkpoints are superseded per attempt, so that figure no longer grows with
+transfer duration (a one-hour transfer previously left about 580 KB per
+mailbox). This is not yet a live-product latency histogram; active backup,
+controller restart, and SQLITE_FULL cases remain to be measured on the
+release host class before increasing local worker limits or advertising large
+queue capacity.
 
 Batch verification currently runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification. There

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Keep only the newest transfer-progress checkpoint per attempt. Checkpoints
+  are written every few seconds and every reader uses only the latest, but
+  all were retained: a one-hour transfer left about 580 KB of ledger per
+  mailbox (tens of gigabytes for a 100,000-mailbox project). Durable state is
+  now about 3.2 KB per mailbox regardless of transfer duration. Existing
+  ledgers keep their historical checkpoints.
+- Add `scripts/benchmark-ledger-workload.sh`: a sustained controller write
+  workload with concurrent read-only pollers that gates write latency
+  percentiles, SQLITE_BUSY/locked failures, WAL high-water mark, and durable
+  bytes per mailbox.
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
