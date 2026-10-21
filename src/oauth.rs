@@ -84,6 +84,13 @@ pub(crate) fn xoauth2_payload(user: &str, access_token: &str) -> SecretString {
     SecretString::new(BASE64_STANDARD.encode(auth.as_bytes()))
 }
 
+/// RFC 4616 SASL PLAIN initial response: `\0user\0password`, base64-encoded.
+/// Unlike an IMAP quoted string, SASL PLAIN carries UTF-8 credentials.
+pub(crate) fn sasl_plain_payload(user: &str, password: &str) -> SecretString {
+    let auth = SecretString::new(format!("\0{user}\0{password}"));
+    SecretString::new(BASE64_STANDARD.encode(auth.as_bytes()))
+}
+
 /// Wait for the server's SASL continuation response before sending the
 /// bearer payload. A bounded response prevents a hostile endpoint from
 /// consuming unbounded memory during readiness probing.

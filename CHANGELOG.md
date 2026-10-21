@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Authenticate the independent verifier with SASL `AUTHENTICATE PLAIN` when
+  a password-auth user name or password contains non-ASCII characters and
+  the server offers `AUTH=PLAIN`. IMAP quoted strings are 7-bit, so `LOGIN`
+  with, for example, an umlaut in the password could be rejected after the
+  transfer itself had succeeded, leaving the mailbox without verification.
+  ASCII credentials keep using `LOGIN`.
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on

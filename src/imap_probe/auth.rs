@@ -38,13 +38,24 @@ pub(super) fn authenticate_imap_stream<S: Read + Write>(
         .lines()
         .any(|line| is_untagged_response(line, "PREAUTH"));
     if !preauth {
-        if auth_method == "oauth2" {
-            let encoded = crate::oauth::xoauth2_payload(user, credential);
+        // IMAP quoted strings are 7-bit, so a non-ASCII user name or password
+        // cannot be sent reliably with LOGIN. SASL PLAIN carries UTF-8; use it
+        // when the server offers it, as the engine's own client would.
+        let sasl = if auth_method == "oauth2" {
+            Some(("XOAUTH2", crate::oauth::xoauth2_payload(user, credential)))
+        } else if (!user.is_ascii() || !credential.is_ascii())
+            && crate::imap_protocol::advertises_capability(&response, "AUTH=PLAIN")
+        {
+            Some(("PLAIN", crate::oauth::sasl_plain_payload(user, credential)))
+        } else {
+            None
+        };
+        if let Some((mechanism, encoded)) = sasl {
             write_imap_command(
                 &mut stream,
-                b"a002 AUTHENTICATE XOAUTH2\r\n",
+                format!("a002 AUTHENTICATE {mechanism}\r\n").as_bytes(),
                 budget,
-                "could not write XOAUTH2 authentication command",
+                "could not write SASL authentication command",
             )?;
             response.clear();
             let (deadline, cancel) = budget
@@ -62,13 +73,13 @@ pub(super) fn authenticate_imap_stream<S: Read + Write>(
                 &mut stream,
                 encoded.as_bytes(),
                 budget,
-                "could not write XOAUTH2 payload",
+                "could not write SASL payload",
             )?;
             write_imap_command(
                 &mut stream,
                 b"\r\n",
                 budget,
-                "could not finish XOAUTH2 payload",
+                "could not finish SASL payload",
             )?;
             response.clear();
             read_auth_result_with_deadline(
@@ -248,6 +259,59 @@ mod tests {
         );
         assert!(stream.sent().contains("a003 CAPABILITY\r\n"));
         assert!(capabilities.contains("a003 OK"));
+    }
+
+    #[test]
+    fn non_ascii_password_uses_sasl_plain_when_offered() {
+        let stream = ScriptedStream::new(&[
+            PRE_AUTH_CAPABILITIES,
+            "+\r\n",
+            "a002 OK authenticated\r\n",
+            POST_AUTH_CAPABILITIES,
+        ]);
+
+        let (stream, _) = authenticate_imap_stream(
+            stream,
+            "imap.example.test",
+            "jürgen@example.test",
+            "Grüße-2026",
+            "password",
+            "* OK ready\r\n".to_owned(),
+            None,
+        )
+        .expect("SASL PLAIN transcript should authenticate");
+
+        let payload = crate::oauth::sasl_plain_payload("jürgen@example.test", "Grüße-2026");
+        assert!(stream.sent().contains("a002 AUTHENTICATE PLAIN\r\n"));
+        assert!(stream.sent().contains(&format!("{}\r\n", payload.as_str())));
+        assert!(!stream.sent().contains("LOGIN"));
+        assert!(!stream.sent().contains("Grüße"));
+    }
+
+    #[test]
+    fn non_ascii_password_keeps_login_when_plain_is_not_offered() {
+        let stream = ScriptedStream::new(&[
+            "* CAPABILITY IMAP4rev1\r\na001 OK capabilities\r\n",
+            "a002 OK authenticated\r\n",
+            POST_AUTH_CAPABILITIES,
+        ]);
+
+        let (stream, _) = authenticate_imap_stream(
+            stream,
+            "imap.example.test",
+            "operator",
+            "Grüße-2026",
+            "password",
+            "* OK ready\r\n".to_owned(),
+            None,
+        )
+        .expect("LOGIN transcript should authenticate");
+
+        assert!(
+            stream
+                .sent()
+                .contains("a002 LOGIN \"operator\" \"Grüße-2026\"\r\n")
+        );
     }
 
     #[test]
