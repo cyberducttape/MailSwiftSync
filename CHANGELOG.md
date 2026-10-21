@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Stop reporting refused batch claims as durability failures. A child whose
+  durable claim is refused by policy (for example a Final Delta
+  source-quiescence attestation older than 15 minutes, or a mailbox already
+  running) now fails with that reason; previously the refusal set the
+  session-wide durability fault, blocked phase advancement, and marked the
+  whole batch for durability review. Run-admission refusals are named
+  ledger rejections instead of SQLite's "Query is not read-only".
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
