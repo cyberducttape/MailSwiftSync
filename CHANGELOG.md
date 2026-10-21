@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Import semicolon- and tab-separated mailbox CSV files. Excel in German and
+  many other European locales saves "CSV" with semicolons, which previously
+  parsed as one column and was rejected for missing headers; the separator is
+  now detected from the header row.
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
