@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Emit each `mailswiftsync metrics` family as one contiguous group with its
+  HELP and TYPE lines first. Headers were written together before any
+  samples, which the Prometheus exposition format and `promtool check
+  metrics` reject.
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
