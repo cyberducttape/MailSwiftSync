@@ -85,11 +85,8 @@ impl App {
         let has_bulk_jobs = batch_summary.total > 0;
         let has_durable_jobs = mailbox_counts.total > 0;
         let has_mailboxes = has_durable_jobs || has_bulk_jobs;
-        let workspace_attention_count = if has_bulk_jobs {
-            batch_summary.attention
-        } else {
-            attention_count
-        };
+        let workspace_attention_count =
+            workspace_attention_count(has_bulk_jobs, batch_summary, attention_count);
         let proof_ready = project.as_ref().is_some_and(|project| {
             customer_proof_ready(project.phase, attention_count, self.ui_snapshot.is_stale())
         });
@@ -1422,9 +1419,44 @@ fn step_state(index: usize, current: usize) -> crate::ui::StepState {
     }
 }
 
+/// Mailboxes needing operator review for the Overview's next-step prompt. A
+/// batch counts the command center's Needs attention bucket (attention,
+/// failed, and verification differences), so the prompt and the bucket on
+/// the same screen agree.
+fn workspace_attention_count(
+    has_bulk_jobs: bool,
+    batch_summary: crate::controller::BulkQueueSummary,
+    durable_needs_review: usize,
+) -> usize {
+    if has_bulk_jobs {
+        batch_summary.command_center().needs_attention
+    } else {
+        durable_needs_review
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LIFECYCLE, OverviewPrimary, OverviewPrimaryInputs, overview_primary};
+
+    #[test]
+    fn batch_attention_prompt_counts_the_command_center_bucket() {
+        let summary = crate::controller::BulkQueueSummary::from_state_counts(
+            [
+                ("attention", 1),
+                ("failed", 1),
+                ("verification_difference", 1),
+                ("verified", 2),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            super::workspace_attention_count(true, summary, 0),
+            summary.command_center().needs_attention
+        );
+        assert_eq!(super::workspace_attention_count(true, summary, 0), 3);
+        assert_eq!(super::workspace_attention_count(false, summary, 5), 5);
+    }
 
     #[test]
     fn workflow_steps_use_operator_language_in_every_locale() {

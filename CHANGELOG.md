@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make the Overview's "Review attention items (n)" prompt for a batch count
+  failed and verification-difference rows, matching the command center's
+  Needs attention bucket on the same screen (it counted only Attention rows).
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
