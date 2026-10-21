@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Update `rustls-webpki` to 0.103.16 and `webpki-roots` to 1.0.10 for
+  RUSTSEC-2026-0382 (certificate verification could accept distrusted
+  intermediates) and RUSTSEC-2026-0381 (bundled roots trusted distrusted
+  emSign intermediates). They back the verifier's own IMAP TLS connections
+  as well as OAuth token and webhook HTTPS requests.
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
