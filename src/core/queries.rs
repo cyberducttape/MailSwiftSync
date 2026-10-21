@@ -108,11 +108,24 @@ impl StateStore {
     /// Supervision must search the whole ledger rather than assuming the
     /// newest project is the only active queue. Stable creation ordering also
     /// prevents newer idle projects from hiding older pending work.
+    #[cfg(test)]
     pub fn oldest_project_with_automation_safe_batch_work(
         &self,
     ) -> rusqlite::Result<Option<String>> {
-        self.connection
-            .query_row(
+        Ok(self
+            .projects_with_automation_safe_batch_work(1)?
+            .into_iter()
+            .next())
+    }
+
+    /// Projects with automation-safe batch work, oldest first, so a
+    /// supervisor can move past a project whose pass is failing.
+    pub fn projects_with_automation_safe_batch_work(
+        &self,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<String>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
                 "SELECT p.id FROM projects p
                  WHERE length(trim(p.name)) > 0
                    AND EXISTS (
@@ -124,11 +137,9 @@ impl StateStore {
                        AND (m.state IN ('queued','ready','completed','delta_required','cancelled')
                             OR (m.state='failed' AND m.attention_reason IN ('transport_failed','capacity_limited')))
                    )
-                 ORDER BY p.created_at ASC, p.rowid ASC LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
+                 ORDER BY p.created_at ASC, p.rowid ASC LIMIT ?1",
+        )?;
+        statement.query_map([limit], |row| row.get(0))?.collect()
     }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection

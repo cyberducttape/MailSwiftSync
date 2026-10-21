@@ -1227,6 +1227,42 @@ fn headless_batch_execute_selected_inner(
 /// window) still terminates instead of running through every future window;
 /// a continuous (`max_idle_polls == 0`) invocation instead just waits for the
 /// window to reopen.
+/// Actionable projects the supervisor considers per poll, oldest first.
+const SUPERVISOR_PROJECT_SCAN: usize = 256;
+/// Longest wait before retrying a project whose pass keeps failing.
+const SUPERVISOR_MAX_PROJECT_BACKOFF: Duration = Duration::from_secs(60 * 60);
+
+/// Retry state for a project whose last batch pass failed.
+#[derive(Clone, Copy, Debug)]
+struct ProjectBackoff {
+    failures: u32,
+    retry_at: std::time::Instant,
+}
+
+/// Exponential, capped delay before a failing project is tried again.
+fn supervisor_backoff_delay(poll_interval: Duration, failures: u32) -> Duration {
+    let base = poll_interval.max(Duration::from_secs(1));
+    let doublings = failures.saturating_sub(1).min(16);
+    base.saturating_mul(1 << doublings)
+        .min(SUPERVISOR_MAX_PROJECT_BACKOFF)
+}
+
+/// The oldest actionable project that is not waiting out a failure backoff.
+fn next_supervised_project<'a>(
+    candidates: &'a [String],
+    backoff: &std::collections::HashMap<String, ProjectBackoff>,
+    now: std::time::Instant,
+) -> Option<&'a str> {
+    candidates
+        .iter()
+        .find(|project| {
+            backoff
+                .get(*project)
+                .is_none_or(|entry| entry.retry_at <= now)
+        })
+        .map(String::as_str)
+}
+
 pub(crate) fn headless_supervise(
     state_path: &std::path::Path,
     poll_interval: Duration,
@@ -1236,6 +1272,24 @@ pub(crate) fn headless_supervise(
 ) -> Result<String, String> {
     let mut idle_polls = 0_usize;
     let mut completed_passes = 0_usize;
+    let mut failed_passes = 0_usize;
+    let mut last_failure: Option<String> = None;
+    // A project whose pass fails (for example an unreachable source server)
+    // must not monopolize the supervisor: back it off and serve the next
+    // actionable project instead of exiting or retrying it in a tight loop.
+    let mut backoff = std::collections::HashMap::<String, ProjectBackoff>::new();
+    let stopped = |reason: String, completed: usize, failed: usize, last: &Option<String>| {
+        if failed == 0 {
+            Ok(format!(
+                "{reason}; completed {completed} batch pass(es). Operator-review rows were left untouched."
+            ))
+        } else {
+            Err(format!(
+                "{reason}; completed {completed} batch pass(es) and {failed} failed; last failure: {}",
+                last.as_deref().unwrap_or("unknown")
+            ))
+        }
+    };
     loop {
         // Checked before `headless_status` so a closed window costs nothing
         // beyond the wall-clock check itself.
@@ -1244,9 +1298,14 @@ pub(crate) fn headless_supervise(
         {
             idle_polls = idle_polls.saturating_add(1);
             if max_idle_polls != 0 && idle_polls >= max_idle_polls {
-                return Ok(format!(
-                    "Migration supervisor stopped after {idle_polls} poll(s) outside the configured maintenance window; completed {completed_passes} batch pass(es). Operator-review rows were left untouched."
-                ));
+                return stopped(
+                    format!(
+                        "Migration supervisor stopped after {idle_polls} poll(s) outside the configured maintenance window"
+                    ),
+                    completed_passes,
+                    failed_passes,
+                    &last_failure,
+                );
             }
             thread::sleep(poll_interval);
             continue;
@@ -1260,8 +1319,10 @@ pub(crate) fn headless_supervise(
             }
             Err(error) => return Err(error.to_string()),
         };
-        let actionable_project = match store.oldest_project_with_automation_safe_batch_work() {
-            Ok(project) => project,
+        let candidates = match store
+            .projects_with_automation_safe_batch_work(SUPERVISOR_PROJECT_SCAN)
+        {
+            Ok(projects) => projects,
             Err(error) if supervisor_should_retry_storage_error(&error) => {
                 eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
                 thread::sleep(poll_interval);
@@ -1269,28 +1330,63 @@ pub(crate) fn headless_supervise(
             }
             Err(error) => return Err(error.to_string()),
         };
-        let Some(project_id) = actionable_project else {
+        drop(store);
+        // Forget backoff for projects that no longer have actionable work.
+        backoff.retain(|project, _| candidates.contains(project));
+        let now = std::time::Instant::now();
+        let Some(project_id) = next_supervised_project(&candidates, &backoff, now) else {
             idle_polls = idle_polls.saturating_add(1);
             if max_idle_polls != 0 && idle_polls >= max_idle_polls {
-                return Ok(format!(
-                    "Migration supervisor stopped after {idle_polls} idle poll(s); completed {completed_passes} batch pass(es). Operator-review rows were left untouched."
-                ));
+                let reason = if candidates.is_empty() {
+                    format!("Migration supervisor stopped after {idle_polls} idle poll(s)")
+                } else {
+                    format!(
+                        "Migration supervisor stopped after {idle_polls} poll(s) with every actionable project backing off after failed passes"
+                    )
+                };
+                return stopped(reason, completed_passes, failed_passes, &last_failure);
             }
-            thread::sleep(poll_interval);
+            let until_retry = backoff
+                .values()
+                .map(|entry| entry.retry_at.saturating_duration_since(now))
+                .min()
+                .unwrap_or(poll_interval);
+            thread::sleep(
+                poll_interval
+                    .min(until_retry)
+                    .max(Duration::from_millis(100)),
+            );
             continue;
         };
+        let project_id = project_id.to_owned();
         idle_polls = 0;
         match headless_batch_execute_project(state_path, &project_id, acknowledge_destination_loss)
         {
             Ok(message) => {
                 completed_passes = completed_passes.saturating_add(1);
+                backoff.remove(&project_id);
                 eprintln!("{message}");
             }
             Err(HeadlessBatchError::InstanceOwned) => {
                 eprintln!("Migration supervisor waiting for durable controller ownership");
                 thread::sleep(poll_interval);
             }
-            Err(HeadlessBatchError::Message(error)) => return Err(error),
+            Err(HeadlessBatchError::Message(error)) => {
+                failed_passes = failed_passes.saturating_add(1);
+                let entry = backoff.entry(project_id.clone()).or_insert(ProjectBackoff {
+                    failures: 0,
+                    retry_at: now,
+                });
+                entry.failures = entry.failures.saturating_add(1);
+                let delay = supervisor_backoff_delay(poll_interval, entry.failures);
+                entry.retry_at = std::time::Instant::now() + delay;
+                eprintln!(
+                    "Migration supervisor pass for project {project_id} failed (attempt {}); retrying it in {}s while other projects continue: {error}",
+                    entry.failures,
+                    delay.as_secs()
+                );
+                last_failure = Some(format!("project {project_id}: {error}"));
+            }
         }
     }
 }
@@ -1543,6 +1639,56 @@ mod tests {
         output.push_bounded("[durability] latest issue".into(), 10, 1024);
 
         assert_eq!(last_durability_detail(&output), Some("latest issue"));
+    }
+
+    #[test]
+    fn supervisor_backs_off_a_failing_project_and_serves_the_next() {
+        use super::{ProjectBackoff, next_supervised_project, supervisor_backoff_delay};
+        use std::time::Duration;
+        let candidates = vec!["older".to_owned(), "newer".to_owned()];
+        let now = std::time::Instant::now();
+        let mut backoff = std::collections::HashMap::new();
+        assert_eq!(
+            next_supervised_project(&candidates, &backoff, now),
+            Some("older")
+        );
+
+        backoff.insert(
+            "older".to_owned(),
+            ProjectBackoff {
+                failures: 1,
+                retry_at: now + Duration::from_secs(30),
+            },
+        );
+        assert_eq!(
+            next_supervised_project(&candidates, &backoff, now),
+            Some("newer"),
+            "a failing older project must not starve newer work"
+        );
+        backoff.insert(
+            "newer".to_owned(),
+            ProjectBackoff {
+                failures: 1,
+                retry_at: now + Duration::from_secs(30),
+            },
+        );
+        assert_eq!(next_supervised_project(&candidates, &backoff, now), None);
+        assert_eq!(
+            next_supervised_project(&candidates, &backoff, now + Duration::from_secs(31)),
+            Some("older")
+        );
+
+        let poll = Duration::from_secs(30);
+        assert_eq!(supervisor_backoff_delay(poll, 1), Duration::from_secs(30));
+        assert_eq!(supervisor_backoff_delay(poll, 3), Duration::from_secs(120));
+        assert_eq!(
+            supervisor_backoff_delay(poll, 30),
+            Duration::from_secs(3600)
+        );
+        assert_eq!(
+            supervisor_backoff_delay(Duration::ZERO, 1),
+            Duration::from_secs(1)
+        );
     }
 
     #[test]

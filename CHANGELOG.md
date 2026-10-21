@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Keep `supervise` serving the whole ledger when one project's batch pass
+  fails. A failed pass previously stopped the supervisor; under the shipped
+  `Restart=on-failure` unit it restarted onto the same oldest project every
+  10 seconds, retrying an unreachable server indefinitely and starving every
+  newer project. The failing project now backs off exponentially (up to one
+  hour) while other projects continue; a bounded run with failed passes still
+  exits nonzero.
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
