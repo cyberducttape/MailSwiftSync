@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Name the reason when the ledger refuses a project phase change or reopen
+  (for example "reopen requires every mailbox verified and no active runs or
+  processes") instead of surfacing SQLite's "Query is not read-only".
+
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
   endings for Markdown so documentation assertions behave consistently on
