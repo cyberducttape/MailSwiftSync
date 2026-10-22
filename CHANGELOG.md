@@ -19,6 +19,18 @@
   workload with concurrent read-only pollers that gates write latency
   percentiles, SQLITE_BUSY/locked failures, WAL high-water mark, and durable
   bytes per mailbox.
+- Update `rustls-webpki` to 0.103.16 and `webpki-roots` to 1.0.10 for
+  RUSTSEC-2026-0382 (certificate verification could accept distrusted
+  intermediates) and RUSTSEC-2026-0381 (bundled roots trusted distrusted
+  emSign intermediates). They back the verifier's own IMAP TLS connections
+  as well as OAuth token and webhook HTTPS requests.
+- Stop reporting refused batch claims as durability failures. A child whose
+  durable claim is refused by policy (for example a Final Delta
+  source-quiescence attestation older than 15 minutes, or a mailbox already
+  running) now fails with that reason; previously the refusal set the
+  session-wide durability fault, blocked phase advancement, and marked the
+  whole batch for durability review. Run-admission refusals are named
+  ledger rejections instead of SQLite's "Query is not read-only".
 
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
