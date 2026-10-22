@@ -113,18 +113,16 @@ impl StateStore {
         &self,
     ) -> rusqlite::Result<Option<String>> {
         Ok(self
-            .projects_with_automation_safe_batch_work(1)?
+            .projects_with_automation_safe_batch_work()?
             .into_iter()
             .next())
     }
 
-    /// Projects with automation-safe batch work, oldest first, so a
-    /// supervisor can move past a project whose pass is failing.
-    pub fn projects_with_automation_safe_batch_work(
-        &self,
-        limit: usize,
-    ) -> rusqlite::Result<Vec<String>> {
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    /// All projects with automation-safe batch work, oldest first, so a
+    /// supervisor can move past a project whose pass is failing. Do not cap
+    /// this list: if every project in a fixed-size prefix is backing off,
+    /// later eligible projects would otherwise be starved indefinitely.
+    pub fn projects_with_automation_safe_batch_work(&self) -> rusqlite::Result<Vec<String>> {
         let mut statement = self.connection.prepare(
                 "SELECT p.id FROM projects p
                  WHERE length(trim(p.name)) > 0
@@ -137,9 +135,9 @@ impl StateStore {
                        AND (m.state IN ('queued','ready','completed','delta_required','cancelled')
                             OR (m.state='failed' AND m.attention_reason IN ('transport_failed','capacity_limited')))
                    )
-                 ORDER BY p.created_at ASC, p.rowid ASC LIMIT ?1",
+                 ORDER BY p.created_at ASC, p.rowid ASC",
         )?;
-        statement.query_map([limit], |row| row.get(0))?.collect()
+        statement.query_map([], |row| row.get(0))?.collect()
     }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection

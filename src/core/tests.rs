@@ -3713,6 +3713,33 @@ fn supervisor_finds_older_actionable_projects_and_moves_on_after_completion() {
 }
 
 #[test]
+fn supervisor_candidate_scan_does_not_starve_projects_after_a_fixed_prefix() {
+    const PROJECTS: usize = 257;
+    let db = StateStore::in_memory().unwrap();
+    let mut last_project = String::new();
+    for index in 0..PROJECTS {
+        let (project, jobs) = db
+            .create_project_with_mailbox_configs(
+                &format!("queued project {index:03}"),
+                "source.example",
+                "destination.example",
+                &[(
+                    "source-user".into(),
+                    "destination-user".into(),
+                    "engine = \"imap\"".into(),
+                )],
+            )
+            .unwrap();
+        db.set_mailbox_state(&jobs[0], "queued").unwrap();
+        last_project = project.id;
+    }
+
+    let candidates = db.projects_with_automation_safe_batch_work().unwrap();
+    assert_eq!(candidates.len(), PROJECTS);
+    assert_eq!(candidates.last(), Some(&last_project));
+}
+
+#[test]
 fn latest_run_summary_is_queryable_for_audit_reports() {
     let db = StateStore::in_memory().unwrap();
     let project = db.create_project("audit", "source", "destination").unwrap();

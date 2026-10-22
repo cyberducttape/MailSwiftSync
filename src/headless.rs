@@ -1227,8 +1227,6 @@ fn headless_batch_execute_selected_inner(
 /// window) still terminates instead of running through every future window;
 /// a continuous (`max_idle_polls == 0`) invocation instead just waits for the
 /// window to reopen.
-/// Actionable projects the supervisor considers per poll, oldest first.
-const SUPERVISOR_PROJECT_SCAN: usize = 256;
 /// Longest wait before retrying a project whose pass keeps failing.
 const SUPERVISOR_MAX_PROJECT_BACKOFF: Duration = Duration::from_secs(60 * 60);
 
@@ -1319,9 +1317,7 @@ pub(crate) fn headless_supervise(
             }
             Err(error) => return Err(error.to_string()),
         };
-        let candidates = match store
-            .projects_with_automation_safe_batch_work(SUPERVISOR_PROJECT_SCAN)
-        {
+        let candidates = match store.projects_with_automation_safe_batch_work() {
             Ok(projects) => projects,
             Err(error) if supervisor_should_retry_storage_error(&error) => {
                 eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
@@ -1676,6 +1672,28 @@ mod tests {
         assert_eq!(
             next_supervised_project(&candidates, &backoff, now + Duration::from_secs(31)),
             Some("older")
+        );
+
+        let many_candidates = (0..257)
+            .map(|index| format!("project-{index:03}"))
+            .collect::<Vec<_>>();
+        let many_backoffs = many_candidates
+            .iter()
+            .take(256)
+            .map(|project| {
+                (
+                    project.clone(),
+                    ProjectBackoff {
+                        failures: 1,
+                        retry_at: now + Duration::from_secs(30),
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            next_supervised_project(&many_candidates, &many_backoffs, now),
+            Some("project-256"),
+            "a fixed-size candidate prefix must not hide later eligible work"
         );
 
         let poll = Duration::from_secs(30);
