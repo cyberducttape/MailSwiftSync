@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Update `rustls-webpki` to 0.103.16 and `webpki-roots` to 1.0.10 for
+  RUSTSEC-2026-0382 (certificate verification could accept distrusted
+  intermediates) and RUSTSEC-2026-0381 (bundled roots trusted distrusted
+  emSign intermediates). They back the verifier's own IMAP TLS connections
+  as well as OAuth token and webhook HTTPS requests.
+- Stop reporting refused batch claims as durability failures. A child whose
+  durable claim is refused by policy (for example a Final Delta
+  source-quiescence attestation older than 15 minutes, or a mailbox already
+  running) now fails with that reason; previously the refusal set the
+  session-wide durability fault, blocked phase advancement, and marked the
+  whole batch for durability review. Run-admission refusals are named
+  ledger rejections instead of SQLite's "Query is not read-only".
 - Emit each `mailswiftsync metrics` family as one contiguous group with its
   HELP and TYPE lines first. Headers were written together before any
   samples, which the Prometheus exposition format and `promtool check

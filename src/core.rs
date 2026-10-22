@@ -126,7 +126,7 @@ pub(crate) fn sqlite_optional_u64(value: Option<i64>) -> rusqlite::Result<Option
 /// Unlike storage failures, retrying the same write can never succeed, and
 /// the reason is part of the operator-visible error.
 #[derive(Debug)]
-pub(crate) struct LedgerRejection(pub(crate) &'static str);
+pub(crate) struct LedgerRejection(pub(crate) std::borrow::Cow<'static, str>);
 
 impl std::fmt::Display for LedgerRejection {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -137,7 +137,13 @@ impl std::fmt::Display for LedgerRejection {
 impl std::error::Error for LedgerRejection {}
 
 pub(crate) fn ledger_rejection(reason: &'static str) -> rusqlite::Error {
-    rusqlite::Error::ToSqlConversionFailure(Box::new(LedgerRejection(reason)))
+    rusqlite::Error::ToSqlConversionFailure(Box::new(LedgerRejection(reason.into())))
+}
+
+/// A ledger rejection whose reason is built at runtime, such as a policy
+/// check that explains which condition failed.
+pub(crate) fn ledger_rejection_owned(reason: String) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(LedgerRejection(reason.into())))
 }
 
 /// Whether an error is a deterministic invariant rejection rather than a
