@@ -18,7 +18,9 @@ impl StateStore {
             if has_cutover_workflow {
                 // Managed cutover transitions must atomically update both the
                 // workflow stage and project phase through approve/advance.
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection(
+                    "a managed cutover workflow owns this project's phase; use the cutover commands",
+                ));
             }
         }
         let backwards_transition = current != Phase::Attention
@@ -30,10 +32,14 @@ impl StateStore {
                     && !matches!(phase, Phase::Preflight | Phase::Verification))
                 || backwards_transition)
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "this phase transition is not allowed from the current phase",
+            ));
         }
         if phase == Phase::Verification && current == Phase::Discovery {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "Verification requires a preflight first",
+            ));
         }
         if phase == Phase::Complete && current != phase {
             let has_cutover_workflow: bool = tx.query_row(
@@ -45,7 +51,9 @@ impl StateStore {
                 // Approved cutovers have a separate terminal gate: only
                 // advance_cutover may record external confirmation and move
                 // the workflow to Completed.
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection(
+                    "a managed cutover completes only through its external confirmation",
+                ));
             }
             let total: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1",
@@ -58,7 +66,9 @@ impl StateStore {
                 |row| row.get(0),
             )?;
             if total == 0 || total != verified || current != Phase::Verification {
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection(
+                    "the project completes only when every mailbox is verified or has accepted exceptions",
+                ));
             }
         }
         let changed = tx.execute(
@@ -87,7 +97,9 @@ impl StateStore {
                 row.get(0)
             })?;
         if current != Phase::Complete.as_str() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "only a completed project can be reopened",
+            ));
         }
         let has_cutover_workflow: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1)",
@@ -98,7 +110,9 @@ impl StateStore {
             // A second cutover epoch is not modeled yet. Refuse reopening
             // rather than strand the project behind a terminal workflow or
             // reuse its prior external confirmation.
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "a project completed through a managed cutover cannot be reopened",
+            ));
         }
         let (total, verified, active_runs, active_processes): (i64, i64, i64, i64) = tx.query_row(
             "SELECT COUNT(*),
@@ -110,7 +124,9 @@ impl StateStore {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         if total == 0 || verified != total || active_runs != 0 || active_processes != 0 {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "reopen requires every mailbox verified and no active runs or processes",
+            ));
         }
         let invalidated = tx.execute(
             "UPDATE mailbox_jobs SET state='attention',attention_reason='verification_incomplete' WHERE project_id=?1 AND state IN ('verified','verified_with_exceptions')",
