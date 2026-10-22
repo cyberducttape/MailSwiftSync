@@ -8,6 +8,9 @@
   with, for example, an umlaut in the password could be rejected after the
   transfer itself had succeeded, leaving the mailbox without verification.
   ASCII credentials keep using `LOGIN`.
+- Name the reason when the ledger refuses a project phase change or reopen
+  (for example "reopen requires every mailbox verified and no active runs or
+  processes") instead of surfacing SQLite's "Query is not read-only".
 - Import semicolon- and tab-separated mailbox CSV files. Excel in German and
   many other European locales saves "CSV" with semicolons, which previously
   parsed as one column and was rejected for missing headers; the separator is
