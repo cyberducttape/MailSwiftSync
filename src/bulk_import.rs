@@ -239,8 +239,14 @@ fn read_csv_with_ack(
     plaintext_acknowledged: bool,
 ) -> Result<Vec<BulkJob>, String> {
     let file = open_import_file(path)?;
+    let mut input = BufReader::with_capacity(
+        64 * 1024,
+        file.take(crate::MAX_BULK_IMPORT_BYTES.saturating_add(1)),
+    );
+    let delimiter = detect_csv_delimiter(input.fill_buf().map_err(|error| error.to_string())?);
     let mut reader = csv::ReaderBuilder::new()
-        .from_reader(file.take(crate::MAX_BULK_IMPORT_BYTES.saturating_add(1)));
+        .delimiter(delimiter)
+        .from_reader(input);
     let headers = normalize_headers(
         reader.headers().map_err(|error| error.to_string())?.iter(),
         crate::MAX_BULK_IMPORT_COLUMNS,
@@ -277,13 +283,36 @@ fn read_csv_with_ack(
     if jobs.is_empty() {
         return Err("The file has no migration rows.".into());
     }
-    if reader.into_inner().limit() == 0 {
+    if reader.into_inner().get_ref().limit() == 0 {
         return Err(format!(
             "The import file exceeds the {}-byte limit.",
             crate::MAX_BULK_IMPORT_BYTES
         ));
     }
     Ok(jobs)
+}
+
+/// Choose the field separator from the header line. Excel in many European
+/// locales (German among them) saves "CSV" with semicolons, and some exports
+/// use tabs. Header names never contain these characters, so the most
+/// frequent one on the first line is the separator; comma wins ties.
+fn detect_csv_delimiter(start: &[u8]) -> u8 {
+    let header = start
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    let count = |delimiter: u8| header.iter().filter(|byte| **byte == delimiter).count();
+    [b';', b'\t']
+        .into_iter()
+        .fold((b',', count(b',')), |best, candidate| {
+            let candidate_count = count(candidate);
+            if candidate_count > best.1 {
+                (candidate, candidate_count)
+            } else {
+                best
+            }
+        })
+        .0
 }
 
 pub(crate) fn workbook_sheets(path: &Path) -> Result<Vec<String>, String> {
@@ -1317,6 +1346,44 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let jobs = jobs.expect("a BOM must not hide the first header");
         assert_eq!(jobs[0].source_host, "imap.source.example");
+    }
+
+    /// Excel in German and other European locales saves "CSV" with
+    /// semicolons; tab-separated exports are also common.
+    #[test]
+    fn semicolon_and_tab_separated_csv_imports() {
+        for (separator, label) in [(";", "semicolon"), ("\t", "tab")] {
+            let path = std::env::temp_dir().join(format!(
+                "mailswiftsync-{label}-{}.csv",
+                uuid::Uuid::new_v4()
+            ));
+            let row = |values: [&str; 4]| values.join(separator);
+            std::fs::write(
+                &path,
+                format!(
+                    "\u{feff}{}\n{}\n",
+                    row([
+                        "source_host",
+                        "source_user",
+                        "destination_host",
+                        "destination_user"
+                    ]),
+                    row([
+                        "imap.source.example",
+                        "a,b@source.example",
+                        "imap.destination.example",
+                        "a@destination.example"
+                    ]),
+                ),
+            )
+            .unwrap();
+            let jobs = super::read_csv(&path, &crate::Form::default());
+            std::fs::remove_file(&path).unwrap();
+            let jobs = jobs.unwrap_or_else(|error| panic!("{label}: {error}"));
+            assert_eq!(jobs[0].source_host, "imap.source.example", "{label}");
+        }
+        assert_eq!(super::detect_csv_delimiter(b"a,b;c,d\nx;y;z;w"), b',');
+        assert_eq!(super::detect_csv_delimiter(b""), b',');
     }
 
     #[test]
