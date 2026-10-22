@@ -8,6 +8,10 @@
   with, for example, an umlaut in the password could be rejected after the
   transfer itself had succeeded, leaving the mailbox without verification.
   ASCII credentials keep using `LOGIN`.
+- Import semicolon- and tab-separated mailbox CSV files. Excel in German and
+  many other European locales saves "CSV" with semicolons, which previously
+  parsed as one column and was rejected for missing headers; the separator is
+  now detected from the header row.
 - Update `rustls-webpki` to 0.103.16 and `webpki-roots` to 1.0.10 for
   RUSTSEC-2026-0382 (certificate verification could accept distrusted
   intermediates) and RUSTSEC-2026-0381 (bundled roots trusted distrusted
