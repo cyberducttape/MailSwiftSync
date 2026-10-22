@@ -1389,9 +1389,21 @@ fn attention_phase_can_return_to_reviewable_work() {
 fn completed_project_cannot_be_reopened_without_verified_mailboxes() {
     let db = StateStore::in_memory().unwrap();
     let project = db.create_project("test", "source", "destination").unwrap();
+    let refused = db
+        .reopen_project(&project.id, "incremental sync requested")
+        .unwrap_err();
+    // A named policy refusal, not SQLite's "Query is not read-only".
+    assert!(super::is_ledger_rejection(&refused));
     assert!(
-        db.reopen_project(&project.id, "incremental sync requested")
-            .is_err()
+        refused
+            .to_string()
+            .contains("only a completed project can be reopened"),
+        "{refused}"
+    );
+    let refused = db.transition(&project.id, Phase::Verification).unwrap_err();
+    assert!(
+        refused.to_string().contains("requires a preflight first"),
+        "{refused}"
     );
 }
 
