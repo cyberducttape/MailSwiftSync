@@ -107,43 +107,6 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         "mailswiftsync_registered_engine_processes {}",
         summary.active_processes.len()
     );
-    gauge_header(
-        &mut output,
-        "mailswiftsync_unfinished_attempt_messages_copied",
-        "Latest durable copied-message progress summed across attempts without a terminal outcome; retries may repeat work.",
-    );
-    gauge_header(
-        &mut output,
-        "mailswiftsync_unfinished_attempt_bytes_copied",
-        "Latest durable copied-byte progress summed across attempts without a terminal outcome; this is not a rate.",
-    );
-
-    counter_header(
-        &mut output,
-        "mailswiftsync_transfer_attempts_total",
-        "Total durably recorded transfer attempts across the projected ledgers.",
-    );
-    gauge_header(
-        &mut output,
-        "mailswiftsync_transfer_attempt_outcomes",
-        "Current durable transfer-attempt counts by terminal or unfinished outcome.",
-    );
-    counter_header(
-        &mut output,
-        "mailswiftsync_transfer_retries_total",
-        "Durably recorded transfer attempts after the first attempt of a pass.",
-    );
-    gauge_header(
-        &mut output,
-        "mailswiftsync_verification_mailboxes",
-        "Current mailbox evidence counts by verification method and outcome.",
-    );
-    gauge_header(
-        &mut output,
-        "mailswiftsync_verification_message_findings",
-        "Current message-level finding counts from latest mailbox evidence; probable matches are not confirmed differences.",
-    );
-
     let mut transfer_attempts = 0_usize;
     let mut transfer_retries = 0_usize;
     let mut unfinished_attempt_messages_copied = 0_u64;
@@ -187,21 +150,48 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         }
     }
 
+    // Each family is one contiguous group, HELP and TYPE first, as the
+    // exposition format requires.
+    counter_header(
+        &mut output,
+        "mailswiftsync_transfer_attempts_total",
+        "Total durably recorded transfer attempts across the projected ledgers.",
+    );
     let _ = writeln!(
         output,
         "mailswiftsync_transfer_attempts_total {transfer_attempts}"
+    );
+    counter_header(
+        &mut output,
+        "mailswiftsync_transfer_retries_total",
+        "Durably recorded transfer attempts after the first attempt of a pass.",
     );
     let _ = writeln!(
         output,
         "mailswiftsync_transfer_retries_total {transfer_retries}"
     );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_unfinished_attempt_messages_copied",
+        "Latest durable copied-message progress summed across attempts without a terminal outcome; retries may repeat work.",
+    );
     let _ = writeln!(
         output,
         "mailswiftsync_unfinished_attempt_messages_copied {unfinished_attempt_messages_copied}"
     );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_unfinished_attempt_bytes_copied",
+        "Latest durable copied-byte progress summed across attempts without a terminal outcome; this is not a rate.",
+    );
     let _ = writeln!(
         output,
         "mailswiftsync_unfinished_attempt_bytes_copied {unfinished_attempt_bytes_copied}"
+    );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_transfer_attempt_outcomes",
+        "Current durable transfer-attempt counts by terminal or unfinished outcome.",
     );
     for (outcome, count) in attempt_outcomes {
         let _ = writeln!(
@@ -209,12 +199,22 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
             "mailswiftsync_transfer_attempt_outcomes{{outcome=\"{outcome}\"}} {count}"
         );
     }
+    gauge_header(
+        &mut output,
+        "mailswiftsync_verification_mailboxes",
+        "Current mailbox evidence counts by verification method and outcome.",
+    );
     for ((method, outcome), count) in verification_outcomes {
         let _ = writeln!(
             output,
             "mailswiftsync_verification_mailboxes{{method=\"{method}\",outcome=\"{outcome}\"}} {count}"
         );
     }
+    gauge_header(
+        &mut output,
+        "mailswiftsync_verification_message_findings",
+        "Current message-level finding counts from latest mailbox evidence; probable matches are not confirmed differences.",
+    );
     for (kind, count) in verification_findings {
         let _ = writeln!(
             output,
@@ -334,6 +334,31 @@ mod tests {
         assert!(!output.contains("customer-project-private-id"));
         assert!(!output.contains("private customer name"));
         assert!(!output.contains("private-source.example.test"));
+    }
+
+    #[test]
+    fn every_metric_family_is_one_contiguous_group_after_its_type_line() {
+        let output = render_metrics(&summary()).unwrap();
+        let mut typed = std::collections::HashSet::new();
+        let mut current: Option<String> = None;
+        let mut finished = std::collections::HashSet::new();
+        for line in output.lines() {
+            if let Some(rest) = line.strip_prefix("# TYPE ") {
+                let name = rest.split_whitespace().next().unwrap().to_owned();
+                assert!(typed.insert(name.clone()), "duplicate TYPE for {name}");
+                if let Some(previous) = current.replace(name) {
+                    finished.insert(previous);
+                }
+            } else if !line.starts_with('#') && !line.is_empty() {
+                let name = line.split(['{', ' ']).next().unwrap();
+                assert!(!finished.contains(name), "{name} is not contiguous");
+                assert_eq!(
+                    current.as_deref(),
+                    Some(name),
+                    "{name} precedes its TYPE line"
+                );
+            }
+        }
     }
 
     #[test]
