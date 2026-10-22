@@ -328,6 +328,70 @@ mod tests {
         let _ = std::fs::remove_file(state_path.with_extension("lock"));
     }
 
+    #[test]
+    fn a_refused_batch_claim_fails_the_child_without_a_durability_fault() {
+        use crate::controller::{ActiveRunContext, Event, RunKind};
+        with_app(|app| {
+            let (project, job) = app
+                .store
+                .create_project_with_mailbox("claim-refusal", "source", "destination", "a", "a")
+                .unwrap();
+            let children = app
+                .store
+                .begin_batch_run_with_children(
+                    &project.id,
+                    std::slice::from_ref(&job),
+                    "claim-batch",
+                    "imapsync",
+                    &[],
+                    "",
+                    &[],
+                )
+                .unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "claim-batch".into(),
+                project_id: project.id.clone(),
+                job_id: None,
+                batch_job_ids: vec![job.clone()],
+                batch_child_indices: [(children[0].clone(), 0)].into_iter().collect(),
+                batch_child_run_ids: children.clone(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Batch,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: None,
+            });
+            let (events, receiver) = std::sync::mpsc::sync_channel(8);
+            app.receiver = Some(receiver);
+            let mut claim = || {
+                let (reply, response) = std::sync::mpsc::sync_channel(1);
+                events
+                    .send(Event::ClaimBatch {
+                        project_id: project.id.clone(),
+                        job_id: job.clone(),
+                        parent_run_id: "claim-batch".into(),
+                        child_run_id: children[0].clone(),
+                        reply,
+                    })
+                    .unwrap();
+                app.poll();
+                response
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+            };
+            claim().unwrap();
+            // The mailbox is now running: a second claim is a policy
+            // refusal the worker reports for this child, not a storage fault.
+            let refused = claim().unwrap_err();
+            assert!(refused.contains("already running"), "{refused}");
+            assert!(!app.durability_error);
+            assert!(!app.status.text.contains("Durability error"));
+        });
+    }
+
     /// Simulate both ways a worker can vanish: returning without sending,
     /// and panicking while it owns the sender.
     fn stop_worker<T: Send + 'static>(sender: Sender<T>, panic: bool) {
