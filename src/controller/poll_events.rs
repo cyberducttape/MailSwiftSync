@@ -80,18 +80,26 @@ impl App {
                                     &parent_run_id,
                                     &child_run_id,
                                 )
-                                .map_err(|error| error.to_string())
+                                .map_err(|error| {
+                                    // A policy refusal (for example a stale
+                                    // source-quiescence attestation) fails
+                                    // this child with its reason; only a
+                                    // storage failure is a durability fault.
+                                    if !core::is_ledger_rejection(&error) {
+                                        durability_errors.push(format!(
+                                            "durable claim for child run {child_run_id} failed: {error}"
+                                        ));
+                                    }
+                                    format!("durable claim refused: {error}")
+                                })
                         } else {
-                            Err(
-                                "batch claim event does not belong to the active run context"
-                                    .to_owned(),
-                            )
-                        };
-                        if let Err(error) = &result {
+                            let error =
+                                "batch claim event does not belong to the active run context";
                             durability_errors.push(format!(
                                 "durable claim for child run {child_run_id} failed: {error}"
                             ));
-                        }
+                            Err(error.to_owned())
+                        };
                         let _ = reply.send(result);
                     }
                     Event::ProcessStarted(
