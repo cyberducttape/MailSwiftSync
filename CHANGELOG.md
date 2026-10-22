@@ -20,6 +20,10 @@
   session-wide durability fault, blocked phase advancement, and marked the
   whole batch for durability review. Run-admission refusals are named
   ledger rejections instead of SQLite's "Query is not read-only".
+- Emit each `mailswiftsync metrics` family as one contiguous group with its
+  HELP and TYPE lines first. Headers were written together before any
+  samples, which the Prometheus exposition format and `promtool check
+  metrics` reject.
 
 - Stabilize native runtime CI by testing launch-limiter pacing at the permit
   boundary instead of relying on child-process scheduling, and enforce LF
