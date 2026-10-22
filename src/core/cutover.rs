@@ -729,15 +729,19 @@ mod tests {
                 [&project.id],
             )
             .unwrap();
+        let refused = store
+            .claim_batch_mailbox_for_child(
+                &project.id,
+                &job,
+                "delayed-final-delta-batch",
+                &children[0],
+            )
+            .unwrap_err();
+        // A policy refusal, named for the operator, not a storage failure.
+        assert!(super::super::is_ledger_rejection(&refused));
         assert!(
-            store
-                .claim_batch_mailbox_for_child(
-                    &project.id,
-                    &job,
-                    "delayed-final-delta-batch",
-                    &children[0],
-                )
-                .is_err()
+            refused.to_string().contains("older than 15 minutes"),
+            "{refused}"
         );
 
         store

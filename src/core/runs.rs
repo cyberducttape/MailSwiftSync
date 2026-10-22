@@ -14,10 +14,14 @@ fn validate_managed_cutover_run_admission(
         .optional()?;
     if let Some((stage, source_quiescence_at, approved)) = cutover {
         if !approved {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "the managed cutover workflow has not been approved",
+            ));
         }
         super::cutover::validate_cutover_run_stage(&stage, phase, source_quiescence_at.as_deref())
-            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            .map_err(|reason| {
+                super::ledger_rejection_owned(format!("managed cutover: {reason}"))
+            })?;
     }
     Ok(())
 }
@@ -47,7 +51,9 @@ fn ensure_no_active_destination_lock_conflict(
             .iter()
             .any(|candidate| candidate == &active_identity)
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "another active run already targets this destination mailbox",
+            ));
         }
     }
     Ok(())
@@ -98,7 +104,9 @@ impl StateStore {
         plan_snapshot: &str,
     ) -> rusqlite::Result<()> {
         if plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "the plan snapshot exceeds the persisted profile size limit",
+            ));
         }
         let tx = self.connection.unchecked_transaction()?;
         let (phase, destination, config): (String, String, Option<String>) = tx.query_row(
@@ -113,7 +121,9 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if active {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "the mailbox already has an active run",
+            ));
         }
         if let Some(transfer_run_id) = transfer_run_id {
             let valid_baseline: bool = tx.query_row(
@@ -122,7 +132,9 @@ impl StateStore {
                 |row| row.get(0),
             )?;
             if !valid_baseline {
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection(
+                    "the baseline is not a completed transfer run of this mailbox",
+                ));
             }
         }
         ensure_no_active_destination_lock_conflict(
@@ -168,7 +180,9 @@ impl StateStore {
         plan_snapshot: &str,
     ) -> rusqlite::Result<()> {
         if plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "the plan snapshot exceeds the persisted profile size limit",
+            ));
         }
         let tx = self.connection.unchecked_transaction()?;
         let (current, phase_at_start, destination, config):
@@ -179,12 +193,14 @@ impl StateStore {
         )?;
         validate_managed_cutover_run_admission(&tx, project_id, &phase_at_start)?;
         if phase_at_start == Phase::Complete.as_str() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("the project is complete"));
         }
         // A mailbox may never have two active runs. Recovery must first move
         // the previous run to an operator-review state before retrying it.
         if current == "running" || !valid_mailbox_transition(&current, "running") {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection_owned(format!(
+                "a mailbox in state {current} cannot start"
+            )));
         }
         let active_run_exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
@@ -192,7 +208,9 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if active_run_exists {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "the mailbox already has an active run",
+            ));
         }
         ensure_no_active_destination_lock_conflict(
             &tx,
@@ -273,7 +291,9 @@ impl StateStore {
                 .iter()
                 .any(|plan| plan.plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES)
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "a batch plan snapshot exceeds the persisted profile size limit",
+            ));
         }
         let mut unique_job_ids = BTreeSet::new();
         let duplicate_job_id = job_ids.iter().any(|job_id| !unique_job_ids.insert(job_id));
@@ -282,7 +302,9 @@ impl StateStore {
             || (!expected_plans.is_empty() && expected_plans.len() != job_ids.len())
             || (!child_plans.is_empty() && child_plans.len() != job_ids.len())
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "the batch mailbox selection or plan list is inconsistent",
+            ));
         }
         let tx = self.connection.unchecked_transaction()?;
         let phase_at_start: String = tx.query_row(
@@ -292,7 +314,7 @@ impl StateStore {
         )?;
         validate_managed_cutover_run_admission(&tx, project_id, &phase_at_start)?;
         if phase_at_start == Phase::Complete.as_str() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("the project is complete"));
         }
         let mut destinations = BTreeSet::new();
         let mut destination_locks = Vec::with_capacity(job_ids.len());
@@ -333,7 +355,9 @@ impl StateStore {
                 destination_identity
             };
             if !destinations.insert(identity) {
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection(
+                    "two batch mailboxes target the same destination mailbox",
+                ));
             }
             destination_locks.push(normalized_destination_lock_identity(
                 &destination,
@@ -343,15 +367,21 @@ impl StateStore {
             // harmless retry. This keeps one durable execution owner per
             // mailbox even when two callers race.
             if current == "running" || !valid_mailbox_transition(&current, "running") {
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection_owned(format!(
+                    "a mailbox in state {current} cannot start"
+                )));
             }
             if active_run_exists {
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection(
+                    "a batch mailbox already has an active run",
+                ));
             }
             if let Some(expected_plan) = expected_plans.get(index)
                 && actual_plan.as_deref() != Some(expected_plan.as_str())
             {
-                return Err(rusqlite::Error::InvalidQuery);
+                return Err(super::ledger_rejection(
+                    "a batch mailbox plan changed since it was confirmed",
+                ));
             }
         }
         ensure_no_active_destination_lock_conflict(
@@ -422,7 +452,9 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if !parent_is_running {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection(
+                "the batch run is no longer running",
+            ));
         }
         let (current, phase): (String, String) = tx.query_row(
             "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
@@ -431,13 +463,15 @@ impl StateStore {
         )?;
         validate_managed_cutover_run_admission(&tx, project_id, &phase)?;
         if phase == Phase::Complete.as_str() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("the project is complete"));
         }
         if current == "running" {
             return tx.commit();
         }
         if !valid_mailbox_transition(&current, "running") {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection_owned(format!(
+                "a mailbox in state {current} cannot start"
+            )));
         }
         tx.execute(
             "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=attempt+1 WHERE id=?1 AND project_id=?2",
@@ -474,8 +508,15 @@ impl StateStore {
             params![child_run_id, project_id, job_id, parent_run_id],
             |row| row.get(0),
         )?;
-        if !parent_is_running || !matches!(child_status.as_str(), "queued" | "running") {
-            return Err(rusqlite::Error::InvalidQuery);
+        if !parent_is_running {
+            return Err(super::ledger_rejection(
+                "the batch run is no longer running",
+            ));
+        }
+        if !matches!(child_status.as_str(), "queued" | "running") {
+            return Err(super::ledger_rejection_owned(format!(
+                "the child run is already {child_status}"
+            )));
         }
         let (current, phase): (String, String) = tx.query_row(
             "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
@@ -484,13 +525,15 @@ impl StateStore {
         )?;
         validate_managed_cutover_run_admission(&tx, project_id, &phase)?;
         if phase == Phase::Complete.as_str() {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("the project is complete"));
         }
         if current == "running" {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection("the mailbox is already running"));
         }
         if !valid_mailbox_transition(&current, "running") {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(super::ledger_rejection_owned(format!(
+                "a mailbox in state {current} cannot start"
+            )));
         }
         tx.execute(
             "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=attempt+1 WHERE id=?1 AND project_id=?2",
