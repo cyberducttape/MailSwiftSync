@@ -6944,3 +6944,254 @@ fn difference_file_export_streams_every_row_across_pages_into_a_private_file() {
     }
     let _ = std::fs::remove_dir_all(directory);
 }
+
+#[test]
+fn progress_checkpoints_keep_only_the_newest_per_attempt() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("checkpoints", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.begin_run(&project.id, &job, "run-1", "imapsync")
+        .unwrap();
+    let checkpoint = |attempt: u32, copied: u64| {
+        format!(
+            "{{\"attempt\":{attempt},\"progress\":{{\"messages_copied\":{copied},\"bytes_copied\":1}}}}"
+        )
+    };
+    for (attempt, copied) in [(1, 5), (1, 7), (2, 3), (1, 9), (2, 4)] {
+        db.record_events_for_runs_batch(&[(
+            "run-1",
+            "transfer_progress_checkpoint",
+            checkpoint(attempt, copied).as_str(),
+        )])
+        .unwrap();
+    }
+    let mut details = db
+        .connection
+        .prepare("SELECT detail FROM events WHERE run_id='run-1' AND kind='transfer_progress_checkpoint' ORDER BY id")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    details.sort();
+    assert_eq!(details, [checkpoint(1, 9), checkpoint(2, 4)]);
+}
+
+/// Sustained controller write workload against a file-backed ledger while
+/// read-only connections poll it, as the GUI snapshot worker and
+/// status/metrics processes do. Reports write-latency percentiles,
+/// SQLITE_BUSY/locked failures, the WAL high-water mark, checkpoint time,
+/// and durable bytes per migrated mailbox. Run via
+/// scripts/benchmark-ledger-workload.sh.
+#[test]
+#[ignore = "run via scripts/benchmark-ledger-workload.sh"]
+fn ledger_write_workload_benchmark() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    let mailboxes: usize = std::env::var("MAILSWIFTSYNC_LEDGER_BENCH_MAILBOXES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2_000);
+    let batches_per_run: usize = std::env::var("MAILSWIFTSYNC_LEDGER_BENCH_BATCHES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20);
+    const MESSAGES_PER_MAILBOX: u64 = 1_000;
+
+    let directory = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("mailswiftsync-ledger-bench-{}", Uuid::new_v4()));
+    crate::credentials::ensure_private_directory(&directory).unwrap();
+    let path = directory.join("state.db");
+    let wal = directory.join("state.db-wal");
+    let db = StateStore::open(&path).unwrap();
+    let project = db
+        .create_project("ledger-bench", "source.example", "destination.example")
+        .unwrap();
+    let jobs = (0..mailboxes)
+        .map(|index| {
+            db.add_mailbox(
+                &project.id,
+                &format!("user{index}@source.example"),
+                &format!("user{index}@destination.example"),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let baseline_bytes = std::fs::metadata(&path).unwrap().len();
+
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let busy = std::sync::Arc::new(AtomicUsize::new(0));
+    let readers = (0..2)
+        .map(|reader| {
+            let path = path.clone();
+            let project_id = project.id.clone();
+            let stop = std::sync::Arc::clone(&stop);
+            let busy = std::sync::Arc::clone(&busy);
+            std::thread::spawn(move || {
+                let store = StateStore::open_readonly(&path).unwrap();
+                let mut latencies = Vec::new();
+                while !stop.load(Ordering::Relaxed) {
+                    let started = Instant::now();
+                    let result = if reader == 0 {
+                        store.verification_rows(&project_id, None, 200).map(drop)
+                    } else {
+                        store.project_operation_metrics(&project_id).map(drop)
+                    };
+                    match result {
+                        Ok(()) => latencies.push(started.elapsed()),
+                        Err(_) => {
+                            busy.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                latencies
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::AggregateEngine,
+        verification_outcome: None,
+        source_messages: MESSAGES_PER_MAILBOX,
+        destination_messages: MESSAGES_PER_MAILBOX,
+        source_bytes: MESSAGES_PER_MAILBOX * 20_000,
+        destination_bytes: MESSAGES_PER_MAILBOX * 20_000,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 8,
+        destination_folders: 8,
+        authoritative: true,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+        flag_verification: None,
+        rfc_message_id_matches: 0,
+        synthetic_identity_matches: 0,
+    };
+    let mut writes = Vec::with_capacity(mailboxes * (batches_per_run + 2));
+    let mut wal_max = 0_u64;
+    let mut timed = |operation: &mut dyn FnMut() -> rusqlite::Result<()>| {
+        let started = Instant::now();
+        let result = operation();
+        writes.push(started.elapsed());
+        if let Err(error) = result {
+            if matches!(
+                &error,
+                rusqlite::Error::SqliteFailure(code, _)
+                    if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+            ) {
+                busy.fetch_add(1, Ordering::Relaxed);
+            } else {
+                panic!("ledger write failed: {error}");
+            }
+        }
+        wal_max = wal_max.max(std::fs::metadata(&wal).map_or(0, |metadata| metadata.len()));
+    };
+    // An operator backup (the `backup` command's own read-only connection)
+    // starts once the ledger holds history and runs while the writer
+    // continues. SQLite restarts a backup whenever another connection writes
+    // to the source, so this measures whether it can finish under load.
+    let backup_result = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let backup_started_at = mailboxes / 2;
+    let mut backup_thread = None;
+    let started = Instant::now();
+    for (index, job) in jobs.iter().enumerate() {
+        if index == backup_started_at {
+            let source = path.clone();
+            let destination = directory.join("backup.db");
+            let result = std::sync::Arc::clone(&backup_result);
+            backup_thread = Some(std::thread::spawn(move || {
+                let started = Instant::now();
+                let outcome = StateStore::open_readonly(&source)
+                    .and_then(|store| store.backup_to(&destination))
+                    .map(|()| started.elapsed());
+                *result.lock().unwrap() = Some(outcome.map_err(|error| error.to_string()));
+            }));
+        }
+        let run = format!("bench-run-{index}");
+        timed(&mut || db.begin_run(&project.id, job, &run, "imapsync"));
+        for batch in 0..batches_per_run {
+            let copied = (batch as u64 + 1) * MESSAGES_PER_MAILBOX / batches_per_run as u64;
+            let detail = format!(
+                "{{\"attempt\":1,\"progress\":{{\"messages_copied\":{copied},\"bytes_copied\":{}}}}}",
+                copied * 20_000
+            );
+            timed(&mut || {
+                db.record_events_for_runs_batch(&[(
+                    run.as_str(),
+                    "transfer_progress_checkpoint",
+                    detail.as_str(),
+                )])
+            });
+        }
+        timed(&mut || {
+            db.finish_run_for_mailbox_with_evidence(
+                &project.id,
+                job,
+                &run,
+                "completed",
+                "verified",
+                "",
+                &evidence,
+            )
+        });
+    }
+    let elapsed = started.elapsed();
+    let backup_completed_during_writes = backup_result.lock().unwrap().is_some();
+    if let Some(thread) = backup_thread {
+        thread.join().unwrap();
+    }
+    let backup_ms = match backup_result.lock().unwrap().take() {
+        Some(Ok(duration)) => duration.as_millis(),
+        Some(Err(error)) => panic!("backup during the write workload failed: {error}"),
+        None => panic!("backup thread produced no result"),
+    };
+    stop.store(true, Ordering::Relaxed);
+    let mut reads = readers
+        .into_iter()
+        .flat_map(|reader| reader.join().unwrap())
+        .collect::<Vec<_>>();
+    let checkpoint_started = Instant::now();
+    db.connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
+    let checkpoint_ms = checkpoint_started.elapsed().as_millis();
+    let durable_bytes = std::fs::metadata(&path).unwrap().len()
+        - baseline_bytes.min(std::fs::metadata(&path).unwrap().len());
+
+    writes.sort_unstable();
+    reads.sort_unstable();
+    let percentile = |values: &[Duration], percent: usize| {
+        values
+            .get((values.len().saturating_sub(1)) * percent / 100)
+            .map_or(0, |value| value.as_micros())
+    };
+    let migrated_messages = mailboxes as u64 * MESSAGES_PER_MAILBOX;
+    eprintln!(
+        "ledger-workload mailboxes={mailboxes} backup_ms={backup_ms} backup_blocked_by_writes={} writes={} elapsed_ms={} write_p50_us={} write_p95_us={} write_p99_us={} write_max_us={} read_p95_us={} reads={} busy_errors={} wal_max_kib={} checkpoint_ms={checkpoint_ms} bytes_per_mailbox={} bytes_per_million_messages={}",
+        u8::from(!backup_completed_during_writes),
+        writes.len(),
+        elapsed.as_millis(),
+        percentile(&writes, 50),
+        percentile(&writes, 95),
+        percentile(&writes, 99),
+        writes.last().map_or(0, |value| value.as_micros()),
+        percentile(&reads, 95),
+        reads.len(),
+        busy.load(Ordering::Relaxed),
+        wal_max / 1024,
+        durable_bytes / mailboxes.max(1) as u64,
+        durable_bytes * 1_000_000 / migrated_messages.max(1),
+    );
+    drop(db);
+    std::fs::remove_dir_all(directory).unwrap();
+}
