@@ -8,6 +8,9 @@
   with, for example, an umlaut in the password could be rejected after the
   transfer itself had succeeded, leaving the mailbox without verification.
   ASCII credentials keep using `LOGIN`.
+- Make the Overview's "Review attention items (n)" prompt for a batch count
+  failed and verification-difference rows, matching the command center's
+  Needs attention bucket on the same screen (it counted only Attention rows).
 - Keep only the newest transfer-progress checkpoint per attempt. Checkpoints
   are written every few seconds and every reader uses only the latest, but
   all were retained: a one-hour transfer left about 580 KB of ledger per
