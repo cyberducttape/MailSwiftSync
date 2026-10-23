@@ -9,6 +9,9 @@
   newer project. The failing project now backs off exponentially (up to one
   hour) while other projects continue; a bounded run with failed passes still
   exits nonzero.
+- Make the Overview's "Review attention items (n)" prompt for a batch count
+  failed and verification-difference rows, matching the command center's
+  Needs attention bucket on the same screen (it counted only Attention rows).
 - Keep only the newest transfer-progress checkpoint per attempt. Checkpoints
   are written every few seconds and every reader uses only the latest, but
   all were retained: a one-hour transfer left about 580 KB of ledger per
