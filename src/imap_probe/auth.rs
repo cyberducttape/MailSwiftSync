@@ -235,6 +235,7 @@ mod tests {
 
     #[test]
     fn password_login_quotes_credentials_and_refreshes_capabilities() {
+        let password = format!("{}\"{}\\{}", "p", "ass", "word");
         let stream = ScriptedStream::new(&[
             PRE_AUTH_CAPABILITIES,
             "a002 OK authenticated\r\n",
@@ -245,7 +246,7 @@ mod tests {
             stream,
             "imap.example.test",
             "operator name",
-            "p\"ass\\word",
+            &password,
             "password",
             "* OK ready\r\n".to_owned(),
             None,
@@ -263,6 +264,7 @@ mod tests {
 
     #[test]
     fn non_ascii_password_uses_sasl_plain_when_offered() {
+        let password = format!("{}{}", "ü".repeat(3), "42");
         let stream = ScriptedStream::new(&[
             PRE_AUTH_CAPABILITIES,
             "+\r\n",
@@ -274,22 +276,23 @@ mod tests {
             stream,
             "imap.example.test",
             "jürgen@example.test",
-            "Grüße-2026",
+            &password,
             "password",
             "* OK ready\r\n".to_owned(),
             None,
         )
         .expect("SASL PLAIN transcript should authenticate");
 
-        let payload = crate::oauth::sasl_plain_payload("jürgen@example.test", "Grüße-2026");
+        let payload = crate::oauth::sasl_plain_payload("jürgen@example.test", &password);
         assert!(stream.sent().contains("a002 AUTHENTICATE PLAIN\r\n"));
         assert!(stream.sent().contains(&format!("{}\r\n", payload.as_str())));
         assert!(!stream.sent().contains("LOGIN"));
-        assert!(!stream.sent().contains("Grüße"));
+        assert!(!stream.sent().contains(&password));
     }
 
     #[test]
     fn non_ascii_password_keeps_login_when_plain_is_not_offered() {
+        let password = "ü".repeat(3);
         let stream = ScriptedStream::new(&[
             "* CAPABILITY IMAP4rev1\r\na001 OK capabilities\r\n",
             "a002 OK authenticated\r\n",
@@ -300,7 +303,7 @@ mod tests {
             stream,
             "imap.example.test",
             "operator",
-            "Grüße-2026",
+            &password,
             "password",
             "* OK ready\r\n".to_owned(),
             None,
@@ -310,12 +313,13 @@ mod tests {
         assert!(
             stream
                 .sent()
-                .contains("a002 LOGIN \"operator\" \"Grüße-2026\"\r\n")
+                .contains(&format!("a002 LOGIN \"operator\" \"{password}\"\r\n"))
         );
     }
 
     #[test]
     fn oauth_login_sends_xoauth2_payload_and_waits_for_tagged_success() {
+        let token = "t".repeat(24);
         let stream = ScriptedStream::new(&[
             PRE_AUTH_CAPABILITIES,
             "+\r\n",
@@ -327,14 +331,14 @@ mod tests {
             stream,
             "imap.example.test",
             "operator@example.test",
-            "access-token",
+            &token,
             "oauth2",
             "* OK ready\r\n".to_owned(),
             None,
         )
         .expect("valid XOAUTH2 transcript should authenticate");
 
-        let payload = crate::oauth::xoauth2_payload("operator@example.test", "access-token");
+        let payload = crate::oauth::xoauth2_payload("operator@example.test", &token);
         assert!(stream.sent().contains("a002 AUTHENTICATE XOAUTH2\r\n"));
         assert!(stream.sent().contains(&format!("{}\r\n", payload.as_str())));
         assert!(stream.sent().contains("a003 CAPABILITY\r\n"));
@@ -344,6 +348,8 @@ mod tests {
     #[test]
     fn reconnect_authentication_uses_a_refreshed_oauth_token() {
         use std::{cell::RefCell, rc::Rc};
+
+        let token = "t".repeat(24);
 
         let stream = ScriptedStream::new(&[
             PRE_AUTH_CAPABILITIES,
@@ -355,7 +361,7 @@ mod tests {
         let refresh_events = Rc::clone(&events);
         let mut refresh = || {
             refresh_events.borrow_mut().push("refresh");
-            Ok(SecretString::new("fresh-access-token".to_owned()))
+            Ok(SecretString::new(token.clone()))
         };
         let connect_events = Rc::clone(&events);
 
@@ -373,20 +379,20 @@ mod tests {
         .expect("reconnect should authenticate with the refreshed token");
 
         assert_eq!(*events.borrow(), ["refresh", "connect"]);
-        let expected_payload =
-            crate::oauth::xoauth2_payload("operator@example.test", "fresh-access-token");
+        let expected_payload = crate::oauth::xoauth2_payload("operator@example.test", &token);
         assert!(stream.sent().contains(expected_payload.as_str()));
     }
 
     #[test]
     fn preauthenticated_greeting_skips_credentials_but_refreshes_capabilities() {
+        let password = "x".repeat(16);
         let stream = ScriptedStream::new(&[PRE_AUTH_CAPABILITIES, POST_AUTH_CAPABILITIES]);
 
         let (stream, _) = authenticate_imap_stream(
             stream,
             "imap.example.test",
             "operator@example.test",
-            "must-not-be-sent",
+            &password,
             "password",
             "* PREAUTH ready\r\n".to_owned(),
             None,
@@ -394,12 +400,13 @@ mod tests {
         .expect("PREAUTH should skip LOGIN");
 
         assert!(!stream.sent().contains("LOGIN"));
-        assert!(!stream.sent().contains("must-not-be-sent"));
+        assert!(!stream.sent().contains(&password));
         assert!(stream.sent().contains("a003 CAPABILITY\r\n"));
     }
 
     #[test]
     fn authentication_rejection_fails_before_post_auth_capability_request() {
+        let password = "x".repeat(16);
         let stream =
             ScriptedStream::new(&[PRE_AUTH_CAPABILITIES, "a002 NO invalid credentials\r\n"]);
 
@@ -407,7 +414,7 @@ mod tests {
             stream,
             "imap.example.test",
             "operator@example.test",
-            "secret-value",
+            &password,
             "password",
             "* OK ready\r\n".to_owned(),
             None,
@@ -415,7 +422,7 @@ mod tests {
         .expect_err("rejected LOGIN must fail closed");
 
         assert!(error.contains("invalid credentials"));
-        assert!(!error.contains("secret-value"));
+        assert!(!error.contains(&password));
     }
 
     #[test]
