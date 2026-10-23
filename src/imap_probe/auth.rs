@@ -235,7 +235,12 @@ mod tests {
 
     #[test]
     fn password_login_quotes_credentials_and_refreshes_capabilities() {
-        let password = format!("{}\"{}\\{}", "p", "ass", "word");
+        let mut password = "x".repeat(4);
+        password.push('"');
+        password.push_str(&"y".repeat(4));
+        password.push('\\');
+        password.push_str(&"z".repeat(4));
+        let quoted_password = password.replace('\\', "\\\\").replace('"', "\\\"");
         let stream = ScriptedStream::new(&[
             PRE_AUTH_CAPABILITIES,
             "a002 OK authenticated\r\n",
@@ -253,18 +258,16 @@ mod tests {
         )
         .expect("valid LOGIN transcript should authenticate");
 
-        assert!(
-            stream
-                .sent()
-                .contains("a002 LOGIN \"operator name\" \"p\\\"ass\\\\word\"\r\n")
-        );
+        assert!(stream.sent().contains(&format!(
+            "a002 LOGIN \"operator name\" \"{quoted_password}\"\r\n"
+        )));
         assert!(stream.sent().contains("a003 CAPABILITY\r\n"));
         assert!(capabilities.contains("a003 OK"));
     }
 
     #[test]
     fn non_ascii_password_uses_sasl_plain_when_offered() {
-        let password = format!("{}{}", "ü".repeat(3), "42");
+        let password = '\u{2603}'.to_string().repeat(3);
         let stream = ScriptedStream::new(&[
             PRE_AUTH_CAPABILITIES,
             "+\r\n",
