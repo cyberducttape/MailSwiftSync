@@ -189,9 +189,20 @@ impl StateStore {
                 }
                 continue;
             }
-            let changed = statement.execute(params![run_id, kind, bounded_event_detail(detail)])?;
+            let detail = bounded_event_detail(detail);
+            let changed = statement.execute(params![run_id, kind, detail])?;
             if changed != 1 {
                 return Err(rusqlite::Error::InvalidQuery);
+            }
+            if *kind == "transfer_progress_checkpoint" {
+                // Progress is checkpointed every few seconds and every
+                // reader uses only an attempt's newest checkpoint. Keep that
+                // one, or a long transfer grows the ledger by hundreds of
+                // kilobytes per mailbox per hour.
+                tx.prepare_cached(
+                    "DELETE FROM events WHERE run_id=?1 AND kind='transfer_progress_checkpoint' AND id<?2 AND json_valid(detail) AND json_extract(detail,'$.attempt') IS json_extract(?3,'$.attempt')",
+                )?
+                .execute(params![run_id, tx.last_insert_rowid(), detail])?;
             }
         }
         drop(statement);

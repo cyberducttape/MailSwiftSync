@@ -258,7 +258,7 @@ impl StateStore {
             let mut migrated = Connection::open_in_memory()?;
             {
                 let backup = backup::Backup::new(&connection, &mut migrated)?;
-                backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
+                copy_all_pages(&backup)?;
             }
             let store = Self {
                 connection: migrated,
@@ -272,7 +272,7 @@ impl StateStore {
         let mut migrated = Connection::open_in_memory()?;
         {
             let backup = backup::Backup::new(&connection, &mut migrated)?;
-            backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
+            copy_all_pages(&backup)?;
         }
         let store = Self {
             connection: migrated,
@@ -312,11 +312,7 @@ impl StateStore {
                 Connection::open_with_flags(destination, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
             {
                 let backup_operation = backup::Backup::new(&self.connection, &mut backup)?;
-                backup_operation.run_to_completion(
-                    128,
-                    std::time::Duration::from_millis(1),
-                    None,
-                )?;
+                copy_all_pages(&backup_operation)?;
             }
             let integrity: String =
                 backup.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
@@ -396,7 +392,7 @@ impl StateStore {
         let result = (|| {
             {
                 let backup = backup::Backup::new(backup_source, &mut destination_connection)?;
-                backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
+                copy_all_pages(&backup)?;
             }
             let integrity: String =
                 destination_connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
@@ -1500,5 +1496,31 @@ mod migration_backup_tests {
         assert!(!should_backup_database(&empty, true).unwrap());
         assert!(should_backup_database(&populated, true).unwrap());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+/// Copy every page in one backup step. SQLite restarts a stepped backup
+/// whenever another connection writes to the source between steps, so a
+/// ledger backup taken while a migration is writing could restart until the
+/// writer paused, possibly for hours. One step reads a single consistent WAL
+/// snapshot without blocking the writer.
+fn copy_all_pages(backup: &backup::Backup<'_, '_>) -> rusqlite::Result<()> {
+    // A busy or locked step copies nothing; retry within the same bound as
+    // the connections' busy_timeout.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match backup.step(-1)? {
+            backup::StepResult::Done => return Ok(()),
+            backup::StepResult::More => {}
+            _ => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                        Some("ledger backup source stayed busy".into()),
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
     }
 }
