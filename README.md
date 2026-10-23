@@ -472,8 +472,12 @@ should resolve the reported condition before claiming trusted verification. With
 automation and package checks: `1` when any check is blocked, `3` when the
 imapsync executable is present but not the qualified version, otherwise `0`.
 `supervise` is a foreground, GUI-independent batch controller. It processes
-only automation-safe queued/retryable work, waits through GUI lock ownership,
-and leaves Attention and verification-difference rows untouched. The optional
+only automation-safe queued/retryable work, oldest project first, waits through
+GUI lock ownership, and leaves Attention and verification-difference rows
+untouched. A project whose batch pass fails (for example because its source
+server is unreachable) is retried with an exponential backoff of up to one
+hour while the supervisor continues with other projects; a bounded run that
+saw any failed pass exits nonzero when it stops. The optional
 `idle-polls` value defaults to one quiet poll; set it to `0` for continuous
 watching. An optional fourth argument, `maintenance-window`, confines new
 batch passes to a `HH:MM-HH:MM` local time-of-day range (which may wrap past
