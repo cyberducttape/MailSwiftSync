@@ -458,6 +458,88 @@ mod tests {
         let _ = std::fs::remove_file(state_path.with_extension("lock"));
     }
 
+    #[test]
+    fn cutover_lookup_failure_does_not_advance_project_phase() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-cutover-read-failure-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let state_path = directory.join("state.db");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        let project = app
+            .store
+            .create_project("cutover-read-failure", "source", "destination")
+            .unwrap();
+        let job = app
+            .store
+            .add_mailbox(
+                &project.id,
+                "source@example.test",
+                "destination@example.test",
+            )
+            .unwrap();
+        app.store
+            .transition(&project.id, crate::core::Phase::Preflight)
+            .unwrap();
+        app.store
+            .create_cutover_workflow(&project.id, "2030-01-01T00:00:00Z", None)
+            .unwrap();
+        app.store
+            .approve_cutover(&project.id, "test-operator")
+            .unwrap();
+        app.store
+            .begin_run(&project.id, &job, "cutover-run", "imapsync")
+            .unwrap();
+
+        // Break only the subsequent cutover lookup. The main ledger tables
+        // used to commit the terminal engine result remain writable, matching
+        // the error interleaving that used to fall through as `None`.
+        rusqlite::Connection::open(&state_path)
+            .unwrap()
+            .execute_batch(
+                "ALTER TABLE cutover_workflows RENAME TO cutover_workflows_injected_failure;",
+            )
+            .unwrap();
+        assert!(app.store.cutover_stage(&project.id).is_err());
+
+        let context = ActiveRunContext {
+            run_id: "cutover-run".to_owned(),
+            project_id: project.id.clone(),
+            job_id: Some(job.clone()),
+            batch_job_ids: Vec::new(),
+            batch_child_run_ids: Vec::new(),
+            batch_child_indices: Default::default(),
+            batch_plan_fingerprints: Vec::new(),
+            kind: RunKind::Single,
+            dry_run: false,
+            plan_fingerprint: String::new(),
+            credential_fingerprint: String::new(),
+            source_provider: "generic_imap".to_owned(),
+            destination_provider: "generic_imap".to_owned(),
+            verification_state_path: None,
+        };
+        app.finish_poll_run(Some(Ok(StreamOutcome::Completed)), Some(context), false);
+
+        assert_eq!(
+            app.store.project(&project.id).unwrap().unwrap().phase,
+            crate::core::Phase::Seed,
+            "an unreadable approved cutover workflow must block generic phase advancement"
+        );
+        assert_eq!(
+            app.store.run_status("cutover-run").unwrap().as_deref(),
+            Some("completed"),
+            "the engine result should still commit independently of the cutover read failure"
+        );
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     /// Drive one single-mailbox live run whose transfer succeeds while its
     /// verification reports `verification_error`, then return the durable
     /// mailbox state, attention reason, run status, and run detail.
