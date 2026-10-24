@@ -93,7 +93,8 @@ every field path with its allowed JSON types; `[]` marks array elements and
 customer-sensitive.
 
 Each project in `status --summary` (and therefore in `fleet-status`) carries
-an `operations` object of durable counters for monitoring and alerting:
+a `hold` object (`held_by`, `reason`, `held_at`) while an operator hold stops
+new mailbox launches, or `null` otherwise, and an `operations` object of durable counters for monitoring and alerting:
 `transfer_attempts`, `retried_attempts`, `attempt_outcomes` (by durable
 outcome: `completed`, `delta_required`, `failed:<class>` such as
 `failed:capacity` for provider throttling or connection limits and
@@ -144,6 +145,7 @@ mailbox, run, customer, or endpoint labels. The metric contract is:
 | Metric | Type | Meaning and limits |
 |---|---|---|
 | `mailswiftsync_mailbox_jobs{state}` | Gauge | Current durable job counts for `total`, `queued`, `ready`, `running`, `verified`, and `needs_review`. `running` includes claimed work; `verified` includes explicitly accepted exceptions. |
+| `mailswiftsync_projects_on_hold` | Gauge | Projects whose operator hold currently stops new mailbox launches. |
 | `mailswiftsync_registered_engine_processes` | Gauge | Durable process registrations, not a process-liveness check. Validate process ownership before acting on a PID. |
 | `mailswiftsync_transfer_attempts_total` | Counter | Cumulative transfer attempts recorded in the projected ledger. |
 | `mailswiftsync_transfer_retries_total` | Counter | Cumulative attempts after the first attempt of a pass. |
@@ -178,15 +180,18 @@ is a long-running listener over the same projections:
 | `GET /metrics` | `Authorization: Bearer <token>` | the metric families above summed across readable ledgers, plus `mailswiftsync_fleet_ledgers{state="readable"\|"unreadable"}`, `mailswiftsync_fleet_snapshot_timestamp_seconds`, the `mailswiftsync_fleet_refresh_failures_total` counter, and `mailswiftsync_fleet_last_successful_scan_timestamp_seconds` |
 | `GET /v1/projects/<project-id>/waves` | read or operator token | the `mailswiftsync-wave-list` v2 document that `wave <state> list` prints |
 | `POST /v1/waves/<wave-id>/approve` | operator token | `{"format":"mailswiftsync-wave-approval","format_version":1,"wave_id","name","approved_by"}` |
+| `POST /v1/projects/<project-id>/hold?reason=<text>` | operator token | `{"format":"mailswiftsync-project-hold","format_version":1,"project_id","state":"held","hold":{"held_by","reason","held_at"}}` |
+| `POST /v1/projects/<project-id>/resume` | operator token | the same document with `"state":"resumed"` and the hold that was lifted |
 
 Responses come from one scan per refresh interval (`--refresh-seconds`,
 5–3600, default 30), not one scan per request; every response carries
 `X-MailSwiftSync-Snapshot-Generated-At` with the scan's Unix time. A scan that
 fails, or a `/metrics` projection that any ledger truncates, is answered with
-503 instead of stale or partial data. Errors from the wave endpoints are
-`{"error": "..."}` with 400 (malformed ID), 403 (read token used to
-approve), 404 (no ledger holds the ID), 409 (already approved, ledger busy
-with `Retry-After`, older ledger schema, or the ID found in more than one
+503 instead of stale or partial data. Errors from the wave and hold
+endpoints are `{"error": "..."}` with 400 (malformed ID, or a hold without a
+reason), 403 (read token used for a control), 404 (no ledger holds the ID),
+409 (already approved, already held or not held, ledger busy with
+`Retry-After`, older ledger schema, or the ID found in more than one
 ledger), or 413 (a request body was sent).
 
 For JSON automation, continue polling `status --summary` (or

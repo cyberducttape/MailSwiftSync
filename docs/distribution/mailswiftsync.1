@@ -13,6 +13,15 @@ The application does not bundle or configure imapsync or Dovecot. Install and
 qualify the selected transfer engine separately, then run a dry preflight.
 .SH COMMANDS
 .TP
+.B hold STATE PROJECT OPERATOR REASON
+Stop new mailbox launches for PROJECT, including inside a batch another
+process is running; transfers already running finish. Works while the GUI or
+.B supervise
+owns the ledger.
+.TP
+.B resume STATE PROJECT OPERATOR
+Lift a project hold so held mailboxes become automation-safe work again.
+.TP
 .B supervise STATE [POLL] [RETRIES] [WINDOW]
 Run automation-safe supervision for queued and retryable work.
 .TP

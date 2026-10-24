@@ -4,3 +4,6 @@
 *.log
 .DS_Store
 __pycache__/
+
+# LLVM coverage raw profiles from local cargo-llvm-cov runs
+*.profraw

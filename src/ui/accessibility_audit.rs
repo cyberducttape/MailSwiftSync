@@ -226,6 +226,15 @@ fn scenes() -> Vec<(&'static str, Setup)> {
             crate::ui::debug_scene::demo_data(app);
             view(app, WorkspaceView::Recovery);
         }),
+        ("held project", |app| {
+            crate::ui::debug_scene::held_demo(app);
+            view(app, WorkspaceView::Activity);
+        }),
+        ("hold dialog", |app| {
+            crate::ui::debug_scene::demo_data(app);
+            view(app, WorkspaceView::Activity);
+            app.hold_draft = Some(String::new());
+        }),
         ("settings dialog", |app| app.settings_open = true),
         ("projects dialog", |app| app.projects_open = true),
         ("credentials dialog", |app| app.keyring_open = true),

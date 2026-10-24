@@ -165,6 +165,7 @@ crate::ui::name_modal(ui, &modal_heading);
                     self.stop_confirm_open = true;
                     self.stop_confirm_focus_requested = false;
                 }
+                self.hold_button(ui);
             });
             ui.add_space(8.0);
             let console = ui.visuals().extreme_bg_color;

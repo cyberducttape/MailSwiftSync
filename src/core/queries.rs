@@ -126,6 +126,7 @@ impl StateStore {
         let mut statement = self.connection.prepare(
                 "SELECT p.id FROM projects p
                  WHERE length(trim(p.name)) > 0
+                   AND NOT EXISTS (SELECT 1 FROM project_holds h WHERE h.project_id=p.id)
                    AND EXISTS (
                      SELECT 1 FROM mailbox_jobs m
                      LEFT JOIN batch_plans b ON b.id=m.batch_plan_id

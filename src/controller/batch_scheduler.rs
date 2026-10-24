@@ -609,9 +609,10 @@ mod tests {
                             let _ = reply.send(Ok(()));
                         }
                     }
-                    Event::ClaimBatch { reply, .. }
-                    | Event::EngineVersion { reply, .. }
-                    | Event::TransferAttempt { reply, .. } => {
+                    Event::ClaimBatch { reply, .. } => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    Event::EngineVersion { reply, .. } | Event::TransferAttempt { reply, .. } => {
                         let _ = reply.send(Ok(()));
                     }
                     Event::JobFinished {

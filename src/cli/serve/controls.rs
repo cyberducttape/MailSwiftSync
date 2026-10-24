@@ -80,9 +80,7 @@ pub(super) fn valid_id(id: &str) -> bool {
 }
 
 pub(super) fn project_waves(root: &Path, project_id: &str) -> Response {
-    let path = match locate_ledger(root, "project", |store| {
-        store.project(project_id).map(|project| project.is_some())
-    }) {
+    let path = match locate_project_ledger(root, project_id) {
         Ok(path) => path,
         Err(response) => return response,
     };
@@ -170,6 +168,82 @@ pub(super) fn approve_wave(root: &Path, wave_id: &str, operator: &str) -> Respon
         })
         .to_string(),
     )
+}
+
+/// Hold a project. Unlike approval this takes no instance lock: a hold has
+/// to reach a batch that another process is running, and the ledger's claim
+/// transaction enforces it there.
+pub(super) fn hold_project(
+    root: &Path,
+    project_id: &str,
+    operator: &str,
+    reason: &str,
+) -> Response {
+    let path = match locate_project_ledger(root, project_id) {
+        Ok(path) => path,
+        Err(response) => return response,
+    };
+    let held_by = format!("{operator} (fleet API)");
+    match core::StateStore::open_for_control(&path)
+        .and_then(|store| store.hold_project(project_id, &held_by, reason))
+    {
+        Ok(hold) => {
+            eprintln!(
+                "Fleet API: project {project_id} in {} held by {held_by}: {}",
+                path.display(),
+                hold.reason
+            );
+            hold_response(project_id, "held", &hold)
+        }
+        Err(error) if core::is_ledger_rejection(&error) => {
+            Response::json_error(409, "Conflict", &error.to_string())
+        }
+        Err(error) => Response::json_error(500, "Internal Server Error", &error.to_string()),
+    }
+}
+
+pub(super) fn resume_project(root: &Path, project_id: &str, operator: &str) -> Response {
+    let path = match locate_project_ledger(root, project_id) {
+        Ok(path) => path,
+        Err(response) => return response,
+    };
+    let resumed_by = format!("{operator} (fleet API)");
+    match core::StateStore::open_for_control(&path)
+        .and_then(|store| store.release_project_hold(project_id, &resumed_by))
+    {
+        Ok(hold) => {
+            eprintln!(
+                "Fleet API: project {project_id} in {} resumed by {resumed_by}",
+                path.display()
+            );
+            hold_response(project_id, "resumed", &hold)
+        }
+        Err(error) if core::is_ledger_rejection(&error) => {
+            Response::json_error(409, "Conflict", &error.to_string())
+        }
+        Err(error) => Response::json_error(500, "Internal Server Error", &error.to_string()),
+    }
+}
+
+fn hold_response(project_id: &str, state: &str, hold: &core::ProjectHold) -> Response {
+    Response::json(
+        200,
+        "OK",
+        serde_json::json!({
+            "format": "mailswiftsync-project-hold",
+            "format_version": 1,
+            "project_id": project_id,
+            "state": state,
+            "hold": hold,
+        })
+        .to_string(),
+    )
+}
+
+fn locate_project_ledger(root: &Path, project_id: &str) -> Result<PathBuf, Response> {
+    locate_ledger(root, "project", |store| {
+        store.project(project_id).map(|project| project.is_some())
+    })
 }
 
 fn stored_schema_version(path: &Path) -> Result<i64, String> {

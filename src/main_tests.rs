@@ -3703,6 +3703,10 @@ fn automation_contract_ledger(directory: &std::path::Path) -> (std::path::PathBu
         executable: "imapsync".into(),
     })
     .unwrap();
+    // Held last: a hold refuses new runs, and the contract needs the
+    // populated `hold` object.
+    db.hold_project(&project.id, "contract-operator", "contract freeze")
+        .unwrap();
     (state, project.id)
 }
 

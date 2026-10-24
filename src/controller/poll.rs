@@ -394,9 +394,101 @@ mod tests {
             // The mailbox is now running: a second claim is a policy
             // refusal the worker reports for this child, not a storage fault.
             let refused = claim().unwrap_err();
-            assert!(refused.contains("already running"), "{refused}");
+            assert!(
+                matches!(&refused, crate::controller::ClaimRefusal::Rejected(reason) if reason.contains("already running")),
+                "{refused:?}"
+            );
             assert!(!app.durability_error);
             assert!(!app.status.text.contains("Durability error"));
+        });
+    }
+
+    #[test]
+    fn a_held_project_refuses_the_claim_and_closes_the_child_without_failing_it() {
+        use crate::controller::{ActiveRunContext, ClaimRefusal, Event, HELD_CHILD_STATE, RunKind};
+        with_app(|app| {
+            let (project, job) = app
+                .store
+                .create_project_with_mailbox("held-claim", "source", "destination", "a", "a")
+                .unwrap();
+            let children = app
+                .store
+                .begin_batch_run_with_children(
+                    &project.id,
+                    std::slice::from_ref(&job),
+                    "held-batch",
+                    "imapsync",
+                    &[],
+                    "",
+                    &[],
+                )
+                .unwrap();
+            let mailbox_before = app.store.mailbox_state(&job).unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "held-batch".into(),
+                project_id: project.id.clone(),
+                job_id: None,
+                batch_job_ids: vec![job.clone()],
+                batch_child_indices: [(children[0].clone(), 0)].into_iter().collect(),
+                batch_child_run_ids: children.clone(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Batch,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: None,
+            });
+            // Another process (the fleet API or the CLI) holds the project
+            // after this batch started.
+            app.store
+                .hold_project(&project.id, "Alice", "customer freeze")
+                .unwrap();
+            let (events, receiver) = std::sync::mpsc::sync_channel(8);
+            app.receiver = Some(receiver);
+            let (reply, response) = std::sync::mpsc::sync_channel(1);
+            events
+                .send(Event::ClaimBatch {
+                    project_id: project.id.clone(),
+                    job_id: job.clone(),
+                    parent_run_id: "held-batch".into(),
+                    child_run_id: children[0].clone(),
+                    reply,
+                })
+                .unwrap();
+            app.poll();
+            let refused = response
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .unwrap_err();
+            let ClaimRefusal::Held(reason) = refused else {
+                panic!("expected a hold refusal, got {refused:?}");
+            };
+            assert!(reason.contains("customer freeze by Alice"), "{reason}");
+
+            let (reply, response) = std::sync::mpsc::sync_channel(1);
+            events
+                .send(Event::JobFinished {
+                    job_id: job.clone(),
+                    child_run_id: children[0].clone(),
+                    state: HELD_CHILD_STATE.into(),
+                    detail: reason,
+                    credential_fingerprint: None,
+                    reply,
+                })
+                .unwrap();
+            app.poll();
+            response
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                app.store.run_status(&children[0]).unwrap().as_deref(),
+                Some("cancelled")
+            );
+            assert_eq!(app.store.mailbox_state(&job).unwrap(), mailbox_before);
+            assert!(!app.durability_error);
         });
     }
 

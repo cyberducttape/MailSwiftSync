@@ -483,6 +483,8 @@ fn refresh_live_credentials(
 
 enum BatchClaimError {
     Rejected(String),
+    /// The project is on hold; the mailbox stays as it is.
+    Held(String),
     ControllerUnavailable,
 }
 
@@ -515,7 +517,12 @@ fn claim_batch_job(
         }
         match response.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(())) => return Ok(()),
-            Ok(Err(error)) => return Err(BatchClaimError::Rejected(error)),
+            Ok(Err(crate::controller::ClaimRefusal::Held(reason))) => {
+                return Err(BatchClaimError::Held(reason));
+            }
+            Ok(Err(crate::controller::ClaimRefusal::Rejected(error))) => {
+                return Err(BatchClaimError::Rejected(error));
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(BatchClaimError::Rejected(
@@ -1138,6 +1145,21 @@ impl BatchAttemptRunner {
                     drop(admission);
                     self.line(&task, format!("[{}] {}", task.index + 1, error));
                     self.fail(&task, &error);
+                    self.finish_transcript(&task);
+                    return AttemptOutcome::Finished;
+                }
+                Err(BatchClaimError::Held(reason)) => {
+                    // Not a failure: the mailbox keeps its durable state and
+                    // runs again once the hold is released.
+                    drop(admission);
+                    self.line(&task, format!("[{}] not started: {reason}", task.index + 1));
+                    self.terminal(
+                        &task,
+                        "Held",
+                        crate::controller::HELD_CHILD_STATE,
+                        reason,
+                        None,
+                    );
                     self.finish_transcript(&task);
                     return AttemptOutcome::Finished;
                 }
@@ -1814,7 +1836,11 @@ mod tests {
         let Ok(Event::ClaimBatch { reply, .. }) = rx.recv() else {
             panic!("expected a durable batch claim request");
         };
-        reply.send(Err("stale plan".to_owned())).unwrap();
+        reply
+            .send(Err(crate::controller::ClaimRefusal::Rejected(
+                "stale plan".to_owned(),
+            )))
+            .unwrap();
         assert!(matches!(
             worker.join().unwrap(),
             Err(BatchClaimError::Rejected(error)) if error == "stale plan"

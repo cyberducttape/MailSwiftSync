@@ -66,6 +66,19 @@ pub(crate) fn process_event_is_current(
     active_run.is_some_and(|run| run.owns_process(run_id, job_id))
 }
 
+/// Terminal child state for a mailbox a project hold kept from starting.
+pub(crate) const HELD_CHILD_STATE: &str = "held";
+
+/// Why the reducer refused a durable batch claim.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ClaimRefusal {
+    /// The project is on hold: the mailbox must not start, but it was not
+    /// cancelled or failed either, so it keeps its durable state.
+    Held(String),
+    /// Any other refusal fails or cancels the child with its reason.
+    Rejected(String),
+}
+
 pub(crate) enum Event {
     Line(String),
     DiagnosticLinesDropped {
@@ -110,7 +123,7 @@ pub(crate) enum Event {
         job_id: String,
         parent_run_id: String,
         child_run_id: String,
-        reply: mpsc::SyncSender<Result<(), String>>,
+        reply: mpsc::SyncSender<Result<(), ClaimRefusal>>,
     },
     JobState {
         job_id: String,
