@@ -16,6 +16,12 @@ qualify the selected transfer engine separately, then run a dry preflight.
 .B supervise STATE [POLL] [RETRIES] [WINDOW]
 Run automation-safe supervision for queued and retryable work.
 .TP
+.B serve DIRECTORY --token-file FILE [--listen ADDRESS] [--refresh-seconds N] [--allow-non-loopback]
+Serve read-only fleet status JSON and Prometheus metrics for every ledger
+under DIRECTORY over HTTP, behind a bearer token read from an owner-only FILE.
+Binds 127.0.0.1:9464 by default; any other address requires
+--allow-non-loopback and a TLS reverse proxy.
+.TP
 .B status STATE [PROJECT]
 Print credential-free project status.
 .TP

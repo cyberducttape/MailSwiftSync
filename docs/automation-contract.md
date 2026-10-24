@@ -132,8 +132,9 @@ five operator questions as follows:
 | Which require human intervention? | `aggregate_mailbox_state_counts.needs_review` and `attention_reason_counts`; detailed status provides bounded mailbox rows | Detail is bounded/truncated. Use the durable ledger and evidence workflow for case-level investigation |
 
 `mailswiftsync metrics <state.db>` emits a one-shot Prometheus text snapshot
-from one local ledger. It is a bounded projection, not a network listener or a
-distributed exporter. Each status and metrics projection reads its ledger
+from one local ledger. It is a bounded projection, not a distributed exporter;
+`serve` exposes the same families summed across every ledger under a
+directory (see below). Each status and metrics projection reads its ledger
 inside one SQLite read transaction, so separate gauges in the same response
 reflect one committed ledger snapshot. A fleet response snapshots each ledger
 independently, not all ledgers atomically. The command refuses to emit output
@@ -163,9 +164,23 @@ discovery or a central control plane. The durable webhook outbox can deliver
 lifecycle/status events, but does not replace polling for current gauges or
 provide centralized operator identity.
 
-For local monitoring, invoke the command through a restricted Prometheus
-textfile-collector/task integration rather than exposing a new network
-listener. For JSON automation, continue polling `status --summary` (or
+For local monitoring, either invoke the command through a restricted
+Prometheus textfile-collector/task integration, or scrape `serve`.
+
+`mailswiftsync serve <directory> --token-file <file>` is a long-running
+read-only listener over the same projections:
+
+| Endpoint | Authentication | Body |
+|---|---|---|
+| `GET /healthz` | none | `ok`; says only that the process is accepting connections |
+| `GET /v1/fleet` | `Authorization: Bearer <token>` | the `fleet-status` v1 document, byte-for-byte the CLI shape |
+| `GET /metrics` | `Authorization: Bearer <token>` | the metric families above summed across readable ledgers, plus `mailswiftsync_fleet_ledgers{state="readable"\|"unreadable"}` and `mailswiftsync_fleet_snapshot_timestamp_seconds` |
+
+Responses come from one scan per refresh interval (`--refresh-seconds`,
+5–3600, default 30), not one scan per request; every response carries
+`X-MailSwiftSync-Snapshot-Generated-At` with the scan's Unix time. A scan that
+fails, or a `/metrics` projection that any ledger truncates, is answered with
+503 instead of stale or partial data. Only `GET` and `HEAD` are accepted. For JSON automation, continue polling `status --summary` (or
 `fleet-status` for explicitly isolated local ledgers), check `format` and
 `format_version`, and calculate rates from successive snapshots only for
 monotonically cumulative counters.
