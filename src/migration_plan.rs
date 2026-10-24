@@ -31,7 +31,7 @@ pub(crate) use profile::{
     auth_method_is_oauth, completeness, default_auth_method, default_destination_tls,
     default_doveadm_path, default_migration_timeout_hours, default_source_tls,
     effective_batch_concurrency, effective_batch_concurrency_for_limits,
-    effective_batch_process_starts_per_second,
+    effective_batch_process_starts_per_second, effective_batch_verification_workers,
 };
 use sha2::{Digest, Sha256};
 use std::{

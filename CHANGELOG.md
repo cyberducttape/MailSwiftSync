@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add **Queue settings → Verification workers** (`batch_verification_workers`,
+  default 0). With it, a batch mailbox whose transfer finished credits the
+  transfer to the adaptive limiter, hands its transfer slot back, and runs
+  independent verification under a separate bounded pool, so long scans no
+  longer hold transfer capacity. The scheduler is woken when a slot is
+  released early. The default keeps verification in the transfer slot;
+  verification workers are capped at the transfer workers and count toward
+  organization `max_concurrency`.
+
 - Authenticate the independent verifier with SASL `AUTHENTICATE PLAIN` when
   a password-auth user name or password contains non-ASCII characters and
   the server offers `AUTH=PLAIN`. IMAP quoted strings are 7-bit, so `LOGIN`

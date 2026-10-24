@@ -124,6 +124,10 @@ impl App {
         self.mark_bulk_jobs_changed();
         let worker = launch_batch_worker(BatchExecutionContext {
             concurrency,
+            verification_workers: crate::migration_plan::effective_batch_verification_workers(
+                batch_profile.batch_verification_workers,
+                concurrency,
+            ),
             provider_rate_ceilings: prepared.provider_rate_ceilings,
             launch_starts_per_second:
                 crate::migration_plan::effective_batch_process_starts_per_second(

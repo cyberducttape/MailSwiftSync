@@ -272,9 +272,17 @@ pub(crate) struct ScheduleResult {
 pub(crate) fn run_batch_schedule<R: AttemptExecutor>(
     runner: Arc<R>,
     concurrency: usize,
+    verification_workers: usize,
     mut source: JobSource,
 ) -> ScheduleResult {
-    let concurrency = concurrency.max(1);
+    // Transfers stay capped at `concurrency` by the rate limiter's global
+    // domain; the extra threads only let a mailbox that released its
+    // transfer slot keep verifying while another transfer starts.
+    let concurrency = concurrency.max(1).saturating_add(verification_workers);
+    // An admission released early (a transfer entering verification) wakes
+    // slot-waiting tasks without waiting for the attempt to finish.
+    let (release_tx, release_rx) = crossbeam_channel::bounded::<()>(1);
+    runner.rate_limiter().set_release_notifier(Some(release_tx));
     // At most one task per worker is dispatched before the scheduler receives
     // reports. Keep both sides bounded to encode that invariant in the
     // channels themselves, even if the dispatch loop changes later.
@@ -400,33 +408,40 @@ pub(crate) fn run_batch_schedule<R: AttemptExecutor>(
             .next_due()
             .map_or(SCHEDULER_TICK, |due| due.saturating_duration_since(now))
             .min(SCHEDULER_TICK);
-        let report = match report_rx.recv_timeout(timeout) {
-            Ok(report) => report,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        let report = crossbeam_channel::select! {
+            recv(report_rx) -> report => match report {
+                Ok(report) => Some(report),
+                Err(_) => break,
+            },
+            recv(release_rx) -> _ => None,
+            default(timeout) => continue,
         };
-        busy = busy.saturating_sub(1);
-        match report {
-            WorkerReport::Attempt(AttemptOutcome::Finished) => {}
-            WorkerReport::Attempt(AttemptOutcome::Retry { task, delay }) => {
-                if runner.cancelled() {
-                    runner.cancel_waiting(*task);
-                } else {
-                    timers.park(Instant::now() + delay, *task);
+        if let Some(report) = report {
+            busy = busy.saturating_sub(1);
+            match report {
+                WorkerReport::Attempt(AttemptOutcome::Finished) => {}
+                WorkerReport::Attempt(AttemptOutcome::Retry { task, delay }) => {
+                    if runner.cancelled() {
+                        runner.cancel_waiting(*task);
+                    } else {
+                        timers.park(Instant::now() + delay, *task);
+                    }
+                }
+                WorkerReport::Panicked => {
+                    alive = alive.saturating_sub(1);
+                    result.worker_panicked = true;
+                    runner.mark_failed();
                 }
             }
-            WorkerReport::Panicked => {
-                alive = alive.saturating_sub(1);
-                result.worker_panicked = true;
-                runner.mark_failed();
-            }
         }
-        // A finished attempt released its slots; let slot-limited tasks
-        // compete again, ahead of their tenants' newer work.
+        // A finished attempt, or one that handed back its transfer slot,
+        // released capacity; let slot-limited tasks compete again, ahead of
+        // their tenants' newer work.
         for task in slot_waiting.drain(..).rev() {
             requeue(&mut ready, task, true);
         }
     }
+    runner.rate_limiter().set_release_notifier(None);
     drop(dispatch_tx);
     for worker in workers {
         if worker.join().is_err() {
@@ -541,6 +556,7 @@ mod tests {
             let coordinator = spawn_batch_worker_with(
                 BatchExecutionContext {
                     concurrency,
+                    verification_workers: 0,
                     provider_rate_ceilings: Default::default(),
                     launch_starts_per_second: 2,
                     mode: BatchExecutionMode::Preflight,
@@ -810,6 +826,100 @@ mod tests {
         }
     }
 
+    /// Transfers for 50 ms, then hands its admission back (as an attempt
+    /// entering verification does) and verifies for 400 ms.
+    struct VerifyingExecutor {
+        limiter: std::sync::Arc<crate::controller::rate_domains::RateDomainLimiter>,
+        started: std::sync::Mutex<Vec<std::time::Instant>>,
+    }
+
+    impl super::AttemptExecutor for VerifyingExecutor {
+        fn cancelled(&self) -> bool {
+            false
+        }
+
+        fn mark_failed(&self) {}
+
+        fn rate_limiter(
+            &self,
+        ) -> &std::sync::Arc<crate::controller::rate_domains::RateDomainLimiter> {
+            &self.limiter
+        }
+
+        fn run_attempt(
+            &self,
+            _task: crate::controller::batch_work_item::MailboxTask,
+            admission: crate::controller::rate_domains::Admission,
+        ) -> crate::controller::batch_work_item::AttemptOutcome {
+            self.started.lock().unwrap().push(std::time::Instant::now());
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(admission);
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            crate::controller::batch_work_item::AttemptOutcome::Finished
+        }
+
+        fn cancel_waiting(&self, _: crate::controller::batch_work_item::MailboxTask) {
+            panic!("nothing is cancelled");
+        }
+
+        fn fail_unschedulable(
+            &self,
+            _: crate::controller::batch_work_item::MailboxTask,
+            reason: &str,
+        ) {
+            panic!("{reason}");
+        }
+    }
+
+    fn second_start_delay(verification_workers: usize) -> std::time::Duration {
+        let executor = std::sync::Arc::new(VerifyingExecutor {
+            limiter: std::sync::Arc::new(crate::controller::rate_domains::RateDomainLimiter::new(
+                1,
+            )),
+            started: Default::default(),
+        });
+        let jobs = (0..2)
+            .map(|index| {
+                let mut form = crate::Form::default();
+                form.profile.source_host = "old.example".into();
+                form.profile.source_user = format!("user{index}@example.test");
+                crate::bulk_import::BulkJob::from_form(format!("job {index}"), form, "Ready".into())
+            })
+            .collect::<Vec<_>>();
+        let result = super::run_batch_schedule(
+            std::sync::Arc::clone(&executor),
+            1,
+            verification_workers,
+            super::JobSource::from_jobs(
+                jobs,
+                (0..2).map(|index| format!("job-{index}")).collect(),
+                (0..2).map(|index| format!("run-{index}")).collect(),
+                vec![None; 2],
+            ),
+        );
+        assert!(!result.worker_panicked && !result.enqueue_failed);
+        let started = executor.started.lock().unwrap();
+        assert_eq!(started.len(), 2);
+        started[1].duration_since(started[0])
+    }
+
+    /// With a verification worker, the next transfer starts as soon as the
+    /// first mailbox hands back its transfer slot; without one, verification
+    /// keeps the slot and the next transfer waits for it.
+    #[test]
+    fn a_verifying_mailbox_frees_its_transfer_slot_only_with_verification_workers() {
+        let split = second_start_delay(1);
+        assert!(
+            split < std::time::Duration::from_millis(300),
+            "second transfer waited {split:?} despite a free transfer slot"
+        );
+        let shared = second_start_delay(0);
+        assert!(
+            shared >= std::time::Duration::from_millis(400),
+            "second transfer started after {shared:?} while the only worker verified"
+        );
+    }
+
     /// A job waiting out its retry backoff is parked in the timer queue and
     /// frees its worker: with one worker, every other job runs during the
     /// delay instead of after it.
@@ -836,6 +946,7 @@ mod tests {
         let result = super::run_batch_schedule(
             std::sync::Arc::clone(&executor),
             1,
+            0,
             super::JobSource::from_jobs(
                 jobs,
                 (0..3).map(|index| format!("job-{index}")).collect(),
@@ -944,6 +1055,7 @@ mod tests {
         let result = super::run_batch_schedule(
             Arc::clone(&executor),
             WORKERS,
+            0,
             super::JobSource::from_jobs(
                 jobs,
                 (0..JOBS).map(|index| format!("job-{index}")).collect(),
@@ -1041,6 +1153,7 @@ mod tests {
         super::run_batch_schedule(
             std::sync::Arc::clone(&executor),
             1,
+            0,
             super::JobSource::from_jobs(
                 jobs,
                 (0..count).map(|index| format!("job-{index}")).collect(),
