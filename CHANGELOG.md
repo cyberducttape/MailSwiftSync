@@ -11,6 +11,8 @@
   certifiable by independent verification. Ambiguous roles, roles missing on
   the destination, and Gmail's All Mail are reported for an operator
   decision instead of being guessed.
+- Update the Windows clipboard dependency `clipboard-win` from the yanked
+  5.4.1 to 5.4.3 so `cargo deny` accepts the lockfile again.
 - Update the transitive `ctutils` dependency (via `digest` and the Linux
   Secret Service keyring backend) to 0.4.4 for RUSTSEC-2026-0385, which
   fixed non-constant-time mask generation and `u128` comparisons.
