@@ -450,7 +450,11 @@ taken). Each ledger summary reports returned and total project counts and an
 explicit truncation flag when its 1,000-project recent view is incomplete.
 This is for operators running multiple instances or
 [sharding a large migration](docs/wiki/Scaling-large-migrations.md) across
-several ledgers. `notify-webhook` POSTs a minimal credential-free operational
+several ledgers. `serve <directory> --token-file <file>` keeps that view
+available to monitoring tools as a read-only, token-protected loopback HTTP
+API with fleet-wide Prometheus metrics; see
+[Fleet visibility](docs/wiki/Fleet-visibility.md#continuous-fleet-api).
+`notify-webhook` POSTs a minimal credential-free operational
 status by default (project IDs, phases, aggregate mailbox counts, and durable
 attention-reason counts; no names, endpoints, or process details) to one
 operator-configured `https://` URL.

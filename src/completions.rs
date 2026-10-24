@@ -22,6 +22,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "status",
     "metrics",
     "fleet-status",
+    "serve",
     "recover",
     "support-bundle",
     "customer-proof",

@@ -103,7 +103,7 @@ pub(crate) fn parse_redirect_request(head: &str, expected_state: &str) -> Redire
     }
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     left.len() == right.len()
         && left
             .iter()

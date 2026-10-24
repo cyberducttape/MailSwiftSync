@@ -140,8 +140,11 @@ customer SLO rather than treating these intervals as product guarantees.
 
 For polling, use the versioned `status --summary`/`fleet-status` JSON and
 `metrics <state.db>` Prometheus text snapshot through a restricted local
-textfile-collector or scheduled task. Atomically replace the collector file;
-do not expose the ledger or add a network listener solely for scraping. Check
+textfile-collector or scheduled task, or run `serve` to scrape the same data
+for every ledger under a directory from one read-only, token-protected
+loopback listener. Atomically replace a collector file; never expose the
+ledger directory itself, and put any non-loopback `serve` listener behind a
+TLS reverse proxy that restricts who can reach it. Check
 format/version and truncation flags, and alert on unreadable ledgers rather
 than dropping them from fleet totals. The snapshot exposes durable job states,
 attempt outcomes, verification results/findings, and registered process
@@ -207,8 +210,8 @@ system. Use the [PSA event contract](psa-event-contract.md) to implement
 idempotent ticket correlation and customer/technician routing in a trusted
 receiver.
 
-The `fleet-status` command is a read-only aggregation of separate local
-ledgers; it is not a scheduler, worker registry, heartbeat service, remote
+The `fleet-status` command and the `serve` API are read-only aggregations of
+separate local ledgers; it is not a scheduler, worker registry, heartbeat service, remote
 pause/resume mechanism, or distributed ownership protocol. Do not place the
 SQLite ledgers on shared storage or run multiple controllers against one ledger.
 
