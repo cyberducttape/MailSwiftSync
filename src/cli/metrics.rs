@@ -68,11 +68,35 @@ pub(super) fn metrics_command(mut arguments: std::env::ArgsOs) -> eframe::Result
 }
 
 fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
-    if summary.projects_truncated || summary.active_processes_truncated {
+    render_metrics_across(&[summary])
+}
+
+/// Sum the metric families across several independently snapshotted
+/// ledgers; a single truncated projection refuses the whole snapshot.
+pub(super) fn render_metrics_across(
+    summaries: &[&HeadlessStatusSummary],
+) -> Result<String, String> {
+    if summaries
+        .iter()
+        .any(|summary| summary.projects_truncated || summary.active_processes_truncated)
+    {
         return Err(
             "the bounded ledger projection was truncated; refusing to emit partial aggregates"
                 .into(),
         );
+    }
+    let mut counts = crate::core::MailboxStateCounts::default();
+    let mut registered_processes = 0_usize;
+    for summary in summaries {
+        let aggregate = &summary.aggregate_mailbox_state_counts;
+        counts.total = checked_metric_sum(counts.total, aggregate.total)?;
+        counts.queued = checked_metric_sum(counts.queued, aggregate.queued)?;
+        counts.ready = checked_metric_sum(counts.ready, aggregate.ready)?;
+        counts.running = checked_metric_sum(counts.running, aggregate.running)?;
+        counts.verified = checked_metric_sum(counts.verified, aggregate.verified)?;
+        counts.needs_review = checked_metric_sum(counts.needs_review, aggregate.needs_review)?;
+        registered_processes =
+            checked_metric_sum(registered_processes, summary.active_processes.len())?;
     }
 
     let mut output = String::new();
@@ -82,15 +106,12 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         "Current mailbox-job counts by durable state category.",
     );
     for (state, count) in [
-        ("total", summary.aggregate_mailbox_state_counts.total),
-        ("queued", summary.aggregate_mailbox_state_counts.queued),
-        ("ready", summary.aggregate_mailbox_state_counts.ready),
-        ("running", summary.aggregate_mailbox_state_counts.running),
-        ("verified", summary.aggregate_mailbox_state_counts.verified),
-        (
-            "needs_review",
-            summary.aggregate_mailbox_state_counts.needs_review,
-        ),
+        ("total", counts.total),
+        ("queued", counts.queued),
+        ("ready", counts.ready),
+        ("running", counts.running),
+        ("verified", counts.verified),
+        ("needs_review", counts.needs_review),
     ] {
         let _ = writeln!(
             output,
@@ -104,8 +125,7 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
     );
     let _ = writeln!(
         output,
-        "mailswiftsync_registered_engine_processes {}",
-        summary.active_processes.len()
+        "mailswiftsync_registered_engine_processes {registered_processes}"
     );
     let mut transfer_attempts = 0_usize;
     let mut transfer_retries = 0_usize;
@@ -118,7 +138,7 @@ fn render_metrics(summary: &HeadlessStatusSummary) -> Result<String, String> {
         .map(|kind| (*kind, 0_usize))
         .collect::<std::collections::BTreeMap<_, _>>();
 
-    for project in &summary.projects {
+    for project in summaries.iter().flat_map(|summary| &summary.projects) {
         transfer_attempts =
             checked_metric_sum(transfer_attempts, project.operations.transfer_attempts)?;
         transfer_retries =

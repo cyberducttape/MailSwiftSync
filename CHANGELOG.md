@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add `serve`, a long-running read-only fleet API for monitoring and PSA
+  tooling. `mailswiftsync serve <directory> --token-file <file>` scans every
+  ledger under the directory on a fixed interval (default 30 seconds) and
+  serves the unchanged `fleet-status` v1 JSON at `/v1/fleet` and fleet-wide
+  Prometheus metrics at `/metrics`, plus an unauthenticated `/healthz`. Data
+  endpoints require a bearer token of at least 32 characters read from an
+  owner-only file. The listener binds loopback by default and refuses another
+  address unless `--allow-non-loopback` acknowledges that TLS must come from
+  a reverse proxy. It exposes no control actions, takes no instance lock, and
+  answers a failed scan or truncated projection with 503 rather than stale
+  or partial data. Requests are bounded in size, time, and concurrency.
 - Add **Queue settings → Verification workers** (`batch_verification_workers`,
   default 0). With it, a batch mailbox whose transfer finished credits the
   transfer to the adaptive limiter, hands its transfer slot back, and runs
