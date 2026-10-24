@@ -282,6 +282,40 @@ impl StateStore {
         Self::validate_schema_constraints(&store.connection)?;
         Ok(store)
     }
+    /// Open an existing ledger for a small control write (a project hold)
+    /// that must land while another process may own the instance lock. It
+    /// never migrates or repairs: a ledger that is not already a clean
+    /// current-schema ledger is refused, so a second process can never be
+    /// the one that rewrites the schema underneath a running controller.
+    pub fn open_for_control(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+        let path = path.as_ref();
+        verify_database_parent(path)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let database_identity = database_identity(path)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        verify_database_identity(path, database_identity)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+        let stored_schema_version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if stored_schema_version != CURRENT_SCHEMA_VERSION {
+            return Err(super::ledger_rejection(
+                "the ledger uses a different schema version; open it locally once before using this control",
+            ));
+        }
+        Self::validate_schema_layout(&connection)?;
+        if !Self::current_schema_is_clean(&connection) {
+            return Err(super::ledger_rejection(
+                "the ledger needs a local repair before this control can be used",
+            ));
+        }
+        Ok(Self { connection })
+    }
+
     pub fn in_memory() -> rusqlite::Result<Self> {
         let store = Self {
             connection: Connection::open_in_memory()?,
@@ -456,8 +490,9 @@ impl StateStore {
         // version 35 persists post-destination source cursor revalidation, and
         // version 36 separates final-delta-started from cutover-ready webhook
         // events and repairs queued legacy classifications; version 37 delays
-        // cutover-ready until final Verification evidence is durable, and
-        // version 38 records post-scan destination cursor revalidation.
+        // cutover-ready until final Verification evidence is durable,
+        // version 38 records post-scan destination cursor revalidation, and
+        // version 39 records operator project holds that stop new launches.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -498,6 +533,7 @@ impl StateStore {
                 "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS waves (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 120), position INTEGER NOT NULL CHECK(position >= 0), scheduled_at TEXT, maintenance_window TEXT, concurrency INTEGER CHECK(concurrency IS NULL OR concurrency >= 1), approved_by TEXT, approved_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id, name), UNIQUE(project_id, position));
                  CREATE TABLE IF NOT EXISTS wave_members (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), wave_id TEXT NOT NULL REFERENCES waves(id));
+                 CREATE TABLE IF NOT EXISTS project_holds (project_id TEXT PRIMARY KEY REFERENCES projects(id), held_by TEXT NOT NULL CHECK(length(held_by) BETWEEN 1 AND 256), reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 500), held_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS evidence_flag_verification (job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), compared_messages INTEGER NOT NULL CHECK(compared_messages >= 0), mismatched_messages INTEGER NOT NULL CHECK(mismatched_messages >= 0), excepted_messages INTEGER NOT NULL CHECK(excepted_messages >= 0), CHECK(mismatched_messages + excepted_messages <= compared_messages), PRIMARY KEY(job_id, run_id));
                  CREATE INDEX IF NOT EXISTS idx_wave_members_wave ON wave_members(wave_id);
                  CREATE TABLE IF NOT EXISTS cutover_workflows (project_id TEXT PRIMARY KEY REFERENCES projects(id), stage TEXT NOT NULL CHECK(stage IN ('seed','catch_up','final_delta','verification','completed')), scheduled_at TEXT NOT NULL, maintenance_window TEXT, approved_by TEXT, approved_at TEXT, external_confirmation TEXT, source_quiescence_operator TEXT, source_quiescence_evidence TEXT, source_quiescence_at TEXT);

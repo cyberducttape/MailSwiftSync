@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add project holds: a durable pause that stops new mailbox launches without
+  interrupting transfers already running. Place one with `mailswiftsync
+  hold <state.db> <project-id> <operator> <reason>`, from the fleet API
+  (`POST /v1/projects/<id>/hold?reason=...` with an operator token), or in
+  the GUI under **Activity → Hold new launches…**; lift it with `resume`,
+  `POST /v1/projects/<id>/resume`, or the **Resume launches** button in the
+  banner every page shows while the project is held. The hold is checked in
+  the ledger transaction that claims each mailbox, so it also stops a batch
+  that another process already has in progress; new runs, including
+  preflights, are refused, and `supervise` skips the project. Mailboxes the
+  hold kept from starting keep their state (a pending final catch-up stays
+  `delta_required`) and their queued child runs close as cancelled.
+  `status --summary` and `fleet-status` gain a `hold` object per project, and
+  `/metrics` gains `mailswiftsync_projects_on_hold`. Ledger schema v39 adds
+  the `project_holds` table.
 - Fix GUI issues found in a full visual audit (dark, light, Windows 95,
   German, 1024×700, and 200% interface size):
   - The keyring, advanced-options, settings, and engine dialogs could run

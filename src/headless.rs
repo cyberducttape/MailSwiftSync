@@ -106,6 +106,8 @@ pub(crate) struct HeadlessProjectSummary {
     pub(crate) mailbox_state_counts: core::MailboxStateCounts,
     pub(crate) attention_reason_counts: std::collections::BTreeMap<String, usize>,
     pub(crate) operations: core::ProjectOperationMetrics,
+    /// Present while an operator hold stops new mailbox launches.
+    pub(crate) hold: Option<core::ProjectHold>,
 }
 
 pub(crate) struct HeadlessCredentials {
@@ -422,6 +424,9 @@ pub(crate) fn headless_status_summary(
         let operations = store
             .project_operation_metrics(&project.id)
             .map_err(|error| error.to_string())?;
+        let hold = store
+            .project_hold(&project.id)
+            .map_err(|error| error.to_string())?;
         summaries.push(HeadlessProjectSummary {
             id: project.id,
             name: project.name,
@@ -432,6 +437,7 @@ pub(crate) fn headless_status_summary(
             mailbox_state_counts,
             attention_reason_counts,
             operations,
+            hold,
         });
     }
     let (active_processes, active_processes_truncated) = store

@@ -81,6 +81,9 @@ impl App {
                                     &child_run_id,
                                 )
                                 .map_err(|error| {
+                                    if core::is_project_held(&error) {
+                                        return controller::ClaimRefusal::Held(error.to_string());
+                                    }
                                     // A policy refusal (for example a stale
                                     // source-quiescence attestation) fails
                                     // this child with its reason; only a
@@ -90,7 +93,7 @@ impl App {
                                             "durable claim for child run {child_run_id} failed: {error}"
                                         ));
                                     }
-                                    format!("durable claim refused: {error}")
+                                    controller::ClaimRefusal::Rejected(format!("durable claim refused: {error}"))
                                 })
                         } else {
                             let error =
@@ -98,7 +101,7 @@ impl App {
                             durability_errors.push(format!(
                                 "durable claim for child run {child_run_id} failed: {error}"
                             ));
-                            Err(error.to_owned())
+                            Err(controller::ClaimRefusal::Rejected(error.to_owned()))
                         };
                         let _ = reply.send(result);
                     }
@@ -426,24 +429,40 @@ impl App {
                         {
                             let evidence = self.pending_batch_evidence.get(&child_run_id);
                             let mismatches = self.pending_batch_mismatches.get(&child_run_id);
-                            let final_state = batch_mailbox_state(&state, evidence);
+                            let held = state == controller::HELD_CHILD_STATE;
+                            let final_state = if held {
+                                "cancelled".to_owned()
+                            } else {
+                                batch_mailbox_state(&state, evidence)
+                            };
                             let checkpoint = self
                                 .pending_batch_checkpoints
                                 .get(&child_run_id)
                                 .map(String::as_str);
-                            let result = finish_batch_child(
-                                &self.store,
-                                run,
-                                controller::BatchChildCompletion {
-                                    job_id: &job_id,
-                                    child_run_id: &child_run_id,
-                                    state: &state,
-                                    detail: &detail,
-                                    evidence,
-                                    mismatches,
-                                    checkpoint,
-                                },
-                            );
+                            // A held child never claimed its mailbox, so only
+                            // the child run closes; the mailbox keeps its state.
+                            let result = if held {
+                                self.store.cancel_held_child_run(
+                                    &run.project_id,
+                                    &job_id,
+                                    &child_run_id,
+                                    &detail,
+                                )
+                            } else {
+                                finish_batch_child(
+                                    &self.store,
+                                    run,
+                                    controller::BatchChildCompletion {
+                                        job_id: &job_id,
+                                        child_run_id: &child_run_id,
+                                        state: &state,
+                                        detail: &detail,
+                                        evidence,
+                                        mismatches,
+                                        checkpoint,
+                                    },
+                                )
+                            };
                             let completion_persisted = result.is_ok();
                             let reply_result = result
                                 .as_ref()

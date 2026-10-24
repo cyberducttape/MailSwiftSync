@@ -48,9 +48,28 @@ pub(crate) fn apply(app: &mut App) {
             "advanced" => app.advanced_open = true,
             "preview" => app.preview = true,
             "clear-queue" => app.bulk_clear_confirm_open = true,
+            "hold" => app.hold_draft = Some(String::new()),
             _ => {}
         }
     }
+    if std::env::var_os("MAILSWIFTSYNC_DEBUG_HOLD").is_some() {
+        held_demo(app);
+    }
+}
+
+/// Put the demo project on hold, as the fleet API or `hold` command would.
+pub(crate) fn held_demo(app: &mut App) {
+    if app.queue.is_empty() {
+        demo_data(app);
+    }
+    if let Some(project_id) = app.queue.project_id().map(str::to_owned) {
+        let _ = app.store.hold_project(
+            &project_id,
+            "Alice Example (fleet API)",
+            "customer change freeze",
+        );
+    }
+    app.refresh_ui_snapshot_now();
 }
 
 /// Synthetic operations telemetry over the demo queue: twenty minutes of

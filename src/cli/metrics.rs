@@ -87,6 +87,11 @@ pub(super) fn render_metrics_across(
     }
     let mut counts = crate::core::MailboxStateCounts::default();
     let mut registered_processes = 0_usize;
+    let held_projects = summaries
+        .iter()
+        .flat_map(|summary| &summary.projects)
+        .filter(|project| project.hold.is_some())
+        .count();
     for summary in summaries {
         let aggregate = &summary.aggregate_mailbox_state_counts;
         counts.total = checked_metric_sum(counts.total, aggregate.total)?;
@@ -118,6 +123,12 @@ pub(super) fn render_metrics_across(
             "mailswiftsync_mailbox_jobs{{state=\"{state}\"}} {count}"
         );
     }
+    gauge_header(
+        &mut output,
+        "mailswiftsync_projects_on_hold",
+        "Projects whose operator hold stops new mailbox launches.",
+    );
+    let _ = writeln!(output, "mailswiftsync_projects_on_hold {held_projects}");
     gauge_header(
         &mut output,
         "mailswiftsync_registered_engine_processes",
@@ -323,6 +334,7 @@ mod tests {
                     verification_message_findings: [("missing".into(), 2), ("probable".into(), 1)]
                         .into(),
                 },
+                hold: None,
             }],
         }
     }
@@ -345,6 +357,7 @@ mod tests {
         );
         assert!(!output.contains("mailswiftsync_transfer_attempt_outcomes_total"));
         assert!(output.contains("mailswiftsync_registered_engine_processes 0"));
+        assert!(output.contains("mailswiftsync_projects_on_hold 0"));
         assert!(output.contains("method=\"metadata_reconciliation\",outcome=\"missing\""));
         assert!(output.contains("mailswiftsync_verification_message_findings{kind=\"missing\"} 2"));
         assert!(

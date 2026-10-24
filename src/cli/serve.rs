@@ -409,7 +409,9 @@ fn allowed_methods(segments: &[&str]) -> Option<&'static str> {
         ["healthz"] | ["metrics"] | ["v1", "fleet"] | ["v1", "projects", _, "waves"] => {
             Some("GET, HEAD")
         }
-        ["v1", "waves", _, "approve"] => Some("POST"),
+        ["v1", "waves", _, "approve"]
+        | ["v1", "projects", _, "hold"]
+        | ["v1", "projects", _, "resume"] => Some("POST"),
         _ => None,
     }
 }
@@ -432,7 +434,7 @@ fn respond(head: &str, context: &ApiContext) -> Response {
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim(), value.trim()))
         .collect::<Vec<_>>();
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let segments = path
         .strip_prefix('/')
         .unwrap_or(path)
@@ -480,6 +482,35 @@ fn respond(head: &str, context: &ApiContext) -> Response {
                 return refusal;
             }
             controls::approve_wave(&context.root, wave_id, operator)
+        }
+        ["v1", "projects", project_id, action @ ("hold" | "resume")]
+            if controls::valid_id(project_id) =>
+        {
+            let Caller::Operator(operator) = caller else {
+                return Response::json_error(
+                    403,
+                    "Forbidden",
+                    "holding or resuming a project needs a named operator token",
+                );
+            };
+            if let Some(refusal) = refuse_request_body(&headers) {
+                return refusal;
+            }
+            if *action == "hold" {
+                let reason = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(name, _)| name == "reason")
+                    .map(|(_, value)| value.into_owned());
+                let Some(reason) = reason else {
+                    return Response::json_error(
+                        400,
+                        "Bad Request",
+                        "a hold needs a reason query parameter, for example ?reason=customer%20change%20freeze",
+                    );
+                };
+                controls::hold_project(&context.root, project_id, operator, &reason)
+            } else {
+                controls::resume_project(&context.root, project_id, operator)
+            }
         }
         _ => Response::json_error(400, "Bad Request", "malformed identifier"),
     };
@@ -889,6 +920,69 @@ mod tests {
             &context,
         );
         assert_eq!(unknown.status, 404);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_operator_holds_and_resumes_a_project_even_while_the_ledger_is_in_use() {
+        let root = private_root();
+        let (state, project_id, _) = ledger_with_wave(&root);
+        let context = context_at(root.clone(), snapshot());
+        let operator = Some(format!("Bearer {OPERATOR}"));
+        let hold = format!("/v1/projects/{project_id}/hold?reason=customer%20change%20freeze");
+        let resume = format!("/v1/projects/{project_id}/resume");
+
+        let reader = respond(
+            &request_with("POST", &hold, Some(&format!("Bearer {TOKEN}"))),
+            &context,
+        );
+        assert_eq!(reader.status, 403);
+        let no_reason = respond(
+            &request_with(
+                "POST",
+                &format!("/v1/projects/{project_id}/hold"),
+                operator.as_deref(),
+            ),
+            &context,
+        );
+        assert_eq!(no_reason.status, 400);
+
+        // A supervised pass or the GUI owns the ledger; the hold still lands.
+        let lock = crate::process::acquire_instance_lock(&state).unwrap();
+        let held = respond(&request_with("POST", &hold, operator.as_deref()), &context);
+        assert_eq!(held.status, 200, "{}", held.body);
+        assert!(
+            held.body
+                .contains("\"held_by\":\"Alice Example (fleet API)\"")
+        );
+        assert!(held.body.contains("customer change freeze"));
+        let store = crate::core::StateStore::open_readonly(&state).unwrap();
+        assert_eq!(
+            store
+                .project_hold(&project_id)
+                .unwrap()
+                .map(|hold| hold.reason),
+            Some("customer change freeze".to_owned())
+        );
+        drop(store);
+        let again = respond(&request_with("POST", &hold, operator.as_deref()), &context);
+        assert_eq!(again.status, 409);
+
+        let resumed = respond(
+            &request_with("POST", &resume, operator.as_deref()),
+            &context,
+        );
+        assert_eq!(resumed.status, 200, "{}", resumed.body);
+        assert!(resumed.body.contains("\"state\":\"resumed\""));
+        assert_eq!(
+            respond(
+                &request_with("POST", &resume, operator.as_deref()),
+                &context
+            )
+            .status,
+            409
+        );
+        drop(lock);
         std::fs::remove_dir_all(root).unwrap();
     }
 

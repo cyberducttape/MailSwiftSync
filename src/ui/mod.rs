@@ -14,6 +14,7 @@ mod bootstrap_failure;
 mod command_center;
 mod confidence;
 mod folder_roles;
+mod hold;
 pub(crate) mod waves;
 // Release-mode tests still use the deterministic debug scenes for the
 // accessibility and scale audits. Keep these fixtures out of production
