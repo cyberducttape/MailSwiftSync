@@ -28,6 +28,17 @@
     background, below WCAG AA; it is now black, and the contrast test now
     checks primary and secondary text on the background and striped rows of
     every theme.
+- Let named operators approve migration waves through the `serve` fleet API.
+  `--operators-file` names an owner-only file of `<token> <name>` lines;
+  `POST /v1/waves/<wave-id>/approve` with an operator's token records
+  `<name> (fleet API)` as the approver, so the audit trail names whoever
+  holds that token. Approval takes the same instance lock as `wave approve`,
+  so it lands between supervised passes (409 with `Retry-After` while the
+  ledger is busy), and it is refused for a read-only token, an
+  already-approved wave, a ledger on an older schema, or an ID found in more
+  than one ledger. `GET /v1/projects/<project-id>/waves` returns the wave
+  list for read and operator tokens. Without an operators file `serve`
+  stays read-only.
 - Add `serve`, a long-running read-only fleet API for monitoring and PSA
   tooling. `mailswiftsync serve <directory> --token-file <file>` scans every
   ledger under the directory on a fixed interval (default 30 seconds) and

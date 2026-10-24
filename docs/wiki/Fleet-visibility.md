@@ -51,7 +51,8 @@ shard stays visible instead of quietly under-counting.
 `fleet-status` is a read-only aggregation view, not a coordination layer. It
 does not:
 
-- start, stop, or influence any of the ledgers it reads (neither does `serve`)
+- start, stop, or influence any of the ledgers it reads (`serve` can only
+  approve waves, and only for named operators; see below)
 - require the scanned instances to know about each other, or run on the same
   host — point it at a directory synced from several machines and it works
   the same way
@@ -100,9 +101,10 @@ beyond a few refresh intervals.
 
 Safety properties:
 
-- **Read-only.** Only `GET` and `HEAD` are accepted. There is no endpoint
-  that starts, pauses, approves, or changes anything; use `supervise`,
-  `wave approve`, and the GUI for that.
+- **Read-only unless you name operators.** Without `--operators-file`, only
+  `GET` and `HEAD` are served. Wave approval is the only change the API can
+  ever make; starting, pausing, or cancelling work stays with `supervise` and
+  the GUI.
 - **Never unauthenticated.** `--token-file` is required. The file must be
   owner-only, and the token must be at least 32 printable characters.
   `/v1/fleet` carries project names and server hostnames, so treat the token
@@ -118,6 +120,54 @@ Safety properties:
 - **Bounded.** Request heads are capped at 8 KiB and 5 seconds, and at most
   16 connections are served at once; extra connections get 503 with
   `Retry-After`.
+
+### Approving waves remotely
+
+A wave's mailboxes may migrate live only after someone approves the wave.
+To let named people do that from a dashboard or a PSA workflow, give each of
+them their own token in an owner-only operators file, one `<token> <name>`
+per line:
+
+```text
+# /etc/mailswiftsync/fleet-operators — chmod 600
+3f9c…e1 Alice Example
+8a20…7b bob@msp.example
+```
+
+```bash
+mailswiftsync serve /var/lib/mailswiftsync \
+  --token-file /etc/mailswiftsync/fleet-api.token \
+  --operators-file /etc/mailswiftsync/fleet-operators
+```
+
+Operator tokens follow the same rules as the read token, must all differ from
+it and from each other, and also grant everything the read token does.
+
+| Request | Token | Effect |
+|---|---|---|
+| `GET /v1/projects/<project-id>/waves` | read or operator | the same JSON as `wave <state> list <project-id>` |
+| `POST /v1/waves/<wave-id>/approve` | operator | approves the wave; send no body |
+
+Project IDs appear in `/v1/fleet`, and wave IDs appear in the wave list.
+`serve` finds the ledger that holds the ID by itself. What happens on
+approval:
+
+- The ledger records the approver as the operator's configured name plus
+  `(fleet API)`, for example `Alice Example (fleet API)`. A caller cannot
+  choose the name, so the audit trail names whoever holds that token.
+- Approval is the ledger's normal one-way approval: a second request returns
+  409 with the existing approver, and an approved wave cannot change.
+- `serve` takes the same instance lock as `wave approve`. While a supervised
+  batch pass is running or the GUI has the ledger open, the request returns
+  409 with `Retry-After: 60`, and the approval lands between passes.
+- It refuses, with 409, a ledger on an older schema (open it locally once to
+  upgrade it) and an ID found in more than one ledger, such as a stray
+  backup copy under the served directory.
+- Each approval is also written to the service log.
+
+Remove a person's line and restart `serve` to revoke their access.
+
+### Running it as a service
 
 On a systemd host, start from the hardening in the canonical
 [`mailswiftsync-supervise.service`](../distribution/mailswiftsync-supervise.service)

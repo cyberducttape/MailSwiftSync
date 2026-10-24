@@ -488,7 +488,9 @@ pub(crate) struct FleetUnreadableLedger {
 /// (avoids directory-cycle loops); depth and candidate count are bounded so
 /// an unexpectedly large or cyclical tree fails closed instead of running
 /// unbounded.
-fn discover_ledger_candidates(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
+pub(crate) fn discover_ledger_candidates(
+    root: &std::path::Path,
+) -> Result<Vec<std::path::PathBuf>, String> {
     let mut found = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0_usize)];
     while let Some((dir, depth)) = stack.pop() {

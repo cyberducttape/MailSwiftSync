@@ -451,8 +451,9 @@ explicit truncation flag when its 1,000-project recent view is incomplete.
 This is for operators running multiple instances or
 [sharding a large migration](docs/wiki/Scaling-large-migrations.md) across
 several ledgers. `serve <directory> --token-file <file>` keeps that view
-available to monitoring tools as a read-only, token-protected loopback HTTP
-API with fleet-wide Prometheus metrics; see
+available to monitoring tools as a token-protected loopback HTTP API with
+fleet-wide Prometheus metrics, and optionally lets named operators approve
+migration waves remotely; see
 [Fleet visibility](docs/wiki/Fleet-visibility.md#continuous-fleet-api).
 `notify-webhook` POSTs a minimal credential-free operational
 status by default (project IDs, phases, aggregate mailbox counts, and durable
