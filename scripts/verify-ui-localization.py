@@ -38,21 +38,16 @@ def decode_rust_string(value: str) -> str:
 
 def translation_keys() -> set[str]:
     keys: set[str] = set()
-    for path in UI_DIR.glob("*.rs"):
+    # rustfmt splits long chains, so `self.language` and `.text("...")` are
+    # often on separate lines; match across whitespace.
+    for path in sorted(UI_DIR.glob("*.rs")) + sorted((ROOT / "src" / "controller").glob("*.rs")):
         if path.name == "language.rs":
             continue
         source = path.read_text(encoding="utf-8")
         keys.update(
             decode_rust_string(value)
             for value in re.findall(
-                r"(?:self\.)?language\.text\(\s*\"((?:\\.|[^\"\\])*)\"",
-                source,
-            )
-        )
-        keys.update(
-            decode_rust_string(value)
-            for value in re.findall(
-                r"(?<![A-Za-z_])language\.text\(\s*\"((?:\\.|[^\"\\])*)\"",
+                r"(?<![A-Za-z_])language\s*\.text\(\s*\"((?:\\.|[^\"\\])*)\"",
                 source,
             )
         )

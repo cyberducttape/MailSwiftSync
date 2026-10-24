@@ -76,6 +76,13 @@ pub(crate) fn telemetry_demo(app: &mut App) {
     // and still renders the full history once the process has enough uptime.
     let start = now.checked_sub(Duration::from_secs(20 * 60)).unwrap_or(now);
     app.run_telemetry.reset(start, app.queue.len());
+    // Match what a real batch start shows, so the header and run card do not
+    // read "Idle" over a running operations view.
+    app.set_status(
+        format!("Batch migration: {} jobs", app.queue.len()),
+        crate::ui::StatusSeverity::Info,
+    );
+    app.output.clear();
     app.form.profile.batch_concurrency = 4;
     // A retry wait is the one presentation-only state; durable states come
     // from the demo ledger.

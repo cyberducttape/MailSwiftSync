@@ -99,24 +99,15 @@ impl eframe::App for App {
                     ui.add_space(8.0);
                     ui.separator();
                     ui.add_space(4.0);
-                    let project_name = self
+                    let project_name = self.ui_snapshot.project.as_ref().map_or_else(
+                        || self.language.message("ui.no-project-selected").to_owned(),
+                        |project| project.name.clone(),
+                    );
+                    let phase = self
                         .ui_snapshot
                         .project
                         .as_ref()
-                        .map(|project| project.name.as_str())
-                        .unwrap_or_else(|| self.language.message("ui.no-project-selected"));
-                    ui.label(
-                        egui::RichText::new(project_name)
-                            .strong()
-                            .family(crate::ui::fonts::medium()),
-                    );
-                    if let Some(project) = self.ui_snapshot.project.as_ref() {
-                        crate::ui::pill(
-                            ui,
-                            self.language.text(format_phase_name(project.phase)),
-                            colors.info,
-                        );
-                    }
+                        .map(|project| self.language.text(format_phase_name(project.phase)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.running() && ui.button(self.language.message("ui.stop")).clicked() {
                             self.stop_confirm_open = true;
@@ -156,6 +147,30 @@ impl eframe::App for App {
                             self.activity_search = self.run_id.clone().unwrap_or_default();
                             self.active_view = WorkspaceView::Activity;
                         }
+                        // The title and phase get only what the status
+                        // controls leave, so a long name or a large
+                        // interface size truncates the name instead of
+                        // drawing it underneath the controls.
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let reserve = phase.map_or(0.0, |phase| {
+                                crate::ui::pill_width(ui, phase) + ui.spacing().item_spacing.x
+                            });
+                            let name_width = (ui.available_width() - reserve).max(40.0);
+                            ui.scope(|ui| {
+                                ui.set_max_width(name_width);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&project_name)
+                                            .strong()
+                                            .family(crate::ui::fonts::medium()),
+                                    )
+                                    .truncate(),
+                                );
+                            });
+                            if let Some(phase) = phase {
+                                crate::ui::pill(ui, phase, colors.info);
+                            }
+                        });
                     });
                 });
             });
@@ -330,8 +345,12 @@ impl eframe::App for App {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        // Keep line lengths readable on wide displays.
-                        ui.set_max_width(ui.available_width().min(1120.0));
+                        // Keep line lengths readable on wide displays, and
+                        // leave a gutter for the floating scroll bar so it
+                        // never draws over the cards' right edge.
+                        let scroll = &ui.spacing().scroll;
+                        let gutter = scroll.bar_width + scroll.bar_inner_margin;
+                        ui.set_max_width((ui.available_width() - gutter).min(1120.0));
                         match self.active_view {
                             WorkspaceView::Overview => self.overview_view(ui),
                             WorkspaceView::Plan => self.plan_view(ui),
@@ -529,8 +548,12 @@ crate::ui::name_modal(ui, &modal_heading);
             self.endpoint_plan_panel(ui, false, dovecot, colors.success);
         } else {
             ui.columns(2, |columns| {
-                self.endpoint_plan_panel(&mut columns[0], true, dovecot, colors.info);
-                self.endpoint_plan_panel(&mut columns[1], false, dovecot, colors.success);
+                self.account_card(&mut columns[0], true, dovecot, colors.info);
+                self.account_card(&mut columns[1], false, dovecot, colors.success);
+            });
+            ui.columns(2, |columns| {
+                self.connection_settings_section(&mut columns[0], true, dovecot);
+                self.connection_settings_section(&mut columns[1], false, dovecot);
             });
         }
         ui.add_space(12.0);
@@ -869,6 +892,12 @@ crate::ui::name_modal(ui, &modal_heading);
         color: egui::Color32,
     ) {
         self.account_card(ui, source, dovecot, color);
+        self.connection_settings_section(ui, source, dovecot);
+    }
+
+    /// Kept separate from the account card so the two-column layout can put
+    /// both sides' headers on one row even when the cards differ in height.
+    fn connection_settings_section(&mut self, ui: &mut egui::Ui, source: bool, dovecot: bool) {
         let language = self.language;
         let fixed_endpoint = (source || !dovecot)
             && !matches!(

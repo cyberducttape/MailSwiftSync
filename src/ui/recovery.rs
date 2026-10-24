@@ -88,58 +88,65 @@ fn reviews_evidence(group: &RecoveryGroup) -> bool {
         )
 }
 
+/// Locale keys for why a group stopped and the follow-up button, plus the
+/// view that button opens.
 fn remediation(group: &RecoveryGroup) -> (&'static str, &'static str, WorkspaceView) {
     match group.reason {
         Some(AttentionReason::AuthenticationFailed) => (
-            "Credentials need reconnecting; live migration remains blocked until a fresh preflight.",
-            "Reconnect accounts in Plan",
+            "ui.recovery-why-authentication",
+            "ui.recovery-action-reconnect",
             WorkspaceView::Plan,
         ),
         Some(AttentionReason::CapacityLimited) => (
-            "Provider capacity or rate policy was reached; adjust policy or wait before retrying.",
-            "Review queue policy",
+            "ui.recovery-why-capacity",
+            "ui.recovery-action-queue-policy",
             WorkspaceView::Mailboxes,
         ),
         Some(AttentionReason::VerificationDifference | AttentionReason::VerificationIncomplete) => {
             (
-                "Verification evidence is incomplete or differs; review evidence before retrying.",
-                "Review verification",
+                "ui.recovery-why-verification",
+                "ui.recovery-action-verification",
                 WorkspaceView::Verification,
             )
         }
         Some(AttentionReason::VerificationLimitExceeded) => (
-            "The transfer completed, but verification stopped at a safety limit; follow the limit guidance in the run detail, then rerun to obtain evidence.",
-            "Review verification",
+            "ui.recovery-why-verification-limit",
+            "ui.recovery-action-verification",
             WorkspaceView::Verification,
         ),
         Some(AttentionReason::ConfigurationInvalid | AttentionReason::PolicyBlocked) => (
-            "The migration plan or organization safety policy blocks execution; correct it before preflight.",
-            "Review migration plan",
+            "ui.recovery-why-configuration",
+            "ui.recovery-action-plan",
             WorkspaceView::Plan,
         ),
         Some(AttentionReason::TransportFailed) => (
-            "The endpoint or network failed; retry only after confirming endpoint health.",
-            "Review mailbox actions",
+            "ui.recovery-why-transport",
+            "ui.recovery-action-mailboxes",
             WorkspaceView::Mailboxes,
         ),
         Some(AttentionReason::Interrupted | AttentionReason::ProcessIdentityUnverified) => (
-            "The previous process ended without enough ownership evidence; confirm recovery before retrying.",
-            "Review recovery mailboxes",
+            "ui.recovery-why-interrupted",
+            "ui.recovery-action-recovery-mailboxes",
             WorkspaceView::Mailboxes,
         ),
         Some(AttentionReason::MessageRejected) => (
-            "The destination rejected one or more messages; inspect the affected mailbox before retrying.",
-            "Review mailbox actions",
+            "ui.recovery-why-message-rejected",
+            "ui.recovery-action-mailboxes",
             WorkspaceView::Mailboxes,
         ),
+        // Unclassified groups are explained by their durable state, the
+        // same way `already_tried` words them.
         Some(AttentionReason::Unknown) | None => (
-            "The mailbox needs operator review before another migration attempt.",
-            "Review mailbox actions",
+            match group.state.as_str() {
+                "delta_required" => "ui.recovery-why-delta",
+                "cancelled" => "ui.recovery-why-cancelled",
+                _ => "ui.recovery-why-unclassified",
+            },
+            "ui.recovery-action-mailboxes",
             WorkspaceView::Mailboxes,
         ),
     }
 }
-
 fn progress_checkpoint_label(detail: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(detail) else {
         return "Last durable transfer checkpoint is available".to_owned();
@@ -328,7 +335,7 @@ impl App {
                 });
                 let (consequence, remediation_label, remediation_view) = remediation(group);
                 crate::ui::section_label(ui, self.language.message("ui.recovery-why"));
-                ui.label(self.language.text(consequence));
+                ui.label(self.language.message(consequence));
                 crate::ui::section_label(ui, self.language.message("ui.recovery-tried"));
                 ui.label(self.language.message(already_tried(group)));
                 crate::ui::section_label(ui, self.language.message("ui.recovery-what-to-do"));
@@ -393,7 +400,10 @@ impl App {
                     if retry_button.clicked() {
                         retry = Some(group.clone());
                     }
-                    if ui.button(self.language.text(remediation_label)).clicked() {
+                    if ui
+                        .button(self.language.message(remediation_label))
+                        .clicked()
+                    {
                         remediate = Some(remediation_view);
                     }
                     if reviews_evidence(group)
@@ -538,8 +548,15 @@ mod tests {
             count: 2,
         };
         let (consequence, label, view) = remediation(&auth);
-        assert!(consequence.contains("fresh preflight"));
-        assert_eq!(label, "Reconnect accounts in Plan");
+        assert!(
+            crate::ui::UiLanguage::English
+                .message(consequence)
+                .contains("fresh preflight")
+        );
+        assert_eq!(
+            crate::ui::UiLanguage::English.message(label),
+            "Reconnect accounts in Plan"
+        );
         assert!(matches!(view, WorkspaceView::Plan));
 
         let quota = RecoveryGroup {
@@ -548,6 +565,20 @@ mod tests {
             count: 1,
         };
         assert!(matches!(remediation(&quota).2, WorkspaceView::Mailboxes));
+    }
+
+    #[test]
+    fn unclassified_groups_are_explained_by_their_state() {
+        let group = |state: &str| RecoveryGroup {
+            state: state.into(),
+            reason: None,
+            count: 1,
+        };
+        let english =
+            |state: &str| crate::ui::UiLanguage::English.message(remediation(&group(state)).0);
+        assert!(english("delta_required").contains("final catch-up"));
+        assert!(english("cancelled").contains("cancelled"));
+        assert!(english("attention").contains("operator review"));
     }
 
     #[test]

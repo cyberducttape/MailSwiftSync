@@ -467,6 +467,7 @@ impl App {
             .open(&mut open)
             .default_width(620.0)
             .show(ctx, |ui| {
+ crate::ui::dialog_body(ui, |ui| {
                 ui.label(RichText::new(self.language.message("ui.these-controls-affect-the-imapsync-fallback-dovecot-native-migrations-use-d-1e32325d23")).color(self.theme_colors().text_secondary));
                 ui.add_space(8.0);
                 let editable = !self.running();
@@ -608,7 +609,8 @@ impl App {
                 }
                 ui.add_space(8.0);
                 ui.label(self.language.message("ui.the-extra-imapsync-options-field-accepts-only-the-documented-safe-tuning-an-924661fe18"));
-            });
+            })
+ });
         self.advanced_open = open;
     }
 }

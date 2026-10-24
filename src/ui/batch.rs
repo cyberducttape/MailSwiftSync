@@ -199,13 +199,6 @@ impl App {
             ui.add_space(8.0);
         }
         if self.queue.is_empty() {
-            ui.label(
-                RichText::new(
-                    self.language
-                        .text("0 selected · 0 visible · 0 hidden by current filter"),
-                )
-                .color(colors.text_secondary),
-            );
             crate::ui::card(ui, |ui| {
                 ui.label(
                     RichText::new(self.language.message("ui.no-bulk-mailbox-list-loaded"))
@@ -526,12 +519,14 @@ impl App {
                 .bulk_selection_count()
                 .saturating_sub(visible_and_selected);
 
+            // "visible" alone read as the number of rows on screen; the
+            // middle figure is selected rows that the current filter shows.
             let status_text = self
                 .language
-                .text("{} selected · {} visible · {} hidden by current filter")
-                .replacen("{}", &self.bulk_selection_count().to_string(), 1)
-                .replacen("{}", &visible_and_selected.to_string(), 1)
-                .replacen("{}", &hidden_selected.to_string(), 1);
+                .message("ui.selection-summary")
+                .replace("{selected}", &self.bulk_selection_count().to_string())
+                .replace("{shown}", &visible_and_selected.to_string())
+                .replace("{hidden}", &hidden_selected.to_string());
 
             let has_selection = !self.bulk_selection_is_empty();
             ui.horizontal_wrapped(|ui| {
