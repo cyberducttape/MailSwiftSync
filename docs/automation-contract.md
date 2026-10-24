@@ -173,8 +173,9 @@ is a long-running listener over the same projections:
 | Endpoint | Authentication | Body |
 |---|---|---|
 | `GET /healthz` | none | `ok`; says only that the process is accepting connections |
+| `GET /readyz` | none | `{"ready","latest_scan_succeeded","snapshot_age_seconds","consecutive_refresh_failures"}`; 200 when the latest scan succeeded and is at most three refresh intervals old, 503 otherwise |
 | `GET /v1/fleet` | `Authorization: Bearer <token>` | the `fleet-status` v1 document, byte-for-byte the CLI shape |
-| `GET /metrics` | `Authorization: Bearer <token>` | the metric families above summed across readable ledgers, plus `mailswiftsync_fleet_ledgers{state="readable"\|"unreadable"}` and `mailswiftsync_fleet_snapshot_timestamp_seconds` |
+| `GET /metrics` | `Authorization: Bearer <token>` | the metric families above summed across readable ledgers, plus `mailswiftsync_fleet_ledgers{state="readable"\|"unreadable"}`, `mailswiftsync_fleet_snapshot_timestamp_seconds`, the `mailswiftsync_fleet_refresh_failures_total` counter, and `mailswiftsync_fleet_last_successful_scan_timestamp_seconds` |
 | `GET /v1/projects/<project-id>/waves` | read or operator token | the `mailswiftsync-wave-list` v2 document that `wave <state> list` prints |
 | `POST /v1/waves/<wave-id>/approve` | operator token | `{"format":"mailswiftsync-wave-approval","format_version":1,"wave_id","name","approved_by"}` |
 

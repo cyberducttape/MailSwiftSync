@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Harden the `serve` fleet API for unattended network use:
+  - `--tls-cert`/`--tls-key` terminate TLS 1.2+ natively, so a network
+    listener no longer needs a reverse proxy; the key file must be
+    owner-only, and plaintext requests to the TLS port get no answer.
+  - `/readyz` reports readiness separately from `/healthz` liveness: 503
+    when the latest scan failed or is older than three refresh intervals,
+    with no paths or error text in the unauthenticated body.
+  - `/metrics` adds `mailswiftsync_fleet_refresh_failures_total` and
+    `mailswiftsync_fleet_last_successful_scan_timestamp_seconds`.
+  - Accept errors are logged (at most once a minute) with a short backoff
+    instead of being dropped silently.
+  - The 8 KiB request-head limit now also applies when the terminator
+    arrives in the read that crosses it.
 - Fix GUI issues found in a full visual audit (dark, light, Windows 95,
   German, 1024×700, and 200% interface size):
   - The keyring, advanced-options, settings, and engine dialogs could run
