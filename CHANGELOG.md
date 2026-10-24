@@ -10,7 +10,9 @@
   released early. The default keeps verification in the transfer slot;
   verification workers are capped at the transfer workers and count toward
   organization `max_concurrency`.
-
+- Update the transitive `ctutils` dependency (via `digest` and the Linux
+  Secret Service keyring backend) to 0.4.4 for RUSTSEC-2026-0385, which
+  fixed non-constant-time mask generation and `u128` comparisons.
 - Authenticate the independent verifier with SASL `AUTHENTICATE PLAIN` when
   a password-auth user name or password contains non-ASCII characters and
   the server offers `AUTH=PLAIN`. IMAP quoted strings are 7-bit, so `LOGIN`
