@@ -167,20 +167,28 @@ provide centralized operator identity.
 For local monitoring, either invoke the command through a restricted
 Prometheus textfile-collector/task integration, or scrape `serve`.
 
-`mailswiftsync serve <directory> --token-file <file>` is a long-running
-read-only listener over the same projections:
+`mailswiftsync serve <directory> --token-file <file> [--operators-file <file>]`
+is a long-running listener over the same projections:
 
 | Endpoint | Authentication | Body |
 |---|---|---|
 | `GET /healthz` | none | `ok`; says only that the process is accepting connections |
 | `GET /v1/fleet` | `Authorization: Bearer <token>` | the `fleet-status` v1 document, byte-for-byte the CLI shape |
 | `GET /metrics` | `Authorization: Bearer <token>` | the metric families above summed across readable ledgers, plus `mailswiftsync_fleet_ledgers{state="readable"\|"unreadable"}` and `mailswiftsync_fleet_snapshot_timestamp_seconds` |
+| `GET /v1/projects/<project-id>/waves` | read or operator token | the `mailswiftsync-wave-list` v2 document that `wave <state> list` prints |
+| `POST /v1/waves/<wave-id>/approve` | operator token | `{"format":"mailswiftsync-wave-approval","format_version":1,"wave_id","name","approved_by"}` |
 
 Responses come from one scan per refresh interval (`--refresh-seconds`,
 5–3600, default 30), not one scan per request; every response carries
 `X-MailSwiftSync-Snapshot-Generated-At` with the scan's Unix time. A scan that
 fails, or a `/metrics` projection that any ledger truncates, is answered with
-503 instead of stale or partial data. Only `GET` and `HEAD` are accepted. For JSON automation, continue polling `status --summary` (or
+503 instead of stale or partial data. Errors from the wave endpoints are
+`{"error": "..."}` with 400 (malformed ID), 403 (read token used to
+approve), 404 (no ledger holds the ID), 409 (already approved, ledger busy
+with `Retry-After`, older ledger schema, or the ID found in more than one
+ledger), or 413 (a request body was sent).
+
+For JSON automation, continue polling `status --summary` (or
 `fleet-status` for explicitly isolated local ledgers), check `format` and
 `format_version`, and calculate rates from successive snapshots only for
 monotonically cumulative counters.

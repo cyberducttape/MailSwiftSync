@@ -210,8 +210,9 @@ system. Use the [PSA event contract](psa-event-contract.md) to implement
 idempotent ticket correlation and customer/technician routing in a trusted
 receiver.
 
-The `fleet-status` command and the `serve` API are read-only aggregations of
-separate local ledgers; it is not a scheduler, worker registry, heartbeat service, remote
+The `fleet-status` command and the `serve` API aggregate separate local
+ledgers. `serve` can also approve waves for named operators, recording the
+operator's name in the ledger; it is still not a scheduler, worker registry, heartbeat service, remote
 pause/resume mechanism, or distributed ownership protocol. Do not place the
 SQLite ledgers on shared storage or run multiple controllers against one ledger.
 

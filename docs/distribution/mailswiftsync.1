@@ -16,9 +16,11 @@ qualify the selected transfer engine separately, then run a dry preflight.
 .B supervise STATE [POLL] [RETRIES] [WINDOW]
 Run automation-safe supervision for queued and retryable work.
 .TP
-.B serve DIRECTORY --token-file FILE [--listen ADDRESS] [--refresh-seconds N] [--allow-non-loopback]
-Serve read-only fleet status JSON and Prometheus metrics for every ledger
+.B serve DIRECTORY --token-file FILE [--operators-file FILE] [--listen ADDRESS] [--refresh-seconds N] [--allow-non-loopback]
+Serve fleet status JSON, Prometheus metrics, and wave lists for every ledger
 under DIRECTORY over HTTP, behind a bearer token read from an owner-only FILE.
+An owner-only operators file of "TOKEN NAME" lines lets each named operator
+approve waves; the ledger records that name as the approver.
 Binds 127.0.0.1:9464 by default; any other address requires
 --allow-non-loopback and a TLS reverse proxy.
 .TP
