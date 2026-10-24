@@ -327,8 +327,7 @@ fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result
             active.fetch_sub(1, Ordering::AcqRel);
             // A plaintext 503 is meaningless to a TLS client; just close.
             if context.tls.is_none() {
-                let _ = stream.set_write_timeout(Some(REQUEST_READ_TIMEOUT));
-                let _ = write_response(&mut stream, &busy_response(), false);
+                refuse_busy(&mut stream);
             }
             continue;
         }
@@ -519,6 +518,28 @@ impl Response {
             ..Self::text(status, reason, "")
         }
     }
+}
+
+/// Answer a connection over the ceiling without blocking the accept loop.
+/// The request bytes that have already arrived are discarded first: closing
+/// a socket with unread input sends a reset (always on Windows), and the
+/// peer may then lose the 503 before reading it.
+fn refuse_busy(stream: &mut TcpStream) {
+    if stream.set_nonblocking(true).is_ok() {
+        let mut discard = [0_u8; 4096];
+        for _ in 0..4 {
+            match stream.read(&mut discard) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    }
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
+    let _ = stream.set_write_timeout(Some(REQUEST_READ_TIMEOUT));
+    let _ = write_response(stream, &busy_response(), false);
+    let _ = stream.shutdown(std::net::Shutdown::Write);
 }
 
 fn busy_response() -> Response {
