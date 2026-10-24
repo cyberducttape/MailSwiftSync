@@ -311,6 +311,11 @@ pub(crate) struct Profile {
     pub(crate) dovecot_config: String,
     #[serde(default = "default_batch_concurrency")]
     pub(crate) batch_concurrency: usize,
+    /// Extra batch workers that only run independent verification, so a long
+    /// scan does not hold a transfer slot. 0 (the default) keeps verification
+    /// inside the transfer slot. Capped at the transfer concurrency.
+    #[serde(default)]
+    pub(crate) batch_verification_workers: usize,
     #[serde(default)]
     pub(crate) batch_retry_count: usize,
     #[serde(default = "default_batch_process_starts_per_second")]
@@ -397,6 +402,7 @@ impl Default for Profile {
             doveadm_path: default_doveadm_path(),
             dovecot_config: String::new(),
             batch_concurrency: default_batch_concurrency(),
+            batch_verification_workers: 0,
             batch_retry_count: 0,
             batch_process_starts_per_second: default_batch_process_starts_per_second(),
             max_messages_per_second: 0,
@@ -441,6 +447,12 @@ pub(crate) fn default_batch_process_starts_per_second() -> usize {
 }
 pub(crate) fn effective_batch_concurrency(value: usize) -> usize {
     value.clamp(1, MAX_BATCH_CONCURRENCY)
+}
+
+/// Verification-only workers never exceed the transfer workers, so the batch
+/// at most doubles its IMAP sessions while verification runs.
+pub(crate) fn effective_batch_verification_workers(value: usize, concurrency: usize) -> usize {
+    value.min(effective_batch_concurrency(concurrency))
 }
 
 /// Keep the sum of configured per-worker imapsync limits within the run-level

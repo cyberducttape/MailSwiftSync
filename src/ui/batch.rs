@@ -1011,6 +1011,22 @@ impl App {
                     );
                     field
                 });
+                crate::ui::form_row(ui, self.language.message("ui.verification-workers"), |ui| {
+                    let transfer_workers = crate::migration_plan::effective_batch_concurrency(
+                        self.form.profile.batch_concurrency,
+                    );
+                    let field = ui.add_enabled(
+                        editable,
+                        egui::DragValue::new(&mut self.form.profile.batch_verification_workers)
+                            .range(0..=transfer_workers),
+                    );
+                    ui.label(
+                        RichText::new(self.language.message("ui.verification-workers-hint"))
+                            .small()
+                            .color(colors.text_secondary),
+                    );
+                    field
+                });
                 crate::ui::form_row(ui, self.language.text("Process starts per second"), |ui| {
                     let field = ui.add_enabled(
                         editable,

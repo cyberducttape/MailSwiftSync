@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add **Queue settings → Verification workers** (`batch_verification_workers`,
+  default 0). With it, a batch mailbox whose transfer finished credits the
+  transfer to the adaptive limiter, hands its transfer slot back, and runs
+  independent verification under a separate bounded pool, so long scans no
+  longer hold transfer capacity. The scheduler is woken when a slot is
+  released early. The default keeps verification in the transfer slot;
+  verification workers are capped at the transfer workers and count toward
+  organization `max_concurrency`.
 - Add **Suggest mappings from server folder roles** to the Plan page's typed
   folder mappings. It reads the RFC 6154 special-use roles (Sent, Drafts,
   Trash, Junk, Archive) of both accounts, with a name-based fallback for

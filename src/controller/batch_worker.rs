@@ -1,6 +1,6 @@
 use super::batch::BatchExecutionMode;
 use super::batch_scheduler::{JobLoader, JobSource, run_batch_schedule};
-use super::batch_work_item::{BatchAttemptRunner, send_job_finished};
+use super::batch_work_item::{BatchAttemptRunner, VerificationGate, send_job_finished};
 use super::rate_domains::{RateDomainLimiter, RateDomainPath, SideIdentity};
 use crate::{
     Event, StreamOutcome,
@@ -127,6 +127,9 @@ pub(crate) struct BatchWorkerLaunch {
 /// the controller and worker coordinator.
 pub(crate) struct BatchExecutionContext {
     pub(crate) concurrency: usize,
+    /// Extra workers that only verify; 0 keeps verification in the transfer
+    /// slot.
+    pub(crate) verification_workers: usize,
     pub(crate) provider_rate_ceilings: crate::organization_policy::ProviderRateCeilings,
     pub(crate) launch_starts_per_second: usize,
     pub(crate) mode: BatchExecutionMode,
@@ -184,6 +187,7 @@ pub(crate) fn spawn_batch_worker_with(
 ) -> thread::JoinHandle<()> {
     let BatchExecutionContext {
         concurrency,
+        verification_workers,
         provider_rate_ceilings: _,
         launch_starts_per_second: _,
         mode,
@@ -229,10 +233,13 @@ pub(crate) fn spawn_batch_worker_with(
             oauth_refresh_locks,
             verification_state_path,
             diagnostic_logger,
+            verification_gate: (verification_workers > 0)
+                .then(|| Arc::new(VerificationGate::new(verification_workers))),
         });
         let schedule = run_batch_schedule(
             runner,
             concurrency,
+            verification_workers,
             JobSource::new(
                 queue_job_ids.clone(),
                 child_run_ids.clone(),
