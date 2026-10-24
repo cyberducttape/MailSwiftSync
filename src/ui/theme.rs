@@ -392,7 +392,9 @@ impl ThemeColors {
             panel: Color32::from_rgb(192, 192, 192),
             window: Color32::from_rgb(166, 202, 240),
             text_primary: Color32::BLACK,
-            text_secondary: Color32::from_rgb(35, 35, 35),
+            // Mailbox tables sit directly on the teal; dark grey managed only
+            // 3.8:1 there, so secondary text is black as in Windows 3.1.
+            text_secondary: Color32::BLACK,
             info: Color32::BLACK,
             success: Color32::BLACK,
             warning: Color32::BLACK,
@@ -627,11 +629,16 @@ mod tests {
 
     #[test]
     fn semantic_colors_meet_wcag_aa_contrast_on_every_surface() {
+        let mut failures = Vec::new();
         for theme in ThemeKind::all() {
             for dark_mode in [true, false] {
                 let colors = ThemeColors::for_theme(*theme, dark_mode);
                 let theme_name = theme.label();
                 for (label, foreground) in [
+                    // Lists and tables sit directly on the page background
+                    // and on striped rows, not only inside panels.
+                    ("primary text", colors.text_primary),
+                    ("secondary text", colors.text_secondary),
                     ("info", colors.info),
                     ("success", colors.success),
                     ("warning", colors.warning),
@@ -642,16 +649,19 @@ mod tests {
                         ("background", colors.background),
                         ("panel", colors.panel),
                         ("window", colors.window),
+                        ("striped row", colors.stripe()),
                     ] {
-                        assert!(
-                            contrast_ratio(foreground, surface) >= 4.5,
-                            "{theme_name} ({dark_mode}): {label} on {surface_name} is {:.2}:1",
-                            contrast_ratio(foreground, surface)
-                        );
+                        let ratio = contrast_ratio(foreground, surface);
+                        if ratio < 4.5 {
+                            failures.push(format!(
+                                "{theme_name} ({dark_mode}): {label} on {surface_name} is {ratio:.2}:1"
+                            ));
+                        }
                     }
                 }
             }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]

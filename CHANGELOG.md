@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Fix GUI issues found in a full visual audit (dark, light, Windows 95,
+  German, 1024×700, and 200% interface size):
+  - The keyring, advanced-options, settings, and engine dialogs could run
+    past the bottom of the window with no way to reach the lower controls;
+    they now grow to the screen edge and scroll.
+  - At large interface sizes the project title ran underneath the status
+    pill in the header; it now truncates with an ellipsis.
+  - A long German detail line in the Overview's command center widened the
+    whole page past the window edge; grid values now wrap.
+  - Page cards no longer sit underneath the floating scroll bar.
+  - "Advanced connection settings" for source and destination now line up
+    when the two account cards differ in height.
+  - The Mailboxes selection summary read "2 selected · 2 visible", which
+    looked like only two rows were on screen; it now reads "2 selected · 2
+    of them in this list · 0 hidden by the current filter".
+  - Recovery explained every unclassified group as "needs operator review";
+    delta-required and cancelled groups now say why they stopped.
+  - Recovery guidance, quota-readiness rows, retry and throttling lines, the
+    blocker count on Mailboxes, and several status messages were shown in
+    English in every language. They are now translated, and the
+    localization guard catches `language.text(...)` calls split across
+    lines, which is how these slipped through.
+  - Secondary text in the Windows 95 theme measured 3.8:1 on the teal page
+    background, below WCAG AA; it is now black, and the contrast test now
+    checks primary and secondary text on the background and striped rows of
+    every theme.
 - Let named operators approve migration waves through the `serve` fleet API.
   `--operators-file` names an owner-only file of `<token> <name>` lines;
   `POST /v1/waves/<wave-id>/approve` with an operator's token records

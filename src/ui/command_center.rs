@@ -238,9 +238,14 @@ impl App {
                         finish_detail,
                     ),
                 ];
+                // Grid cells never wrap without a column cap, so one long
+                // translated detail would widen the whole page past the
+                // viewport; cap the columns so details wrap instead.
+                let column_cap = (right.available_width() * 0.6).max(120.0);
                 egui::Grid::new("command_center_figures")
                     .num_columns(2)
                     .spacing([24.0, 2.0])
+                    .max_col_width(column_cap)
                     .show(right, |ui| {
                         for (label, value, detail) in figures {
                             ui.label(RichText::new(label).color(colors.text_secondary));
@@ -265,6 +270,7 @@ impl App {
                     egui::Grid::new("command_center_providers")
                         .num_columns(2)
                         .spacing([24.0, 6.0])
+                        .max_col_width(column_cap)
                         .show(right, |ui| {
                             for provider in &health {
                                 ui.label(&provider.name);

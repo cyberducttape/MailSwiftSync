@@ -26,6 +26,7 @@ impl App {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+ crate::ui::dialog_body(ui, |ui| {
                 ui.heading(self.language.message("ui.how-should-this-migration-run"));
                 ui.label(RichText::new(self.language.message("ui.select-the-execution-engine-that-fits-the-destination-mailswiftsync-owns-pl-d8fb4be0d4")).color(self.theme_colors().text_secondary));
                 ui.add_space(8.0);
@@ -66,7 +67,8 @@ impl App {
                 if ui.button(self.language.message("ui.continue-to-migration-plan")).clicked() {
                     close_requested = true;
                 }
-            });
+            })
+ });
         self.engine_open = open && !close_requested;
     }
 

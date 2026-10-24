@@ -78,6 +78,24 @@ pub(crate) fn styled_test_context() -> egui::Context {
     context
 }
 
+/// Body of a dialog that can outgrow the viewport (a small screen, a long
+/// translation, or a large interface size). The window still fits short
+/// content; only when the body would run past the bottom of the viewport
+/// does it scroll, so no control ends up unreachable below the screen edge.
+pub(crate) fn dialog_body<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let max_height = (ui.ctx().content_rect().bottom() - ui.cursor().top() - 32.0).max(160.0);
+    // Without a minimum, the scroll viewport is bounded by the window's
+    // small default size and the window never grows toward the screen edge.
+    egui::ScrollArea::vertical()
+        .max_height(max_height)
+        .min_scrolled_height(max_height)
+        .show(ui, add_contents)
+        .inner
+}
+
 /// Grouped content on a raised, softly bordered surface. Every page and
 /// dialog uses this instead of `Ui::group`, so the palette decides whether
 /// cards are rounded and filled (modern) or square and outlined (retro).
@@ -450,9 +468,20 @@ pub(crate) fn status_label(ui: &mut egui::Ui, text: &str, color: egui::Color32) 
     ui.label(status_text(text, color, size))
 }
 
+const PILL_PADDING: egui::Vec2 = egui::vec2(9.0, 3.0);
+
+/// Width [`pill`] will take for `text`, for layouts that reserve room first.
+pub(crate) fn pill_width(ui: &mut egui::Ui, text: &str) -> f32 {
+    let color = ui.visuals().text_color();
+    ui.fonts_mut(|fonts| fonts.layout_job(status_text(text, color, 11.5)))
+        .size()
+        .x
+        + PILL_PADDING.x * 2.0
+}
+
 pub(crate) fn pill(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui::Response {
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(status_text(text, color, 11.5)));
-    let padding = egui::vec2(9.0, 3.0);
+    let padding = PILL_PADDING;
     let size = galley.size() + padding * 2.0;
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     if ui.is_rect_visible(rect) {

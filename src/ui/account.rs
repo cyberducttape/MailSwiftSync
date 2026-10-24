@@ -494,6 +494,7 @@ impl App {
             .open(&mut open)
             .default_width(620.0)
             .show(ctx, |ui| {
+ crate::ui::dialog_body(ui, |ui| {
                 ui.label(
                     RichText::new(
                     self.language.message("ui.keyring-ids-are-non-secret-references-saved-in-the-profile-passwords-and-oa-ec6c7dd669"),
@@ -565,7 +566,8 @@ impl App {
                 self.oauth_authorization_section(ui, editable, ctx, None);
                 ui.separator();
                 self.oauth_refresh_section(ui, editable);
-            });
+            })
+ });
         self.keyring_open = open;
     }
 

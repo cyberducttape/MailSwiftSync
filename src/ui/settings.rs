@@ -42,6 +42,7 @@ pub(crate) fn show(
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
+ crate::ui::dialog_body(ui, |ui| {
             ui.heading(language.message("ui.operator-settings"));
             ui.label(RichText::new(language.message("ui.appearance-and-workspace-tools-live-here-migration-connection-and-engine-ch-5f254b5b82")).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
             ui.add_space(8.0);
@@ -185,7 +186,8 @@ pub(crate) fn show(
                 }
                 ui.label(RichText::new(format!("{} {}. {}", language.message("ui.current-engine"), language.text(engine.label()), language.message("ui.connection-credentials-advanced-options-and-readiness-are-available-from-th-89dbcd1dd5"))).size(12.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
             });
-        });
+        })
+ });
     *open = window_open && !close_requested;
     SettingsResult { action, error }
 }
