@@ -86,6 +86,14 @@ impl App {
             ),
             WorkerPoll::Pending => {}
         }
+        match poll_worker(&mut self.folder_role_receiver) {
+            WorkerPoll::Ready(result) => self.complete_special_folder_probe(result),
+            WorkerPoll::Stopped => {
+                self.folder_role_error =
+                    Some(format!("Folder role reader {WORKER_STOPPED_UNEXPECTEDLY}."));
+            }
+            WorkerPoll::Pending => {}
+        }
         self.poll_engine_setup();
         match poll_worker(&mut self.keyring_operation_receiver) {
             WorkerPoll::Ready(result) => self.complete_keyring_operation(result),

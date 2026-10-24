@@ -429,15 +429,22 @@ and SQLITE_FULL cases (the latter covered functionally by
 `controller-chaos-smoke.sh`) remain to be measured on the release host class
 before increasing local worker limits or advertising large queue capacity.
 
-Batch verification currently runs inside the admitted mailbox worker attempt
-and retains that attempt's provider-rate admission through verification. There
-is no independently configured transfer/verification concurrency pool, and
-the adaptive limiter responds to capacity/error signals rather than optimizing
-for completed-and-verified messages per unit time. This intentionally bounds
-combined pressure but can make long verification scans occupy transfer
-capacity. A future split budget must be measured against provider throttling
-and must preserve same-destination exclusion. Qualification reports should
-measure engine transfer throughput and verification throughput, request
+By default, batch verification runs inside the admitted mailbox worker attempt
+and retains that attempt's provider-rate admission through verification, so a
+long verification scan occupies transfer capacity. **Queue settings →
+Verification workers** (`batch_verification_workers`, 0 by default, capped at
+the transfer worker count) adds verification-only workers: when a transfer
+finishes, the attempt credits its success to the adaptive limiter, hands its
+transfer slot back to the scheduler, and waits for a bounded verification
+permit, so the next transfer starts while the scan runs. The mailbox stays
+claimed throughout, preserving same-destination exclusion. Verification IMAP
+sessions are bounded by the verification-worker count but are not admitted
+through the provider rate domains, and verification workers count toward the
+organization policy's `max_concurrency`. Keep the default until the split
+budget has been measured against provider throttling for the provider pair.
+The adaptive limiter responds to capacity/error signals rather than optimizing
+for completed-and-verified messages per unit time. Qualification reports
+should measure engine transfer throughput and verification throughput, request
 volume, provider cooldown time, and end-to-end verified mailbox completion
 separately; do not claim adaptive useful-throughput optimization today.
 

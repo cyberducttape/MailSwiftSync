@@ -406,11 +406,22 @@ impl OrganizationPolicy {
                 "Organization policy max_concurrency must be at least 1 when configured.".into(),
             );
         } else if let Some(maximum) = self.max_concurrency
-            && profile.batch_concurrency > maximum
+            && profile.batch_concurrency
+                + crate::migration_plan::effective_batch_verification_workers(
+                    profile.batch_verification_workers,
+                    profile.batch_concurrency,
+                )
+                > maximum
         {
+            // Verification-only workers open their own IMAP sessions, so
+            // they count toward the organization's worker ceiling.
             return Err(format!(
-                "Organization policy limits batch concurrency to {maximum}; current plan requests {}.",
-                profile.batch_concurrency
+                "Organization policy limits batch concurrency to {maximum}; current plan requests {} transfer and {} verification workers.",
+                profile.batch_concurrency,
+                crate::migration_plan::effective_batch_verification_workers(
+                    profile.batch_verification_workers,
+                    profile.batch_concurrency,
+                )
             ));
         }
         for (configured_provider, provider_policy) in &self.providers {
@@ -625,6 +636,21 @@ mod tests {
             ..OrganizationPolicy::default()
         };
         assert!(policy.check_form(&form).unwrap_err().contains("at least 1"));
+    }
+
+    #[test]
+    fn verification_workers_count_toward_the_worker_ceiling() {
+        let mut form = Form::default();
+        form.profile.batch_concurrency = 3;
+        form.profile.batch_verification_workers = 2;
+        let policy = OrganizationPolicy {
+            max_concurrency: Some(4),
+            ..OrganizationPolicy::default()
+        };
+        let error = policy.check_form(&form).unwrap_err();
+        assert!(error.contains("3 transfer and 2 verification"), "{error}");
+        form.profile.batch_verification_workers = 1;
+        policy.check_form(&form).unwrap();
     }
 
     #[test]

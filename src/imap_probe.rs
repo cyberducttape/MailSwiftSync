@@ -1080,6 +1080,99 @@ pub(crate) struct SidedProbeError {
     pub(crate) message: String,
 }
 
+/// List one account's selectable folders with their RFC 6154 special-use
+/// roles, for proposing explicit folder mappings while setting up a plan.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn list_account_folders_with_transport(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+) -> Result<Vec<MailboxDescriptor>, String> {
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::for_probe(TLS_CAPABILITY_PROBE_BUDGET, &cancel);
+    let (stream, greeting) = connect_tls_stream_with_budget(
+        host,
+        transport,
+        ca_bundle,
+        certificate_pin_sha256,
+        &budget,
+    )?;
+    let (mut stream, post_auth_response) = authenticate_imap_stream(
+        stream,
+        host,
+        user,
+        credential,
+        auth_method,
+        greeting,
+        Some(&budget),
+    )?;
+    list_folders_on_authenticated_stream(&mut stream, host, &post_auth_response, &budget)
+}
+
+fn list_folders_on_authenticated_stream<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    post_auth_response: &str,
+    budget: &MessageFetchBudget<'_>,
+) -> Result<Vec<MailboxDescriptor>, String> {
+    write_imap_command(
+        stream,
+        authenticated_list_command(
+            "f001",
+            advertises_capability(post_auth_response, "SPECIAL-USE"),
+        )
+        .as_bytes(),
+        Some(budget),
+        &format!("{host}: could not enumerate folders"),
+    )?;
+    let mut buffer = [0; 4096];
+    let mut folders = Vec::new();
+    read_imap_list_response_with_details(stream, "f001", &mut buffer, &mut folders, budget)?;
+    let _ = stream.write_all(b"f999 LOGOUT\r\n");
+    folders.retain(|folder| folder.selectable);
+    Ok(folders)
+}
+
+/// List the source and destination folders of a plan, naming the side that
+/// failed.
+pub(crate) fn list_both_account_folders(
+    form: &crate::Form,
+) -> Result<(Vec<MailboxDescriptor>, Vec<MailboxDescriptor>), SidedProbeError> {
+    let sided = |side| move |message| SidedProbeError { side, message };
+    let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)
+        .map_err(sided(MailSide::Source))?;
+    let destination = endpoint_for_probe(
+        &form.profile.destination_host,
+        &form.profile.destination_port,
+    )
+    .map_err(sided(MailSide::Destination))?;
+    let source_folders = list_account_folders_with_transport(
+        &source,
+        &form.profile.source_user,
+        form.source_password.as_str(),
+        &form.profile.source_auth,
+        &form.profile.source_tls,
+        &form.profile.source_ca_bundle,
+        &form.profile.source_certificate_pin_sha256,
+    )
+    .map_err(sided(MailSide::Source))?;
+    let destination_folders = list_account_folders_with_transport(
+        &destination,
+        &form.profile.destination_user,
+        form.destination_password.as_str(),
+        &form.profile.destination_auth,
+        &form.profile.destination_tls,
+        &form.profile.destination_ca_bundle,
+        &form.profile.destination_certificate_pin_sha256,
+    )
+    .map_err(sided(MailSide::Destination))?;
+    Ok((source_folders, destination_folders))
+}
+
 pub(crate) fn fresh_dual_imaps_readiness(form: &crate::Form) -> Result<(), SidedProbeError> {
     if !fresh_imap_authentication_applies(form) {
         return Ok(());

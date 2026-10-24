@@ -270,6 +270,9 @@ pub(crate) struct RateDomainLimiter {
     ceiling: f64,
     provider_ceilings: crate::organization_policy::ProviderRateCeilings,
     state: Mutex<HashMap<DomainKey, DomainState>>,
+    /// Signalled (coalescing) whenever an admission is released, so a
+    /// scheduler can retry slot-limited work immediately.
+    release_notifier: Mutex<Option<crossbeam_channel::Sender<()>>>,
 }
 
 /// Why a path cannot be admitted right now.
@@ -314,6 +317,7 @@ impl RateDomainLimiter {
             ceiling: ceiling.max(1) as f64,
             provider_ceilings,
             state: Mutex::new(HashMap::new()),
+            release_notifier: Mutex::new(None),
         }
     }
 
@@ -382,7 +386,22 @@ impl RateDomainLimiter {
         state.get_mut(key)
     }
 
+    pub(crate) fn set_release_notifier(&self, notifier: Option<crossbeam_channel::Sender<()>>) {
+        if let Ok(mut slot) = self.release_notifier.lock() {
+            *slot = notifier;
+        }
+    }
+
     fn release(&self, path: &RateDomainPath) {
+        self.release_slots(path);
+        if let Ok(slot) = self.release_notifier.lock()
+            && let Some(notifier) = slot.as_ref()
+        {
+            let _ = notifier.try_send(());
+        }
+    }
+
+    fn release_slots(&self, path: &RateDomainPath) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };

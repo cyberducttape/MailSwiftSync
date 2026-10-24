@@ -229,6 +229,82 @@ fn adapt_launch_rate(
 }
 
 /// Shared, immutable inputs for running scheduled mailbox attempts.
+/// Bounded pool of verification-only work. With it, a mailbox whose transfer
+/// finished hands its transfer slot back before the independent verification
+/// scan, so long scans do not hold transfer capacity.
+pub(crate) struct VerificationGate {
+    limit: usize,
+    active: Mutex<usize>,
+    available: std::sync::Condvar,
+}
+
+impl VerificationGate {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            limit: limit.max(1),
+            active: Mutex::new(0),
+            available: std::sync::Condvar::new(),
+        }
+    }
+
+    fn acquire(&self, cancel: &AtomicBool) -> Result<VerificationPermit<'_>, String> {
+        let unavailable = || "verification pool is unavailable".to_owned();
+        let mut active = self.active.lock().map_err(|_| unavailable())?;
+        while *active >= self.limit {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelled by operator before verification".to_owned());
+            }
+            active = self
+                .available
+                .wait_timeout(active, Duration::from_millis(100))
+                .map_err(|_| unavailable())?
+                .0;
+        }
+        *active += 1;
+        Ok(VerificationPermit { gate: self })
+    }
+}
+
+struct VerificationPermit<'a> {
+    gate: &'a VerificationGate,
+}
+
+impl Drop for VerificationPermit<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.gate.active.lock() {
+            *active = active.saturating_sub(1);
+        }
+        self.gate.available.notify_one();
+    }
+}
+
+/// The transfer-phase admission of one attempt, which the attempt may hand
+/// back to the scheduler before verification.
+struct TransferPhase {
+    admission: Option<Admission>,
+    limiter: Arc<RateDomainLimiter>,
+    gate: Option<Arc<VerificationGate>>,
+}
+
+impl TransferPhase {
+    /// With a verification pool, credit the finished transfer to the provider
+    /// limiter, release its transfer slot, and wait for a verification
+    /// permit. Without one, verification keeps the transfer slot (the
+    /// qualified default).
+    fn enter_verification(
+        &mut self,
+        cancel: &AtomicBool,
+    ) -> Result<Option<VerificationPermit<'_>>, String> {
+        let Some(gate) = self.gate.as_deref() else {
+            return Ok(None);
+        };
+        if let Some(admission) = self.admission.take() {
+            self.limiter.observe_success(&admission);
+        }
+        gate.acquire(cancel).map(Some)
+    }
+}
+
 pub(crate) struct BatchAttemptRunner {
     pub(crate) concurrency: usize,
     pub(crate) mode: BatchExecutionMode,
@@ -245,6 +321,8 @@ pub(crate) struct BatchAttemptRunner {
     pub(crate) oauth_refresh_locks: OAuthRefreshLocks,
     pub(crate) verification_state_path: Option<std::path::PathBuf>,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
+    /// Present when the batch runs verification in its own worker pool.
+    pub(crate) verification_gate: Option<Arc<VerificationGate>>,
 }
 
 /// One mailbox job and the progress it carries between scheduled attempts.
@@ -468,6 +546,7 @@ struct BatchAttemptContext<'a> {
     verification_evidence_recorded: &'a mut bool,
     launch_limiter: &'a ProcessLaunchLimiter,
     launch_path: &'a RateDomainPath,
+    transfer_phase: &'a mut TransferPhase,
 }
 
 /// Prepare and execute a single engine attempt, then collect engine-specific
@@ -494,6 +573,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
         verification_evidence_recorded,
         launch_limiter,
         launch_path,
+        transfer_phase,
     } = context;
     let prepared = form.validated_plan().and_then(|plan| {
         plan.prepared_command_with_throttle_divisor_and_checkpoint(
@@ -570,6 +650,15 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                 })
             })
             .and_then(|stream| {
+                let verifies = !form.dry_run
+                    && (form.engine() == core::Engine::Dovecot
+                        || (form.engine() == core::Engine::ImapSync
+                            && message_verification_enabled(form)));
+                let _verification_permit = if verifies {
+                    transfer_phase.enter_verification(&cancel)?
+                } else {
+                    None
+                };
                 if !form.dry_run
                     && form.engine() == core::Engine::ImapSync
                     && message_verification_enabled(form)
@@ -1075,6 +1164,11 @@ impl BatchAttemptRunner {
         let mut transfer_attempt_number = task.transfer_attempt_number;
         let mut verification_failure = task.verification_failure.take();
         let mut verification_evidence_recorded = false;
+        let mut transfer_phase = TransferPhase {
+            admission: Some(admission),
+            limiter: Arc::clone(&self.provider_limiter),
+            gate: self.verification_gate.clone(),
+        };
         let result = run_prepared_batch_attempt(BatchAttemptContext {
             form: &task.form,
             checkpoint: task.checkpoint.clone(),
@@ -1095,13 +1189,17 @@ impl BatchAttemptRunner {
             verification_evidence_recorded: &mut verification_evidence_recorded,
             launch_limiter: &self.launch_limiter,
             launch_path: &task.rate_path,
+            transfer_phase: &mut transfer_phase,
         });
+        // `None` when the transfer slot was already released for verification.
+        let admission = transfer_phase.admission.take();
         task.transfer_attempt_number = transfer_attempt_number;
         task.verification_failure = verification_failure;
         match result {
             Ok(outcome) => {
-                self.provider_limiter.observe_success(&admission);
-                drop(admission);
+                if let Some(admission) = admission {
+                    self.provider_limiter.observe_success(&admission);
+                }
                 let delta_required = outcome == StreamOutcome::DeltaRequired;
                 if delta_required {
                     self.line(
@@ -1151,7 +1249,9 @@ impl BatchAttemptRunner {
                     self.retry_count,
                 ) =>
             {
-                let penalized = self.provider_limiter.observe_failure(&admission, &error);
+                let penalized = admission.as_ref().map_or_else(Vec::new, |admission| {
+                    self.provider_limiter.observe_failure(admission, &error)
+                });
                 adapt_launch_rate(&self.launch_limiter, &penalized);
                 report_cooldowns(&self.tx, &self.provider_limiter, penalized);
                 drop(admission);
@@ -1192,6 +1292,29 @@ impl BatchAttemptRunner {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[test]
+    fn verification_gate_bounds_concurrent_scans_and_honors_cancellation() {
+        let gate = Arc::new(VerificationGate::new(1));
+        let cancel = AtomicBool::new(false);
+        let first = gate.acquire(&cancel).unwrap();
+        let waiting_gate = Arc::clone(&gate);
+        let waiter = thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let permit = waiting_gate.acquire(&AtomicBool::new(false)).map(drop);
+            (permit, started.elapsed())
+        });
+        thread::sleep(Duration::from_millis(150));
+        drop(first);
+        let (permit, waited) = waiter.join().unwrap();
+        permit.unwrap();
+        assert!(waited >= Duration::from_millis(100), "{waited:?}");
+
+        let held = gate.acquire(&cancel).unwrap();
+        cancel.store(true, Ordering::Relaxed);
+        assert!(gate.acquire(&cancel).is_err());
+        drop(held);
+    }
 
     #[test]
     fn completed_batch_without_verification_records_the_plan_limitation() {
@@ -1259,6 +1382,7 @@ mod tests {
             oauth_refresh_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
             verification_state_path: None,
             diagnostic_logger: None,
+            verification_gate: None,
         }
     }
 
