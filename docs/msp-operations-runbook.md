@@ -211,9 +211,11 @@ idempotent ticket correlation and customer/technician routing in a trusted
 receiver.
 
 The `fleet-status` command and the `serve` API aggregate separate local
-ledgers. `serve` can also approve waves for named operators, recording the
-operator's name in the ledger; it is still not a scheduler, worker registry, heartbeat service, remote
-pause/resume mechanism, or distributed ownership protocol. Do not place the
+ledgers. `serve` can also approve waves and hold or resume projects for
+named operators, recording the operator's name in the ledger. A hold stops
+new mailbox launches in every process that uses that ledger; it is not a
+scheduler, worker registry, heartbeat service, or distributed ownership
+protocol. Do not place the
 SQLite ledgers on shared storage or run multiple controllers against one ledger.
 
 Follow the [credential lifecycle runbook](distribution/CREDENTIAL-LIFECYCLE.md)

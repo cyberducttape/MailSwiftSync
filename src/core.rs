@@ -25,6 +25,7 @@ mod engine;
 mod events;
 mod evidence;
 mod evidence_ops;
+mod holds;
 pub(crate) use evidence_ops::VerificationOnlyRun;
 pub use evidence_ops::{MismatchFilter, MismatchFolderSummary, StoredMismatch};
 mod mailboxes;
@@ -65,6 +66,8 @@ pub use evidence::{
     VerificationAcceptance, VerificationDimensions, VerificationEvidence, VerificationMethod,
     VerificationOutcome, coverage_percent,
 };
+pub use holds::ProjectHold;
+pub(crate) use holds::is_project_held;
 pub(crate) use message_extraction::{
     ExtractedMessage, ExtractedMessages, MailboxMessageKey, MessageIdentityProvenance,
 };
@@ -91,7 +94,7 @@ pub use transfer_passes::{
 };
 pub use verification_limit::VerificationLimit;
 pub use waves::{Wave, WaveSettings, WaveStatus, WaveSummary};
-pub const CURRENT_SCHEMA_VERSION: i64 = 38;
+pub const CURRENT_SCHEMA_VERSION: i64 = 39;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 
@@ -149,7 +152,8 @@ pub(crate) fn ledger_rejection_owned(reason: String) -> rusqlite::Error {
 /// Whether an error is a deterministic invariant rejection rather than a
 /// possibly transient storage failure.
 pub(crate) fn is_ledger_rejection(error: &rusqlite::Error) -> bool {
-    matches!(error, rusqlite::Error::ToSqlConversionFailure(inner) if inner.is::<LedgerRejection>())
+    matches!(error, rusqlite::Error::ToSqlConversionFailure(inner)
+        if inner.is::<LedgerRejection>() || inner.is::<holds::ProjectHeld>())
 }
 
 pub struct StateStore {

@@ -52,7 +52,8 @@ shard stays visible instead of quietly under-counting.
 does not:
 
 - start, stop, or influence any of the ledgers it reads (`serve` can only
-  approve waves, and only for named operators; see below)
+  approve waves and hold or resume projects, and only for named operators;
+  see below)
 - require the scanned instances to know about each other, or run on the same
   host — point it at a directory synced from several machines and it works
   the same way
@@ -102,9 +103,9 @@ beyond a few refresh intervals.
 Safety properties:
 
 - **Read-only unless you name operators.** Without `--operators-file`, only
-  `GET` and `HEAD` are served. Wave approval is the only change the API can
-  ever make; starting, pausing, or cancelling work stays with `supervise` and
-  the GUI.
+  `GET` and `HEAD` are served. Approving a wave and holding or resuming a
+  project are the only changes the API can ever make; starting or cancelling
+  work stays with `supervise` and the GUI.
 - **Never unauthenticated.** `--token-file` is required. The file must be
   owner-only, and the token must be at least 32 printable characters.
   `/v1/fleet` carries project names and server hostnames, so treat the token
@@ -166,6 +167,42 @@ approval:
 - Each approval is also written to the service log.
 
 Remove a person's line and restart `serve` to revoke their access.
+
+### Holding a project
+
+A hold stops new mailbox launches for one project without interrupting the
+transfers already running, for example during a customer change freeze or
+while a provider incident is investigated:
+
+```bash
+curl -X POST -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  "http://127.0.0.1:9464/v1/projects/<project-id>/hold?reason=customer%20change%20freeze"
+curl -X POST -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  "http://127.0.0.1:9464/v1/projects/<project-id>/resume"
+```
+
+The same is available as `mailswiftsync hold <state.db> <project-id>
+<operator> <reason>` and `mailswiftsync resume <state.db> <project-id>
+<operator>`, and in the GUI under **Activity → Hold new launches…**. While a
+project is held:
+
+- No mailbox in it starts, from any process: the hold is checked in the same
+  ledger transaction that claims each mailbox, so it also stops a batch that
+  the GUI or `supervise` already has in progress. Starting a new run,
+  including a preflight, is refused.
+- Transfers already running finish and record their results normally.
+- Mailboxes the hold kept from starting keep their state; for example a
+  mailbox waiting for its final catch-up stays `delta_required`. Their
+  queued child runs close as cancelled with the hold as the reason.
+- `supervise` skips the project, every page of the GUI shows who held it and
+  why, `status --summary` and `/v1/fleet` include a `hold` object for the
+  project, and `/metrics` reports `mailswiftsync_projects_on_hold`.
+
+Unlike wave approval, a hold takes no instance lock — it has to reach a
+ledger another process owns. It writes only to a ledger that is already on
+the current schema, and the ledger records who held and resumed the project.
+A second hold is refused with 409 naming the existing one, and resuming a
+project that is not held is refused as well.
 
 ### Running it as a service
 

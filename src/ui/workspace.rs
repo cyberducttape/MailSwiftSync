@@ -117,6 +117,8 @@ pub(crate) struct WorkspaceSnapshot {
     verification_cursor: Option<i64>,
     pub(crate) verification_last_rowid: Option<i64>,
     pub(crate) project: Option<core::Project>,
+    /// Operator hold on the selected project, refreshed with the project.
+    pub(crate) project_hold: Option<core::ProjectHold>,
     pub(crate) jobs: Vec<core::MailboxJob>,
     mailbox_first_rowid: Option<i64>,
     mailbox_last_rowid: Option<i64>,
@@ -186,6 +188,7 @@ impl WorkspaceSnapshot {
         self.runs.clear();
         self.runs_revision = None;
         self.project = None;
+        self.project_hold = None;
         self.jobs.clear();
         self.attention_reason_counts.clear();
         self.verification_attention_reason = None;
@@ -331,6 +334,10 @@ impl WorkspaceSnapshot {
             || self.mailbox_offset != Some(options.mailbox_offset)
             || self.mailbox_cursor != options.mailbox_cursor;
         if project_data_changed {
+            match store.project_hold(&project_id) {
+                Ok(value) => self.project_hold = value,
+                Err(error) => refresh_errors.push(format!("project hold: {error}")),
+            }
             match store.project(&project_id) {
                 Ok(value) => {
                     self.project = value;

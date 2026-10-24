@@ -351,6 +351,7 @@ impl eframe::App for App {
                         let scroll = &ui.spacing().scroll;
                         let gutter = scroll.bar_width + scroll.bar_inner_margin;
                         ui.set_max_width((ui.available_width() - gutter).min(1120.0));
+                        self.hold_banner(ui);
                         match self.active_view {
                             WorkspaceView::Overview => self.overview_view(ui),
                             WorkspaceView::Plan => self.plan_view(ui),
@@ -367,6 +368,7 @@ impl eframe::App for App {
         self.keyring_dialog(&ctx);
         self.credential_delete_confirmation(&ctx);
         self.engine_dialog(&ctx);
+        self.hold_dialog(&ctx);
         self.preview(&ctx);
         self.advanced_dialog(&ctx);
         self.live_confirmation(&ctx);

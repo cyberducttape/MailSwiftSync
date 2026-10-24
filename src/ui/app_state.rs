@@ -217,6 +217,11 @@ pub(crate) struct App {
     pub(crate) durability_recovery_pending: bool,
     pub(crate) stop_confirm_open: bool,
     pub(crate) stop_confirm_focus_requested: bool,
+    /// Reason being typed in the hold dialog; `Some` while it is open.
+    pub(crate) hold_draft: Option<String>,
+    pub(crate) hold_focus_requested: bool,
+    /// Outcome of the last hold or resume, shown in the banner area.
+    pub(crate) hold_message: Option<(bool, String)>,
     /// Closing the desktop would terminate its controller and interrupt the
     /// engine; require the operator to acknowledge that boundary first.
     pub(crate) close_during_run_confirm_open: bool,

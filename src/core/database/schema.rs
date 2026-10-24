@@ -60,6 +60,15 @@ impl StateStore {
                 &[("job_id", "TEXT", false, 1), ("wave_id", "TEXT", true, 0)],
             ),
             (
+                "project_holds",
+                &[
+                    ("project_id", "TEXT", false, 1),
+                    ("held_by", "TEXT", true, 0),
+                    ("reason", "TEXT", true, 0),
+                    ("held_at", "TEXT", true, 0),
+                ],
+            ),
+            (
                 "cutover_workflows",
                 &[
                     ("project_id", "TEXT", false, 1),
@@ -420,6 +429,17 @@ impl StateStore {
             ),
             (
                 "waves",
+                &[(
+                    "projects",
+                    "project_id",
+                    "id",
+                    "NO ACTION",
+                    "NO ACTION",
+                    "NONE",
+                )],
+            ),
+            (
+                "project_holds",
                 &[(
                     "projects",
                     "project_id",
@@ -1130,6 +1150,13 @@ impl StateStore {
 
     pub(super) fn validate_schema_constraints(connection: &Connection) -> rusqlite::Result<()> {
         const REQUIRED_CHECKS: &[(&str, &[&str])] = &[
+            (
+                "project_holds",
+                &[
+                    "length(held_by)between1and256",
+                    "length(reason)between1and500",
+                ],
+            ),
             (
                 "waves",
                 &[

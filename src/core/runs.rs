@@ -195,6 +195,9 @@ impl StateStore {
         if phase_at_start == Phase::Complete.as_str() {
             return Err(super::ledger_rejection("the project is complete"));
         }
+        if let Some(hold) = super::holds::project_hold_in(&tx, project_id)? {
+            return Err(super::holds::held_refusal(&hold));
+        }
         // A mailbox may never have two active runs. Recovery must first move
         // the previous run to an operator-review state before retrying it.
         if current == "running" || !valid_mailbox_transition(&current, "running") {
@@ -315,6 +318,9 @@ impl StateStore {
         validate_managed_cutover_run_admission(&tx, project_id, &phase_at_start)?;
         if phase_at_start == Phase::Complete.as_str() {
             return Err(super::ledger_rejection("the project is complete"));
+        }
+        if let Some(hold) = super::holds::project_hold_in(&tx, project_id)? {
+            return Err(super::holds::held_refusal(&hold));
         }
         let mut destinations = BTreeSet::new();
         let mut destination_locks = Vec::with_capacity(job_ids.len());
@@ -465,6 +471,9 @@ impl StateStore {
         if phase == Phase::Complete.as_str() {
             return Err(super::ledger_rejection("the project is complete"));
         }
+        if let Some(hold) = super::holds::project_hold_in(&tx, project_id)? {
+            return Err(super::holds::held_refusal(&hold));
+        }
         if current == "running" {
             return tx.commit();
         }
@@ -526,6 +535,9 @@ impl StateStore {
         validate_managed_cutover_run_admission(&tx, project_id, &phase)?;
         if phase == Phase::Complete.as_str() {
             return Err(super::ledger_rejection("the project is complete"));
+        }
+        if let Some(hold) = super::holds::project_hold_in(&tx, project_id)? {
+            return Err(super::holds::held_refusal(&hold));
         }
         if current == "running" {
             return Err(super::ledger_rejection("the mailbox is already running"));
