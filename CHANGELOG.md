@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Update the transitive `ctutils` dependency (via `digest` and the Linux
+  Secret Service keyring backend) to 0.4.4 for RUSTSEC-2026-0385, which
+  fixed non-constant-time mask generation and `u128` comparisons.
 - Authenticate the independent verifier with SASL `AUTHENTICATE PLAIN` when
   a password-auth user name or password contains non-ASCII characters and
   the server offers `AUTH=PLAIN`. IMAP quoted strings are 7-bit, so `LOGIN`
