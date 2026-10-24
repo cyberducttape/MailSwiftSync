@@ -16,7 +16,8 @@ mod folder_policy;
 #[path = "runner/verification.rs"]
 mod verification_runner;
 pub(crate) use folder_policy::{
-    apply_explicit_folder_mapping, infer_automap_folder_mapping, validate_destination_folder_policy,
+    apply_explicit_folder_mapping, automap_folder_kind, infer_automap_folder_mapping,
+    validate_destination_folder_policy,
 };
 pub(crate) use verification_runner::{
     MessageVerificationResult, run_dovecot_destination_preflight, run_dovecot_verification,

@@ -100,6 +100,13 @@ pub(crate) struct App {
     pub(crate) folder_mapping_source: String,
     pub(crate) folder_mapping_destination: String,
     pub(crate) folder_mapping_exclude: bool,
+    /// Background read of both accounts' special-folder roles.
+    pub(crate) folder_role_receiver: Option<
+        Receiver<Result<crate::migration_plan::folder_roles::SpecialFolderProposal, String>>,
+    >,
+    pub(crate) folder_role_proposal:
+        Option<crate::migration_plan::folder_roles::SpecialFolderProposal>,
+    pub(crate) folder_role_error: Option<String>,
     pub(crate) engine_open: bool,
     pub(crate) store: core::StateStore,
     /// Persistent ledger path used to place interrupted verification stages
@@ -599,6 +606,7 @@ impl App {
             || self.live_auth_receiver.is_some()
             || self.manual_oauth_refresh_receiver.is_some()
             || self.report_export_receiver.is_some()
+            || self.folder_role_receiver.is_some()
             || self
                 .snapshot_worker
                 .as_ref()
