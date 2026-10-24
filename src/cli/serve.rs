@@ -1,7 +1,10 @@
-//! Read-only fleet API: a long-running HTTP listener that serves cached
+//! Fleet API: a long-running HTTP listener that serves cached
 //! `fleet-status` JSON and fleet-wide Prometheus metrics to monitoring and
-//! PSA tooling. It never takes an instance lock and exposes no control
-//! actions; `supervise` remains the per-ledger worker.
+//! PSA tooling, plus wave listing and, for named operators only, wave
+//! approval. Reads never take an instance lock; `supervise` remains the
+//! per-ledger worker.
+
+mod controls;
 
 use super::*;
 use crate::headless::FleetStatus;
@@ -11,7 +14,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-const SERVE_USAGE: &str = "Usage: mailswiftsync serve <directory> --token-file <file> [--listen 127.0.0.1:9464] [--refresh-seconds 5..3600] [--allow-non-loopback]";
+const SERVE_USAGE: &str = "Usage: mailswiftsync serve <directory> --token-file <file> [--operators-file <file>] [--listen 127.0.0.1:9464] [--refresh-seconds 5..3600] [--allow-non-loopback]";
 const DEFAULT_LISTEN: &str = "127.0.0.1:9464";
 const DEFAULT_REFRESH_SECONDS: u64 = 30;
 const MIN_TOKEN_BYTES: usize = 32;
@@ -24,6 +27,7 @@ const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) struct ServeArguments {
     pub(super) root: PathBuf,
     pub(super) token_file: PathBuf,
+    pub(super) operators_file: Option<PathBuf>,
     pub(super) listen: SocketAddr,
     pub(super) refresh_seconds: u64,
     pub(super) allow_non_loopback: bool,
@@ -36,6 +40,7 @@ where
     let mut arguments = arguments.into_iter();
     let mut root = None;
     let mut token_file = None;
+    let mut operators_file = None;
     let mut listen = None;
     let mut refresh_seconds = None;
     let mut allow_non_loopback = false;
@@ -43,6 +48,9 @@ where
         match argument.to_str() {
             Some("--token-file") if token_file.is_none() => {
                 token_file = Some(PathBuf::from(arguments.next().ok_or(SERVE_USAGE)?));
+            }
+            Some("--operators-file") if operators_file.is_none() => {
+                operators_file = Some(PathBuf::from(arguments.next().ok_or(SERVE_USAGE)?));
             }
             Some("--listen") if listen.is_none() => {
                 let value = arguments.next().ok_or(SERVE_USAGE)?;
@@ -79,6 +87,7 @@ where
         root: root.ok_or(SERVE_USAGE)?,
         token_file: token_file
             .ok_or("--token-file is required; the fleet API never runs unauthenticated")?,
+        operators_file,
         listen,
         refresh_seconds: refresh_seconds.unwrap_or(DEFAULT_REFRESH_SECONDS),
         allow_non_loopback,
@@ -100,7 +109,19 @@ pub(super) fn serve_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
             std::process::exit(2);
         }
     };
-    if let Err(error) = run_fleet_api(&serve, &token) {
+    let operators = match &serve.operators_file {
+        None => Vec::new(),
+        Some(path) => match read_secret_file(path)
+            .and_then(|contents| controls::parse_operators(contents.as_str(), &token))
+        {
+            Ok(operators) => operators,
+            Err(error) => {
+                eprintln!("Fleet API operators file refused: {error}");
+                std::process::exit(2);
+            }
+        },
+    };
+    if let Err(error) = run_fleet_api(&serve, token, operators) {
         eprintln!("Fleet API stopped: {error}");
         std::process::exit(1);
     }
@@ -126,50 +147,78 @@ fn token_digest(token: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(token).into()
 }
 
-fn run_fleet_api(serve: &ServeArguments, token: &[u8; 32]) -> Result<(), String> {
+/// Everything a request handler needs; shared by every connection thread.
+struct ApiContext {
+    root: PathBuf,
+    read_token: [u8; 32],
+    operators: Vec<controls::Operator>,
+    snapshot: RwLock<Arc<FleetSnapshot>>,
+}
+
+impl ApiContext {
+    fn current_snapshot(&self) -> Arc<FleetSnapshot> {
+        Arc::clone(
+            &self
+                .snapshot
+                .read()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
+    }
+}
+
+fn run_fleet_api(
+    serve: &ServeArguments,
+    read_token: [u8; 32],
+    operators: Vec<controls::Operator>,
+) -> Result<(), String> {
     // Refuse to start on a root that cannot be scanned at all, so a typo in
     // a service unit fails loudly instead of serving errors forever.
     let first = FleetSnapshot::capture(&serve.root);
     if let Err(error) = &first.rendered {
         return Err(format!("could not scan {}: {error}", serve.root.display()));
     }
-    let snapshot = Arc::new(RwLock::new(Arc::new(first)));
+    let context = Arc::new(ApiContext {
+        root: serve.root.clone(),
+        read_token,
+        operators,
+        snapshot: RwLock::new(Arc::new(first)),
+    });
     let listener = TcpListener::bind(serve.listen)
         .map_err(|error| format!("could not listen on {}: {error}", serve.listen))?;
     eprintln!(
-        "Serving read-only fleet status for {} on http://{} (refresh every {}s)",
+        "Serving fleet status for {} on http://{} (refresh every {}s); {}",
         serve.root.display(),
         listener.local_addr().unwrap_or(serve.listen),
-        serve.refresh_seconds
+        serve.refresh_seconds,
+        match context.operators.len() {
+            0 => "read-only, no operators configured".to_owned(),
+            count => format!("wave approval enabled for {count} named operator(s)"),
+        }
     );
     {
-        let snapshot = Arc::clone(&snapshot);
-        let root = serve.root.clone();
+        let context = Arc::clone(&context);
         let interval = Duration::from_secs(serve.refresh_seconds);
         std::thread::Builder::new()
             .name("fleet-api-refresh".into())
             .spawn(move || {
                 loop {
                     std::thread::sleep(interval);
-                    let next = FleetSnapshot::capture(&root);
+                    let next = FleetSnapshot::capture(&context.root);
                     if let Err(error) = &next.rendered {
                         eprintln!("Fleet status refresh failed: {error}");
                     }
-                    *snapshot
+                    *context
+                        .snapshot
                         .write()
                         .unwrap_or_else(|poison| poison.into_inner()) = Arc::new(next);
                 }
             })
             .map_err(|error| format!("could not start the refresh thread: {error}"))?;
     }
-    accept_connections(listener, snapshot, *token)
+    accept_connections(listener, context)
 }
 
-fn accept_connections(
-    listener: TcpListener,
-    snapshot: Arc<RwLock<Arc<FleetSnapshot>>>,
-    token: [u8; 32],
-) -> Result<(), String> {
+fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result<(), String> {
     let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else {
@@ -181,12 +230,12 @@ fn accept_connections(
             let _ = write_response(&mut stream, &busy_response(), false);
             continue;
         }
-        let current = Arc::clone(&snapshot.read().unwrap_or_else(|poison| poison.into_inner()));
+        let context = Arc::clone(&context);
         let connection_slots = Arc::clone(&active);
         let spawned = std::thread::Builder::new()
             .name("fleet-api-connection".into())
             .spawn(move || {
-                handle_connection(stream, &current, &token);
+                handle_connection(stream, &context);
                 connection_slots.fetch_sub(1, Ordering::AcqRel);
             });
         if spawned.is_err() {
@@ -196,11 +245,11 @@ fn accept_connections(
     Err("the listening socket closed".into())
 }
 
-fn handle_connection(mut stream: TcpStream, snapshot: &FleetSnapshot, token: &[u8; 32]) {
+fn handle_connection(mut stream: TcpStream, context: &ApiContext) {
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(RESPONSE_WRITE_TIMEOUT));
     let response = match read_request_head(&mut stream) {
-        Ok(head) => respond(&head, snapshot, token),
+        Ok(head) => respond(&head, context),
         Err(response) => response,
     };
     let head_only = response.head_only;
@@ -317,6 +366,14 @@ impl Response {
         }
     }
 
+    fn json(status: u16, reason: &'static str, body: String) -> Self {
+        Self {
+            content_type: "application/json",
+            body,
+            ..Self::text(status, reason, "")
+        }
+    }
+
     fn json_error(status: u16, reason: &'static str, error: &str) -> Self {
         Self {
             content_type: "application/json",
@@ -332,7 +389,32 @@ fn busy_response() -> Response {
     response
 }
 
-fn respond(head: &str, snapshot: &FleetSnapshot, token: &[u8; 32]) -> Response {
+/// Who a request's bearer token identifies.
+#[derive(Debug, PartialEq, Eq)]
+enum Caller<'a> {
+    Anonymous,
+    Reader,
+    Operator(&'a str),
+}
+
+impl Caller<'_> {
+    fn may_read(&self) -> bool {
+        !matches!(self, Self::Anonymous)
+    }
+}
+
+/// The routes this API serves and the methods each accepts.
+fn allowed_methods(segments: &[&str]) -> Option<&'static str> {
+    match segments {
+        ["healthz"] | ["metrics"] | ["v1", "fleet"] | ["v1", "projects", _, "waves"] => {
+            Some("GET, HEAD")
+        }
+        ["v1", "waves", _, "approve"] => Some("POST"),
+        _ => None,
+    }
+}
+
+fn respond(head: &str, context: &ApiContext) -> Response {
     let mut lines = head.split("\r\n");
     let mut request_line = lines.next().unwrap_or_default().split(' ');
     let (Some(method), Some(target), Some(version), None) = (
@@ -346,33 +428,34 @@ fn respond(head: &str, snapshot: &FleetSnapshot, token: &[u8; 32]) -> Response {
     if !version.starts_with("HTTP/1.") {
         return Response::text(505, "HTTP Version Not Supported", "HTTP/1.x only\n");
     }
-    let head_only = method == "HEAD";
-    if method != "GET" && !head_only {
-        let mut response =
-            Response::text(405, "Method Not Allowed", "the fleet API is read-only\n");
-        response.extra_headers.push(("Allow", "GET, HEAD".into()));
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim(), value.trim()))
+        .collect::<Vec<_>>();
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    let segments = path
+        .strip_prefix('/')
+        .unwrap_or(path)
+        .split('/')
+        .collect::<Vec<_>>();
+    let Some(allowed) = allowed_methods(&segments) else {
+        return Response::text(404, "Not Found", "not found\n");
+    };
+    if !allowed.split(", ").any(|candidate| candidate == method) {
+        let mut response = Response::text(405, "Method Not Allowed", "method not allowed\n");
+        response.extra_headers.push(("Allow", allowed.into()));
         return response;
     }
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
-    let authorized = authorized(lines, token);
-    let mut response = match path {
-        "/healthz" => Response::text(200, "OK", "ok\n"),
-        "/v1/fleet" | "/metrics" if !authorized => {
-            let mut response = Response::text(401, "Unauthorized", "bearer token required\n");
-            response
-                .extra_headers
-                .push(("WWW-Authenticate", "Bearer realm=\"mailswiftsync\"".into()));
-            response
-        }
-        "/v1/fleet" => match &snapshot.rendered {
-            Ok(rendered) => Response {
-                content_type: "application/json",
-                body: rendered.json.clone(),
-                ..Response::text(200, "OK", "")
-            },
+    let caller = identify(&headers, context);
+    let snapshot = context.current_snapshot();
+    let mut response = match segments.as_slice() {
+        ["healthz"] => Response::text(200, "OK", "ok\n"),
+        _ if !caller.may_read() => unauthorized(),
+        ["v1", "fleet"] => match &snapshot.rendered {
+            Ok(rendered) => Response::json(200, "OK", rendered.json.clone()),
             Err(error) => Response::json_error(503, "Service Unavailable", error),
         },
-        "/metrics" => match snapshot.rendered.as_ref().map(|rendered| &rendered.metrics) {
+        ["metrics"] => match snapshot.rendered.as_ref().map(|rendered| &rendered.metrics) {
             Ok(Ok(metrics)) => Response {
                 content_type: "text/plain; version=0.0.4; charset=utf-8",
                 body: metrics.clone(),
@@ -382,29 +465,85 @@ fn respond(head: &str, snapshot: &FleetSnapshot, token: &[u8; 32]) -> Response {
                 Response::text(503, "Service Unavailable", &format!("{error}\n"))
             }
         },
-        _ => Response::text(404, "Not Found", "not found\n"),
+        ["v1", "projects", project_id, "waves"] if controls::valid_id(project_id) => {
+            controls::project_waves(&context.root, project_id)
+        }
+        ["v1", "waves", wave_id, "approve"] if controls::valid_id(wave_id) => {
+            let Caller::Operator(operator) = caller else {
+                return Response::json_error(
+                    403,
+                    "Forbidden",
+                    "approving a wave needs a named operator token",
+                );
+            };
+            if let Some(refusal) = refuse_request_body(&headers) {
+                return refusal;
+            }
+            controls::approve_wave(&context.root, wave_id, operator)
+        }
+        _ => Response::json_error(400, "Bad Request", "malformed identifier"),
     };
     response.extra_headers.push((
         "X-MailSwiftSync-Snapshot-Generated-At",
         snapshot.generated_at.to_string(),
     ));
-    response.head_only = head_only;
+    response.head_only = method == "HEAD";
     response
 }
 
-fn authorized<'a>(headers: impl Iterator<Item = &'a str>, token: &[u8; 32]) -> bool {
-    headers
-        .filter_map(|line| line.split_once(':'))
-        .filter(|(name, _)| name.trim().eq_ignore_ascii_case("authorization"))
-        .filter_map(|(_, value)| {
-            let (scheme, credential) = value.trim().split_once(' ')?;
+fn unauthorized() -> Response {
+    let mut response = Response::text(401, "Unauthorized", "bearer token required\n");
+    response
+        .extra_headers
+        .push(("WWW-Authenticate", "Bearer realm=\"mailswiftsync\"".into()));
+    response
+}
+
+/// Control requests carry everything in the path; a body is never read, so
+/// one is refused instead of being silently ignored.
+fn refuse_request_body(headers: &[(&str, &str)]) -> Option<Response> {
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case("transfer-encoding")
+            || (name.eq_ignore_ascii_case("content-length") && *value != "0")
+        {
+            return Some(Response::json_error(
+                413,
+                "Content Too Large",
+                "control requests take no body",
+            ));
+        }
+    }
+    None
+}
+
+/// Match the bearer token against every configured credential without an
+/// early exit, so timing does not reveal which kind of token was close.
+fn identify<'a>(headers: &[(&str, &str)], context: &'a ApiContext) -> Caller<'a> {
+    let Some(credential) = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .and_then(|(_, value)| {
+            let (scheme, credential) = value.split_once(' ')?;
             scheme
                 .eq_ignore_ascii_case("bearer")
                 .then(|| credential.trim())
         })
-        .any(|credential| {
-            crate::oauth_redirect::constant_time_eq(&token_digest(credential.as_bytes()), token)
-        })
+    else {
+        return Caller::Anonymous;
+    };
+    let digest = token_digest(credential.as_bytes());
+    let reader = crate::oauth_redirect::constant_time_eq(&digest, &context.read_token);
+    let mut operator = None;
+    for candidate in &context.operators {
+        if crate::oauth_redirect::constant_time_eq(&digest, &candidate.digest) {
+            operator = Some(candidate.name.as_str());
+        }
+    }
+    match (operator, reader) {
+        (Some(name), _) => Caller::Operator(name),
+        (None, true) => Caller::Reader,
+        (None, false) => Caller::Anonymous,
+    }
 }
 
 fn write_response(
@@ -438,6 +577,7 @@ mod tests {
     use super::*;
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+    const OPERATOR: &str = "operator-0123456789abcdef0123456789";
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -453,13 +593,69 @@ mod tests {
         }
     }
 
+    fn context_at(root: PathBuf, snapshot: FleetSnapshot) -> ApiContext {
+        ApiContext {
+            root,
+            read_token: token_digest(TOKEN.as_bytes()),
+            operators: controls::parse_operators(
+                &format!("{OPERATOR} Alice Example"),
+                &token_digest(TOKEN.as_bytes()),
+            )
+            .unwrap(),
+            snapshot: RwLock::new(Arc::new(snapshot)),
+        }
+    }
+
+    fn context(snapshot: FleetSnapshot) -> ApiContext {
+        context_at(
+            std::env::temp_dir().join("mailswiftsync-serve-unused"),
+            snapshot,
+        )
+    }
+
     fn request(path: &str, authorization: Option<&str>) -> String {
-        let mut head = format!("GET {path} HTTP/1.1\r\nHost: localhost");
+        request_with("GET", path, authorization)
+    }
+
+    fn request_with(method: &str, path: &str, authorization: Option<&str>) -> String {
+        let mut head = format!("{method} {path} HTTP/1.1\r\nHost: localhost");
         if let Some(authorization) = authorization {
             head.push_str("\r\nAuthorization: ");
             head.push_str(authorization);
         }
         head
+    }
+
+    fn private_root() -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("mailswiftsync-serve-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("shard")).unwrap();
+        #[cfg(unix)]
+        for directory in [root.clone(), root.join("shard")] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        root
+    }
+
+    /// A ledger with one project holding one unapproved wave.
+    fn ledger_with_wave(root: &std::path::Path) -> (PathBuf, String, String) {
+        let state = root.join("shard").join("state.db");
+        let store = crate::core::StateStore::open(&state).unwrap();
+        let (project, job_id) = store
+            .create_project_with_mailbox("shard", "source.example", "destination.example", "a", "a")
+            .unwrap();
+        let wave = store
+            .create_wave(
+                &project.id,
+                &crate::core::WaveSettings {
+                    name: "Pilot".into(),
+                    ..Default::default()
+                },
+                &[job_id],
+            )
+            .unwrap();
+        (state, project.id, wave.id)
     }
 
     #[test]
@@ -469,10 +665,23 @@ mod tests {
             Ok(ServeArguments {
                 root: "/srv/ledgers".into(),
                 token_file: "/etc/token".into(),
+                operators_file: None,
                 listen: DEFAULT_LISTEN.parse().unwrap(),
                 refresh_seconds: DEFAULT_REFRESH_SECONDS,
                 allow_non_loopback: false,
             })
+        );
+        assert_eq!(
+            parse_serve_arguments(args(&[
+                "/srv",
+                "--token-file",
+                "t",
+                "--operators-file",
+                "/etc/operators"
+            ]))
+            .unwrap()
+            .operators_file,
+            Some("/etc/operators".into())
         );
         assert!(parse_serve_arguments(args(&["/srv/ledgers"])).is_err());
         assert!(parse_serve_arguments(args(&["--token-file", "/etc/token"])).is_err());
@@ -502,6 +711,16 @@ mod tests {
             vec!["/srv", "--token-file", "t", "--refresh-seconds", "3601"],
             vec!["/srv", "--token-file", "t", "--listen", "localhost"],
             vec!["/srv", "--token-file", "t", "--token-file", "u"],
+            vec![
+                "/srv",
+                "--token-file",
+                "t",
+                "--operators-file",
+                "o",
+                "--operators-file",
+                "p",
+            ],
+            vec!["/srv", "--token-file", "t", "--operators-file"],
             vec!["/srv", "--token-file", "t", "--unknown"],
             vec!["/srv", "/other", "--token-file", "t"],
             vec!["/srv", "--token-file"],
@@ -520,82 +739,211 @@ mod tests {
 
     #[test]
     fn data_endpoints_require_the_bearer_token_but_health_does_not() {
-        let token = token_digest(TOKEN.as_bytes());
-        let snapshot = snapshot();
-        assert_eq!(
-            respond(&request("/healthz", None), &snapshot, &token).status,
-            200
-        );
+        let context = context(snapshot());
+        assert_eq!(respond(&request("/healthz", None), &context).status, 200);
         for path in ["/v1/fleet", "/metrics"] {
             for authorization in [None, Some("Bearer wrong-token"), Some("Basic abc")] {
-                let response = respond(&request(path, authorization), &snapshot, &token);
+                let response = respond(&request(path, authorization), &context);
                 assert_eq!(response.status, 401, "{path} {authorization:?}");
                 assert!(!response.body.contains("mailswiftsync"));
             }
-            let response = respond(
-                &request(path, Some(&format!("bearer {TOKEN}"))),
-                &snapshot,
-                &token,
-            );
-            assert_eq!(response.status, 200, "{path}");
+            for token in [TOKEN, OPERATOR] {
+                let response = respond(&request(path, Some(&format!("bearer {token}"))), &context);
+                assert_eq!(response.status, 200, "{path}");
+            }
         }
         let fleet = respond(
             &request("/v1/fleet?pretty", Some(&format!("Bearer {TOKEN}"))),
-            &snapshot,
-            &token,
+            &context,
         );
         assert_eq!(fleet.content_type, "application/json");
         assert!(fleet.body.contains("mailswiftsync-fleet-status"));
     }
 
     #[test]
-    fn the_api_is_read_only_and_rejects_malformed_requests() {
-        let token = token_digest(TOKEN.as_bytes());
-        let snapshot = snapshot();
-        let post = respond("POST /v1/fleet HTTP/1.1", &snapshot, &token);
+    fn tokens_identify_readers_and_named_operators() {
+        let context = context(snapshot());
+        let identify_with = |value: &str| identify(&[("Authorization", value)], &context);
+        assert_eq!(identify_with(&format!("Bearer {TOKEN}")), Caller::Reader);
+        assert_eq!(
+            identify_with(&format!("Bearer {OPERATOR}")),
+            Caller::Operator("Alice Example")
+        );
+        assert_eq!(identify_with("Bearer nope"), Caller::Anonymous);
+        assert_eq!(identify(&[], &context), Caller::Anonymous);
+    }
+
+    #[test]
+    fn routes_enforce_methods_and_reject_malformed_requests() {
+        let context = context(snapshot());
+        let post = respond("POST /v1/fleet HTTP/1.1", &context);
         assert_eq!(post.status, 405);
         assert!(post.extra_headers.contains(&("Allow", "GET, HEAD".into())));
-        assert_eq!(respond("GET /v1/fleet", &snapshot, &token).status, 400);
-        assert_eq!(respond("GET / HTTP/2", &snapshot, &token).status, 505);
+        let get_approve = respond("GET /v1/waves/abc/approve HTTP/1.1", &context);
+        assert_eq!(get_approve.status, 405);
+        assert!(
+            get_approve
+                .extra_headers
+                .contains(&("Allow", "POST".into()))
+        );
+        assert_eq!(respond("GET /v1/fleet", &context).status, 400);
+        assert_eq!(respond("GET / HTTP/2", &context).status, 505);
+        assert_eq!(respond("GET /other HTTP/1.1", &context).status, 404);
         assert_eq!(
-            respond("GET /other HTTP/1.1", &snapshot, &token).status,
+            respond("GET /v1/fleet/extra HTTP/1.1", &context).status,
             404
         );
-        let head = respond("HEAD /healthz HTTP/1.1", &snapshot, &token);
+        let head = respond("HEAD /healthz HTTP/1.1", &context);
         assert!(head.head_only);
+        let malformed = respond(
+            &request(
+                "/v1/projects/a%2F..%2Fb/waves",
+                Some(&format!("Bearer {TOKEN}")),
+            ),
+            &context,
+        );
+        assert_eq!(malformed.status, 400);
+    }
+
+    #[test]
+    fn approval_needs_an_operator_token_and_no_body() {
+        let context = context(snapshot());
+        let path = "/v1/waves/8f1c2e9a/approve";
+        assert_eq!(
+            respond(&request_with("POST", path, None), &context).status,
+            401
+        );
+        let reader = respond(
+            &request_with("POST", path, Some(&format!("Bearer {TOKEN}"))),
+            &context,
+        );
+        assert_eq!(reader.status, 403);
+        let with_body = format!(
+            "{}\r\nContent-Length: 12",
+            request_with("POST", path, Some(&format!("Bearer {OPERATOR}")))
+        );
+        assert_eq!(respond(&with_body, &context).status, 413);
+        let chunked = format!(
+            "{}\r\nTransfer-Encoding: chunked",
+            request_with("POST", path, Some(&format!("Bearer {OPERATOR}")))
+        );
+        assert_eq!(respond(&chunked, &context).status, 413);
+    }
+
+    #[test]
+    fn an_operator_approves_a_wave_once_under_their_own_name() {
+        let root = private_root();
+        let (state, project_id, wave_id) = ledger_with_wave(&root);
+        let context = context_at(root.clone(), snapshot());
+        let operator = Some(format!("Bearer {OPERATOR}"));
+        let approve = format!("/v1/waves/{wave_id}/approve");
+
+        let waves = respond(
+            &request(
+                &format!("/v1/projects/{project_id}/waves"),
+                Some(&format!("Bearer {TOKEN}")),
+            ),
+            &context,
+        );
+        assert_eq!(waves.status, 200, "{}", waves.body);
+        assert!(
+            waves.body.contains("\"status\": \"draft\""),
+            "{}",
+            waves.body
+        );
+
+        let approved = respond(
+            &request_with("POST", &approve, operator.as_deref()),
+            &context,
+        );
+        assert_eq!(approved.status, 200, "{}", approved.body);
+        assert!(
+            approved
+                .body
+                .contains("\"approved_by\":\"Alice Example (fleet API)\"")
+        );
+        let store = crate::core::StateStore::open_readonly(&state).unwrap();
+        assert_eq!(
+            store
+                .wave(&wave_id)
+                .unwrap()
+                .unwrap()
+                .approved_by
+                .as_deref(),
+            Some("Alice Example (fleet API)")
+        );
+        drop(store);
+
+        let again = respond(
+            &request_with("POST", &approve, operator.as_deref()),
+            &context,
+        );
+        assert_eq!(again.status, 409);
+        assert!(again.body.contains("already approved by Alice Example"));
+        let unknown = respond(
+            &request_with(
+                "POST",
+                "/v1/waves/missing-wave/approve",
+                operator.as_deref(),
+            ),
+            &context,
+        );
+        assert_eq!(unknown.status, 404);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn approval_waits_for_the_ledger_lock_and_refuses_ambiguous_copies() {
+        let root = private_root();
+        let (state, _, wave_id) = ledger_with_wave(&root);
+        let context = context_at(root.clone(), snapshot());
+        let operator = Some(format!("Bearer {OPERATOR}"));
+        let approve = format!("/v1/waves/{wave_id}/approve");
+
+        let lock = crate::process::acquire_instance_lock(&state).unwrap();
+        let busy = respond(
+            &request_with("POST", &approve, operator.as_deref()),
+            &context,
+        );
+        assert_eq!(busy.status, 409, "{}", busy.body);
+        assert!(busy.extra_headers.contains(&("Retry-After", "60".into())));
+        drop(lock);
+
+        let store = crate::core::StateStore::open_readonly(&state).unwrap();
+        store.backup_to(&root.join("copy.db")).unwrap();
+        assert!(store.wave(&wave_id).unwrap().unwrap().approved_by.is_none());
+        drop(store);
+        let ambiguous = respond(
+            &request_with("POST", &approve, operator.as_deref()),
+            &context,
+        );
+        assert_eq!(ambiguous.status, 409);
+        assert!(ambiguous.body.contains("more than one ledger"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn a_failed_refresh_is_reported_rather_than_serving_stale_data() {
-        let token = token_digest(TOKEN.as_bytes());
-        let failed = FleetSnapshot {
+        let failed = context(FleetSnapshot {
             generated_at: 1,
             rendered: Err("could not read /srv: permission denied".into()),
-        };
+        });
         let authorization = format!("Bearer {TOKEN}");
         for path in ["/v1/fleet", "/metrics"] {
-            let response = respond(&request(path, Some(&authorization)), &failed, &token);
+            let response = respond(&request(path, Some(&authorization)), &failed);
             assert_eq!(response.status, 503, "{path}");
             assert!(response.body.contains("permission denied"));
         }
-        let truncated = FleetSnapshot {
+        let truncated = context(FleetSnapshot {
             generated_at: 1,
             rendered: Ok(RenderedFleet {
                 json: "{}".into(),
                 metrics: Err("truncated".into()),
             }),
-        };
-        let metrics = respond(
-            &request("/metrics", Some(&authorization)),
-            &truncated,
-            &token,
-        );
+        });
+        let metrics = respond(&request("/metrics", Some(&authorization)), &truncated);
         assert_eq!(metrics.status, 503);
-        let fleet = respond(
-            &request("/v1/fleet", Some(&authorization)),
-            &truncated,
-            &token,
-        );
+        let fleet = respond(&request("/v1/fleet", Some(&authorization)), &truncated);
         assert_eq!(fleet.status, 200);
     }
 
@@ -614,14 +962,7 @@ mod tests {
 
     #[test]
     fn fleet_metrics_add_ledger_counts_and_snapshot_time() {
-        let root =
-            std::env::temp_dir().join(format!("mailswiftsync-serve-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(root.join("shard")).unwrap();
-        #[cfg(unix)]
-        for directory in [root.clone(), root.join("shard")] {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
+        let root = private_root();
         let store = crate::core::StateStore::open(root.join("shard").join("state.db")).unwrap();
         store
             .create_project_with_mailbox("shard", "source.example", "destination.example", "a", "a")
@@ -648,9 +989,8 @@ mod tests {
     fn a_live_listener_serves_health_and_authorized_status() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let shared = Arc::new(RwLock::new(Arc::new(snapshot())));
-        let token = token_digest(TOKEN.as_bytes());
-        std::thread::spawn(move || accept_connections(listener, shared, token));
+        let shared = Arc::new(context(snapshot()));
+        std::thread::spawn(move || accept_connections(listener, shared));
 
         let exchange = |request: &str| {
             let mut stream = TcpStream::connect(address).unwrap();
