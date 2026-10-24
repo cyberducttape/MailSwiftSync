@@ -3,6 +3,7 @@ mod profile;
 pub(crate) use profile::DestinationMutationPolicy;
 mod engine_command;
 mod fingerprint;
+pub(crate) mod folder_roles;
 mod keyring_credentials;
 mod saved_profile;
 mod validation;

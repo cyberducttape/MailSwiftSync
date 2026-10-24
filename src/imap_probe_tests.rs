@@ -4,9 +4,10 @@ use super::{
     MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageSink,
     MessageStateBudget, QUOTA_PROBE_COMMAND, StageMessageSink, StateReservation,
     TaggedResponseScanner, authenticated_list_command, classify_mailbox_fetch_error,
-    format_folder_failures, inbox_quota_observation, message_fetch_limit_exceeded,
-    parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes,
-    parse_message_id_header, quota_response_has_successful_root, read_imap_list_response,
+    format_folder_failures, inbox_quota_observation, list_folders_on_authenticated_stream,
+    message_fetch_limit_exceeded, parse_list_delimiter, parse_list_mailbox_name,
+    parse_message_fetch_metadata_response_bytes, parse_message_id_header,
+    quota_response_has_successful_root, read_imap_list_response,
     read_imap_list_response_with_mailboxes, read_with_deadline, record_list_entry,
     source_snapshot_matches, tagged_response_outside_literals, write_imap_command,
 };
@@ -1671,4 +1672,66 @@ fn source_snapshot_revalidation_detects_uid_and_condstore_drift() {
         }
     ));
     assert!(source_snapshot_matches(&without_modseq, &without_modseq));
+}
+
+/// Reads a scripted server transcript and records what the client wrote.
+struct ScriptedDuplex {
+    incoming: Cursor<Vec<u8>>,
+    outgoing: Vec<u8>,
+}
+
+impl Read for ScriptedDuplex {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.incoming.read(buffer)
+    }
+}
+
+impl Write for ScriptedDuplex {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.outgoing.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn folder_role_listing_requests_special_use_and_keeps_selectable_roles() {
+    let mut stream = ScriptedDuplex {
+        incoming: Cursor::new(
+            b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n\
+* LIST (\\HasNoChildren \\Sent) \"/\" \"[Gmail]/Sent Mail\"\r\n\
+* LIST (\\Noselect \\HasChildren) \"/\" \"[Gmail]\"\r\n\
+* LIST (\\HasNoChildren \\All) \"/\" \"[Gmail]/All Mail\"\r\n\
+f001 OK LIST completed\r\n"
+                .to_vec(),
+        ),
+        outgoing: Vec::new(),
+    };
+    let cancel = AtomicBool::new(false);
+    let budget = MessageFetchBudget::new(Duration::from_secs(5), &cancel);
+    let folders = list_folders_on_authenticated_stream(
+        &mut stream,
+        "imap.example.test",
+        "* CAPABILITY IMAP4rev1 SPECIAL-USE\r\na003 OK\r\n",
+        &budget,
+    )
+    .unwrap();
+    let sent = String::from_utf8(stream.outgoing).unwrap();
+    assert!(sent.starts_with("f001 LIST"), "{sent}");
+    assert!(sent.contains("SPECIAL-USE"), "{sent}");
+    let names = folders
+        .iter()
+        .map(|folder| (folder.wire_name.as_str(), folder.special_use.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            ("INBOX", Vec::<String>::new()),
+            ("[Gmail]/Sent Mail", vec!["sent".to_owned()]),
+            ("[Gmail]/All Mail", vec!["all".to_owned()]),
+        ]
+    );
 }
