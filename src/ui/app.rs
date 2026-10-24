@@ -615,6 +615,7 @@ crate::ui::name_modal(ui, &modal_heading);
                             self.language.message("ui.typed-folder-mappings"),
                         );
                         ui.label(self.language.message("ui.typed-folder-mappings-description"));
+                        self.special_folder_mapping_section(ui);
                         let mut remove_mapping = None;
                         for (index, rule) in self.form.profile.folder_mapping_rules.iter().enumerate() {
                             ui.horizontal(|ui| {

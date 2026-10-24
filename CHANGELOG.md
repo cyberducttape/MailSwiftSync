@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add **Suggest mappings from server folder roles** to the Plan page's typed
+  folder mappings. It reads the RFC 6154 special-use roles (Sent, Drafts,
+  Trash, Junk, Archive) of both accounts, with a name-based fallback for
+  servers that advertise none, and proposes explicit mappings such as
+  `[Gmail]/Sent Mail` → `Sent Items` for review. Applying them turns off
+  automap, so Gmail ↔ Microsoft 365 plans keep their special folders and stay
+  certifiable by independent verification. Ambiguous roles, roles missing on
+  the destination, and Gmail's All Mail are reported for an operator
+  decision instead of being guessed.
+
 - Authenticate the independent verifier with SASL `AUTHENTICATE PLAIN` when
   a password-auth user name or password contains non-ASCII characters and
   the server offers `AUTH=PLAIN`. IMAP quoted strings are 7-bit, so `LOGIN`
