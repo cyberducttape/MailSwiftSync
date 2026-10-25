@@ -183,7 +183,8 @@ reconciliation as successful.
 - An owner-only `organization-policy.toml` may require TLS, prohibit
   destination mutation, require metadata or bounded body verification, and cap
   batch concurrency. The same policy is shown during preflight and rechecked at
-  batch admission; provider-tenant rate quotas and role-scoped policy
+  single live and batch admission, and each verified mailbox is measured
+  against the required verification level; provider-tenant rate quotas and role-scoped policy
   administration remain outside this local policy file.
 - `notify-webhook` includes a deterministic event ID, event type, and
   idempotency key. Production organization policy requires

@@ -567,15 +567,22 @@ crate::ui::name_modal(ui, &modal_heading);
         } else {
             self.language.message("ui.mail-and-original-folder-names")
         };
-        let verification_summary = if dovecot {
-            self.language.message("ui.level-1-aggregate-evidence")
-        } else if self.form.profile.body_hash_verification {
-            self.language
-                .message("ui.level-3-bounded-content-fingerprints")
-        } else {
-            self.language
-                .message("ui.level-2-metadata-reconciliation-plan-dependent")
+        // The level this plan can actually establish, not the one its engine
+        // could reach with other settings: automap or header mutation leaves
+        // an imapsync plan with counts-only evidence.
+        let plan_assurance = crate::runner::plan_assurance(&self.form);
+        let verification_summary = match plan_assurance {
+            core::AssuranceLevel::Aggregate => self.language.message("ui.level-1-aggregate-evidence"),
+            core::AssuranceLevel::Metadata => self
+                .language
+                .message("ui.level-2-metadata-reconciliation-plan-dependent"),
+            core::AssuranceLevel::Content => self
+                .language
+                .message("ui.level-3-bounded-content-fingerprints"),
         };
+        let verification_limitation = crate::runner::message_verification_limitation(&self.form);
+        let policy_shortfall = crate::controller::policy_required_assurance()
+            .filter(|required| *required > plan_assurance);
         crate::ui::card(ui, |ui| {
             ui.heading(self.language.message("ui.migration-policy"));
             egui::Grid::new("migration_policy_summary")
@@ -600,6 +607,23 @@ crate::ui::name_modal(ui, &modal_heading);
                     ui.label(verification_summary);
                     ui.end_row();
                 });
+            if let Some(limitation) = verification_limitation {
+                ui.label(
+                    egui::RichText::new(self.language.text(limitation))
+                        .small()
+                        .color(colors.warning),
+                );
+            }
+            if let Some(required) = policy_shortfall {
+                ui.label(
+                    egui::RichText::new(
+                        self.language
+                            .message("ui.assurance-below-policy")
+                            .replace("{required}", self.language.message(assurance_label_key(required))),
+                    )
+                    .color(colors.danger),
+                );
+            }
         });
         ui.add_space(8.0);
         egui::CollapsingHeader::new(
@@ -1098,6 +1122,15 @@ crate::ui::name_modal(ui, &modal_heading);
                     });
             },
         );
+    }
+}
+
+/// Locale key naming an assurance level for operators.
+pub(crate) fn assurance_label_key(level: core::AssuranceLevel) -> &'static str {
+    match level {
+        core::AssuranceLevel::Aggregate => "ui.assurance-aggregate",
+        core::AssuranceLevel::Metadata => "ui.assurance-metadata",
+        core::AssuranceLevel::Content => "ui.assurance-content",
     }
 }
 

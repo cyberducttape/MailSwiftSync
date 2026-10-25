@@ -430,11 +430,17 @@ impl App {
                             let evidence = self.pending_batch_evidence.get(&child_run_id);
                             let mismatches = self.pending_batch_mismatches.get(&child_run_id);
                             let held = state == controller::HELD_CHILD_STATE;
-                            let final_state = if held {
+                            let mut final_state = if held {
                                 "cancelled".to_owned()
                             } else {
                                 batch_mailbox_state(&state, evidence)
                             };
+                            if final_state == "verified"
+                                && controller::assurance_shortfall(evidence, run.required_assurance)
+                                    .is_some()
+                            {
+                                final_state = "attention".into();
+                            }
                             let checkpoint = self
                                 .pending_batch_checkpoints
                                 .get(&child_run_id)

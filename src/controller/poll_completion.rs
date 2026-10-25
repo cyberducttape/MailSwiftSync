@@ -53,6 +53,16 @@ impl App {
                 );
                 self.report_store_error("record incomplete verification", result);
             }
+            // Only a result that would otherwise verify can fall short; a
+            // pass that still needs a delta keeps its own state and detail.
+            let assurance_shortfall = (succeeded && !run_context.dry_run && !delta_required)
+                .then(|| {
+                    crate::controller::assurance_shortfall(
+                        terminal_evidence.as_ref(),
+                        run_context.required_assurance,
+                    )
+                })
+                .flatten();
             if !was_bulk_run && run_context.job_id.is_some() {
                 let final_state = if succeeded && run_context.dry_run {
                     "ready"
@@ -69,7 +79,9 @@ impl App {
                         "failed"
                     }
                 } else if let Some(evidence) = terminal_evidence.as_ref() {
-                    if evidence.is_exact_match() && !delta_required {
+                    if evidence.is_exact_match() && assurance_shortfall.is_some() {
+                        "attention"
+                    } else if evidence.is_exact_match() && !delta_required {
                         "verified"
                     } else if delta_required {
                         "delta_required"
@@ -111,7 +123,7 @@ impl App {
                                 self.pending_verification_failure.as_deref(),
                             )
                         } else {
-                            String::new()
+                            assurance_shortfall.clone().unwrap_or_default()
                         }
                     },
                     |error| {
@@ -523,6 +535,7 @@ mod tests {
             source_provider: "generic_imap".to_owned(),
             destination_provider: "generic_imap".to_owned(),
             verification_state_path: None,
+            required_assurance: None,
         };
         app.finish_poll_run(Some(Ok(StreamOutcome::Completed)), Some(context), false);
 
@@ -578,6 +591,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: None,
+                required_assurance: None,
             });
             app.run_id = Some("limit-run".into());
             let (sender, receiver) = std::sync::mpsc::sync_channel(8);
@@ -725,6 +739,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: None,
+                required_assurance: None,
             });
             app.run_id = Some("failed-cutover-run".into());
             let (sender, receiver) = std::sync::mpsc::sync_channel(8);
@@ -793,6 +808,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: Some(stage_state_path),
+                required_assurance: None,
             });
             app.run_id = Some("rejected-run".into());
             // An exact label over counters that disagree violates a store
@@ -893,6 +909,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: Some(stage_state_path),
+                required_assurance: None,
             });
             app.run_id = Some("committed-run".into());
             let (sender, receiver) = std::sync::mpsc::sync_channel(8);
@@ -971,6 +988,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: None,
+                required_assurance: None,
             });
             app.run_id = Some("cutover-read-error-run".into());
             let (sender, receiver) = std::sync::mpsc::sync_channel(8);

@@ -61,10 +61,10 @@ pub(crate) use cutover::{CutoverStage, CutoverWorkflow, validate_cutover_run_sta
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{
-    EvidenceDimensionStatus, EvidenceScope, FlagVerification, MailboxAssurance, MailboxEvidence,
-    ProjectReportSnapshot, ReportMailboxPage, ReportMailboxSnapshot, ReportRunSnapshot,
-    VerificationAcceptance, VerificationDimensions, VerificationEvidence, VerificationMethod,
-    VerificationOutcome, coverage_percent,
+    AssuranceLevel, EvidenceDimensionStatus, EvidenceScope, FlagVerification, MailboxAssurance,
+    MailboxEvidence, ProjectReportSnapshot, ReportMailboxPage, ReportMailboxSnapshot,
+    ReportRunSnapshot, VerificationAcceptance, VerificationDimensions, VerificationEvidence,
+    VerificationMethod, VerificationOutcome, coverage_percent,
 };
 pub use holds::ProjectHold;
 pub(crate) use holds::is_project_held;

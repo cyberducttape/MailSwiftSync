@@ -975,7 +975,10 @@ impl StateStore {
             || (!successful_preflight
                 && !matches!(
                     mailbox_state,
-                    "verified" | "delta_required" | "verification_difference"
+                    // Attention keeps exact evidence that falls short of the
+                    // required assurance, so the operator can see what was
+                    // established.
+                    "verified" | "delta_required" | "verification_difference" | "attention"
                 ))
         {
             return Err(super::ledger_rejection(

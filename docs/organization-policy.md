@@ -48,6 +48,30 @@ individual policy settings to express their weaker behavior. The profile is
 stored alongside the individual settings so policy review shows which
 exception class was selected.
 
+`minimum_verification` is enforced twice. Before a live run, single-mailbox
+and batch admission refuse a plan that cannot establish that level: a native
+Dovecot plan, or an imapsync plan whose automap, folder-only,
+header-mutation, INTERNALDATE, or size-mismatch setting leaves only engine
+counts. The dry preflight still runs and lists the reason. Because the
+default policy requires `metadata`, a native Dovecot migration needs a
+policy that sets `minimum_verification = "aggregate"` under the
+`compatibility` or `lab` profile, plus `allow_destination_deletion = true`
+for the `initial_mirror` strategy, which may replace destination state. After a run, each mailbox is measured
+against the level its evidence actually reached:
+
+| Evidence reached | Satisfies |
+|---|---|
+| Engine or server totals agree (counts only) | `aggregate` |
+| Every message's identity and metadata reconciled | `aggregate`, `metadata` |
+| Metadata plus bounded body fingerprints | `aggregate`, `metadata`, `body` |
+
+A mailbox whose evidence matches exactly but below the minimum is not marked
+Verified: it goes to Attention with the reason *verification incomplete*,
+keeping its evidence, and so it blocks project completion and the customer
+proof until it is reverified with a plan that can establish the required
+level. The Plan page shows the level the current plan can establish, the
+setting that limits it, and a warning when policy requires more.
+
 Production policy also rejects the imapsync `--useuid` plus `--usecache`
 combination. After interruption during an in-flight APPEND, that expert
 combination can duplicate a message on resume. The default header-matching
