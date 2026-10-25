@@ -26,6 +26,10 @@ pub(crate) struct ActiveRunContext {
     /// Base state path used to garbage-collect a durable verification stage
     /// only after its terminal evidence transaction succeeds.
     pub(crate) verification_state_path: Option<PathBuf>,
+    /// Organization-policy minimum a mailbox's evidence must reach before
+    /// it is marked verified; captured at admission so the whole run is
+    /// measured against one policy.
+    pub(crate) required_assurance: Option<crate::core::AssuranceLevel>,
 }
 
 impl ActiveRunContext {

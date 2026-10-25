@@ -109,6 +109,7 @@ pub(crate) fn admit_single_run(
         source_provider: admission.source_provider,
         destination_provider: admission.destination_provider,
         verification_state_path: None,
+        required_assurance: crate::controller::policy_required_assurance(),
     })
 }
 

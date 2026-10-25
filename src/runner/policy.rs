@@ -48,6 +48,19 @@ pub(crate) fn message_verification_limitation(form: &crate::Form) -> Option<&'st
     None
 }
 
+/// The strongest assurance this plan can establish for a mailbox: what the
+/// Plan page promises and what organization policy is measured against.
+pub(crate) fn plan_assurance(form: &crate::Form) -> crate::core::AssuranceLevel {
+    use crate::core::AssuranceLevel;
+    if form.engine() != crate::core::Engine::ImapSync || !message_verification_enabled(form) {
+        AssuranceLevel::Aggregate
+    } else if form.profile.body_hash_verification {
+        AssuranceLevel::Content
+    } else {
+        AssuranceLevel::Metadata
+    }
+}
+
 pub(super) const MAX_BODY_HASH_BYTES_PER_MESSAGE: u64 = 64 * 1024 * 1024;
 
 pub(super) const MAX_BODY_HASH_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;

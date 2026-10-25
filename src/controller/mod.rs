@@ -31,6 +31,7 @@ pub(crate) use batch::{
     BatchExecutionMode, BatchStartContext, BatchStartDecision, BulkQueueSummary, BulkRetryScope,
     BulkStateSet, SelectionScope, batch_mailbox_state, batch_start_decision,
 };
+pub(crate) use batch::{assurance_shortfall, policy_required_assurance};
 pub(crate) use batch_admission::{
     BatchLaunchRequest, admit_batch_launch, decode_persisted_batch_profile,
     durable_single_identity_matches,

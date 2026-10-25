@@ -20,6 +20,22 @@
   reported as extra. Before, the unequal totals contradicted the exact
   verification label and the ledger refused the result. Found by the new
   three-folder interruption drill.
+- Enforce the organization policy's `minimum_verification` on the evidence a
+  mailbox actually reached, not only on the plan (external review finding
+  6). An exact match below the minimum, for example counts-only evidence
+  under the default `metadata` policy, now goes to Attention with the reason
+  *verification incomplete* instead of Verified, keeping its evidence, so it
+  cannot pass for a reconciled mailbox or unlock the customer proof. The
+  Plan page now reports the level the plan can really establish: an
+  imapsync plan with automap, header mutation, or another setting that
+  disables message-level verification showed "Level 2 — message metadata"
+  but could only produce counts. It also names the limiting setting and
+  warns when policy requires more than the plan can establish. A single
+  live run (GUI or `headless live`) now enforces the policy's plan check
+  as batch admission already did; before, it was only shown on the
+  preflight checklist. A native Dovecot migration therefore needs a
+  `compatibility` or `lab` policy with `minimum_verification = "aggregate"`
+  (and `allow_destination_deletion = true` for its initial mirror).
 - Fix the fleet API's over-capacity 503 being lost on Windows: a refused
   connection is now answered on a helper thread that keeps the socket open
   until the client has read the reply (at most one second), instead of

@@ -487,6 +487,12 @@ impl OrganizationPolicy {
         Ok(ceilings)
     }
 
+    /// The assurance every verified mailbox must reach; `None` when the
+    /// policy sets no minimum.
+    pub(crate) fn required_assurance(&self) -> Option<crate::core::AssuranceLevel> {
+        crate::core::AssuranceLevel::from_policy(&self.minimum_verification)
+    }
+
     pub(crate) fn check_form(&self, form: &Form) -> Result<(), String> {
         self.check(&form.profile)
     }

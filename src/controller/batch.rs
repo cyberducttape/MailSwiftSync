@@ -21,6 +21,33 @@ pub(crate) fn batch_run_status(state: &str) -> &'static str {
     }
 }
 
+/// The organization-policy minimum assurance in force for a run being
+/// admitted. Admission and preflight already refuse a policy that cannot be
+/// read, so an unreadable one here imposes no additional minimum.
+pub(crate) fn policy_required_assurance() -> Option<core::AssuranceLevel> {
+    crate::organization_policy::OrganizationPolicy::load()
+        .ok()
+        .and_then(|policy| policy.required_assurance())
+}
+
+/// Detail for an exact match whose evidence is weaker than the required
+/// assurance, or `None` when the evidence meets it. The mailbox then goes to
+/// Attention (verification incomplete) instead of Verified, so counts-only
+/// evidence can never pass for a reconciled mailbox under a stricter policy.
+pub(crate) fn assurance_shortfall(
+    evidence: Option<&core::MailboxEvidence>,
+    required: Option<core::AssuranceLevel>,
+) -> Option<String> {
+    let (achieved, required) = (evidence?.assurance_level()?, required?);
+    (achieved < required).then(|| {
+        format!(
+            "[attention_reason=verification_incomplete] verification established {} evidence, but organization policy requires {} assurance; reverify with a plan that can establish it",
+            achieved.as_str(),
+            required.as_str()
+        )
+    })
+}
+
 pub(crate) fn batch_mailbox_state(state: &str, evidence: Option<&core::MailboxEvidence>) -> String {
     // A late or malformed evidence event must never mask a failed or
     // cancelled transfer. Only successful/continuable child states may be

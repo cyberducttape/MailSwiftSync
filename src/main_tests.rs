@@ -2039,6 +2039,7 @@ fn active_run_context_rejects_foreign_process_events() {
         source_provider: "generic".into(),
         destination_provider: "generic".into(),
         verification_state_path: None,
+        required_assurance: None,
     };
     assert!(context.owns_process("child-a", "job-a"));
     assert!(context.owns_process("child-b", "job-b"));
@@ -3789,4 +3790,35 @@ fn a_failure_after_credentials_are_written_removes_them_for_both_engines() {
             directory.display()
         );
     }
+}
+
+#[test]
+fn a_single_live_run_is_refused_when_organization_policy_prohibits_the_plan() {
+    // The default (production) policy requires metadata evidence, which a
+    // native Dovecot plan cannot establish. Batch admission already refused
+    // such a plan; a single live start must refuse it too.
+    if crate::organization_policy::OrganizationPolicy::load()
+        .is_ok_and(|policy| policy.check_form(&dovecot_form()).is_ok())
+    {
+        return;
+    }
+    let state_path = std::env::temp_dir().join(format!(
+        "mailswiftsync-single-policy-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let mut app = App::from_state_path(Some(&state_path));
+    app.form = dovecot_form();
+    app.form.dry_run = false;
+    app.live_confirmed = true;
+    app.live_confirmation_plan = Some(plan_fingerprint_digest(&app.form.plan_fingerprint()));
+    app.start();
+    assert!(
+        app.status.text.contains("blocked by organization policy"),
+        "{}",
+        app.status.text
+    );
+    assert!(app.active_run.is_none());
+    drop(app);
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(state_path.with_extension("lock"));
 }
