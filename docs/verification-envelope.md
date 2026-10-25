@@ -740,6 +740,27 @@ terminal evidence commit, and report export. In particular, the approximately
 reservation or universal ceiling; none of these measurements qualifies
 provider behavior, large-byte mailboxes, or other host classes.
 
+A fresh typical-shape repeat was run on 2026-10-25 at code revision
+`d0da235bfcaa596c644c2c9fce6eed431fe909cb`, using Rust 1.92.0 on the same
+shared AMD Ryzen 7 7735U / Linux 7.0.0-38-generic / x86_64 workstation and
+ext4 filesystem. All five sizes passed the 64 MiB peak-RSS and 20,000
+messages/s gates. The 1M case staged in 26.871 s, reconciled in 23.313 s
+(42,894 messages/s), resumed reconciliation in 22.431 s, compared FLAGS for
+980,000 messages, and peaked at 20 MiB RSS. Its stage directory peaked at
+1,092,691,152 B with a 100,893,904 B rollback journal; reconciliation wrote
+680,185,856 B. The 500k case reconciled at 39,600 messages/s with 20 MiB peak
+RSS and a 544,121,344 B stage high-water mark. This is a repeatable synthetic
+SQLite result for that single host and typical fixture; it is not a transfer
+benchmark, provider qualification, or safe disk reservation. It excludes
+network fetching and final evidence/report commits.
+
+A separate 1M-only rerun of the same code revision also passed both gates. It
+staged in 30.982 s, reconciled in 28.146 s (35,529 messages/s), resumed in
+22.590 s, and used 20 MiB peak RSS. Stage and journal high-water sizes were
+unchanged; reconciliation wrote 757,796,864 B. The two successful runs' rate
+spread is useful evidence of shared-host variability, not a basis for
+promising a fixed throughput or lifting the resource limits.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the
