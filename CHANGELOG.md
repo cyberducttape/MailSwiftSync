@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix the fleet API's over-capacity 503 being lost on Windows: a refused
+  connection is now answered on a helper thread that keeps the socket open
+  until the client has read the reply (at most one second), instead of
+  closing it with the request unread, which reset the connection.
 - Harden the `serve` fleet API for unattended network use:
   - `--tls-cert`/`--tls-key` terminate TLS 1.2+ natively, so a network
     listener no longer needs a reverse proxy; the key file must be
