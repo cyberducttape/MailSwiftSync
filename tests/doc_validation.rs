@@ -877,6 +877,29 @@ fn verification_envelope_records_revision_tagged_scale_matrix_and_artifacts() {
 }
 
 #[test]
+fn verification_envelope_records_latest_main_scale_repeat_with_limits() {
+    let envelope = fs::read_to_string("docs/verification-envelope.md")
+        .expect("verification envelope measurements should exist");
+    for evidence in [
+        "fresh typical-shape repeat was run on 2026-10-25",
+        "d0da235bfcaa596c644c2c9fce6eed431fe909cb",
+        "42,894 messages/s",
+        "separate 1M-only rerun of the same code revision also passed both gates",
+        "35,529 messages/s",
+        "757,796,864 B",
+        "shared-host variability",
+        "1,092,691,152 B with a 100,893,904 B rollback journal",
+        "544,121,344 B stage high-water mark",
+        "not a transfer\nbenchmark, provider qualification, or safe disk reservation",
+    ] {
+        assert!(
+            envelope.contains(evidence),
+            "latest-main verification benchmark evidence is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
