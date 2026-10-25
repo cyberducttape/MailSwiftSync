@@ -488,8 +488,11 @@ saw any failed pass exits nonzero when it stops. The optional
 watching. An optional fourth argument, `maintenance-window`, confines new
 batch passes to a `HH:MM-HH:MM` local time-of-day range (which may wrap past
 midnight, for example `22:00-06:00`) and, with an `@Mon,Tue,...` suffix, to
-specific days; a batch already admitted before the window closes still runs
-to completion. Outside the window `supervise` only waits and re-checks the
+windows that open on specific days: `22:00-06:00@Fri` runs from Friday 22:00
+to Saturday 06:00. Day names are three-letter abbreviations or full English
+names. A window that spans a daylight-saving change lasts its real
+wall-clock length. A batch already admitted before the window closes still
+runs to completion; use `mailswiftsync hold` to stop further launches. Outside the window `supervise` only waits and re-checks the
 clock, so a bounded (`idle-polls` != 0) invocation launched by an external
 scheduler at the start of each window still exits at the end of it rather
 than running through every subsequent one. It is a supervisor process, not a
