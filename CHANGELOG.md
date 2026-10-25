@@ -20,6 +20,18 @@
   reported as extra. Before, the unequal totals contradicted the exact
   verification label and the ledger refused the result. Found by the new
   three-folder interruption drill.
+- Fix maintenance-window boundaries (external review findings 1 and 2). A
+  weekday now names the day a window opens: `22:00-06:00@Fri` runs Friday
+  22:00 to Saturday 06:00. Previously it matched Friday 00:00-06:00 (the
+  tail of Thursday night) and stopped at Friday midnight, while the
+  Activity page's "window closes in" readout assumed Saturday 06:00.
+  Membership and time-to-close now come from the same occurrence, back-to-
+  back full-day windows count as one span, and the close instant is
+  resolved through the local time zone, so a window across a
+  daylight-saving change reports its real length (a skipped close time
+  closes when the clock jumps; a repeated one closes at its first
+  occurrence). Day names must be exact three-letter abbreviations or full
+  names; `MondayXYZ` and `Fr` are refused instead of being read by prefix.
 - Enforce the organization policy's `minimum_verification` on the evidence a
   mailbox actually reached, not only on the plan (external review finding
   6). An exact match below the minimum, for example counts-only evidence
