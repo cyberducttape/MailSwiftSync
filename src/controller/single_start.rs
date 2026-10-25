@@ -65,6 +65,20 @@ impl App {
             );
             return;
         }
+        // Batch admission already refuses a plan the organization policy
+        // prohibits; a single live run must not be the way around it. The
+        // dry preflight still runs so its checklist can show the reason.
+        if !self.form.dry_run {
+            let decision = crate::organization_policy::OrganizationPolicy::load()
+                .and_then(|policy| policy.check_form(&self.form));
+            if let Err(error) = decision {
+                self.set_status(
+                    format!("Live migration blocked by organization policy: {error}"),
+                    StatusSeverity::Error,
+                );
+                return;
+            }
+        }
         if let (Some(project_id), Some(job_id)) = (self.project_id.clone(), self.job_id.clone()) {
             let identity_matches = match (
                 self.store.project(&project_id),

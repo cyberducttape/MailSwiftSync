@@ -371,6 +371,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: None,
+                required_assurance: None,
             });
             let (events, receiver) = std::sync::mpsc::sync_channel(8);
             app.receiver = Some(receiver);
@@ -439,6 +440,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: None,
+                required_assurance: None,
             });
             // Another process (the fleet API or the CLI) holds the project
             // after this batch started.
@@ -652,6 +654,7 @@ mod tests {
                 source_provider: "generic".into(),
                 destination_provider: "generic".into(),
                 verification_state_path: None,
+                required_assurance: None,
             });
             app.run_telemetry.reset(std::time::Instant::now(), 1);
             let progress = |bytes| crate::progress::TransferProgress {

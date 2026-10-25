@@ -674,6 +674,15 @@ allowsizemismatch = false
 delete2 = false
 extra_options = "$extra_options"
 EOF
+if [[ "$test_engine" == Dovecot ]]; then
+  # Native Dovecot establishes counts-only (aggregate) evidence, and its
+  # initial mirror may replace destination state; the default production
+  # policy refuses both for a live run. Declare them explicitly, as an
+  # operator running this engine has to.
+  printf 'profile = "lab"\nminimum_verification = "aggregate"\nallow_destination_deletion = true\n' \
+    > "$XDG_CONFIG_HOME/mailswiftsync/organization-policy.toml"
+  chmod 0600 "$XDG_CONFIG_HOME/mailswiftsync/organization-policy.toml"
+fi
 source_secret="$app_runtime/source.secret"
 destination_secret="$app_runtime/destination.secret"
 printf '%s' "$password" > "$source_secret"
@@ -867,6 +876,7 @@ if [[ "$test_engine" == Dovecot ]]; then
     "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" \
     > "$preservation_profile_dir/profile.toml"
   chmod 0600 "$preservation_profile_dir/profile.toml"
+  cp -- "$XDG_CONFIG_HOME/mailswiftsync/organization-policy.toml" "$preservation_profile_dir/"
   if ! grep -q '^dovecot_strategy = "destination_already_active"$' \
       "$preservation_profile_dir/profile.toml"; then
     echo "FAIL: preservation fixture did not select destination_already_active" >&2

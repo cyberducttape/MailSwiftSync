@@ -138,6 +138,38 @@ impl VerificationEvidence {
     }
 }
 
+/// How much a mailbox's evidence proves, weakest first. Only an exact match
+/// reaches a level; differing or incomplete evidence is not verified at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AssuranceLevel {
+    /// Engine or server totals agree; individual messages were not compared.
+    Aggregate,
+    /// Every message's identity and metadata were reconciled.
+    Metadata,
+    /// Metadata plus bounded body-content fingerprints.
+    Content,
+}
+
+impl AssuranceLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Aggregate => "aggregate",
+            Self::Metadata => "metadata",
+            Self::Content => "content",
+        }
+    }
+
+    /// An organization-policy `minimum_verification` value.
+    pub fn from_policy(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "aggregate" => Some(Self::Aggregate),
+            "metadata" => Some(Self::Metadata),
+            "body" | "content" => Some(Self::Content),
+            _ => None,
+        }
+    }
+}
+
 /// Verification adapter that produced the persisted evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerificationMethod {
@@ -600,6 +632,21 @@ impl VerificationEvidence {
 
     pub fn verification_method(&self) -> VerificationMethod {
         self.verification_method
+    }
+
+    /// The assurance this evidence establishes, or `None` unless it is an
+    /// exact match.
+    pub fn assurance_level(&self) -> Option<AssuranceLevel> {
+        if !self.is_exact_match() {
+            return None;
+        }
+        Some(match self.verification_method {
+            VerificationMethod::MetadataReconciliation => AssuranceLevel::Metadata,
+            VerificationMethod::BodyHash => AssuranceLevel::Content,
+            VerificationMethod::AggregateEngine | VerificationMethod::NativeDovecot => {
+                AssuranceLevel::Aggregate
+            }
+        })
     }
 
     /// Canonical classification consumed by all report and UI layers.
