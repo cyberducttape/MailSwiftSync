@@ -430,6 +430,19 @@ and SQLITE_FULL cases (the latter covered functionally by
 `controller-chaos-smoke.sh`) remain to be measured on the release host class
 before increasing local worker limits or advertising large queue capacity.
 
+A repeat of the same release benchmark on 2026-10-25 at commit
+`d0da235bfcaa596c644c2c9fce6eed431fe909cb` measured 2,000 mailbox jobs and
+44,000 writes on Linux x86_64 (kernel `7.0.0-38-generic`), an AMD Ryzen 7
+7735U host with 16 logical CPUs, using the `/dev/nvme0n1p2` ext4 filesystem.
+It reported write p50/p95/p99/max of 59 µs / 692 µs / 954 µs / 5.4 ms,
+read p95 of 7.6 ms, zero busy errors, a 6.8 MiB WAL high-water mark, a 2 ms
+checkpoint, 3.2 KB durable ledger per mailbox, and a 122 ms concurrent
+operator backup. It passed every budget in
+`scripts/benchmark-ledger-workload.sh`. This single-host repeat is an
+environment-specific ledger workload result; it is not an IMAP transfer
+benchmark, a host-class qualification, or evidence for customer-scale
+capacity.
+
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a
 long verification scan occupies transfer capacity. **Queue settings →
