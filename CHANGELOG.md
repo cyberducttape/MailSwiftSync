@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add real-server fault drills to the IMAP integration lab (external review
+  finding 5). Besides killing the controller, the lab now SIGKILLs only the
+  imapsync engine, crashes the source and the destination Dovecot server
+  mid-transfer, and crashes the controller three times before resuming. Every
+  drill spreads its messages over three folders and requires the resumed
+  destination to hold each source Message-ID exactly once, so a duplicate
+  and a lost message can no longer cancel out in a count. The crash-recovery
+  matrix records the new scenarios.
 - Fix exactly matching mail landing in Attention, unrecorded, whenever the
   destination kept a folder the source does not have, such as a provider's
   own empty folder or a parent imapsync creates for a nested folder

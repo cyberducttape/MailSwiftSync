@@ -1109,18 +1109,76 @@ fi
 echo "PASS: destination retained literal, non-UTF-8, renamed special-use, and sparse-UID fixtures"
 echo "PASS: MailSwiftSync product integration verified $destination_messages message(s) through ${test_engine}"
 
-# Real-engine interruption drill: kill the controller mid-transfer, recover the
-# ledger, and resume. With the default header-matching plan the resumed run
-# must hold exactly the source messages, verified. With expert --useuid
-# --usecache, imapsync trusts only its UID cache, so the message in flight when
-# the controller died can be appended twice; that run must surface the
-# difference rather than report a silently verified result.
+# Real-engine interruption drills: stop a transfer mid-flight with a real
+# fault, recover the ledger, and resume. With the default header-matching plan
+# the resumed run must hold exactly the source messages -- every Message-ID
+# once, none missing -- and verify. With expert --useuid --usecache, imapsync
+# trusts only its UID cache, so the message in flight when the controller died
+# can be appended twice; that run must surface the difference rather than
+# report a silently verified result.
+#
+# Faults:
+#   controller   SIGKILL the MailSwiftSync process (host or controller crash);
+#                the engine must not outlive it.
+#   engine       SIGKILL only the imapsync process group while the controller
+#                stays up; the controller must record a non-verified outcome.
+#   source       SIGKILL the source Dovecot master and its workers mid-transfer,
+#   destination  or the destination's, and keep it down until the controller
+#                gives up; then restart the server and resume.
+# Messages are spread over three folders so an interruption also lands
+# between folders, and `interruptions` > 1 repeats the fault before the final
+# resume.
+
+# SIGKILL a fixture Dovecot master and every worker it owns: a server crash,
+# not a shutdown. Stop the master first so it cannot respawn a worker.
+crash_server() {
+  local pid="$1" port="$2"
+  kill -STOP "$pid" 2>/dev/null || true
+  pkill -KILL -P "$pid" 2>/dev/null || true
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  local deadline=$((SECONDS + 20))
+  while (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; do
+    if (( SECONDS > deadline )); then
+      echo "FAIL: crashed Dovecot still accepts connections on 127.0.0.1:$port" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+}
+
+# Restart a crashed fixture server from its existing configuration, keeping
+# its certificates, accounts, and mail. The SIGKILLed master left its pid
+# file behind.
+restart_server() {
+  local name="$1" port="$2"
+  rm -f -- "${workspace:?}/${name:?}/run/master.pid"
+  dovecot -F -c "$workspace/$name.conf" >> "$workspace/$name/dovecot.stdout" 2>&1 &
+  local pid=$!
+  local ready=0
+  for _ in {1..100}; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+      ready=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$ready" != 1 ]]; then
+    echo "FAIL: restarted Dovecot did not listen on 127.0.0.1:$port" >&2
+    tail -n 40 "$workspace/$name/log/dovecot.log" >&2 || true
+    exit 1
+  fi
+  restarted_server_pid=$pid
+}
+
 run_interruption_drill() {
   local label="$1" useuid="$2" strict="$3" restore="${4:-}"
   local drill_messages="${5:-60}" payload_bytes="${6:-0}"
   local max_bytes_per_second="${7:-0}"
+  local fault="${8:-controller}" interruptions="${9:-1}"
   local drill_user="drill-$label@example.test"
-  local name index drill_filename
+  local name index drill_filename drill_folder
+  local drill_folders=("" ".Archive" ".Projects.2026")
   if (( payload_bytes > 0 && max_bytes_per_second == 0 )); then
     echo "FAIL: interruption drill ($label) needs a byte throttle to observe a partial APPEND" >&2
     exit 1
@@ -1130,9 +1188,14 @@ run_interruption_drill() {
     printf '%s:{PLAIN}%s:%s:%s::%s::\n' "$drill_user" "$password" "$mail_uid" "$mail_gid" \
       "$workspace/$name/mail/$drill_user" >> "$workspace/$name/passwd"
   done
+  for drill_folder in "${drill_folders[@]:1}"; do
+    mkdir -p "$workspace/source/mail/$drill_user/Maildir/$drill_folder"/{cur,new,tmp}
+  done
   for ((index = 1; index <= drill_messages; index++)); do
     printf -v drill_filename 'drill-%03d.eml' "$index"
-    local drill_path="$workspace/source/mail/$drill_user/Maildir/new/$drill_filename"
+    # Message 1 stays in INBOX: the partial-APPEND drill watches its size.
+    drill_folder="${drill_folders[$(((index - 1) % ${#drill_folders[@]}))]}"
+    local drill_path="$workspace/source/mail/$drill_user/Maildir/${drill_folder:+$drill_folder/}new/$drill_filename"
     printf 'From: drill-lab@example.test\nTo: %s\nSubject: Interruption drill %d\nMessage-ID: <mailswiftsync-drill-%s-%03d@example.test>\nDate: Tue, 01 Jan 2030 03:00:00 +0000\nContent-Type: text/plain; charset=utf-8\n\nInterruption drill message %d.\n' \
       "$drill_user" "$index" "$label" "$index" "$index" \
       > "$drill_path"
@@ -1166,79 +1229,156 @@ run_interruption_drill() {
     "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" > "$drill_config/mailswiftsync/profile.toml"
   chmod 0600 "$drill_config/mailswiftsync/profile.toml"
 
+  local drill_source="$workspace/source/mail/$drill_user/Maildir"
   local drill_destination="$workspace/destination/mail/$drill_user/Maildir"
   drill_count() {
     find "$drill_destination" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l | tr -d '[:space:]'
   }
+  # One sorted line per delivered message, so a duplicate shows up twice
+  # and a lost message is absent even when the two would cancel out in a
+  # plain count.
+  drill_message_ids() {
+    find "$1" -type f \( -path '*/cur/*' -o -path '*/new/*' \) \
+      -exec grep -h -m1 -i '^Message-ID:' {} + | tr -d '\r' | LC_ALL=C sort
+  }
+  engine_running() {
+    pgrep -f "imapsync.*$drill_user" >/dev/null
+  }
   local drill_log="$app_runtime/drill-$label-live.log"
-  XDG_CONFIG_HOME="$drill_config" "$binary" headless "$drill_state" live \
-    --acknowledge-destination-loss \
-    --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
-    > "$drill_log" 2>&1 &
-  local drill_pid=$!
-  local drill_deadline=$((SECONDS + 120))
-  if (( payload_bytes > 0 )); then
-    # Maildir APPEND writes to tmp until the full literal is accepted, then
-    # atomically moves it to new/cur. The byte throttle keeps this partial
-    # file observable long enough to kill the controller inside APPEND.
-    local partial_append_bytes expected_message_bytes
-    local message_path="$workspace/source/mail/$drill_user/Maildir/new/drill-001.eml"
-    expected_message_bytes=$(stat -c '%s' "$message_path")
-    partial_append_bytes=0
-    while (( partial_append_bytes <= 1048576 || partial_append_bytes >= expected_message_bytes )); do
-      if ! kill -0 "$drill_pid" 2>/dev/null; then
-        echo "FAIL: interruption drill ($label) finished before a partial APPEND was observed" >&2
-        tail -n 40 "$drill_log" >&2
-        exit 1
-      fi
-      if (( SECONDS > drill_deadline )); then
-        echo "FAIL: interruption drill ($label) never exposed a partial destination APPEND" >&2
-        find "$drill_destination/tmp" -maxdepth 1 -type f -printf '%s bytes %p\n' >&2 || true
-        tail -n 40 "$drill_log" >&2
-        exit 1
-      fi
+  local round copied_before_kill=0 drill_pid drill_deadline threshold
+  for ((round = 1; round <= interruptions; round++)); do
+    XDG_CONFIG_HOME="$drill_config" "$binary" headless "$drill_state" live \
+      --acknowledge-destination-loss \
+      --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+      > "$drill_log" 2>&1 &
+    drill_pid=$!
+    drill_deadline=$((SECONDS + 120))
+    if (( payload_bytes > 0 )); then
+      # Maildir APPEND writes to tmp until the full literal is accepted, then
+      # atomically moves it to new/cur. The byte throttle keeps this partial
+      # file observable long enough to kill the controller inside APPEND.
+      local partial_append_bytes expected_message_bytes
+      local message_path="$drill_source/new/drill-001.eml"
+      expected_message_bytes=$(stat -c '%s' "$message_path")
       partial_append_bytes=0
-      while IFS= read -r file_bytes; do
-        if (( file_bytes > partial_append_bytes )); then
-          partial_append_bytes=$file_bytes
+      while (( partial_append_bytes <= 1048576 || partial_append_bytes >= expected_message_bytes )); do
+        if ! kill -0 "$drill_pid" 2>/dev/null; then
+          echo "FAIL: interruption drill ($label) finished before a partial APPEND was observed" >&2
+          tail -n 40 "$drill_log" >&2
+          exit 1
         fi
-      done < <(find "$drill_destination/tmp" -maxdepth 1 -type f -printf '%s\n')
-      sleep 0.1
-    done
-    echo "Interruption drill ($label): killing during APPEND at $partial_append_bytes of $expected_message_bytes bytes"
-  else
-    while (( $(drill_count) < 5 )); do
-      if ! kill -0 "$drill_pid" 2>/dev/null; then
-        echo "FAIL: interruption drill ($label) finished before it could be interrupted" >&2
-        tail -n 40 "$drill_log" >&2
-        exit 1
-      fi
-      if (( SECONDS > drill_deadline )); then
-        echo "FAIL: interruption drill ($label) transfer never started" >&2
-        tail -n 40 "$drill_log" >&2
-        exit 1
-      fi
-      sleep 0.2
-    done
-  fi
-  kill -KILL "$drill_pid"
-  wait "$drill_pid" 2>/dev/null || true
-  local copied_before_kill
-  copied_before_kill="$(drill_count)"
-  echo "Interruption drill ($label): controller killed after $copied_before_kill of $drill_messages messages"
-  # The engine must not outlive its controller and keep writing unsupervised.
-  local engine_deadline=$((SECONDS + 20))
-  while pgrep -f "imapsync.*$drill_user" >/dev/null; do
-    if (( SECONDS > engine_deadline )); then
-      echo "FAIL: imapsync kept running after its controller was killed ($label)" >&2
-      pgrep -af "imapsync.*$drill_user" >&2 || true
-      exit 1
+        if (( SECONDS > drill_deadline )); then
+          echo "FAIL: interruption drill ($label) never exposed a partial destination APPEND" >&2
+          find "$drill_destination/tmp" -maxdepth 1 -type f -printf '%s bytes %p\n' >&2 || true
+          tail -n 40 "$drill_log" >&2
+          exit 1
+        fi
+        partial_append_bytes=0
+        while IFS= read -r file_bytes; do
+          if (( file_bytes > partial_append_bytes )); then
+            partial_append_bytes=$file_bytes
+          fi
+        done < <(find "$drill_destination/tmp" -maxdepth 1 -type f -printf '%s\n')
+        sleep 0.1
+      done
+      echo "Interruption drill ($label): interrupting during APPEND at $partial_append_bytes of $expected_message_bytes bytes"
+    else
+      # Each round must make fresh progress, so a repeated fault lands on a
+      # resumed transfer rather than on its startup.
+      threshold=$((copied_before_kill + 5))
+      while (( $(drill_count) < threshold )) || ! engine_running; do
+        if ! kill -0 "$drill_pid" 2>/dev/null; then
+          echo "FAIL: interruption drill ($label) finished before it could be interrupted (round $round)" >&2
+          tail -n 40 "$drill_log" >&2
+          exit 1
+        fi
+        if (( SECONDS > drill_deadline )); then
+          echo "FAIL: interruption drill ($label) transfer never reached $threshold messages (round $round)" >&2
+          tail -n 40 "$drill_log" >&2
+          exit 1
+        fi
+        sleep 0.2
+      done
     fi
-    sleep 0.5
-  done
-  echo "PASS: the engine stopped with its killed controller ($label)"
 
-  XDG_CONFIG_HOME="$drill_config" run_product recover "$drill_state"
+    local drill_exit=0
+    case "$fault" in
+      controller)
+        kill -KILL "$drill_pid"
+        wait "$drill_pid" 2>/dev/null || true
+        ;;
+      engine)
+        local engine_pid engine_group own_group
+        engine_pid="$(pgrep -o -f "imapsync.*$drill_user")"
+        engine_group="$(ps -o pgid= -p "$engine_pid" | tr -d '[:space:]')"
+        own_group="$(ps -o pgid= -p "$$" | tr -d '[:space:]')"
+        # The runner makes the engine its own process-group leader; never
+        # signal the harness's group if that ever stops being true.
+        if [[ -n "$engine_group" && "$engine_group" != "$own_group" ]]; then
+          kill -KILL -- "-$engine_group"
+        else
+          kill -KILL "$engine_pid"
+        fi
+        wait "$drill_pid" || drill_exit=$?
+        ;;
+      source | destination)
+        local server_pid server_port
+        if [[ "$fault" == source ]]; then
+          server_pid=$source_pid server_port=$source_port
+        else
+          server_pid=$destination_pid server_port=$destination_port
+        fi
+        crash_server "$server_pid" "$server_port"
+        # Keep the server down until the controller gives up on it.
+        local outage_deadline=$((SECONDS + 150))
+        while kill -0 "$drill_pid" 2>/dev/null; do
+          if (( SECONDS > outage_deadline )); then
+            echo "FAIL: the controller kept running for 150s against a crashed $fault server ($label)" >&2
+            tail -n 40 "$drill_log" >&2
+            exit 1
+          fi
+          sleep 0.5
+        done
+        wait "$drill_pid" || drill_exit=$?
+        restart_server "$fault" "$server_port"
+        if [[ "$fault" == source ]]; then
+          source_pid=$restarted_server_pid
+        else
+          destination_pid=$restarted_server_pid
+        fi
+        ;;
+      *)
+        echo "FAIL: unknown interruption drill fault '$fault'" >&2
+        exit 1
+        ;;
+    esac
+    copied_before_kill="$(drill_count)"
+    echo "Interruption drill ($label): $fault fault in round $round after $copied_before_kill of $drill_messages messages"
+    # The engine must not outlive the fault and keep writing unsupervised.
+    local engine_deadline=$((SECONDS + 20))
+    while engine_running; do
+      if (( SECONDS > engine_deadline )); then
+        echo "FAIL: imapsync kept running after the $fault fault ($label)" >&2
+        pgrep -af "imapsync.*$drill_user" >&2 || true
+        exit 1
+      fi
+      sleep 0.5
+    done
+    echo "PASS: the engine stopped after the $fault fault ($label, round $round)"
+    if [[ "$fault" != controller ]]; then
+      # The controller survived the fault, so it must have said so: neither
+      # a clean exit nor a verified mailbox may hide an interrupted copy.
+      if [[ "$drill_exit" -eq 0 ]] || \
+        XDG_CONFIG_HOME="$drill_config" run_product status "$drill_state" | grep -q '"state": "verified"'; then
+        echo "FAIL: the controller reported success after the $fault fault ($label, exit $drill_exit)" >&2
+        tail -n 40 "$drill_log" >&2
+        exit 1
+      fi
+      echo "PASS: the controller recorded the $fault fault as unfinished work (exit $drill_exit)"
+    fi
+    XDG_CONFIG_HOME="$drill_config" run_product recover "$drill_state"
+  done
+
   if [[ "$restore" == restore ]]; then
     # Resume from a ledger restored out of a post-crash backup rather than
     # the original file, as after losing the host's state volume.
@@ -1252,20 +1392,26 @@ run_interruption_drill() {
     --acknowledge-destination-loss \
     --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
     --diagnostic-log "$diagnostic_dir"
-  local drill_status drill_final
+  local drill_status drill_final expected_ids delivered_ids
   drill_status="$(XDG_CONFIG_HOME="$drill_config" run_product status "$drill_state")"
   drill_final="$(drill_count)"
-  printf 'Integration assertion: interruption drill (%s) destination count=%s (killed at %s)\n' \
-    "$label" "$drill_final" "$copied_before_kill" >> "$product_log"
-  if [[ "$drill_final" -eq "$drill_messages" ]]; then
+  expected_ids="$(drill_message_ids "$drill_source")"
+  delivered_ids="$(drill_message_ids "$drill_destination")"
+  printf 'Integration assertion: interruption drill (%s, %s x%s) destination count=%s (interrupted at %s)\n' \
+    "$label" "$fault" "$interruptions" "$drill_final" "$copied_before_kill" >> "$product_log"
+  if [[ "$delivered_ids" == "$expected_ids" ]]; then
     if ! grep -q '"state": "verified"' <<<"$drill_status"; then
       echo "FAIL: resumed drill ($label) copied every message but did not verify" >&2
       printf '%s\n' "$drill_status" >&2
       exit 1
     fi
-    echo "PASS: interrupted migration ($label) resumed to exactly $drill_messages verified messages"
+    echo "PASS: interrupted migration ($label) resumed to exactly $drill_messages verified messages, each Message-ID once"
   elif [[ "$strict" == strict ]] || grep -q '"state": "verified"' <<<"$drill_status"; then
     echo "FAIL: resumed drill ($label) holds $drill_final of $drill_messages messages (state below)" >&2
+    echo "Duplicated Message-IDs:" >&2
+    uniq -d <<<"$delivered_ids" >&2 || true
+    echo "Missing Message-IDs:" >&2
+    LC_ALL=C comm -23 <(uniq <<<"$expected_ids") <(uniq <<<"$delivered_ids") >&2 || true
     printf '%s\n' "$drill_status" >&2
     exit 1
   else
@@ -1279,4 +1425,8 @@ if [[ "$test_engine" != Dovecot ]] && (( scale_messages == 0 )); then
   # socket shaping. Kill only after observing a genuinely partial APPEND file.
   run_interruption_drill large-append false strict "" 1 67108864 1048576
   run_interruption_drill uid-cache true flagged
+  run_interruption_drill engine-kill false strict "" 60 0 0 engine
+  run_interruption_drill destination-crash false strict "" 60 0 0 destination
+  run_interruption_drill source-crash false strict "" 60 0 0 source
+  run_interruption_drill repeated-crash false strict "" 60 0 0 controller 3
 fi
