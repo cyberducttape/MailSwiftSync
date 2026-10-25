@@ -17,7 +17,7 @@ mod folder_policy;
 mod verification_runner;
 pub(crate) use folder_policy::{
     apply_explicit_folder_mapping, automap_folder_kind, infer_automap_folder_mapping,
-    validate_destination_folder_policy,
+    reconciled_folder_counts, validate_destination_folder_policy,
 };
 pub(crate) use verification_runner::{
     MessageVerificationResult, run_dovecot_destination_preflight, run_dovecot_verification,
@@ -1289,6 +1289,40 @@ mod tests {
 
         let error = validate_destination_folder_policy(&required, &actual, false).unwrap_err();
         assert!(error.contains("Sent"));
+    }
+
+    #[test]
+    fn empty_destination_only_folders_do_not_change_reconciled_folder_counts() {
+        let folders = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<HashSet<_>>()
+        };
+        let source = folders(&["INBOX", "Archive", "Projects/2026", "Spam"]);
+        let excluded = folders(&["Spam"]);
+        let expected = folders(&["INBOX", "Archive", "Projects/2026"]);
+        // imapsync created the parent `Projects`; the provider keeps its
+        // own empty `Provider/System`; `Imported` holds mail.
+        let destination = folders(&[
+            "INBOX",
+            "Archive",
+            "Projects",
+            "Projects/2026",
+            "Provider/System",
+            "Imported",
+        ]);
+        let messages = |folder: &str| u64::from(folder == "Imported") * 3;
+
+        assert_eq!(
+            super::reconciled_folder_counts(&source, &excluded, &expected, &destination, messages),
+            (3, 4)
+        );
+        let without_mail = folders(&["INBOX", "Archive", "Projects", "Projects/2026"]);
+        assert_eq!(
+            super::reconciled_folder_counts(&source, &excluded, &expected, &without_mail, |_| 0),
+            (3, 3)
+        );
     }
 
     #[test]
