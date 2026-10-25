@@ -350,8 +350,17 @@ pub(crate) fn run_imap_message_verification(
     let destination_bytes = stage
         .sum_bytes(core::StagedMessageSide::Destination)
         .map_err(|e| e.to_string())?;
-    let source_folders = source.mailboxes.len() as u64;
-    let destination_folders = destination.mailboxes.len() as u64;
+    let (source_folders, destination_folders) = reconciled_folder_counts(
+        &source.mailboxes,
+        &excluded_source_folders,
+        &expected_destination_folders,
+        &destination.mailboxes,
+        |folder| {
+            destination_snapshots
+                .get(folder)
+                .map_or(0, |snapshot| snapshot.exists)
+        },
+    );
     let verification_method = if form.profile.body_hash_verification {
         core::VerificationMethod::BodyHash
     } else {

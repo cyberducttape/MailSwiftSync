@@ -29,6 +29,38 @@ pub(crate) fn validate_destination_folder_policy(
     Ok(())
 }
 
+/// Folder totals for the reconciled scope, as `(source, destination)`.
+///
+/// The source side counts the folders that were verified (exclusions left
+/// out). The destination side counts the folders that receive them plus any
+/// destination-only folder that holds mail. An empty destination-only folder
+/// is left out: the additive policy keeps folders the source never had, such
+/// as a provider's own folders or a parent imapsync creates for a nested
+/// folder whose parent is not selectable on the source, and such a folder
+/// carries nothing to reconcile. Counting it made exactly matching mail
+/// look like a folder-count difference, which the ledger refuses to record
+/// under an exact label. Mail in a destination-only folder is still counted
+/// here and reported as extra messages.
+pub(crate) fn reconciled_folder_counts(
+    source_folders: &HashSet<String>,
+    excluded_source_folders: &HashSet<String>,
+    expected_destination_folders: &HashSet<String>,
+    destination_folders: &HashSet<String>,
+    destination_messages: impl Fn(&str) -> u64,
+) -> (u64, u64) {
+    let source = source_folders
+        .iter()
+        .filter(|folder| !excluded_source_folders.contains(*folder))
+        .count();
+    let destination = destination_folders
+        .iter()
+        .filter(|folder| {
+            expected_destination_folders.contains(*folder) || destination_messages(folder) > 0
+        })
+        .count();
+    (source as u64, destination as u64)
+}
+
 pub(crate) fn infer_automap_folder_mapping(
     source: &[MailboxDescriptor],
     destination: &[MailboxDescriptor],

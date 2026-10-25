@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Fix exactly matching mail landing in Attention, unrecorded, whenever the
+  destination kept a folder the source does not have, such as a provider's
+  own empty folder or a parent imapsync creates for a nested folder
+  (`Projects` for `Projects/2026` when the source's `Projects` is not
+  selectable). The folder totals now cover the verified scope: excluded
+  source folders and empty destination-only folders are left out, while a
+  destination-only folder holding mail still counts and its messages are
+  reported as extra. Before, the unequal totals contradicted the exact
+  verification label and the ledger refused the result. Found by the new
+  three-folder interruption drill.
 - Fix the fleet API's over-capacity 503 being lost on Windows: a refused
   connection is now answered on a helper thread that keeps the socket open
   until the client has read the reply (at most one second), instead of
