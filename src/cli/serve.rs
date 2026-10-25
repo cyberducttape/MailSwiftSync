@@ -21,6 +21,10 @@ const DEFAULT_REFRESH_SECONDS: u64 = 30;
 const MIN_TOKEN_BYTES: usize = 32;
 const MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
 const MAX_CONCURRENT_CONNECTIONS: usize = 16;
+/// Over-ceiling connections waiting for their 503.
+const MAX_QUEUED_REFUSALS: usize = 4 * MAX_CONCURRENT_CONNECTIONS;
+/// How long a refused connection may take to read its 503 and close.
+const BUSY_LINGER: Duration = Duration::from_secs(1);
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -306,8 +310,17 @@ fn run_fleet_api(
 fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result<(), String> {
     let active = Arc::new(AtomicUsize::new(0));
     let mut last_accept_error_log: Option<std::time::Instant> = None;
+    // Over-ceiling connections are answered on one helper thread, so a slow
+    // peer's lingering close never stalls the accept loop. A refusal that
+    // does not fit the queue is closed without an answer.
+    let (refusals, refusal_queue) = std::sync::mpsc::sync_channel::<TcpStream>(MAX_QUEUED_REFUSALS);
+    let refusals = std::thread::Builder::new()
+        .name("fleet-api-refusals".into())
+        .spawn(move || refusal_queue.into_iter().for_each(refuse_busy))
+        .is_ok()
+        .then_some(refusals);
     for stream in listener.incoming() {
-        let mut stream = match stream {
+        let stream = match stream {
             Ok(stream) => stream,
             Err(error) => {
                 // Usually descriptor exhaustion or a reset during accept.
@@ -326,8 +339,10 @@ fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result
         if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
             active.fetch_sub(1, Ordering::AcqRel);
             // A plaintext 503 is meaningless to a TLS client; just close.
-            if context.tls.is_none() {
-                refuse_busy(&mut stream);
+            if context.tls.is_none()
+                && let Some(refusals) = &refusals
+            {
+                let _ = refusals.try_send(stream);
             }
             continue;
         }
@@ -520,26 +535,30 @@ impl Response {
     }
 }
 
-/// Answer a connection over the ceiling without blocking the accept loop.
-/// The request bytes that have already arrived are discarded first: closing
-/// a socket with unread input sends a reset (always on Windows), and the
-/// peer may then lose the 503 before reading it.
-fn refuse_busy(stream: &mut TcpStream) {
-    if stream.set_nonblocking(true).is_ok() {
-        let mut discard = [0_u8; 4096];
-        for _ in 0..4 {
-            match stream.read(&mut discard) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-    }
-    if stream.set_nonblocking(false).is_err() {
+/// Answer a connection over the ceiling with a 503, then linger until the
+/// peer closes. Closing a socket whose request has not been read sends a
+/// reset (always on Windows), and the reset can destroy the 503 before the
+/// peer reads it, so the request is drained after the write side is shut.
+/// The linger is bounded in time and bytes.
+fn refuse_busy(mut stream: TcpStream) {
+    let deadline = std::time::Instant::now() + BUSY_LINGER;
+    let _ = stream.set_write_timeout(Some(BUSY_LINGER));
+    if write_response(&mut stream, &busy_response(), false).is_err() {
         return;
     }
-    let _ = stream.set_write_timeout(Some(REQUEST_READ_TIMEOUT));
-    let _ = write_response(stream, &busy_response(), false);
     let _ = stream.shutdown(std::net::Shutdown::Write);
+    let mut discard = [0_u8; 4096];
+    let mut drained = 0;
+    while drained < MAX_REQUEST_HEAD_BYTES {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
+            break;
+        }
+        match stream.read(&mut discard) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => drained += read,
+        }
+    }
 }
 
 fn busy_response() -> Response {
@@ -1444,6 +1463,29 @@ mod tests {
                 .body
                 .contains("mailswiftsync_fleet_last_successful_scan_timestamp_seconds 1700000000")
         );
+    }
+
+    #[test]
+    fn a_refused_client_reads_its_503_even_when_its_request_arrives_late() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            // The request lands after the 503 was written: closing the
+            // socket with it unread would reset the connection.
+            std::thread::sleep(Duration::from_millis(200));
+            stream
+                .write_all(b"GET /metrics HTTP/1.1\r\nHost: x\r\n\r\n")
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            let mut response = String::new();
+            stream.read_to_string(&mut response).map(|_| response)
+        });
+        let (stream, _) = listener.accept().unwrap();
+        refuse_busy(stream);
+        let response = client.join().unwrap().expect("the 503 was reset away");
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        assert!(response.contains("Retry-After: 1"), "{response}");
     }
 
     #[test]
