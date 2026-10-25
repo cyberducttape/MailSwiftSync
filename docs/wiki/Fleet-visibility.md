@@ -80,7 +80,8 @@ the ledger reads.
 
 | Endpoint | Token | Returns |
 |---|---|---|
-| `/healthz` | no | `ok` while the process accepts connections |
+| `/healthz` | no | `ok` while the process accepts connections (liveness) |
+| `/readyz` | no | 200 only while the latest scan succeeded and is at most three refresh intervals old, else 503; the JSON body has counts and ages, never paths or errors |
 | `/v1/fleet` | yes | exactly the `fleet-status` JSON above |
 | `/metrics` | yes | Prometheus text: the [`metrics`](../automation-contract.md#sre-operational-coverage-and-limits) families summed across every readable ledger, plus readable/unreadable ledger counts and the scan time |
 
@@ -97,8 +98,11 @@ scrape_configs:
 ```
 
 Alert on `up == 0`, on `mailswiftsync_fleet_ledgers{state="unreadable"} > 0`,
-and on `time() - mailswiftsync_fleet_snapshot_timestamp_seconds` growing
-beyond a few refresh intervals.
+on `increase(mailswiftsync_fleet_refresh_failures_total[15m]) > 0`, and on
+`time() - mailswiftsync_fleet_last_successful_scan_timestamp_seconds` growing
+beyond a few refresh intervals. Point a load balancer or uptime check at
+`/readyz` rather than `/healthz`: a live process whose scans fail is not
+ready.
 
 Safety properties:
 
@@ -110,10 +114,13 @@ Safety properties:
   owner-only, and the token must be at least 32 printable characters.
   `/v1/fleet` carries project names and server hostnames, so treat the token
   like customer data.
-- **Loopback unless you say otherwise.** The API speaks plain HTTP. Binding
-  any other address requires `--allow-non-loopback`. Put a TLS reverse proxy
-  (Caddy, nginx) in front, and restrict who can reach it, before using that
-  flag.
+- **Loopback unless it is encrypted.** With `--tls-cert <chain.pem>
+  --tls-key <key.pem>` the listener terminates TLS 1.2+ itself and may bind
+  any address, for example `--listen 0.0.0.0:9464`. The key file must be
+  owner-only, like the tokens; restart `serve` to pick up a renewed
+  certificate. Without TLS the API speaks plain HTTP, and binding beyond
+  loopback requires `--allow-non-loopback` and a TLS reverse proxy in front.
+  Either way, restrict which hosts can reach the port.
 - **Fails visibly.** A scan that fails returns 503 with the reason instead of
   stale numbers, and `/metrics` returns 503 if any ledger's projection is
   truncated rather than publishing partial sums. `serve` refuses to start on

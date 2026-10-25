@@ -5,16 +5,17 @@
 //! per-ledger worker.
 
 mod controls;
+mod tls;
 
 use super::*;
 use crate::headless::FleetStatus;
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-const SERVE_USAGE: &str = "Usage: mailswiftsync serve <directory> --token-file <file> [--operators-file <file>] [--listen 127.0.0.1:9464] [--refresh-seconds 5..3600] [--allow-non-loopback]";
+const SERVE_USAGE: &str = "Usage: mailswiftsync serve <directory> --token-file <file> [--operators-file <file>] [--listen 127.0.0.1:9464] [--tls-cert <pem> --tls-key <pem>] [--refresh-seconds 5..3600] [--allow-non-loopback]";
 const DEFAULT_LISTEN: &str = "127.0.0.1:9464";
 const DEFAULT_REFRESH_SECONDS: u64 = 30;
 const MIN_TOKEN_BYTES: usize = 32;
@@ -29,8 +30,15 @@ pub(super) struct ServeArguments {
     pub(super) token_file: PathBuf,
     pub(super) operators_file: Option<PathBuf>,
     pub(super) listen: SocketAddr,
+    pub(super) tls: Option<TlsFiles>,
     pub(super) refresh_seconds: u64,
     pub(super) allow_non_loopback: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct TlsFiles {
+    pub(super) certificate: PathBuf,
+    pub(super) key: PathBuf,
 }
 
 pub(super) fn parse_serve_arguments<I>(arguments: I) -> Result<ServeArguments, &'static str>
@@ -42,6 +50,8 @@ where
     let mut token_file = None;
     let mut operators_file = None;
     let mut listen = None;
+    let mut tls_certificate = None;
+    let mut tls_key = None;
     let mut refresh_seconds = None;
     let mut allow_non_loopback = false;
     while let Some(argument) = arguments.next() {
@@ -61,6 +71,12 @@ where
                         .ok_or("--listen needs an IP address and port, such as 127.0.0.1:9464")?,
                 );
             }
+            Some("--tls-cert") if tls_certificate.is_none() => {
+                tls_certificate = Some(PathBuf::from(arguments.next().ok_or(SERVE_USAGE)?));
+            }
+            Some("--tls-key") if tls_key.is_none() => {
+                tls_key = Some(PathBuf::from(arguments.next().ok_or(SERVE_USAGE)?));
+            }
             Some("--refresh-seconds") if refresh_seconds.is_none() => {
                 let value = arguments.next().ok_or(SERVE_USAGE)?;
                 refresh_seconds = Some(
@@ -77,10 +93,17 @@ where
             _ => return Err(SERVE_USAGE),
         }
     }
+    let tls = match (tls_certificate, tls_key) {
+        (Some(certificate), Some(key)) => Some(TlsFiles { certificate, key }),
+        (None, None) => None,
+        _ => return Err("--tls-cert and --tls-key must be given together"),
+    };
     let listen = listen.unwrap_or_else(|| DEFAULT_LISTEN.parse().expect("valid default"));
-    if !listen.ip().is_loopback() && !allow_non_loopback {
+    // With native TLS a network listener is safe to bind directly; plain
+    // HTTP beyond loopback still needs the explicit acknowledgement.
+    if !listen.ip().is_loopback() && tls.is_none() && !allow_non_loopback {
         return Err(
-            "the fleet API speaks plain HTTP, so a non-loopback --listen would expose the bearer token and customer metadata on the network; put a TLS reverse proxy in front and pass --allow-non-loopback to acknowledge",
+            "without --tls-cert/--tls-key the fleet API speaks plain HTTP, so a non-loopback --listen would expose the bearer token and customer metadata on the network; enable TLS, or put a TLS reverse proxy in front and pass --allow-non-loopback to acknowledge",
         );
     }
     Ok(ServeArguments {
@@ -89,6 +112,7 @@ where
             .ok_or("--token-file is required; the fleet API never runs unauthenticated")?,
         operators_file,
         listen,
+        tls,
         refresh_seconds: refresh_seconds.unwrap_or(DEFAULT_REFRESH_SECONDS),
         allow_non_loopback,
     })
@@ -121,7 +145,17 @@ pub(super) fn serve_command(arguments: std::env::ArgsOs) -> eframe::Result<()> {
             }
         },
     };
-    if let Err(error) = run_fleet_api(&serve, token, operators) {
+    let tls = match &serve.tls {
+        None => None,
+        Some(files) => match tls::server_config(&files.certificate, &files.key) {
+            Ok(config) => Some(config),
+            Err(error) => {
+                eprintln!("Fleet API TLS configuration refused: {error}");
+                std::process::exit(2);
+            }
+        },
+    };
+    if let Err(error) = run_fleet_api(&serve, token, operators, tls) {
         eprintln!("Fleet API stopped: {error}");
         std::process::exit(1);
     }
@@ -153,6 +187,46 @@ struct ApiContext {
     read_token: [u8; 32],
     operators: Vec<controls::Operator>,
     snapshot: RwLock<Arc<FleetSnapshot>>,
+    /// Present when the listener terminates TLS itself.
+    tls: Option<Arc<rustls::ServerConfig>>,
+    refresh: RefreshHealth,
+}
+
+/// Scan outcomes over the process lifetime, for readiness and metrics; the
+/// snapshot alone only describes the latest scan.
+#[derive(Default)]
+struct RefreshHealth {
+    interval_seconds: AtomicU64,
+    last_success_at: AtomicU64,
+    consecutive_failures: AtomicU64,
+    failures_total: AtomicU64,
+}
+
+impl RefreshHealth {
+    fn new(interval: Duration) -> Self {
+        let health = Self::default();
+        health
+            .interval_seconds
+            .store(interval.as_secs(), Ordering::Relaxed);
+        health
+    }
+
+    fn record(&self, snapshot: &FleetSnapshot) {
+        if snapshot.rendered.is_ok() {
+            self.last_success_at
+                .store(snapshot.generated_at, Ordering::Relaxed);
+            self.consecutive_failures.store(0, Ordering::Relaxed);
+        } else {
+            self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+            self.failures_total.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 impl ApiContext {
@@ -170,6 +244,7 @@ fn run_fleet_api(
     serve: &ServeArguments,
     read_token: [u8; 32],
     operators: Vec<controls::Operator>,
+    tls: Option<Arc<rustls::ServerConfig>>,
 ) -> Result<(), String> {
     // Refuse to start on a root that cannot be scanned at all, so a typo in
     // a service unit fails loudly instead of serving errors forever.
@@ -177,17 +252,26 @@ fn run_fleet_api(
     if let Err(error) = &first.rendered {
         return Err(format!("could not scan {}: {error}", serve.root.display()));
     }
+    let refresh = RefreshHealth::new(Duration::from_secs(serve.refresh_seconds));
+    refresh.record(&first);
     let context = Arc::new(ApiContext {
         root: serve.root.clone(),
         read_token,
         operators,
         snapshot: RwLock::new(Arc::new(first)),
+        tls,
+        refresh,
     });
     let listener = TcpListener::bind(serve.listen)
         .map_err(|error| format!("could not listen on {}: {error}", serve.listen))?;
     eprintln!(
-        "Serving fleet status for {} on http://{} (refresh every {}s); {}",
+        "Serving fleet status for {} on {}://{} (refresh every {}s); {}",
         serve.root.display(),
+        if context.tls.is_some() {
+            "https"
+        } else {
+            "http"
+        },
         listener.local_addr().unwrap_or(serve.listen),
         serve.refresh_seconds,
         match context.operators.len() {
@@ -207,6 +291,7 @@ fn run_fleet_api(
                     if let Err(error) = &next.rendered {
                         eprintln!("Fleet status refresh failed: {error}");
                     }
+                    context.refresh.record(&next);
                     *context
                         .snapshot
                         .write()
@@ -220,14 +305,30 @@ fn run_fleet_api(
 
 fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result<(), String> {
     let active = Arc::new(AtomicUsize::new(0));
+    let mut last_accept_error_log: Option<std::time::Instant> = None;
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else {
-            continue;
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                // Usually descriptor exhaustion or a reset during accept.
+                // Report it at most once a minute, and back off briefly so
+                // a persistent failure cannot spin a CPU.
+                if last_accept_error_log
+                    .is_none_or(|logged| logged.elapsed() >= Duration::from_secs(60))
+                {
+                    eprintln!("Fleet API could not accept a connection: {error}");
+                    last_accept_error_log = Some(std::time::Instant::now());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
         };
         if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
             active.fetch_sub(1, Ordering::AcqRel);
-            let _ = stream.set_write_timeout(Some(REQUEST_READ_TIMEOUT));
-            let _ = write_response(&mut stream, &busy_response(), false);
+            // A plaintext 503 is meaningless to a TLS client; just close.
+            if context.tls.is_none() {
+                refuse_busy(&mut stream);
+            }
             continue;
         }
         let context = Arc::clone(&context);
@@ -246,15 +347,42 @@ fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result
 }
 
 fn handle_connection(mut stream: TcpStream, context: &ApiContext) {
+    // Socket timeouts also bound the TLS handshake, which happens inside
+    // the first read.
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(RESPONSE_WRITE_TIMEOUT));
-    let response = match read_request_head(&mut stream) {
+    match &context.tls {
+        None => {
+            serve_request(&mut stream, context);
+        }
+        Some(config) => {
+            let Ok(connection) = rustls::ServerConnection::new(Arc::clone(config)) else {
+                return;
+            };
+            let mut tls = rustls::StreamOwned::new(connection, stream);
+            // A failed handshake (plain HTTP sent to the TLS port, an
+            // untrusted client) surfaces as a read error and gets no reply.
+            if serve_request(&mut tls, context) {
+                tls.conn.send_close_notify();
+                let _ = tls.flush();
+            }
+            stream = tls.sock;
+        }
+    }
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+}
+
+/// Answer one request on a plain or TLS stream; false when nothing could be
+/// exchanged at all (for example a failed TLS handshake).
+fn serve_request(stream: &mut (impl Read + Write), context: &ApiContext) -> bool {
+    // After a failed handshake the write below fails too, so no plaintext
+    // error ever goes to a TLS port and the caller skips close_notify.
+    let response = match read_request_head(stream) {
         Ok(head) => respond(&head, context),
         Err(response) => response,
     };
     let head_only = response.head_only;
-    let _ = write_response(&mut stream, &response, head_only);
-    let _ = stream.shutdown(std::net::Shutdown::Both);
+    write_response(stream, &response, head_only).is_ok()
 }
 
 fn read_request_head(stream: &mut impl Read) -> Result<String, Response> {
@@ -279,6 +407,15 @@ fn read_request_head(stream: &mut impl Read) -> Result<String, Response> {
         }
         head.extend_from_slice(&buffer[..read]);
         if let Some(end) = head.windows(4).position(|window| window == b"\r\n\r\n") {
+            // The limit applies to the head itself, including one whose
+            // terminator arrived in the read that crossed the limit.
+            if end + 4 > MAX_REQUEST_HEAD_BYTES {
+                return Err(Response::text(
+                    431,
+                    "Request Header Fields Too Large",
+                    "request head too large\n",
+                ));
+            }
             head.truncate(end);
             break;
         }
@@ -383,6 +520,28 @@ impl Response {
     }
 }
 
+/// Answer a connection over the ceiling without blocking the accept loop.
+/// The request bytes that have already arrived are discarded first: closing
+/// a socket with unread input sends a reset (always on Windows), and the
+/// peer may then lose the 503 before reading it.
+fn refuse_busy(stream: &mut TcpStream) {
+    if stream.set_nonblocking(true).is_ok() {
+        let mut discard = [0_u8; 4096];
+        for _ in 0..4 {
+            match stream.read(&mut discard) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    }
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
+    let _ = stream.set_write_timeout(Some(REQUEST_READ_TIMEOUT));
+    let _ = write_response(stream, &busy_response(), false);
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+}
+
 fn busy_response() -> Response {
     let mut response = Response::text(503, "Service Unavailable", "too many connections\n");
     response.extra_headers.push(("Retry-After", "1".into()));
@@ -406,9 +565,11 @@ impl Caller<'_> {
 /// The routes this API serves and the methods each accepts.
 fn allowed_methods(segments: &[&str]) -> Option<&'static str> {
     match segments {
-        ["healthz"] | ["metrics"] | ["v1", "fleet"] | ["v1", "projects", _, "waves"] => {
-            Some("GET, HEAD")
-        }
+        ["healthz"]
+        | ["readyz"]
+        | ["metrics"]
+        | ["v1", "fleet"]
+        | ["v1", "projects", _, "waves"] => Some("GET, HEAD"),
         ["v1", "waves", _, "approve"]
         | ["v1", "projects", _, "hold"]
         | ["v1", "projects", _, "resume"] => Some("POST"),
@@ -452,6 +613,7 @@ fn respond(head: &str, context: &ApiContext) -> Response {
     let snapshot = context.current_snapshot();
     let mut response = match segments.as_slice() {
         ["healthz"] => Response::text(200, "OK", "ok\n"),
+        ["readyz"] => readiness(&snapshot, &context.refresh),
         _ if !caller.may_read() => unauthorized(),
         ["v1", "fleet"] => match &snapshot.rendered {
             Ok(rendered) => Response::json(200, "OK", rendered.json.clone()),
@@ -460,7 +622,7 @@ fn respond(head: &str, context: &ApiContext) -> Response {
         ["metrics"] => match snapshot.rendered.as_ref().map(|rendered| &rendered.metrics) {
             Ok(Ok(metrics)) => Response {
                 content_type: "text/plain; version=0.0.4; charset=utf-8",
-                body: metrics.clone(),
+                body: format!("{metrics}{}", refresh_metrics(&context.refresh)),
                 ..Response::text(200, "OK", "")
             },
             Ok(Err(error)) | Err(error) => {
@@ -520,6 +682,36 @@ fn respond(head: &str, context: &ApiContext) -> Response {
     ));
     response.head_only = method == "HEAD";
     response
+}
+
+/// Ready only when the latest scan succeeded and is recent. Unauthenticated
+/// like `/healthz`, so the body carries counts and ages but never a path or
+/// an error message.
+fn readiness(snapshot: &FleetSnapshot, refresh: &RefreshHealth) -> Response {
+    let interval = refresh.interval_seconds.load(Ordering::Relaxed).max(1);
+    let age = unix_now().saturating_sub(snapshot.generated_at);
+    let fresh = age <= interval.saturating_mul(3);
+    let ready = snapshot.rendered.is_ok() && fresh;
+    let body = serde_json::json!({
+        "ready": ready,
+        "latest_scan_succeeded": snapshot.rendered.is_ok(),
+        "snapshot_age_seconds": age,
+        "consecutive_refresh_failures": refresh.consecutive_failures.load(Ordering::Relaxed),
+    })
+    .to_string();
+    if ready {
+        Response::json(200, "OK", body)
+    } else {
+        Response::json(503, "Service Unavailable", body)
+    }
+}
+
+fn refresh_metrics(refresh: &RefreshHealth) -> String {
+    format!(
+        "# HELP mailswiftsync_fleet_refresh_failures_total Ledger scans that failed since the fleet API started.\n# TYPE mailswiftsync_fleet_refresh_failures_total counter\nmailswiftsync_fleet_refresh_failures_total {}\n# HELP mailswiftsync_fleet_last_successful_scan_timestamp_seconds Unix time of the latest ledger scan that succeeded.\n# TYPE mailswiftsync_fleet_last_successful_scan_timestamp_seconds gauge\nmailswiftsync_fleet_last_successful_scan_timestamp_seconds {}\n",
+        refresh.failures_total.load(Ordering::Relaxed),
+        refresh.last_success_at.load(Ordering::Relaxed),
+    )
 }
 
 fn unauthorized() -> Response {
@@ -634,6 +826,8 @@ mod tests {
             )
             .unwrap(),
             snapshot: RwLock::new(Arc::new(snapshot)),
+            tls: None,
+            refresh: RefreshHealth::new(Duration::from_secs(30)),
         }
     }
 
@@ -698,6 +892,7 @@ mod tests {
                 token_file: "/etc/token".into(),
                 operators_file: None,
                 listen: DEFAULT_LISTEN.parse().unwrap(),
+                tls: None,
                 refresh_seconds: DEFAULT_REFRESH_SECONDS,
                 allow_non_loopback: false,
             })
@@ -733,6 +928,153 @@ mod tests {
         let parsed = parse_serve_arguments(args(&acknowledged)).unwrap();
         assert_eq!(parsed.listen, "0.0.0.0:9464".parse().unwrap());
         assert!(parsed.allow_non_loopback);
+    }
+
+    #[test]
+    fn tls_needs_both_files_and_makes_a_network_listener_acceptable() {
+        let base = ["/srv", "--token-file", "t"];
+        let with = |extra: &[&str]| {
+            let mut values = base.to_vec();
+            values.extend_from_slice(extra);
+            parse_serve_arguments(args(&values))
+        };
+        assert!(with(&["--tls-cert", "cert.pem"]).is_err());
+        assert!(with(&["--tls-key", "key.pem"]).is_err());
+        let parsed = with(&[
+            "--tls-cert",
+            "cert.pem",
+            "--tls-key",
+            "key.pem",
+            "--listen",
+            "0.0.0.0:9464",
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed.tls,
+            Some(TlsFiles {
+                certificate: "cert.pem".into(),
+                key: "key.pem".into(),
+            })
+        );
+        assert!(!parsed.allow_non_loopback);
+        assert!(with(&["--tls-cert", "a", "--tls-cert", "b", "--tls-key", "k"]).is_err());
+    }
+
+    /// A throwaway self-signed `localhost` certificate, or `None` where the
+    /// `openssl` command is unavailable.
+    #[cfg(unix)]
+    fn generated_certificate(directory: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
+        let certificate = directory.join("cert.pem");
+        let key = directory.join("key.pem");
+        let status = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+            ])
+            .args(["-nodes", "-days", "2", "-subj", "/CN=localhost"])
+            .args(["-addext", "subjectAltName=DNS:localhost"])
+            // A leaf, not a CA: webpki refuses a CA certificate as a server.
+            .args(["-addext", "basicConstraints=critical,CA:FALSE"])
+            .args(["-addext", "extendedKeyUsage=serverAuth"])
+            .arg("-keyout")
+            .arg(&key)
+            .arg("-out")
+            .arg(&certificate)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        Some((certificate, key))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tls_listener_serves_requests_and_never_answers_plaintext() {
+        let root = private_root();
+        let Some((certificate, key)) = generated_certificate(&root) else {
+            eprintln!("openssl unavailable; skipping the live TLS test");
+            return;
+        };
+        let config = tls::server_config(&certificate, &key).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut context = context(snapshot());
+        context.tls = Some(config);
+        let shared = Arc::new(context);
+        std::thread::spawn(move || accept_connections(listener, shared));
+
+        let mut roots = rustls::RootCertStore::empty();
+        let pem = std::fs::read(&certificate).unwrap();
+        {
+            use rustls::pki_types::pem::PemObject;
+            for certificate in rustls::pki_types::CertificateDer::pem_slice_iter(&pem) {
+                roots.add(certificate.unwrap()).unwrap();
+            }
+        }
+        let client = Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        );
+        let connection =
+            rustls::ClientConnection::new(client, "localhost".try_into().unwrap()).unwrap();
+        let mut tls_stream =
+            rustls::StreamOwned::new(connection, TcpStream::connect(address).unwrap());
+        tls_stream
+            .write_all(
+                format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        let mut response = String::new();
+        let _ = tls_stream.read_to_string(&mut response);
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert!(response.contains("mailswiftsync_mailbox_jobs"));
+
+        // Plain HTTP to the TLS port must not get a plaintext answer.
+        let mut plain = TcpStream::connect(address).unwrap();
+        plain
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        plain.write_all(b"GET /healthz HTTP/1.1\r\n\r\n").unwrap();
+        let mut bytes = Vec::new();
+        let _ = plain.read_to_end(&mut bytes);
+        assert!(!String::from_utf8_lossy(&bytes).contains("HTTP/1.1"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tls_configuration_refuses_unusable_files() {
+        let root = private_root();
+        let Some((certificate, key)) = generated_certificate(&root) else {
+            return;
+        };
+        let missing = root.join("missing.pem");
+        assert!(tls::server_config(&missing, &key).is_err());
+        assert!(tls::server_config(&certificate, &missing).is_err());
+        // The certificate is not a key, and an empty file holds no chain.
+        let empty = root.join("empty.pem");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(tls::server_config(&empty, &key).is_err());
+        // A key readable by others is refused like any secret file.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            tls::server_config(&certificate, &key)
+                .unwrap_err()
+                .contains("owner-only")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1042,11 +1384,137 @@ mod tests {
     }
 
     #[test]
+    fn readiness_requires_a_recent_successful_scan_and_leaks_no_detail() {
+        let fresh = FleetSnapshot {
+            generated_at: unix_now(),
+            ..snapshot()
+        };
+        let context = context(fresh);
+        context.refresh.record(&context.current_snapshot());
+        let ready = respond("GET /readyz HTTP/1.1", &context);
+        assert_eq!(ready.status, 200, "{}", ready.body);
+        assert!(ready.body.contains("\"ready\":true"));
+
+        let failed = FleetSnapshot {
+            generated_at: unix_now(),
+            rendered: Err("could not read /srv/customer-a: permission denied".into()),
+        };
+        context.refresh.record(&failed);
+        *context.snapshot.write().unwrap() = Arc::new(failed);
+        let not_ready = respond("GET /readyz HTTP/1.1", &context);
+        assert_eq!(not_ready.status, 503);
+        assert!(
+            not_ready
+                .body
+                .contains("\"consecutive_refresh_failures\":1")
+        );
+        assert!(!not_ready.body.contains("customer-a"));
+        // Liveness stays independent of scan health.
+        assert_eq!(respond("GET /healthz HTTP/1.1", &context).status, 200);
+
+        // A snapshot older than three refresh intervals is stale even if it
+        // succeeded, for example when the refresh thread is stuck.
+        *context.snapshot.write().unwrap() = Arc::new(FleetSnapshot {
+            generated_at: unix_now() - 120,
+            ..snapshot()
+        });
+        assert_eq!(respond("GET /readyz HTTP/1.1", &context).status, 503);
+    }
+
+    #[test]
+    fn metrics_report_refresh_failures_and_the_last_successful_scan() {
+        let context = context(snapshot());
+        context.refresh.record(&snapshot());
+        context.refresh.record(&FleetSnapshot {
+            generated_at: 1,
+            rendered: Err("unreadable".into()),
+        });
+        let metrics = respond(
+            &request("/metrics", Some(&format!("Bearer {TOKEN}"))),
+            &context,
+        );
+        assert_eq!(metrics.status, 200);
+        assert!(
+            metrics
+                .body
+                .contains("mailswiftsync_fleet_refresh_failures_total 1")
+        );
+        assert!(
+            metrics
+                .body
+                .contains("mailswiftsync_fleet_last_successful_scan_timestamp_seconds 1700000000")
+        );
+    }
+
+    #[test]
+    fn concurrent_clients_beyond_the_ceiling_get_answers_and_the_listener_survives() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let shared = Arc::new(context(snapshot()));
+        std::thread::spawn(move || accept_connections(listener, shared));
+        let exchange = move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream
+                .write_all(
+                    format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n")
+                        .as_bytes(),
+                )
+                .unwrap();
+            let mut response = String::new();
+            let _ = stream.read_to_string(&mut response);
+            response
+        };
+        let clients = (0..48)
+            .map(|_| std::thread::spawn(exchange))
+            .collect::<Vec<_>>();
+        let mut served = 0;
+        for client in clients {
+            let response = client.join().unwrap();
+            if response.starts_with("HTTP/1.1 200 OK") {
+                served += 1;
+            } else {
+                assert!(
+                    response.starts_with("HTTP/1.1 503") && response.contains("Retry-After: 1"),
+                    "{response}"
+                );
+            }
+        }
+        assert!(served >= 16, "only {served} requests served");
+        // Every slot was released: a later request is served normally.
+        assert!(exchange().starts_with("HTTP/1.1 200 OK"));
+    }
+
+    #[test]
     fn oversized_request_heads_are_refused() {
         let mut oversized = std::io::Cursor::new(vec![b'a'; MAX_REQUEST_HEAD_BYTES + 2048]);
         assert_eq!(read_request_head(&mut oversized).unwrap_err().status, 431);
         let mut truncated = std::io::Cursor::new(b"GET / HTTP/1.1\r\n".to_vec());
         assert_eq!(read_request_head(&mut truncated).unwrap_err().status, 400);
+        // A head that crosses the limit inside the final read is refused
+        // even though its terminator arrives in that same read.
+        let mut crossing = format!(
+            "GET / HTTP/1.1\r\nX-Pad: {}",
+            "a".repeat(MAX_REQUEST_HEAD_BYTES - 100)
+        )
+        .into_bytes();
+        crossing.extend_from_slice(&[b'b'; 200]);
+        crossing.extend_from_slice(b"\r\n\r\n");
+        assert!(crossing.len() > MAX_REQUEST_HEAD_BYTES);
+        assert!(crossing.len() < MAX_REQUEST_HEAD_BYTES + 1024);
+        assert_eq!(
+            read_request_head(&mut std::io::Cursor::new(crossing))
+                .unwrap_err()
+                .status,
+            431
+        );
+        let mut exact = format!(
+            "GET / HTTP/1.1\r\nX-Pad: {}",
+            "a".repeat(MAX_REQUEST_HEAD_BYTES - 27)
+        )
+        .into_bytes();
+        exact.extend_from_slice(b"\r\n\r\n");
+        assert_eq!(exact.len(), MAX_REQUEST_HEAD_BYTES);
+        assert!(read_request_head(&mut std::io::Cursor::new(exact)).is_ok());
         let mut complete = std::io::Cursor::new(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n".to_vec());
         assert_eq!(
             read_request_head(&mut complete).unwrap(),

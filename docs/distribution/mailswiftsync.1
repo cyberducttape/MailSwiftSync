@@ -25,12 +25,13 @@ Lift a project hold so held mailboxes become automation-safe work again.
 .B supervise STATE [POLL] [RETRIES] [WINDOW]
 Run automation-safe supervision for queued and retryable work.
 .TP
-.B serve DIRECTORY --token-file FILE [--operators-file FILE] [--listen ADDRESS] [--refresh-seconds N] [--allow-non-loopback]
+.B serve DIRECTORY --token-file FILE [--operators-file FILE] [--listen ADDRESS] [--tls-cert PEM --tls-key PEM] [--refresh-seconds N] [--allow-non-loopback]
 Serve fleet status JSON, Prometheus metrics, and wave lists for every ledger
 under DIRECTORY over HTTP, behind a bearer token read from an owner-only FILE.
 An owner-only operators file of "TOKEN NAME" lines lets each named operator
 approve waves; the ledger records that name as the approver.
-Binds 127.0.0.1:9464 by default; any other address requires
+Binds 127.0.0.1:9464 by default. With --tls-cert and --tls-key it serves
+HTTPS and may bind any address; plain HTTP beyond loopback requires
 --allow-non-loopback and a TLS reverse proxy.
 .TP
 .B status STATE [PROJECT]
