@@ -789,7 +789,7 @@ fn write_response(
     head_only: bool,
 ) -> std::io::Result<()> {
     let mut head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n",
         response.status,
         response.reason,
         response.content_type,
@@ -1613,6 +1613,7 @@ mod tests {
             "health endpoint must return HTTP 200"
         );
         assert!(health.contains("Cache-Control: no-store"));
+        assert!(health.contains("Cross-Origin-Resource-Policy: same-origin"));
         assert!(health.ends_with("ok\n"));
         let unauthorized = exchange("GET /metrics HTTP/1.1\r\n\r\n");
         assert!(
