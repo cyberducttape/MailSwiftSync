@@ -28,8 +28,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.12"
       - name: Lint GitHub Actions workflows
@@ -45,8 +45,9 @@ jobs:
           printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --status
           tar -xzf "$archive" -C "$install_dir" actionlint
           "$install_dir/actionlint" .github/workflows/*.yml
-      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
         with:
+          toolchain: 1.92.0
           components: rustfmt, clippy
       - run: cargo fmt --check
       - name: Analyze systemd supervisor security profile
@@ -178,7 +179,7 @@ jobs:
           fi
       - name: Upload test summary
         if: ${{ always() && !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: linux-test-summary
           path: dist/test-summary.md
@@ -189,7 +190,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Install pinned coverage toolchains
         run: |
           rustup toolchain install 1.92.0 --profile minimal --component llvm-tools-preview
@@ -204,7 +205,7 @@ jobs:
         run: python3 scripts/check-critical-coverage.py coverage.lcov --branch-lcov coverage-branches.lcov
       - name: Upload coverage report
         if: always() && hashFiles('coverage.lcov') != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: critical-line-and-branch-coverage-lcov
           path: |
@@ -253,13 +254,14 @@ jobs:
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
         with:
+          toolchain: 1.92.0
           targets: ${{ matrix.target }}
       - name: Initialize MSVC build environment
         if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        uses: ilammy/msvc-dev-cmd@v1.13.0
       - name: Select the MSVC linker explicitly
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -283,7 +285,7 @@ jobs:
           exit "$status"
       - name: Upload cross-platform build log
         if: failure() && matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: windows-cross-build-log
           path: cross-build.log
@@ -310,13 +312,14 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
         with:
+          toolchain: 1.92.0
           components: rustfmt, clippy
       - name: Initialize MSVC build environment
         if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        uses: ilammy/msvc-dev-cmd@v1.13.0
       - name: Select the MSVC linker explicitly
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -339,7 +342,7 @@ jobs:
           exit "$status"
       - name: Upload native test log
         if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: native-test-log-${{ matrix.os }}
           path: native-test.log
@@ -359,7 +362,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Build container image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:ci .
       - name: Verify container state and runtime persistence boundary
@@ -383,7 +386,7 @@ jobs:
           "$RUNNER_TEMP/mailswiftsync-image-vulnerability-report.json"
       - name: Preserve runtime image vulnerability report
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: runtime-image-vulnerability-report
           path: |
