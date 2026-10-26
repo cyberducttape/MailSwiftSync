@@ -76,7 +76,7 @@ def verify_pack(path: Path, schema_path: Path = DEFAULT_SCHEMA) -> dict:
         import jsonschema
     except ImportError as error:
         raise ValueError(
-            "jsonschema is required; install scripts/requirements-provider-qualification.txt"
+            "jsonschema is required; install scripts/requirements-provider-qualification.txt with pip --require-hashes"
         ) from error
     try:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))

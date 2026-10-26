@@ -1,0 +1,6 @@
+name: MailSwiftSync CodeQL
+queries:
+  - uses: security-extended
+paths-ignore:
+  - target/**
+  - fuzz/target/**

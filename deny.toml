@@ -3,7 +3,13 @@
 [advisories]
 version = 2
 yanked = "deny"
-unmaintained = "workspace"
+unmaintained = "all"
+unused-ignored-advisory = "deny"
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 is currently required by the Linux accessibility and Secret Service backends; review this exception when updating the desktop/keyring dependency graph" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 is currently required by the Linux accessibility and Secret Service backends; review this exception when updating the desktop/keyring dependency graph" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 is currently required by zvariant 5 in the Linux accessibility and Secret Service backends; review this exception when updating the desktop/keyring dependency graph" },
+]
 
 [bans]
 multiple-versions = "warn"

@@ -15,6 +15,7 @@ on:
       - "src/core/state.rs"
       - "src/migration_plan/profile.rs"
       - "src/bulk_import/**"
+      - "src/cli/serve/**"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   pull_request:
@@ -31,6 +32,7 @@ on:
       - "src/core/state.rs"
       - "src/migration_plan/profile.rs"
       - "src/bulk_import/**"
+      - "src/cli/serve/**"
       - "fuzz/**"
       - ".github/workflows/imap-fuzz.yml"
   schedule:
@@ -66,6 +68,7 @@ jobs:
           - xlsx_dimension
           - xlsx_reader
           - import_rows
+          - fleet_http_request
     env:
       FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '90' || github.event_name == 'push' && '300' || '900' }}
     steps:
