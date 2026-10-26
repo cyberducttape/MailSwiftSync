@@ -1065,8 +1065,15 @@ fn fleet_api_dast_scans_an_authenticated_live_instance_with_pinned_zap() {
     assert!(workflow.contains("ZAP_AUTH_HEADER_VALUE: Bearer ${{ env.FLEET_API_DAST_TOKEN }}"));
     assert!(workflow.contains("zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25"));
     assert!(workflow.contains("ghcr.io/zaproxy/zaproxy@sha256:"));
+    assert!(workflow.contains("rules_file_name: .zap/rules.tsv"));
     assert!(workflow.contains("fail_action: true"));
     assert!(workflow.contains("allow_issue_writing: false"));
+    let rules = fs::read_to_string(".zap/rules.tsv")
+        .expect("ZAP rule dispositions should document intentional API behavior");
+    assert!(rules.contains("10049\tIGNORE"));
+    assert!(rules.contains("10096\tOUTOFSCOPE\t.*/v1/fleet$"));
+    assert!(rules.contains("no-store"));
+    assert!(rules.contains("snapshot"));
 }
 
 #[test]

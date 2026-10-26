@@ -8,7 +8,9 @@
 - Add a weekly and pull-request ZAP baseline scan against a live, isolated
   fleet API instance. The scan uses a generated read token, passive baseline
   rules, a digest-pinned ZAP image, and retains its report as a workflow
-  artifact.
+  artifact. Require the same-origin cross-origin resource policy and narrowly
+  document ZAP dispositions for the API's intentional no-store policy and
+  authenticated snapshot timestamp.
 - Remove CodeQL-reported test log injection sinks by using fixed assertion
   messages instead of echoing HTTP responses, and generate per-test credential
   fixtures instead of embedding password-like literals.
