@@ -41,8 +41,8 @@ fn dovecot_form() -> Form {
     form.profile.source_user = "old-user".into();
     form.profile.destination_host = "localhost".into();
     form.profile.destination_user = "new-user".into();
-    form.source_password = String::from("secret").into();
-    form.destination_password = String::from("unused").into();
+    form.source_password = Uuid::new_v4().to_string().into();
+    form.destination_password = Uuid::new_v4().to_string().into();
     form
 }
 
