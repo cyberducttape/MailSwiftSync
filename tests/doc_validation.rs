@@ -1056,6 +1056,20 @@ fn codeql_uses_a_valid_checked_in_config_and_runs_on_pull_requests() {
 }
 
 #[test]
+fn fleet_api_dast_scans_an_authenticated_live_instance_with_pinned_zap() {
+    let workflow = fs::read_to_string(".github/workflows/fleet-api-dast.yml")
+        .expect("Fleet API DAST workflow should exist");
+    assert!(workflow.contains("cargo build --locked --bin mailswiftsync"));
+    assert!(workflow.contains("/v1/fleet"));
+    assert!(workflow.contains("FLEET_API_DAST_TOKEN=%s\\n"));
+    assert!(workflow.contains("ZAP_AUTH_HEADER_VALUE: Bearer ${{ env.FLEET_API_DAST_TOKEN }}"));
+    assert!(workflow.contains("zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25"));
+    assert!(workflow.contains("ghcr.io/zaproxy/zaproxy@sha256:"));
+    assert!(workflow.contains("fail_action: true"));
+    assert!(workflow.contains("allow_issue_writing: false"));
+}
+
+#[test]
 fn ci_lints_github_actions_workflows_with_a_pinned_actionlint_binary() {
     let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
     assert!(

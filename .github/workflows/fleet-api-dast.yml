@@ -1,0 +1,84 @@
+name: Fleet API DAST
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "11 7 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Authenticated ZAP baseline scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+
+      - name: Build the fleet API
+        run: cargo build --locked --bin mailswiftsync
+
+      - name: Start an isolated fleet API with a temporary token
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          state_dir="$RUNNER_TEMP/fleet-api-dast-state"
+          token_file="$RUNNER_TEMP/fleet-api-dast-token"
+          pid_file="$RUNNER_TEMP/fleet-api-dast.pid"
+          mkdir -m 700 "$state_dir"
+          openssl rand -hex 32 > "$token_file"
+          token="$(<"$token_file")"
+          echo "::add-mask::$token"
+          printf 'FLEET_API_DAST_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
+
+          target/debug/mailswiftsync serve "$state_dir" \
+            --token-file "$token_file" \
+            --listen 127.0.0.1:9464 \
+            --refresh-seconds 5 \
+            > "$RUNNER_TEMP/fleet-api-dast.log" 2>&1 &
+          echo "$!" > "$pid_file"
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:9464/readyz > /dev/null; then
+              curl --fail --silent \
+                -H "Authorization: Bearer $token" \
+                http://127.0.0.1:9464/v1/fleet > /dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$RUNNER_TEMP/fleet-api-dast.log"
+          echo "Fleet API did not become ready after $attempt attempts" >&2
+          exit 1
+
+      - name: Scan the live API with ZAP baseline rules
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        env:
+          ZAP_AUTH_HEADER: Authorization
+          ZAP_AUTH_HEADER_VALUE: Bearer ${{ env.FLEET_API_DAST_TOKEN }}
+          ZAP_AUTH_HEADER_SITE: 127.0.0.1
+        with:
+          target: http://127.0.0.1:9464/v1/fleet
+          # Update this digest only with a reviewed ZAP image release.
+          docker_name: ghcr.io/zaproxy/zaproxy@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: fleet-api-zap-baseline
+
+      - name: Stop the fleet API
+        if: always()
+        shell: bash
+        run: |
+          pid_file="$RUNNER_TEMP/fleet-api-dast.pid"
+          if [[ -f "$pid_file" ]]; then
+            kill "$(<"$pid_file")" 2>/dev/null || true
+          fi
