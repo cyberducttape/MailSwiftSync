@@ -1026,7 +1026,8 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
 #[test]
 fn dependabot_monitors_each_hash_locked_python_dependency_directory() {
     let config = fs::read_to_string(".github/dependabot.yml")
-        .expect("Dependabot configuration should be readable");
+        .expect("Dependabot configuration should be readable")
+        .replace("\r\n", "\n");
 
     for directory in ["/scripts", "/tests/provider-evidence"] {
         let entry = format!(
