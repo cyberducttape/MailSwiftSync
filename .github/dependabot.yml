@@ -9,6 +9,24 @@ updates:
       timezone: "America/Denver"
     open-pull-requests-limit: 10
 
+  - package-ecosystem: pip
+    directory: "/scripts"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:47"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: pip
+    directory: "/tests/provider-evidence"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:52"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 10
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

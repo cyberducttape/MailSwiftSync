@@ -1024,6 +1024,23 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
 }
 
 #[test]
+fn dependabot_monitors_each_hash_locked_python_dependency_directory() {
+    let config = fs::read_to_string(".github/dependabot.yml")
+        .expect("Dependabot configuration should be readable")
+        .replace("\r\n", "\n");
+
+    for directory in ["/scripts", "/tests/provider-evidence"] {
+        let entry = format!(
+            "package-ecosystem: pip\n    directory: \"{directory}\"\n    schedule:\n      interval: weekly"
+        );
+        assert!(
+            config.contains(&entry),
+            "Dependabot must check hash-locked Python requirements in {directory}"
+        );
+    }
+}
+
+#[test]
 fn codeql_uses_a_valid_checked_in_config_and_runs_on_pull_requests() {
     let workflow =
         fs::read_to_string(".github/workflows/codeql.yml").expect("CodeQL workflow should exist");
