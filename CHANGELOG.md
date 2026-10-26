@@ -2,9 +2,23 @@
 
 ## Unreleased
 
+- Pin the libFuzzer compiler to the already-qualified `nightly-2026-10-02`.
+  Add GitHub's workflow dependency lockfile and a pinned verification workflow;
+  lock all direct and transitive Actions dependencies after replacing an
+  unreachable `dtolnay/rust-toolchain` SHA with its supported `master` ref and
+  explicit Rust 1.92.0 toolchain input.
+- Resolve container Debian packages from a dated Bookworm snapshot so the same
+  source revision uses a reproducible package set; snapshot advances remain an
+  explicit security-update review.
 - Enable weekly Dependabot pip-compile updates for the Python dependency sets
   used by provider qualification and evidence validation, including their
   generated hash-locked requirement files.
+- Add a weekly and pull-request ZAP baseline scan against a live, isolated
+  fleet API instance. The scan uses a generated read token, passive baseline
+  rules, a digest-pinned ZAP image, and retains its report as a workflow
+  artifact. Require the same-origin cross-origin resource policy and narrowly
+  document ZAP dispositions for the API's intentional no-store policy and
+  authenticated snapshot timestamp.
 - Remove CodeQL-reported test log injection sinks by using fixed assertion
   messages instead of echoing HTTP responses, and generate per-test credential
   fixtures instead of embedding password-like literals.
