@@ -8,7 +8,7 @@
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS debian-base
 
-ARG DEBIAN_SNAPSHOT=20261025T000000Z
+ARG DEBIAN_SNAPSHOT=20261026T100000Z
 RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* \
     && printf '%s\n' \
         'Types: deb' \
