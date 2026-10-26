@@ -1608,18 +1608,27 @@ mod tests {
             response
         };
         let health = exchange("GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
-        assert!(health.starts_with("HTTP/1.1 200 OK\r\n"), "{health}");
+        assert!(
+            health.starts_with("HTTP/1.1 200 OK\r\n"),
+            "health endpoint must return HTTP 200"
+        );
         assert!(health.contains("Cache-Control: no-store"));
         assert!(health.ends_with("ok\n"));
         let unauthorized = exchange("GET /metrics HTTP/1.1\r\n\r\n");
-        assert!(unauthorized.starts_with("HTTP/1.1 401"), "{unauthorized}");
+        assert!(
+            unauthorized.starts_with("HTTP/1.1 401"),
+            "unauthorized endpoint must return HTTP 401"
+        );
         let metrics = exchange(&format!(
             "GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
         ));
-        assert!(metrics.starts_with("HTTP/1.1 200 OK\r\n"), "{metrics}");
+        assert!(
+            metrics.starts_with("HTTP/1.1 200 OK\r\n"),
+            "metrics endpoint must return HTTP 200"
+        );
         assert!(metrics.contains("mailswiftsync_mailbox_jobs"));
         let head = exchange("HEAD /healthz HTTP/1.1\r\n\r\n");
         assert!(head.contains("Content-Length: 3\r\n"));
-        assert!(head.ends_with("\r\n\r\n"), "{head}");
+        assert!(head.ends_with("\r\n\r\n"), "HEAD response must omit a body");
     }
 }

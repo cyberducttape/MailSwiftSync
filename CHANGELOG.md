@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Remove CodeQL-reported test log injection sinks by using fixed assertion
+  messages instead of echoing HTTP responses, and generate per-test credential
+  fixtures instead of embedding password-like literals.
 - Make unmaintained transitive Rust dependencies an explicit deny-by-default
   policy, with narrowly documented exceptions for the three Linux `zbus` 5
   maintenance advisories that have no compatible parent-crate upgrade yet.
