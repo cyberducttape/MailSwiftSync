@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prevent a continuously eligible older project from monopolizing unattended
+  supervision. The supervisor now rotates through eligible projects after
+  every batch pass while preserving per-project retry backoff, so recurring
+  delta passes cannot indefinitely starve later customer projects.
 - Add real-server fault drills to the IMAP integration lab (external review
   finding 5). Besides killing the controller, the lab now SIGKILLs only the
   imapsync engine, crashes the source and the destination Dovecot server

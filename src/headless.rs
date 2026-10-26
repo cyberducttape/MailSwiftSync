@@ -1253,20 +1253,33 @@ fn supervisor_backoff_delay(poll_interval: Duration, failures: u32) -> Duration 
         .min(SUPERVISOR_MAX_PROJECT_BACKOFF)
 }
 
-/// The oldest actionable project that is not waiting out a failure backoff.
+/// The next actionable project in a round-robin order, skipping projects that
+/// are waiting out a failure backoff. Completed mailboxes remain actionable
+/// for recurring delta passes, so always starting at the oldest project would
+/// let a healthy project starve every later project indefinitely.
 fn next_supervised_project<'a>(
     candidates: &'a [String],
     backoff: &std::collections::HashMap<String, ProjectBackoff>,
     now: std::time::Instant,
+    last_served: Option<&str>,
 ) -> Option<&'a str> {
-    candidates
-        .iter()
-        .find(|project| {
-            backoff
-                .get(*project)
-                .is_none_or(|entry| entry.retry_at <= now)
-        })
-        .map(String::as_str)
+    if candidates.is_empty() {
+        return None;
+    }
+    let start = last_served
+        .and_then(|last| candidates.iter().position(|project| project == last))
+        .map_or(0, |index| (index + 1) % candidates.len());
+    (0..candidates.len()).find_map(|offset| {
+        let project = &candidates[(start + offset) % candidates.len()];
+        if backoff
+            .get(project)
+            .is_none_or(|entry| entry.retry_at <= now)
+        {
+            Some(project.as_str())
+        } else {
+            None
+        }
+    })
 }
 
 pub(crate) fn headless_supervise(
@@ -1284,6 +1297,7 @@ pub(crate) fn headless_supervise(
     // must not monopolize the supervisor: back it off and serve the next
     // actionable project instead of exiting or retrying it in a tight loop.
     let mut backoff = std::collections::HashMap::<String, ProjectBackoff>::new();
+    let mut last_served_project: Option<String> = None;
     let stopped = |reason: String, completed: usize, failed: usize, last: &Option<String>| {
         if failed == 0 {
             Ok(format!(
@@ -1338,7 +1352,9 @@ pub(crate) fn headless_supervise(
         // Forget backoff for projects that no longer have actionable work.
         backoff.retain(|project, _| candidates.contains(project));
         let now = std::time::Instant::now();
-        let Some(project_id) = next_supervised_project(&candidates, &backoff, now) else {
+        let Some(project_id) =
+            next_supervised_project(&candidates, &backoff, now, last_served_project.as_deref())
+        else {
             idle_polls = idle_polls.saturating_add(1);
             if max_idle_polls != 0 && idle_polls >= max_idle_polls {
                 let reason = if candidates.is_empty() {
@@ -1363,6 +1379,7 @@ pub(crate) fn headless_supervise(
             continue;
         };
         let project_id = project_id.to_owned();
+        last_served_project = Some(project_id.clone());
         idle_polls = 0;
         match headless_batch_execute_project(state_path, &project_id, acknowledge_destination_loss)
         {
@@ -1653,8 +1670,18 @@ mod tests {
         let now = std::time::Instant::now();
         let mut backoff = std::collections::HashMap::new();
         assert_eq!(
-            next_supervised_project(&candidates, &backoff, now),
+            next_supervised_project(&candidates, &backoff, now, None),
             Some("older")
+        );
+        assert_eq!(
+            next_supervised_project(&candidates, &backoff, now, Some("older")),
+            Some("newer"),
+            "a successful older project must yield to the next eligible project"
+        );
+        assert_eq!(
+            next_supervised_project(&candidates, &backoff, now, Some("newer")),
+            Some("older"),
+            "round-robin order must wrap after the final candidate"
         );
 
         backoff.insert(
@@ -1665,7 +1692,7 @@ mod tests {
             },
         );
         assert_eq!(
-            next_supervised_project(&candidates, &backoff, now),
+            next_supervised_project(&candidates, &backoff, now, Some("older")),
             Some("newer"),
             "a failing older project must not starve newer work"
         );
@@ -1676,9 +1703,17 @@ mod tests {
                 retry_at: now + Duration::from_secs(30),
             },
         );
-        assert_eq!(next_supervised_project(&candidates, &backoff, now), None);
         assert_eq!(
-            next_supervised_project(&candidates, &backoff, now + Duration::from_secs(31)),
+            next_supervised_project(&candidates, &backoff, now, Some("newer")),
+            None
+        );
+        assert_eq!(
+            next_supervised_project(
+                &candidates,
+                &backoff,
+                now + Duration::from_secs(31),
+                Some("newer")
+            ),
             Some("older")
         );
 
@@ -1699,7 +1734,7 @@ mod tests {
             })
             .collect::<std::collections::HashMap<_, _>>();
         assert_eq!(
-            next_supervised_project(&many_candidates, &many_backoffs, now),
+            next_supervised_project(&many_candidates, &many_backoffs, now, None),
             Some("project-256"),
             "a fixed-size candidate prefix must not hide later eligible work"
         );
