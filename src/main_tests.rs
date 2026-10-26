@@ -3184,6 +3184,10 @@ fn xoauth2_payload_uses_rfc_7628_shape() {
 fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
     let mut form = dovecot_form();
     form.profile.engine = core::Engine::ImapSync;
+    let source_password = Uuid::new_v4().to_string();
+    let destination_password = Uuid::new_v4().to_string();
+    form.source_password = source_password.clone().into();
+    form.destination_password = destination_password.clone().into();
     let prepared = form.validated_plan().unwrap().prepared_command().unwrap();
     assert!(!prepared.args.contains(&"--password1".into()));
     assert!(!prepared.args.contains(&"--password2".into()));
@@ -3199,11 +3203,11 @@ fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
         .unwrap();
     assert_eq!(
         std::fs::read_to_string(&prepared.args[source_index + 1]).unwrap(),
-        "secret"
+        source_password
     );
     assert_eq!(
         std::fs::read_to_string(&prepared.args[destination_index + 1]).unwrap(),
-        "unused"
+        destination_password
     );
     #[cfg(unix)]
     {
