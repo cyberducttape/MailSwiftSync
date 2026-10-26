@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Enable weekly Dependabot pip-compile updates for the Python dependency sets
+  used by provider qualification and evidence validation, including their
+  generated hash-locked requirement files.
 - Remove CodeQL-reported test log injection sinks by using fixed assertion
   messages instead of echoing HTTP responses, and generate per-test credential
   fixtures instead of embedding password-like literals.
