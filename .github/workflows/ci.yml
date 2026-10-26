@@ -29,6 +29,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: "3.12"
       - name: Lint GitHub Actions workflows
         env:
           ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
@@ -82,7 +85,7 @@ jobs:
       - name: Verify prerelease compatibility policy
         run: scripts/verify-compatibility-matrix.sh --release-preview docs/compatibility-matrix.md
       - name: Install provider evidence validator
-        run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
+        run: python3 -m pip install --disable-pip-version-check --require-hashes --requirement tests/provider-evidence/requirements.txt
       - run: python3 tests/provider_evidence_generator_test.py
       - run: python3 tests/provider_evidence_schema_test.py
       - run: python3 tests/provider_qualification_pack_test.py

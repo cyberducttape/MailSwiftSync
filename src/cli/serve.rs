@@ -5,6 +5,7 @@
 //! per-ledger worker.
 
 mod controls;
+mod http;
 mod tls;
 
 use super::*;
@@ -400,7 +401,7 @@ fn serve_request(stream: &mut (impl Read + Write), context: &ApiContext) -> bool
     write_response(stream, &response, head_only).is_ok()
 }
 
-fn read_request_head(stream: &mut impl Read) -> Result<String, Response> {
+fn read_request_head(stream: &mut impl Read) -> Result<Vec<u8>, Response> {
     let mut head = Vec::with_capacity(1024);
     let mut buffer = [0_u8; 1024];
     // The socket timeout bounds each read; this bounds the whole head, so a
@@ -431,7 +432,7 @@ fn read_request_head(stream: &mut impl Read) -> Result<String, Response> {
                     "request head too large\n",
                 ));
             }
-            head.truncate(end);
+            head.truncate(end + 4);
             break;
         }
         if head.len() > MAX_REQUEST_HEAD_BYTES {
@@ -442,7 +443,7 @@ fn read_request_head(stream: &mut impl Read) -> Result<String, Response> {
             ));
         }
     }
-    String::from_utf8(head).map_err(|_| Response::text(400, "Bad Request", "malformed request\n"))
+    Ok(head)
 }
 
 /// One immutable refresh result shared by every request until the next
@@ -596,24 +597,18 @@ fn allowed_methods(segments: &[&str]) -> Option<&'static str> {
     }
 }
 
-fn respond(head: &str, context: &ApiContext) -> Response {
-    let mut lines = head.split("\r\n");
-    let mut request_line = lines.next().unwrap_or_default().split(' ');
-    let (Some(method), Some(target), Some(version), None) = (
-        request_line.next(),
-        request_line.next(),
-        request_line.next(),
-        request_line.next(),
-    ) else {
-        return Response::text(400, "Bad Request", "malformed request line\n");
+fn respond<T: AsRef<[u8]> + ?Sized>(head: &T, context: &ApiContext) -> Response {
+    let request = match http::parse_request_head(head.as_ref()) {
+        Ok(request) => request,
+        Err(_) => return Response::text(400, "Bad Request", "malformed request\n"),
     };
-    if !version.starts_with("HTTP/1.") {
-        return Response::text(505, "HTTP Version Not Supported", "HTTP/1.x only\n");
-    }
-    let headers = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim(), value.trim()))
+    let headers = request
+        .headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect::<Vec<_>>();
+    let method = request.method.as_str();
+    let target = request.target.as_str();
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let segments = path
         .strip_prefix('/')
@@ -867,6 +862,7 @@ mod tests {
             head.push_str("\r\nAuthorization: ");
             head.push_str(authorization);
         }
+        head.push_str("\r\n\r\n");
         head
     }
 
@@ -1168,24 +1164,24 @@ mod tests {
     #[test]
     fn routes_enforce_methods_and_reject_malformed_requests() {
         let context = context(snapshot());
-        let post = respond("POST /v1/fleet HTTP/1.1", &context);
+        let post = respond("POST /v1/fleet HTTP/1.1\r\n\r\n", &context);
         assert_eq!(post.status, 405);
         assert!(post.extra_headers.contains(&("Allow", "GET, HEAD".into())));
-        let get_approve = respond("GET /v1/waves/abc/approve HTTP/1.1", &context);
+        let get_approve = respond("GET /v1/waves/abc/approve HTTP/1.1\r\n\r\n", &context);
         assert_eq!(get_approve.status, 405);
         assert!(
             get_approve
                 .extra_headers
                 .contains(&("Allow", "POST".into()))
         );
-        assert_eq!(respond("GET /v1/fleet", &context).status, 400);
-        assert_eq!(respond("GET / HTTP/2", &context).status, 505);
-        assert_eq!(respond("GET /other HTTP/1.1", &context).status, 404);
+        assert_eq!(respond("GET /v1/fleet\r\n\r\n", &context).status, 400);
+        assert_eq!(respond("GET / HTTP/2\r\n\r\n", &context).status, 400);
+        assert_eq!(respond("GET /other HTTP/1.1\r\n\r\n", &context).status, 404);
         assert_eq!(
-            respond("GET /v1/fleet/extra HTTP/1.1", &context).status,
+            respond("GET /v1/fleet/extra HTTP/1.1\r\n\r\n", &context).status,
             404
         );
-        let head = respond("HEAD /healthz HTTP/1.1", &context);
+        let head = respond("HEAD /healthz HTTP/1.1\r\n\r\n", &context);
         assert!(head.head_only);
         let malformed = respond(
             &request(
@@ -1211,13 +1207,15 @@ mod tests {
         );
         assert_eq!(reader.status, 403);
         let with_body = format!(
-            "{}\r\nContent-Length: 12",
+            "{}\r\nContent-Length: 12\r\n\r\n",
             request_with("POST", path, Some(&format!("Bearer {OPERATOR}")))
+                .trim_end_matches("\r\n\r\n")
         );
         assert_eq!(respond(&with_body, &context).status, 413);
         let chunked = format!(
-            "{}\r\nTransfer-Encoding: chunked",
+            "{}\r\nTransfer-Encoding: chunked\r\n\r\n",
             request_with("POST", path, Some(&format!("Bearer {OPERATOR}")))
+                .trim_end_matches("\r\n\r\n")
         );
         assert_eq!(respond(&chunked, &context).status, 413);
     }
@@ -1410,7 +1408,7 @@ mod tests {
         };
         let context = context(fresh);
         context.refresh.record(&context.current_snapshot());
-        let ready = respond("GET /readyz HTTP/1.1", &context);
+        let ready = respond("GET /readyz HTTP/1.1\r\n\r\n", &context);
         assert_eq!(ready.status, 200, "{}", ready.body);
         assert!(ready.body.contains("\"ready\":true"));
 
@@ -1420,7 +1418,7 @@ mod tests {
         };
         context.refresh.record(&failed);
         *context.snapshot.write().unwrap() = Arc::new(failed);
-        let not_ready = respond("GET /readyz HTTP/1.1", &context);
+        let not_ready = respond("GET /readyz HTTP/1.1\r\n\r\n", &context);
         assert_eq!(not_ready.status, 503);
         assert!(
             not_ready
@@ -1429,7 +1427,10 @@ mod tests {
         );
         assert!(!not_ready.body.contains("customer-a"));
         // Liveness stays independent of scan health.
-        assert_eq!(respond("GET /healthz HTTP/1.1", &context).status, 200);
+        assert_eq!(
+            respond("GET /healthz HTTP/1.1\r\n\r\n", &context).status,
+            200
+        );
 
         // A snapshot older than three refresh intervals is stale even if it
         // succeeded, for example when the refresh thread is stuck.
@@ -1437,7 +1438,10 @@ mod tests {
             generated_at: unix_now() - 120,
             ..snapshot()
         });
-        assert_eq!(respond("GET /readyz HTTP/1.1", &context).status, 503);
+        assert_eq!(
+            respond("GET /readyz HTTP/1.1\r\n\r\n", &context).status,
+            503
+        );
     }
 
     #[test]
@@ -1560,7 +1564,7 @@ mod tests {
         let mut complete = std::io::Cursor::new(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n".to_vec());
         assert_eq!(
             read_request_head(&mut complete).unwrap(),
-            "GET / HTTP/1.1\r\nHost: x"
+            b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"
         );
     }
 

@@ -787,6 +787,13 @@ older crate family; do not claim this exposure is remediated merely because
 then qualify Linux keyring behavior and accessibility before removing this
 notice. Re-run both audit tools against the exact release lockfile.
 
+The dependency policy sets `unmaintained = "all"` so newly introduced
+unmaintained transitive crates fail the scheduled and pull-request checks.
+Only the three listed zbus-family advisory IDs are excepted, with a reason in
+`deny.toml`; `unused-ignored-advisory = "deny"` makes obsolete exceptions
+fail. Python qualification helpers and the `pip-audit` toolchain use generated
+hash-locked requirement files, installed with pip's `--require-hashes` mode.
+
 The repository's GitHub security settings were also checked on 2026-10-17:
 Dependabot security alerts and security updates are disabled. The repository
 does contain weekly Dependabot update configuration and a scheduled dependency

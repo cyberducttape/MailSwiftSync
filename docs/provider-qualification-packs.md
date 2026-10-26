@@ -25,7 +25,7 @@ is not a signature or proof that the evidence was independently authenticated.
 Verify a retained pack before consuming it:
 
 ```bash
-python3 -m pip install --requirement scripts/requirements-provider-qualification.txt
+python3 -m pip install --require-hashes --requirement scripts/requirements-provider-qualification.txt
 python3 scripts/verify-provider-qualification-pack.py \
   google-workspace-to-microsoft365.pack.json
 ```

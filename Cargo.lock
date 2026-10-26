@@ -2310,6 +2310,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "fs2",
+ "httparse",
  "keyring",
  "libc",
  "quick-xml 0.42.0",

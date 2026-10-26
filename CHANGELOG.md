@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Make unmaintained transitive Rust dependencies an explicit deny-by-default
+  policy, with narrowly documented exceptions for the three Linux `zbus` 5
+  maintenance advisories that have no compatible parent-crate upgrade yet.
+  Add an advanced CodeQL workflow with a valid checked-in query config and
+  Rust, Python, and Actions analysis on pull requests, pushes, and a weekly
+  schedule. Hash-lock the Python qualification and `pip-audit` dependency
+  trees, and require hashes in CI and release installs. Replace the fleet
+  API's permissive request-line/header splitting with a strict `httparse`
+  request-head parser and fuzz the production parser through the existing
+  libFuzzer workflow.
 - Prevent a continuously eligible older project from monopolizing unattended
   supervision. The supervisor now rotates through eligible projects after
   every batch pass while preserving per-project retry backoff, so recurring

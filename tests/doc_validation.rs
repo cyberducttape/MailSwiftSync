@@ -1001,12 +1001,40 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
         .expect("dependency audit workflow should exist")
         .replace("\r\n", "\n");
     assert!(
-        dependency_audit.contains("pip-audit==2.10.1")
+        dependency_audit.contains("requirements-pip-audit.txt")
+            && dependency_audit.contains("--require-hashes")
             && dependency_audit.contains(
                 "run: >-\n          \"$RUNNER_TEMP/pip-audit/bin/pip-audit\""
             )
-            && dependency_audit.contains("pip-audit\" -r scripts/requirements-provider-qualification.txt -r tests/provider-evidence/requirements.txt"),
+            && dependency_audit.contains("pip-audit\" -r scripts/requirements-provider-qualification.txt -r tests/provider-evidence/requirements.txt -r scripts/requirements-pip-audit.txt"),
         "scheduled dependency audit must scan all pinned provider-qualification Python requirements"
+    );
+
+    for workflow in [".github/workflows/ci.yml", ".github/workflows/release.yml"] {
+        let workflow_text = fs::read_to_string(workflow).expect("workflow should exist");
+        assert!(
+            workflow_text.contains("--require-hashes"),
+            "{workflow} must hash-lock Python installs"
+        );
+        assert!(
+            workflow_text.contains("actions/setup-python@"),
+            "{workflow} must pin its Python runtime version"
+        );
+    }
+}
+
+#[test]
+fn codeql_uses_a_valid_checked_in_config_and_runs_on_pull_requests() {
+    let workflow =
+        fs::read_to_string(".github/workflows/codeql.yml").expect("CodeQL workflow should exist");
+    let config =
+        fs::read_to_string(".github/codeql/codeql-config.yml").expect("CodeQL config should exist");
+    assert!(workflow.contains("pull_request:") && workflow.contains("security-events: write"));
+    assert!(workflow.contains("config-file: ./.github/codeql/codeql-config.yml"));
+    assert!(config.contains("queries:") && config.contains("security-extended"));
+    assert!(
+        !config.contains("rules:"),
+        "unsupported rule severity overrides must not silently disable CodeQL policy"
     );
 }
 

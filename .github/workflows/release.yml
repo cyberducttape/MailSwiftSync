@@ -16,6 +16,9 @@ jobs:
       release-channel: ${{ steps.release-channel.outputs.value }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: "3.12"
       - name: Classify release channel
         id: release-channel
         run: echo "value=$(scripts/release-channel.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
@@ -42,7 +45,7 @@ jobs:
             scripts/verify-compatibility-matrix.sh --release docs/compatibility-matrix.md
           fi
       - name: Install provider evidence validator
-        run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
+        run: python3 -m pip install --disable-pip-version-check --require-hashes --requirement tests/provider-evidence/requirements.txt
       - run: python3 tests/provider_proof_signature_test.py
       - name: Fetch externally retained provider evidence
         if: ${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-rc.') }}

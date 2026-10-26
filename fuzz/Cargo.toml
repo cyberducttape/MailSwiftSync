@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 csv = "1.3"
 libfuzzer-sys = "0.4"
+httparse = "1.10"
 quick-xml = { version = "0.42", features = ["encoding"] }
 sha2 = "0.11"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -114,6 +115,13 @@ bench = false
 [[bin]]
 name = "import_rows"
 path = "fuzz_targets/import_rows.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fleet_http_request"
+path = "fuzz_targets/fleet_http_request.rs"
 test = false
 doc = false
 bench = false
