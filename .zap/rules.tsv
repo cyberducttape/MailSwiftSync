@@ -1,0 +1,9 @@
+# MailSwiftSync Fleet API ZAP baseline dispositions.
+# ZAP 10049 reports Cache-Control: no-store as informational because it favors
+# caching. Fleet responses contain operational/customer metadata, so no-store is
+# a deliberate confidentiality control and is asserted by the HTTP tests.
+10049	IGNORE	(Required no-store policy for customer operational data.)
+# The Fleet API intentionally exposes its snapshot scan time through a
+# documented response header; the value is neither confidential nor an
+# authorization input. Keep the disposition scoped to this one endpoint.
+10096	OUTOFSCOPE	.*/v1/fleet$

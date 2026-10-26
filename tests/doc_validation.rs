@@ -521,6 +521,10 @@ fn runtime_image_applies_security_updates_and_is_scanned_in_ci_and_release() {
         .expect("runtime image scanner should exist");
 
     assert!(dockerfile.contains("apt-mark hold dovecot-core dovecot-imapd"));
+    assert!(dockerfile.contains("ARG DEBIAN_SNAPSHOT=20261026T100000Z"));
+    assert!(dockerfile.contains("snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}"));
+    assert!(dockerfile.contains("snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}"));
+    assert!(dockerfile.contains("Acquire::Check-Valid-Until \"false\";"));
     assert!(dockerfile.contains("apt-get upgrade --no-install-recommends -y"));
     assert!(dockerfile.contains("apt-mark unhold dovecot-core dovecot-imapd"));
     assert!(dockerfile.contains("apt-get clean"));
@@ -1056,6 +1060,31 @@ fn codeql_uses_a_valid_checked_in_config_and_runs_on_pull_requests() {
 }
 
 #[test]
+fn fleet_api_dast_scans_an_authenticated_live_instance_with_pinned_zap() {
+    let workflow = fs::read_to_string(".github/workflows/fleet-api-dast.yml")
+        .expect("Fleet API DAST workflow should exist");
+    assert!(workflow.contains("cargo build --locked --bin mailswiftsync"));
+    assert!(workflow.contains("/v1/fleet"));
+    assert!(workflow.contains("FLEET_API_DAST_TOKEN=%s\\n"));
+    assert!(workflow.contains("ZAP_AUTH_HEADER_VALUE: Bearer ${{ env.FLEET_API_DAST_TOKEN }}"));
+    assert!(workflow.contains("zaproxy/action-baseline@v0.15.0"));
+    let action_lock = fs::read_to_string(".github/workflows/actions.lock")
+        .expect("workflow dependency lockfile should exist");
+    assert!(action_lock.contains("zaproxy/action-baseline@v0.15.0"));
+    assert!(action_lock.contains("sha1-de8ad967d3548d44ef623df22cf95c3b0baf8b25"));
+    assert!(workflow.contains("ghcr.io/zaproxy/zaproxy@sha256:"));
+    assert!(workflow.contains("rules_file_name: .zap/rules.tsv"));
+    assert!(workflow.contains("fail_action: true"));
+    assert!(workflow.contains("allow_issue_writing: false"));
+    let rules = fs::read_to_string(".zap/rules.tsv")
+        .expect("ZAP rule dispositions should document intentional API behavior");
+    assert!(rules.contains("10049\tIGNORE"));
+    assert!(rules.contains("10096\tOUTOFSCOPE\t.*/v1/fleet$"));
+    assert!(rules.contains("no-store"));
+    assert!(rules.contains("snapshot"));
+}
+
+#[test]
 fn ci_lints_github_actions_workflows_with_a_pinned_actionlint_binary() {
     let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
     assert!(
@@ -1178,17 +1207,45 @@ fn imap_fuzz_workflow_runs_targets_with_nightly() {
     let workflow = std::fs::read_to_string(".github/workflows/imap-fuzz.yml")
         .expect("IMAP parser fuzz workflow must be checked in");
     assert!(
-        workflow.contains("rustup toolchain install nightly"),
-        "the workflow must install the unstable compiler required by libFuzzer"
+        workflow.contains("rustup toolchain install nightly-2026-10-02"),
+        "the workflow must install the pinned unstable compiler required by libFuzzer"
     );
     assert!(
-        workflow.contains("cargo +nightly fuzz run"),
-        "the fuzz build must select nightly explicitly instead of the repository's stable override"
+        workflow.contains("cargo +nightly-2026-10-02 fuzz run"),
+        "the fuzz build must use the same pinned nightly as its installation"
+    );
+    assert!(
+        !workflow.contains("rustup toolchain install nightly ")
+            && !workflow.contains("cargo +nightly fuzz run"),
+        "the fuzz workflow must not resolve a moving nightly channel"
     );
     assert!(
         !workflow.contains("run: cargo fuzz run"),
         "a plain cargo fuzz command inherits the stable repository toolchain"
     );
+}
+
+#[test]
+fn workflows_use_a_pinned_rust_toolchain_action_and_verify_action_lock() {
+    for path in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/dependency-audit.yml",
+        ".github/workflows/fleet-api-dast.yml",
+        ".github/workflows/release.yml",
+    ] {
+        let workflow = std::fs::read_to_string(path).expect("workflow should be checked in");
+        if workflow.contains("dtolnay/rust-toolchain@") {
+            assert!(workflow.contains("dtolnay/rust-toolchain@master"), "{path}");
+            assert!(workflow.contains("toolchain: 1.92.0"), "{path}");
+        }
+    }
+
+    let verify = std::fs::read_to_string(".github/workflows/verify-actions-lock.yml")
+        .expect("action lock verification workflow should exist");
+    assert!(verify.contains("gh actions-lock --verify"));
+    assert!(verify.contains("gh-actions-lock --pin v0.4.0"));
+    assert!(std::path::Path::new(".github/workflows/actions.lock").is_file());
 }
 
 #[test]
