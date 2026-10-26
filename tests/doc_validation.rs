@@ -1244,7 +1244,7 @@ fn workflows_use_a_pinned_rust_toolchain_action_and_verify_action_lock() {
     let verify = std::fs::read_to_string(".github/workflows/verify-actions-lock.yml")
         .expect("action lock verification workflow should exist");
     assert!(verify.contains("gh actions-lock --verify"));
-    assert!(verify.contains("759f9c2d44e8599fa5b29224e5a30c58b3555211"));
+    assert!(verify.contains("gh-actions-lock --pin v0.4.0"));
     assert!(std::path::Path::new(".github/workflows/actions.lock").is_file());
 }
 
