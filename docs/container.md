@@ -51,10 +51,14 @@ container does not grant the process access to a secret manager, OAuth
 provider, host Dovecot socket, or a display; those must be explicitly
 integrated and documented by the deployment owner.
 
+The image resolves Debian packages from the dated snapshot in `DEBIAN_SNAPSHOT`
+in the Dockerfile. Advance that date deliberately and review the resulting
+package manifest so security updates enter the image through a recorded change.
 The image installs pinned Debian Bookworm `dovecot-core` and `dovecot-imapd`
-packages and a pinned upstream `imapsync` Debian artifact because Bookworm does not provide `imapsync` in its
-default repositories. The artifact version and SHA-256 are recorded in the
-Dockerfile and verified before installation. Record the image digest and the
-reported engine versions in the migration change record. Native image signing
-and a published registry are release engineering work still required before
-treating an image as an official distribution artifact.
+packages and a pinned upstream `imapsync` Debian artifact because Bookworm does
+not provide `imapsync` in its default repositories. The artifact version and
+SHA-256 are recorded in the Dockerfile and verified before installation.
+Record the image digest and the reported engine versions in the migration
+change record. Native image signing and a published registry are release
+engineering work still required before treating an image as an official
+distribution artifact.

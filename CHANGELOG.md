@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Pin the libFuzzer compiler to the already-qualified `nightly-2026-10-02`.
+  Add GitHub's workflow dependency lockfile and a pinned verification workflow;
+  lock all direct and transitive Actions dependencies after replacing an
+  unreachable `dtolnay/rust-toolchain` SHA with its supported `master` ref and
+  explicit Rust 1.92.0 toolchain input.
+- Resolve container Debian packages from a dated Bookworm snapshot so the same
+  source revision uses a reproducible package set; snapshot advances remain an
+  explicit security-update review.
 - Enable weekly Dependabot pip-compile updates for the Python dependency sets
   used by provider qualification and evidence validation, including their
   generated hash-locked requirement files.

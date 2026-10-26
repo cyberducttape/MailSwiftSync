@@ -1,14 +1,32 @@
 # Version-controlled Linux headless image. The desktop controller remains available
 # in the binary, but this image deliberately defaults to the CLI help instead
-# of attempting to open a display server. Note: base images use mutable tags
-# The Debian and Rust bases are pinned by OCI manifest digest; apt repositories
-# remain live, so rebuilds still require an explicit package/release record.
-# For historical reproducibility, rebuild from a dated Debian snapshot or
-# archived package artifacts; the regular mirror may eventually expire a
-# pinned package version.
+# of attempting to open a display server. Base images are pinned by OCI digest,
+# and Debian packages resolve from a dated snapshot. Advance the snapshot
+# deliberately after reviewing the resulting package manifest and security
+# updates; the imapsync .deb remains independently SHA-256 pinned.
 # The imapsync .deb is SHA-256 pinned.
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS imapsync-package
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS debian-base
+
+ARG DEBIAN_SNAPSHOT=20261025T000000Z
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* \
+    && printf '%s\n' \
+        'Types: deb' \
+        "URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/" \
+        'Suites: bookworm bookworm-updates' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        '' \
+        'Types: deb' \
+        "URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/" \
+        'Suites: bookworm-security' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        > /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' 'Acquire::Check-Valid-Until "false";' \
+        > /etc/apt/apt.conf.d/99snapshot-validity
+
+FROM debian-base AS imapsync-package
 
 # Debian Bookworm does not ship imapsync in its configured repositories. Pin
 # the upstream Debian artifact and verify it before it enters the runtime
@@ -38,7 +56,7 @@ COPY locales ./locales
 COPY assets ./assets
 RUN cargo build --locked --release
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+FROM debian-base
 
 ARG DOVECOT_VERSION=1:2.3.19.1+dfsg1-2.1+deb12u6
 

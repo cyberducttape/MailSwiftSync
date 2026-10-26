@@ -51,7 +51,7 @@ jobs:
     environment: live-providers
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Build the distributed runtime image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:provider .
       - name: Stage OAuth refresh configurations
@@ -195,7 +195,7 @@ jobs:
           fi
       - name: Upload smoke proofs (credential-free)
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: live-provider-smoke-${{ github.event.inputs.direction }}
           path: provider-smoke-evidence

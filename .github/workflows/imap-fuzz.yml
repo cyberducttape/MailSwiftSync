@@ -72,10 +72,10 @@ jobs:
     env:
       FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '90' || github.event_name == 'push' && '300' || '900' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
       - name: Restore accumulated fuzz corpus
         id: corpus-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}/
           key: parser-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -84,13 +84,13 @@ jobs:
             parser-corpus-${{ matrix.target }}-main-
       - name: Install nightly Rust and cargo-fuzz
         run: |
-          rustup toolchain install nightly --profile minimal
+          rustup toolchain install nightly-2026-10-02 --profile minimal
           cargo +stable install cargo-fuzz --version 0.13.2 --locked
       - name: Fuzz ${{ matrix.target }}
-        run: cargo +nightly fuzz run --release "${{ matrix.target }}" -- -max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=4096 -max_len=1048576
+        run: cargo +nightly-2026-10-02 fuzz run --release "${{ matrix.target }}" -- -max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=4096 -max_len=1048576
       - name: Retain evolved corpus
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: parser-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           path: fuzz/corpus/${{ matrix.target }}/
@@ -98,7 +98,7 @@ jobs:
           retention-days: 14
       - name: Save accumulated fuzz corpus
         if: always() && steps.corpus-cache.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/save@v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}/
           key: parser-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
