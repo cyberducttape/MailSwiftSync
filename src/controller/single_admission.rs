@@ -76,6 +76,7 @@ pub(crate) struct SingleRunAdmission {
     pub(crate) plan_snapshot: String,
     pub(crate) source_provider: String,
     pub(crate) destination_provider: String,
+    pub(crate) organization_policy: crate::organization_policy::OrganizationPolicy,
 }
 
 /// Commit a single run snapshot and construct the matching ownership context.
@@ -85,6 +86,15 @@ pub(crate) fn admit_single_run(
     store: &core::StateStore,
     admission: SingleRunAdmission,
 ) -> Result<ActiveRunContext, String> {
+    let current_policy =
+        crate::organization_policy::OrganizationPolicy::load().map_err(|error| {
+            format!("Could not recheck organization policy; no migration was started: {error}")
+        })?;
+    if current_policy != admission.organization_policy {
+        return Err(
+            "Organization policy changed during admission; review the plan and start again. No migration was started.".into(),
+        );
+    }
     store
         .begin_run_with_snapshot(
             &admission.project_id,
@@ -109,7 +119,7 @@ pub(crate) fn admit_single_run(
         source_provider: admission.source_provider,
         destination_provider: admission.destination_provider,
         verification_state_path: None,
-        required_assurance: crate::controller::policy_required_assurance(),
+        required_assurance: admission.organization_policy.required_assurance(),
     })
 }
 

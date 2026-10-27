@@ -581,8 +581,11 @@ crate::ui::name_modal(ui, &modal_heading);
                 .message("ui.level-3-bounded-content-fingerprints"),
         };
         let verification_limitation = crate::runner::message_verification_limitation(&self.form);
-        let policy_shortfall = crate::controller::policy_required_assurance()
-            .filter(|required| *required > plan_assurance);
+        let (policy_shortfall, policy_error) =
+            match crate::controller::policy_required_assurance() {
+                Ok(required) => (required.filter(|required| *required > plan_assurance), None),
+                Err(error) => (None, Some(error)),
+            };
         crate::ui::card(ui, |ui| {
             ui.heading(self.language.message("ui.migration-policy"));
             egui::Grid::new("migration_policy_summary")
@@ -623,6 +626,16 @@ crate::ui::name_modal(ui, &modal_heading);
                     )
                     .color(colors.danger),
                 );
+            }
+            if let Some(error) = policy_error {
+                ui.label(
+                    egui::RichText::new(
+                        self.language
+                            .text("Organization policy could not be loaded; execution will be blocked."),
+                    )
+                    .color(colors.danger),
+                );
+                ui.label(egui::RichText::new(error).small().color(colors.text_secondary));
             }
         });
         ui.add_space(8.0);

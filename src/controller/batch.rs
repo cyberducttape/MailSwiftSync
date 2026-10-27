@@ -22,12 +22,16 @@ pub(crate) fn batch_run_status(state: &str) -> &'static str {
 }
 
 /// The organization-policy minimum assurance in force for a run being
-/// admitted. Admission and preflight already refuse a policy that cannot be
-/// read, so an unreadable one here imposes no additional minimum.
-pub(crate) fn policy_required_assurance() -> Option<core::AssuranceLevel> {
-    crate::organization_policy::OrganizationPolicy::load()
-        .ok()
-        .and_then(|policy| policy.required_assurance())
+/// admitted. A policy read or validation failure must prevent admission; it
+/// must never be interpreted as an absent assurance requirement.
+pub(crate) fn policy_required_assurance() -> Result<Option<core::AssuranceLevel>, String> {
+    policy_required_assurance_from(crate::organization_policy::OrganizationPolicy::load)
+}
+
+fn policy_required_assurance_from(
+    load: impl FnOnce() -> Result<crate::organization_policy::OrganizationPolicy, String>,
+) -> Result<Option<core::AssuranceLevel>, String> {
+    load().map(|policy| policy.required_assurance())
 }
 
 /// Detail for an exact match whose evidence is weaker than the required
@@ -394,6 +398,14 @@ mod tests {
     use crate::migration_plan::Form;
     use crate::runner::{TerminalEvidenceSource, terminal_evidence_source};
     use std::collections::HashSet;
+
+    #[test]
+    fn organization_policy_read_failure_is_not_treated_as_no_assurance_requirement() {
+        let result = super::policy_required_assurance_from(|| {
+            Err("organization policy is unreadable".to_owned())
+        });
+        assert_eq!(result.unwrap_err(), "organization policy is unreadable");
+    }
 
     fn unsuitable_live_form() -> crate::Form {
         let mut form = crate::Form {
