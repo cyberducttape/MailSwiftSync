@@ -122,6 +122,7 @@ impl MigrationError {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn detail(&self) -> &str {
         match self {
             Self::Cancellation { detail }
@@ -398,22 +399,220 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
     classify_error(error).class()
 }
 
+#[cfg(test)]
 pub(crate) fn classify_failure_for_provider(provider: &str, error: &str) -> FailureClass {
     classify_error_for_provider(provider, error).class()
 }
 
-/// Choose a provider classifier only when the engine diagnostic identifies
-/// one endpoint. Ambiguous diagnostics must not borrow either provider's
-/// provider-specific signatures.
-pub(crate) fn provider_for_sided_error<'a>(
-    source_provider: &'a str,
-    destination_provider: &'a str,
-    error: &str,
+fn attributed_provider<'a>(
+    sides: &[crate::controller::rate_domains::Side],
+    provider_of: impl Fn(crate::controller::rate_domains::Side) -> &'a str,
 ) -> &'a str {
-    match crate::controller::rate_domains::failure_sides(error).as_slice() {
-        [crate::controller::rate_domains::Side::Source] => source_provider,
-        [crate::controller::rate_domains::Side::Destination] => destination_provider,
+    match sides {
+        [side] => provider_of(*side),
         _ => crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER,
+    }
+}
+
+/// A failure classified once, at the execution boundary, against the
+/// provider of the endpoint that emitted it. Retry eligibility, backoff,
+/// rate-domain cooldowns, and the durable detail all read this value, so
+/// they cannot disagree, and none of them re-derives the class from text
+/// that was later prefixed, redacted, or bounded for presentation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClassifiedFailure {
+    provider: String,
+    sides: Vec<crate::controller::rate_domains::Side>,
+    error: MigrationError,
+    provider_error: crate::core::provider_intelligence::ProviderErrorType,
+    signal: Option<crate::core::provider_intelligence::ProviderSignal>,
+    controller_marked: bool,
+    verification_limit: bool,
+}
+
+impl ClassifiedFailure {
+    /// Classify `error` for a known provider, with no side attribution.
+    #[cfg(test)]
+    pub(crate) fn new(provider: &str, error: &str) -> Self {
+        Self::classify(provider, Vec::new(), error)
+    }
+
+    /// Classify `error` for the endpoint(s) it names. A failure attributed to
+    /// exactly one side uses that side's provider vocabulary; an ambiguous one
+    /// uses none.
+    pub(crate) fn attributed<'a>(
+        error: &str,
+        sides: Vec<crate::controller::rate_domains::Side>,
+        provider_of: impl Fn(crate::controller::rate_domains::Side) -> &'a str,
+    ) -> Self {
+        let provider = attributed_provider(&sides, provider_of);
+        Self::classify(provider, sides, error)
+    }
+
+    /// Classify a single run's failure, attributing it to the source or
+    /// destination provider only when the diagnostic names one endpoint.
+    pub(crate) fn for_endpoints(
+        error: &str,
+        source_provider: &str,
+        destination_provider: &str,
+    ) -> Self {
+        use crate::controller::rate_domains::{Side, failure_sides};
+        Self::attributed(error, failure_sides(error), |side| match side {
+            Side::Source => source_provider,
+            Side::Destination => destination_provider,
+        })
+    }
+
+    fn classify(
+        provider: &str,
+        sides: Vec<crate::controller::rate_domains::Side>,
+        error: &str,
+    ) -> Self {
+        let text = control_error_text(error);
+        Self {
+            provider: provider.to_owned(),
+            sides,
+            error: classify_error_for_provider(provider, error),
+            provider_error: crate::core::provider_intelligence::ProviderErrorClassifier::classify(
+                provider, text,
+            ),
+            signal: crate::core::provider_intelligence::provider_signal_for_provider(
+                provider, text,
+            ),
+            controller_marked: controller_failure_class(error).is_some(),
+            verification_limit: core::VerificationLimit::from_detail(error).is_some(),
+        }
+    }
+
+    pub(crate) fn class(&self) -> FailureClass {
+        self.error.class()
+    }
+
+    /// Provider whose vocabulary classified this failure.
+    #[cfg(test)]
+    pub(crate) fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    pub(crate) fn sides(&self) -> &[crate::controller::rate_domains::Side] {
+        &self.sides
+    }
+
+    /// The delay the server itself requested, when it stated one.
+    pub(crate) fn retry_after(&self) -> Option<Duration> {
+        self.error.retry_after()
+    }
+
+    /// The provider's documented backoff for this kind of failure.
+    pub(crate) fn suggested_delay(&self) -> Option<Duration> {
+        self.provider_error.suggested_retry_delay()
+    }
+
+    /// Whether a later attempt could succeed, regardless of retry budget.
+    pub(crate) fn is_transient(&self) -> bool {
+        use crate::core::provider_intelligence::ProviderErrorType;
+        let class = self.class();
+        if class != FailureClass::Transport || self.controller_marked {
+            return class == FailureClass::Capacity || class == FailureClass::Transport;
+        }
+        // The durable taxonomy folds several provider verdicts (tagged NO,
+        // BAD, engine exit, TLS, DNS) into Transport for attention reporting,
+        // but those verdicts carry their own retry contract: a tagged NO or
+        // BAD can be a permanent policy or configuration rejection. Retry
+        // only what the provider classifier itself declares retryable. Its
+        // fallback verdict (PermanentProviderFailure) means it recognized
+        // nothing, so the controller's own transport heuristics decided the
+        // class and stand.
+        match self.provider_error {
+            ProviderErrorType::PermanentProviderFailure => true,
+            provider => provider.is_retryable(),
+        }
+    }
+
+    pub(crate) fn should_retry(&self, attempt: usize, retry_count: usize) -> bool {
+        self.class() != FailureClass::Cancellation && attempt < retry_count && self.is_transient()
+    }
+
+    /// Backoff before retry number `attempt + 1`.
+    pub(crate) fn retry_delay(&self, attempt: usize) -> Duration {
+        // A delay the server itself requested (for example Exchange Online's
+        // suggested backoff) is honored as the base, capped by the provider
+        // module; otherwise the class default applies.
+        let server_requested = self.retry_after();
+        let base_millis = server_requested.or(self.suggested_delay()).map_or_else(
+            || {
+                if self.class() == FailureClass::Capacity {
+                    5_000_u64
+                } else {
+                    1_000_u64
+                }
+            },
+            |delay| delay.as_millis().min(u128::from(u64::MAX)) as u64,
+        );
+        let multiplier = 1_u64 << attempt.min(5);
+        let exponential = base_millis.saturating_mul(multiplier).min(120_000);
+        // Add per-attempt entropy so concurrent workers do not wake on the
+        // same deterministic boundary. This is deliberately bounded and
+        // local; it is a collision-avoidance jitter, not a claim that
+        // provider capacity reset.
+        let entropy = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.subsec_nanos() as u64)
+            ^ std::process::id() as u64
+            ^ attempt as u64;
+        let jitter = if exponential >= 120_000 {
+            0
+        } else {
+            entropy % (exponential / 2 + 1)
+        };
+        // Never retry sooner than the server asked, even past the usual cap.
+        Duration::from_millis(exponential.saturating_add(jitter).min(120_000))
+            .max(server_requested.unwrap_or_default())
+    }
+
+    /// Durable run detail: the class prefix this failure was classified
+    /// with, followed by `presented`, the operator-facing text (redacted,
+    /// possibly prefixed). `presented` is never reclassified.
+    pub(crate) fn durable_detail(&self, presented: &str) -> String {
+        self.render_detail(presented, true)
+    }
+
+    fn render_detail(&self, presented: &str, include_provider_context: bool) -> String {
+        let class = self.class();
+        // A recognized documented response names its source and, when the
+        // failure needs a person, what to check. The tag follows the class so
+        // the durable prefix parse is unchanged.
+        let (signal, remediation) = self
+            .signal
+            .map(|signal| {
+                let remediation = if signal.remediation.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Next step: {}.", signal.remediation)
+                };
+                (
+                    format!("[signal={}:{}] ", signal.source, signal.name),
+                    remediation,
+                )
+            })
+            .unwrap_or_default();
+        let provider_context = if include_provider_context
+            && self.provider != crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
+        {
+            format!("[provider={}] ", self.provider)
+        } else {
+            String::new()
+        };
+        let attention_reason = if class == FailureClass::Verification && self.verification_limit {
+            core::AttentionReason::VerificationLimitExceeded
+        } else {
+            class.attention_reason()
+        };
+        format!(
+            "[attention_reason={}] [class={}] {provider_context}{signal}{presented}{remediation}",
+            attention_reason.as_str(),
+            class.label(),
+        )
     }
 }
 
@@ -422,24 +621,9 @@ pub(crate) fn is_transient_batch_error(error: &str) -> bool {
     is_transient_batch_error_for_provider("generic", error)
 }
 
+#[cfg(test)]
 pub(crate) fn is_transient_batch_error_for_provider(provider: &str, error: &str) -> bool {
-    use crate::core::provider_intelligence::{ProviderErrorClassifier, ProviderErrorType};
-    let typed = classify_error_for_provider(provider, error);
-    let class = typed.class();
-    if class != FailureClass::Transport || controller_failure_class(error).is_some() {
-        return class == FailureClass::Capacity || class == FailureClass::Transport;
-    }
-    // The durable taxonomy folds several provider verdicts (tagged NO, BAD,
-    // engine exit, TLS, DNS) into Transport for attention reporting, but those
-    // verdicts carry their own retry contract: a tagged NO or BAD can be a
-    // permanent policy or configuration rejection. Retry only what the
-    // provider classifier itself declares retryable. Its fallback verdict
-    // (PermanentProviderFailure) means it recognized nothing, so the
-    // controller's own transport heuristics decided the class and stand.
-    match ProviderErrorClassifier::classify(provider, control_error_text(error)) {
-        ProviderErrorType::PermanentProviderFailure => true,
-        provider => provider.is_retryable(),
-    }
+    ClassifiedFailure::new(provider, error).is_transient()
 }
 
 #[cfg(test)]
@@ -447,15 +631,14 @@ pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count:
     should_retry_batch_error_for_provider("generic", error, attempt, retry_count)
 }
 
+#[cfg(test)]
 pub(crate) fn should_retry_batch_error_for_provider(
     provider: &str,
     error: &str,
     attempt: usize,
     retry_count: usize,
 ) -> bool {
-    classify_failure_for_provider(provider, error) != FailureClass::Cancellation
-        && attempt < retry_count
-        && is_transient_batch_error_for_provider(provider, error)
+    ClassifiedFailure::new(provider, error).should_retry(attempt, retry_count)
 }
 
 #[cfg(test)]
@@ -463,49 +646,13 @@ pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
     transient_retry_delay_for_provider("generic", error, attempt)
 }
 
+#[cfg(test)]
 pub(crate) fn transient_retry_delay_for_provider(
     provider: &str,
     error: &str,
     attempt: usize,
 ) -> Duration {
-    let typed = classify_error_for_provider(provider, error);
-    let error = typed.detail();
-    let provider_error =
-        crate::core::provider_intelligence::ProviderErrorClassifier::classify(provider, error);
-    // A delay the server itself requested (for example Exchange Online's
-    // suggested backoff) is honored as the base, capped by the provider
-    // module; otherwise the class default applies.
-    let server_requested = typed.retry_after();
-    let base_millis = server_requested
-        .or(provider_error.suggested_retry_delay())
-        .map_or_else(
-            || {
-                if typed.class() == FailureClass::Capacity {
-                    5_000_u64
-                } else {
-                    1_000_u64
-                }
-            },
-            |delay| delay.as_millis().min(u128::from(u64::MAX)) as u64,
-        );
-    let multiplier = 1_u64 << attempt.min(5);
-    let exponential = base_millis.saturating_mul(multiplier).min(120_000);
-    // Add per-attempt entropy so concurrent workers do not wake on the same
-    // deterministic boundary. This is deliberately bounded and local; it is
-    // a collision-avoidance jitter, not a claim that provider capacity reset.
-    let entropy = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.subsec_nanos() as u64)
-        ^ std::process::id() as u64
-        ^ attempt as u64;
-    let jitter = if exponential >= 120_000 {
-        0
-    } else {
-        entropy % (exponential / 2 + 1)
-    };
-    // Never retry sooner than the server asked, even past the usual cap.
-    Duration::from_millis(exponential.saturating_add(jitter).min(120_000))
-        .max(server_requested.unwrap_or_default())
+    ClassifiedFailure::new(provider, error).retry_delay(attempt)
 }
 
 /// Return only the primary failure, excluding untrusted diagnostic text added
@@ -514,54 +661,6 @@ pub(crate) fn control_error_text(error: &str) -> &str {
     error
         .split_once("; recent output:")
         .map_or(error, |(primary, _)| primary)
-}
-
-fn classified_failure_detail_internal(
-    provider: &str,
-    error: &str,
-    include_provider_context: bool,
-) -> String {
-    let class = classify_failure_text(provider, error);
-    // A recognized documented response names its source and, when the
-    // failure needs a person, what to check. The tag follows the class so
-    // the durable prefix parse is unchanged.
-    let signal = crate::core::provider_intelligence::provider_signal_for_provider(
-        provider,
-        control_error_text(error),
-    )
-    .map(|signal| {
-        let remediation = if signal.remediation.is_empty() {
-            String::new()
-        } else {
-            format!(" Next step: {}.", signal.remediation)
-        };
-        (
-            format!("[signal={}:{}] ", signal.source, signal.name),
-            remediation,
-        )
-    })
-    .unwrap_or_default();
-    let provider_context = if include_provider_context
-        && provider != crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
-    {
-        format!("[provider={provider}] ")
-    } else {
-        String::new()
-    };
-    let attention_reason = if class == FailureClass::Verification
-        && core::VerificationLimit::from_detail(error).is_some()
-    {
-        core::AttentionReason::VerificationLimitExceeded
-    } else {
-        class.attention_reason()
-    };
-    format!(
-        "[attention_reason={}] [class={}] {provider_context}{}{error}{}",
-        attention_reason.as_str(),
-        class.label(),
-        signal.0,
-        signal.1
-    )
 }
 
 /// Durable run detail for a transfer that completed without verification
@@ -601,13 +700,14 @@ pub(crate) fn bounded_verification_error(error: &str, max_chars: usize) -> Strin
 /// Classify a failure with the provider selected at the execution boundary.
 /// The provider marker is durable operator context; policy still consumes the
 /// typed class and never parses the marker or raw diagnostic prose.
+#[cfg(test)]
 pub(crate) fn classified_failure_detail_for_provider(provider: &str, error: &str) -> String {
-    classified_failure_detail_internal(provider, error, true)
+    ClassifiedFailure::new(provider, error).durable_detail(error)
 }
 
 #[cfg(test)]
 pub(crate) fn classified_failure_detail(error: &str) -> String {
-    classified_failure_detail_internal("generic", error, false)
+    ClassifiedFailure::new("generic", error).render_detail(error, false)
 }
 
 #[cfg(test)]
@@ -659,21 +759,49 @@ mod tests {
     }
 
     #[test]
+    fn presentation_prefixes_do_not_reclassify_a_failure() {
+        // Once a retryable failure exhausts its budget the worker prefixes
+        // the text for the operator. Reclassifying that prose lost the
+        // controller's class marker, which only counts at the start.
+        let error = "[attention_reason=capacity_limited] [class=capacity] connection refused";
+        let presented = format!("retry budget exhausted after 2 retries: {error}");
+        assert_ne!(
+            super::classify_failure(&presented),
+            super::FailureClass::Capacity
+        );
+        let failure = super::ClassifiedFailure::new("generic", error);
+        assert_eq!(
+            failure.durable_detail(&presented),
+            format!(
+                "[attention_reason=capacity_limited] [class=capacity] [provider=generic] {presented}"
+            )
+        );
+    }
+
+    #[test]
     fn terminal_provider_selection_requires_unambiguous_endpoint_attribution() {
         assert_eq!(
-            super::provider_for_sided_error("gmail", "microsoft365", "Host1: server busy"),
+            super::ClassifiedFailure::for_endpoints("Host1: server busy", "gmail", "microsoft365")
+                .provider(),
             "gmail"
         );
         assert_eq!(
-            super::provider_for_sided_error("gmail", "microsoft365", "Host2: server busy"),
+            super::ClassifiedFailure::for_endpoints("Host2: server busy", "gmail", "microsoft365")
+                .provider(),
             "microsoft365"
         );
         assert_eq!(
-            super::provider_for_sided_error("gmail", "microsoft365", "server busy"),
+            super::ClassifiedFailure::for_endpoints("server busy", "gmail", "microsoft365")
+                .provider(),
             crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
         );
         assert_eq!(
-            super::provider_for_sided_error("gmail", "microsoft365", "Host1 and Host2 refused"),
+            super::ClassifiedFailure::for_endpoints(
+                "Host1 and Host2 refused",
+                "gmail",
+                "microsoft365"
+            )
+            .provider(),
             crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
         );
     }
