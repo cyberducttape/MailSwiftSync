@@ -135,6 +135,10 @@ pub(crate) struct RunContext<'a> {
         &'a crate::process::ProcessLaunchLimiter,
         &'a crate::controller::rate_domains::RateDomainPath,
     )>,
+    /// Source and destination providers. A failure that names one endpoint
+    /// is classified with that endpoint's documented signatures, exactly as
+    /// the controller classifies it for retry and terminal state.
+    pub(crate) endpoint_providers: (&'a str, &'a str),
 }
 
 pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, String> {
@@ -156,6 +160,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         attempt_number,
         transfer_pass,
         launch_limiter,
+        endpoint_providers: (source_provider, destination_provider),
     } = context;
     if imapsync_output_profile == verification::ImapsyncOutputProfile::Unknown
         && args
@@ -599,9 +604,18 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             },
         );
     }
+    let failure_class = |error: &str| {
+        crate::controller::failure::ClassifiedFailure::for_endpoints(
+            error,
+            source_provider,
+            destination_provider,
+        )
+        .class()
+        .label()
+    };
     let attempt_outcome = if let Some(error) = reader_error.as_deref() {
         crate::controller::TransferAttemptOutcome::Failed {
-            failure_class: crate::controller::failure::classify_failure(error).label(),
+            failure_class: failure_class(error),
         }
     } else {
         match &result {
@@ -610,7 +624,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 crate::controller::TransferAttemptOutcome::DeltaRequired
             }
             Err(error) => crate::controller::TransferAttemptOutcome::Failed {
-                failure_class: crate::controller::failure::classify_failure(error).label(),
+                failure_class: failure_class(error),
             },
         }
     };
@@ -1048,6 +1062,7 @@ mod tests {
             attempt_number: 1,
             transfer_pass: None,
             launch_limiter: None,
+            endpoint_providers: ("generic", "generic"),
         });
 
         let detached_pid = (0..20).find_map(|_| {
@@ -1130,6 +1145,7 @@ mod tests {
             attempt_number: 1,
             transfer_pass: None,
             launch_limiter: None,
+            endpoint_providers: ("generic", "generic"),
         })
         .unwrap_err();
         assert!(error.contains("qualified imapsync 2.314"));
@@ -1191,6 +1207,7 @@ mod tests {
             attempt_number: 1,
             transfer_pass: None,
             launch_limiter: None,
+            endpoint_providers: ("generic", "generic"),
         });
         drop(tx);
         let snapshots = controller.join().unwrap();

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Record each transfer attempt's failure class with the provider of the
+  endpoint that failed, the same classification the controller uses for retry
+  and terminal state, instead of a provider-blind guess.
 - Classify a batch or single-run failure once, at the execution boundary, and
   drive retry eligibility, backoff, rate-domain cooldowns, the log label, and
   the durable detail from that one result. A failure whose retry budget ran

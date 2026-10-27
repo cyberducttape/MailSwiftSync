@@ -96,6 +96,24 @@ impl Form {
             dry_run: self.dry_run,
         }
     }
+
+    /// Canonical provider of one endpoint, whose documented error signatures
+    /// classify the failures that endpoint reports.
+    pub(crate) fn endpoint_provider(&self, side: crate::imap_probe::MailSide) -> &'static str {
+        let host = match side {
+            crate::imap_probe::MailSide::Source => &self.profile.source_host,
+            crate::imap_probe::MailSide::Destination => &self.profile.destination_host,
+        };
+        crate::core::provider_intelligence::canonical_provider(host)
+    }
+
+    /// Source and destination providers, in that order.
+    pub(crate) fn endpoint_providers(&self) -> (&'static str, &'static str) {
+        (
+            self.endpoint_provider(crate::imap_probe::MailSide::Source),
+            self.endpoint_provider(crate::imap_probe::MailSide::Destination),
+        )
+    }
 }
 
 #[cfg(test)]

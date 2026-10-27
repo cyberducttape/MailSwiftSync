@@ -2133,6 +2133,7 @@ fn live_dovecot_exit_code_two_is_a_delta_outcome() {
         attempt_number: 1,
         transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
+        endpoint_providers: ("generic", "generic"),
     })
     .unwrap();
     drop(tx);
@@ -2189,6 +2190,7 @@ fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
         attempt_number: 1,
         transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
+        endpoint_providers: ("generic", "generic"),
     })
     .unwrap();
     drop(tx);
@@ -2262,6 +2264,7 @@ fn streaming_rejects_evidence_for_an_unknown_imapsync_profile() {
         attempt_number: 1,
         transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
+        endpoint_providers: ("generic", "generic"),
     })
     .unwrap();
     drop(tx);
@@ -2310,6 +2313,7 @@ fn dry_dovecot_exit_code_two_is_not_a_delta_outcome() {
         attempt_number: 1,
         transfer_pass: None,
         launch_limiter: None,
+        endpoint_providers: ("generic", "generic"),
     });
     drop(tx);
     assert!(!acknowledger.join().unwrap());
@@ -2342,6 +2346,7 @@ fn disconnected_process_event_channel_cancels_child_before_returning() {
         attempt_number: 1,
         transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
+        endpoint_providers: ("generic", "generic"),
     });
 
     let error = outcome.unwrap_err();
@@ -2379,6 +2384,7 @@ fn rejected_process_registration_cancels_child_before_returning() {
         attempt_number: 1,
         transfer_pass: Some(&transfer_pass),
         launch_limiter: None,
+        endpoint_providers: ("generic", "generic"),
     });
     drop(tx);
     acknowledger.join().unwrap();

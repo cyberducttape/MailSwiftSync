@@ -391,10 +391,12 @@ pub(crate) fn classify_error_for_provider(provider: &str, error: &str) -> Migrat
     }
 }
 
+#[cfg(test)]
 pub(crate) fn classify_error(error: &str) -> MigrationError {
     classify_error_for_provider("generic", error)
 }
 
+#[cfg(test)]
 pub(crate) fn classify_failure(error: &str) -> FailureClass {
     classify_error(error).class()
 }
@@ -803,6 +805,22 @@ mod tests {
             )
             .provider(),
             crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
+        );
+    }
+
+    #[test]
+    fn a_sided_failure_uses_only_its_endpoints_signatures() {
+        let error = "Host1: NO account exceeded command or bandwidth limits";
+        let class = |source, destination| {
+            super::ClassifiedFailure::for_endpoints(error, source, destination).class()
+        };
+        assert_eq!(
+            class("gmail", "microsoft365"),
+            super::FailureClass::Capacity
+        );
+        assert_ne!(
+            class("microsoft365", "gmail"),
+            super::FailureClass::Capacity
         );
     }
 
