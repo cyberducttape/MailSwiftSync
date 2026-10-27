@@ -70,6 +70,8 @@ jobs:
           exit 1
 
       - name: Exercise live reader and operator authorization boundaries
+        env:
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: >-
           python3 scripts/fleet-api-auth-smoke.py
           --base-url http://127.0.0.1:9464

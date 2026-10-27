@@ -1099,6 +1099,17 @@ fn fleet_api_dast_scans_an_authenticated_live_instance_with_pinned_zap() {
     assert!(workflow.contains("FLEET_API_DAST_OPERATOR_TOKEN=%s\\n"));
     assert!(workflow.contains("scripts/fleet-api-auth-smoke.py"));
     assert!(workflow.contains("fleet-api-auth-smoke.json"));
+    let smoke = fs::read_to_string("scripts/fleet-api-auth-smoke.py")
+        .expect("live authorization smoke test should exist");
+    assert!(smoke.contains("GITHUB_SHA"));
+    assert!(smoke.contains("GITHUB_HEAD_SHA"));
+    assert!(smoke.contains("workflow_run_id"));
+    assert!(smoke.contains("authentication_profiles"));
+    assert!(smoke.contains("\"transport\": \"http\""));
+    assert!(
+        workflow
+            .contains("GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}")
+    );
     assert!(workflow.contains("ZAP_AUTH_HEADER_VALUE: Bearer ${{ env.FLEET_API_DAST_TOKEN }}"));
     assert!(workflow.contains("zaproxy/action-baseline@v0.15.0"));
     let action_lock = fs::read_to_string(".github/workflows/actions.lock")
