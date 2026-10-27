@@ -60,7 +60,7 @@ fn successful_batch_detail(
 /// signatures stay disabled until side attribution is explicit.
 fn classify_attempt_failure(form: &crate::Form, error: &str) -> ClassifiedFailure {
     ClassifiedFailure::attributed(error, failure_sides(error), |side| {
-        provider_for_side(form, side)
+        form.endpoint_provider(side)
     })
 }
 
@@ -70,15 +70,7 @@ fn classify_sided_failure(
     side: crate::imap_probe::MailSide,
     error: &str,
 ) -> ClassifiedFailure {
-    ClassifiedFailure::attributed(error, vec![side], |side| provider_for_side(form, side))
-}
-
-fn provider_for_side(form: &crate::Form, side: crate::imap_probe::MailSide) -> &'static str {
-    let host = match side {
-        crate::imap_probe::MailSide::Source => &form.profile.source_host,
-        crate::imap_probe::MailSide::Destination => &form.profile.destination_host,
-    };
-    crate::core::provider_intelligence::canonical_provider(host)
+    ClassifiedFailure::attributed(error, vec![side], |side| form.endpoint_provider(side))
 }
 
 /// Redact one mailbox's secrets from controller-generated text. Errors can
@@ -640,6 +632,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     attempt_number: *transfer_attempt_number,
                     transfer_pass: transfer_pass.as_ref(),
                     launch_limiter: Some((launch_limiter, launch_path)),
+                    endpoint_providers: form.endpoint_providers(),
                 })
             })
             .and_then(|stream| {
