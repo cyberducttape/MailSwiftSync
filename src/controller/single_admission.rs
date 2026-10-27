@@ -76,6 +76,27 @@ pub(crate) struct SingleRunAdmission {
     pub(crate) plan_snapshot: String,
     pub(crate) source_provider: String,
     pub(crate) destination_provider: String,
+    pub(crate) organization_policy: Option<crate::organization_policy::OrganizationPolicy>,
+}
+
+pub(crate) fn policy_snapshot_for_admission(
+    dry_run: bool,
+) -> Result<Option<crate::organization_policy::OrganizationPolicy>, String> {
+    policy_snapshot_for_admission_from(
+        dry_run,
+        crate::organization_policy::OrganizationPolicy::load,
+    )
+}
+
+fn policy_snapshot_for_admission_from(
+    dry_run: bool,
+    load: impl FnOnce() -> Result<crate::organization_policy::OrganizationPolicy, String>,
+) -> Result<Option<crate::organization_policy::OrganizationPolicy>, String> {
+    match load() {
+        Ok(policy) => Ok(Some(policy)),
+        Err(_) if dry_run => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Commit a single run snapshot and construct the matching ownership context.
@@ -85,6 +106,20 @@ pub(crate) fn admit_single_run(
     store: &core::StateStore,
     admission: SingleRunAdmission,
 ) -> Result<ActiveRunContext, String> {
+    if !admission.dry_run {
+        let expected_policy = admission.organization_policy.as_ref().ok_or_else(|| {
+            "Organization policy was not captured; live migration was not started.".to_owned()
+        })?;
+        let current_policy =
+            crate::organization_policy::OrganizationPolicy::load().map_err(|error| {
+                format!("Could not recheck organization policy; no migration was started: {error}")
+            })?;
+        if &current_policy != expected_policy {
+            return Err(
+                "Organization policy changed during admission; review the plan and start again. No migration was started.".into(),
+            );
+        }
+    }
     store
         .begin_run_with_snapshot(
             &admission.project_id,
@@ -109,13 +144,19 @@ pub(crate) fn admit_single_run(
         source_provider: admission.source_provider,
         destination_provider: admission.destination_provider,
         verification_state_path: None,
-        required_assurance: crate::controller::policy_required_assurance(),
+        required_assurance: admission
+            .organization_policy
+            .as_ref()
+            .and_then(crate::organization_policy::OrganizationPolicy::required_assurance),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SingleStartBlock, SingleStartContext, SingleStartDecision, single_start_decision};
+    use super::{
+        SingleStartBlock, SingleStartContext, SingleStartDecision,
+        policy_snapshot_for_admission_from, single_start_decision,
+    };
 
     fn context() -> SingleStartContext {
         SingleStartContext {
@@ -150,5 +191,16 @@ mod tests {
             single_start_decision(stale),
             SingleStartDecision::Block(SingleStartBlock::StaleDurableView)
         );
+    }
+
+    #[test]
+    fn unreadable_policy_blocks_live_admission_but_allows_dry_preflight() {
+        let load = || Err("policy file is unreadable".to_owned());
+
+        assert_eq!(
+            policy_snapshot_for_admission_from(false, load),
+            Err("policy file is unreadable".to_owned())
+        );
+        assert_eq!(policy_snapshot_for_admission_from(true, load), Ok(None));
     }
 }
