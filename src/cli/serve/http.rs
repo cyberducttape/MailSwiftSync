@@ -24,7 +24,13 @@ pub(super) fn parse_request_head(bytes: &[u8]) -> Result<RequestHead, String> {
 
     let method = request.method.ok_or("HTTP method is missing")?;
     let target = request.path.ok_or("HTTP request target is missing")?;
-    request.version.ok_or("HTTP version is missing")?;
+    match request.version.ok_or("HTTP version is missing")? {
+        // This listener speaks HTTP/1.1 and closes every connection after a
+        // single request. Accept HTTP/1.0 clients as a compatible subset, but
+        // never reinterpret a future HTTP/1.x version as HTTP/1.1.
+        0 | 1 => {}
+        _ => return Err("unsupported HTTP minor version".into()),
+    }
     let headers = request
         .headers
         .iter()
@@ -79,5 +85,18 @@ mod tests {
         }
         request.extend_from_slice(b"\r\n");
         assert!(parse_request_head(&request).is_err());
+    }
+
+    #[test]
+    fn accepts_only_supported_http_one_minor_versions() {
+        for version in ["HTTP/1.0", "HTTP/1.1"] {
+            let request = format!("GET /healthz {version}\r\n\r\n");
+            assert!(parse_request_head(request.as_bytes()).is_ok(), "{version}");
+        }
+
+        for version in ["HTTP/1.2", "HTTP/1.9", "HTTP/1.255"] {
+            let request = format!("GET /healthz {version}\r\n\r\n");
+            assert!(parse_request_head(request.as_bytes()).is_err(), "{version}");
+        }
     }
 }
