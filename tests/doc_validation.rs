@@ -386,6 +386,25 @@ fn crash_recovery_docs_record_current_head_local_fault_drills_with_limits() {
 }
 
 #[test]
+fn crash_recovery_docs_record_latest_merged_main_fault_drills() {
+    let docs = fs::read_to_string("docs/crash-recovery-validation.md")
+        .expect("crash-recovery validation evidence should exist");
+    for evidence in [
+        "On 2026-10-27, the three local drills were rerun against the merged `main`",
+        "2c4e527fbdbe75c939475bea4caf05551319dc55",
+        "ad62a108ecb53b866647b986653b78eb07aad98a539f1d10918000ae920e3970",
+        "controller exited 153 instead of reporting success",
+        "bounded write-failure simulation, not a physically full filesystem",
+        "do not simulate host reboot",
+    ] {
+        assert!(
+            docs.contains(evidence),
+            "latest merged-main recovery evidence is missing {evidence:?}"
+        );
+    }
+}
+
+#[test]
 fn production_docs_keep_body_proof_and_power_loss_claims_bounded() {
     let verification = fs::read_to_string("docs/verification-envelope.md")
         .expect("verification envelope should exist");
