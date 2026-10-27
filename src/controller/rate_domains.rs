@@ -20,7 +20,7 @@
 //! a provider that throttles broadly is still discovered from observation.
 //! No undocumented provider quota is encoded.
 
-use crate::controller::failure::{FailureClass, control_error_text};
+use crate::controller::failure::{ClassifiedFailure, FailureClass, control_error_text};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -439,6 +439,7 @@ impl RateDomainLimiter {
         }
     }
 
+    #[cfg(test)]
     /// Attribute a capacity failure. Returns each domain that was penalized
     /// with the end of its cooldown; non-capacity failures change nothing.
     pub(crate) fn observe_failure(
@@ -449,6 +450,7 @@ impl RateDomainLimiter {
         self.observe_failure_on(admission, error, failure_sides(error))
     }
 
+    #[cfg(test)]
     /// As `observe_failure`, for a failure whose side is already known.
     pub(crate) fn observe_failure_on(
         &self,
@@ -459,6 +461,7 @@ impl RateDomainLimiter {
         self.observe_failure_on_at(admission, error, sides, Instant::now())
     }
 
+    #[cfg(test)]
     fn observe_failure_on_at(
         &self,
         admission: &Admission,
@@ -466,42 +469,45 @@ impl RateDomainLimiter {
         sides: Vec<Side>,
         now: Instant,
     ) -> Vec<(DomainKey, Instant)> {
-        let Some(first_side) = sides.first().copied() else {
-            return Vec::new();
-        };
-        let path = &admission.path;
         // If Host1/Host2 cannot attribute a failure, don't test it against
         // either endpoint's provider vocabulary. Those signatures can imply
         // capacity for the wrong side and incorrectly cool down both paths.
-        let provider = if sides.len() > 1 {
-            crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
-        } else {
-            path.chain(first_side)[0].provider
-        };
-        let is_capacity =
-            crate::controller::failure::classify_failure_for_provider(provider, error)
-                == FailureClass::Capacity;
-        if !is_capacity {
+        let failure = ClassifiedFailure::attributed(error, sides, |side| {
+            admission.path.chain(side)[0].provider
+        });
+        self.observe_classified_at(admission, &failure, now)
+    }
+
+    /// Attribute a failure classified at the execution boundary to the sides
+    /// it names. Only capacity failures penalize a domain.
+    pub(crate) fn observe_classified(
+        &self,
+        admission: &Admission,
+        failure: &ClassifiedFailure,
+    ) -> Vec<(DomainKey, Instant)> {
+        self.observe_classified_at(admission, failure, Instant::now())
+    }
+
+    fn observe_classified_at(
+        &self,
+        admission: &Admission,
+        failure: &ClassifiedFailure,
+        now: Instant,
+    ) -> Vec<(DomainKey, Instant)> {
+        if failure.sides().is_empty() || failure.class() != FailureClass::Capacity {
             return Vec::new();
         }
-        let text = control_error_text(error);
-        let server_requested =
-            crate::core::provider_intelligence::provider_signal_for_provider(provider, text)
-                .and_then(|signal| signal.retry_after);
+        let path = &admission.path;
+        let server_requested = failure.retry_after();
         let base = server_requested
-            .or_else(|| {
-                crate::core::provider_intelligence::ProviderErrorClassifier::classify(
-                    provider, text,
-                )
-                .suggested_retry_delay()
-            })
+            .or_else(|| failure.suggested_delay())
             .unwrap_or(DEFAULT_CAPACITY_DELAY);
         let floor = server_requested.unwrap_or_default();
         let Ok(mut state) = self.state.lock() else {
             return Vec::new();
         };
         let mut penalized = Vec::new();
-        for side in sides {
+        for &side in failure.sides() {
             // global, provider, tenant, credential, mailbox — broadest first.
             let lineage: Vec<&DomainKey> = std::iter::once(&path.global)
                 .chain(path.chain(side).iter())

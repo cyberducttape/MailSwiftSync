@@ -19,13 +19,17 @@ impl App {
             };
             let mut succeeded = r.is_ok();
             let mut preserved_cutover_stage = None;
-            let terminal_failure_class = |error: &str| {
-                let provider = crate::controller::failure::provider_for_sided_error(
+            let terminal_failure = r.as_ref().err().map(|error| {
+                crate::controller::failure::ClassifiedFailure::for_endpoints(
+                    error,
                     &run_context.source_provider,
                     &run_context.destination_provider,
-                    error,
-                );
-                crate::controller::failure::classify_failure_for_provider(provider, error)
+                )
+            });
+            let terminal_failure_is = |class| {
+                terminal_failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.class() == class)
             };
             let delta_required = r
                 .as_ref()
@@ -67,13 +71,9 @@ impl App {
                 let final_state = if succeeded && run_context.dry_run {
                     "ready"
                 } else if !succeeded {
-                    if r.as_ref().err().is_some_and(|error| {
-                        terminal_failure_class(error) == FailureClass::Verification
-                    }) {
+                    if terminal_failure_is(FailureClass::Verification) {
                         "attention"
-                    } else if r.as_ref().err().is_some_and(|error| {
-                        terminal_failure_class(error) == FailureClass::Cancellation
-                    }) {
+                    } else if terminal_failure_is(FailureClass::Cancellation) {
                         "cancelled"
                     } else {
                         "failed"
@@ -101,13 +101,9 @@ impl App {
                 let run_id = &run_context.run_id;
                 let run_status = if succeeded {
                     "completed"
-                } else if r.as_ref().err().is_some_and(|error| {
-                    terminal_failure_class(error) == FailureClass::Verification
-                }) {
+                } else if terminal_failure_is(FailureClass::Verification) {
                     "verification_failed"
-                } else if r.as_ref().err().is_some_and(|error| {
-                    terminal_failure_class(error) == FailureClass::Cancellation
-                }) {
+                } else if terminal_failure_is(FailureClass::Cancellation) {
                     "cancelled"
                 } else {
                     "failed"
@@ -127,14 +123,10 @@ impl App {
                         }
                     },
                     |error| {
-                        let provider = crate::controller::failure::provider_for_sided_error(
-                            &run_context.source_provider,
-                            &run_context.destination_provider,
-                            error,
-                        );
-                        crate::controller::failure::classified_failure_detail_for_provider(
-                            provider, error,
-                        )
+                        terminal_failure
+                            .as_ref()
+                            .map(|failure| failure.durable_detail(error))
+                            .unwrap_or_default()
                     },
                 );
                 let terminal_write = if !was_bulk_run
