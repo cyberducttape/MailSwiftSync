@@ -165,6 +165,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     attempt_number: 1,
                     transfer_pass: transfer_pass.as_ref(),
                     launch_limiter: None,
+                    endpoint_providers: form.endpoint_providers(),
                 })
             });
             if result.is_ok() && !destination_preflight.is_empty() {
