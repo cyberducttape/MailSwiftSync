@@ -761,6 +761,36 @@ unchanged; reconciliation wrote 757,796,864 B. The two successful runs' rate
 spread is useful evidence of shared-host variability, not a basis for
 promising a fixed throughput or lifting the resource limits.
 
+A fresh full typical-shape matrix at current `main` was run on 2026-10-27 at
+commit `fdb630df8a1c3021b4cea58a88f603e81adc12c3`, using Rust 1.92.0 on the
+same shared AMD Ryzen 7 7735U workstation (Ubuntu 26.04.1 x86_64, Linux
+7.0.0-38-generic, ext4 on NVMe). It used a durable stage on the workspace
+filesystem and `CARGO_BUILD_JOBS=2`; all five sizes passed the harness's 64
+MiB peak-RSS and 20,000 messages/s reconciliation gates:
+
+| Messages per endpoint | Stage / reconcile | Reconcile rate | FLAGS compared / time | Restart reconcile | Peak RSS | Stage after staging | Peak stage / journal | Reconciliation writes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 18 ms / 22 ms | 45,454/s | 980 / 9 ms | 29 ms | 13 MiB | 675,840 B | 1,011,712 B / 107,216 B | 557,056 B |
+| 10,000 | 173 ms / 196 ms | 51,020/s | 9,800 / 55 ms | 204 ms | 17 MiB | 6,242,304 B | 9,415,680 B / 949,248 B | 5,337,088 B |
+| 100,000 | 2.149 s / 2.389 s | 41,858/s | 98,000 / 626 ms | 2.128 s | 22 MiB | 64,651,264 B | 105,372,120 B / 9,722,328 B | 64,884,736 B |
+| 500,000 | 10.055 s / 10.992 s | 45,487/s | 490,000 / 3.191 s | 10.990 s | 20 MiB | 334,123,008 B | 544,121,344 B / 50,225,664 B | 334,880,768 B |
+| 1,000,000 | 20.530 s / 22.385 s | 44,672/s | 980,000 / 6.551 s | 22.385 s | 21 MiB | 670,916,608 B | 1,092,691,152 B / 100,893,904 B | 688,721,920 B |
+
+Every size contained 2% intentional changed-ID cases; the million-message
+case recorded 20,000 changed messages. SHA-256 for the benchmark script is
+`37c383f6bd22c27cd9683ac54f79cbf5987d6d6fe440b3461372d04edd61bff4`; the
+release test harness binary is
+`d10c52d2c8d68a4d16c5bc42a9a0dc1fccb5f823554a03583a66369f754011c7`. The
+1M process reported 70.1 CPU-seconds, 868,814,848 B staging writes, and
+688,721,920 B reconciliation writes. The full script, including its cold
+release build and five cases, took 9m49s and peaked at 1,786,068 KiB resident
+memory for the timed command tree. These results confirm synthetic durable
+SQLite reconciliation on this host only; they exclude network inventory and
+fetch, engine transfer, concurrent workers, terminal evidence commit, and
+report export. The 1.09 GB stage high-water mark is a planning observation,
+not a reservation or universal disk ceiling, and this matrix is not large-byte
+mailbox or provider qualification.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the
