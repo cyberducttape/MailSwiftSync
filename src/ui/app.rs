@@ -631,7 +631,7 @@ crate::ui::name_modal(ui, &modal_heading);
                 ui.label(
                     egui::RichText::new(
                         self.language
-                            .text("Organization policy could not be loaded; execution will be blocked."),
+                            .message("ui.organization-policy-could-not-be-loaded"),
                     )
                     .color(colors.danger),
                 );
