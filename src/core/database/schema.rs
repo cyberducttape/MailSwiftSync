@@ -1006,51 +1006,16 @@ impl StateStore {
         // these counters and byte sizes as u64. Reject negative values at the
         // ledger boundary instead of allowing a malformed but structurally
         // valid database to become a huge value through an unchecked cast.
-        const NON_NEGATIVE_COLUMNS: &[(&str, &str)] = &[
-            ("mailbox_jobs", "attempt"),
-            ("evidence", "source_messages"),
-            ("evidence", "destination_messages"),
-            ("evidence", "source_bytes"),
-            ("evidence", "destination_bytes"),
-            ("evidence", "unmatched_messages"),
-            ("evidence", "failed_messages"),
-            ("evidence", "source_folders"),
-            ("evidence", "destination_folders"),
-            ("evidence", "missing_messages"),
-            ("evidence", "extra_messages"),
-            ("evidence", "modified_messages"),
-            ("evidence", "probable_messages"),
-            ("evidence", "rfc_message_id_matches"),
-            ("evidence", "synthetic_identity_matches"),
-            ("evidence_history", "source_messages"),
-            ("evidence_history", "destination_messages"),
-            ("evidence_history", "source_bytes"),
-            ("evidence_history", "destination_bytes"),
-            ("evidence_history", "unmatched_messages"),
-            ("evidence_history", "failed_messages"),
-            ("evidence_history", "source_folders"),
-            ("evidence_history", "destination_folders"),
-            ("evidence_history", "missing_messages"),
-            ("evidence_history", "extra_messages"),
-            ("evidence_history", "modified_messages"),
-            ("evidence_history", "probable_messages"),
-            ("evidence_history", "rfc_message_id_matches"),
-            ("evidence_history", "synthetic_identity_matches"),
-            ("evidence_flag_verification", "compared_messages"),
-            ("evidence_flag_verification", "mismatched_messages"),
-            ("evidence_flag_verification", "excepted_messages"),
-            ("message_mismatches", "source_uidvalidity"),
-            ("message_mismatches", "destination_uidvalidity"),
-            ("message_mismatches", "source_size_bytes"),
-            ("message_mismatches", "dest_size_bytes"),
-            ("active_processes", "pid"),
-            ("active_processes", "start_ticks"),
-            ("active_processes", "process_group"),
-            ("active_processes", "session_id"),
+        const NON_NEGATIVE_CHECKS: &[&str] = &[
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE attempt < 0)",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE source_messages < 0 OR destination_messages < 0 OR source_bytes < 0 OR destination_bytes < 0 OR unmatched_messages < 0 OR failed_messages < 0 OR source_folders < 0 OR destination_folders < 0 OR missing_messages < 0 OR extra_messages < 0 OR modified_messages < 0 OR probable_messages < 0 OR rfc_message_id_matches < 0 OR synthetic_identity_matches < 0)",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE source_messages < 0 OR destination_messages < 0 OR source_bytes < 0 OR destination_bytes < 0 OR unmatched_messages < 0 OR failed_messages < 0 OR source_folders < 0 OR destination_folders < 0 OR missing_messages < 0 OR extra_messages < 0 OR modified_messages < 0 OR probable_messages < 0 OR rfc_message_id_matches < 0 OR synthetic_identity_matches < 0)",
+            "SELECT EXISTS(SELECT 1 FROM evidence_flag_verification WHERE compared_messages < 0 OR mismatched_messages < 0 OR excepted_messages < 0)",
+            "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE source_uidvalidity < 0 OR destination_uidvalidity < 0 OR source_size_bytes < 0 OR dest_size_bytes < 0)",
+            "SELECT EXISTS(SELECT 1 FROM active_processes WHERE pid < 0 OR start_ticks < 0 OR process_group < 0 OR session_id < 0)",
         ];
-        for (table, column) in NON_NEGATIVE_COLUMNS {
-            let sql = format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column} < 0)");
-            let has_negative: bool = connection.query_row(&sql, [], |row| row.get(0))?;
+        for sql in NON_NEGATIVE_CHECKS {
+            let has_negative: bool = connection.query_row(sql, [], |row| row.get(0))?;
             if has_negative {
                 return Err(rusqlite::Error::InvalidQuery);
             }

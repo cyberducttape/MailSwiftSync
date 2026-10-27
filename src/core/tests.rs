@@ -2773,6 +2773,123 @@ fn readonly_rejects_negative_unsigned_evidence_values() {
 }
 
 #[test]
+fn readonly_rejects_negative_values_in_every_unsigned_ledger_column() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-schema-negative-columns-{}",
+        Uuid::new_v4()
+    ));
+    create_private_test_directory(&directory);
+    let path = directory.join("state.db");
+    let store = StateStore::open(&path).unwrap();
+    let project = store
+        .create_project("negative-columns", "source", "destination")
+        .unwrap();
+    let job = store.add_mailbox(&project.id, "INBOX", "INBOX").unwrap();
+    let run_id = "negative-columns-run";
+    store.begin_run(&project.id, &job, run_id, "test").unwrap();
+    store
+        .connection
+        .execute_batch("PRAGMA ignore_check_constraints=ON;")
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO evidence(job_id, verification_method, verification_outcome, source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, authoritative, missing_messages, extra_messages, modified_messages, probable_messages, rfc_message_id_matches, synthetic_identity_matches, run_id) VALUES(?1, 'metadata_reconciliation', 'incomplete', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?2)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO evidence_history(job_id, run_id, source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders) VALUES(?1, ?2, 0, 0, 0, 0, 0, 0, 0, 0)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO evidence_flag_verification(job_id, run_id, compared_messages, mismatched_messages, excepted_messages) VALUES(?1, ?2, 0, 0, 0)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO message_mismatches(id, job_id, run_id, mismatch_type, source_uidvalidity, destination_uidvalidity, source_size_bytes, dest_size_bytes) VALUES('negative-columns-mismatch', ?1, ?2, 'missing', 0, 0, 0, 0)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO active_processes(run_id, job_id, pid, start_ticks, process_group, session_id) VALUES(?1, ?2, 1, 1, 1, 1)",
+            rusqlite::params![run_id, job],
+        )
+        .unwrap();
+    assert!(StateStore::open_readonly(&path).is_ok());
+
+    const GUARDED_COLUMNS: &[(&str, &str)] = &[
+        ("mailbox_jobs", "attempt"),
+        ("evidence", "source_messages"),
+        ("evidence", "destination_messages"),
+        ("evidence", "source_bytes"),
+        ("evidence", "destination_bytes"),
+        ("evidence", "unmatched_messages"),
+        ("evidence", "failed_messages"),
+        ("evidence", "source_folders"),
+        ("evidence", "destination_folders"),
+        ("evidence", "missing_messages"),
+        ("evidence", "extra_messages"),
+        ("evidence", "modified_messages"),
+        ("evidence", "probable_messages"),
+        ("evidence", "rfc_message_id_matches"),
+        ("evidence", "synthetic_identity_matches"),
+        ("evidence_history", "source_messages"),
+        ("evidence_history", "destination_messages"),
+        ("evidence_history", "source_bytes"),
+        ("evidence_history", "destination_bytes"),
+        ("evidence_history", "unmatched_messages"),
+        ("evidence_history", "failed_messages"),
+        ("evidence_history", "source_folders"),
+        ("evidence_history", "destination_folders"),
+        ("evidence_history", "missing_messages"),
+        ("evidence_history", "extra_messages"),
+        ("evidence_history", "modified_messages"),
+        ("evidence_history", "probable_messages"),
+        ("evidence_history", "rfc_message_id_matches"),
+        ("evidence_history", "synthetic_identity_matches"),
+        ("evidence_flag_verification", "compared_messages"),
+        ("evidence_flag_verification", "mismatched_messages"),
+        ("evidence_flag_verification", "excepted_messages"),
+        ("message_mismatches", "source_uidvalidity"),
+        ("message_mismatches", "destination_uidvalidity"),
+        ("message_mismatches", "source_size_bytes"),
+        ("message_mismatches", "dest_size_bytes"),
+        ("active_processes", "pid"),
+        ("active_processes", "start_ticks"),
+        ("active_processes", "process_group"),
+        ("active_processes", "session_id"),
+    ];
+    for (table, column) in GUARDED_COLUMNS {
+        let corrupt = format!("UPDATE {table} SET {column}=-1");
+        store.connection.execute(&corrupt, []).unwrap();
+        assert!(
+            StateStore::open_readonly(&path).is_err(),
+            "read-only open accepted a negative {table}.{column}"
+        );
+        let repair = format!("UPDATE {table} SET {column}=0");
+        store.connection.execute(&repair, []).unwrap();
+        assert!(
+            StateStore::open_readonly(&path).is_ok(),
+            "read-only open remained rejected after repairing {table}.{column}"
+        );
+    }
+
+    drop(store);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn evidence_rejects_values_that_do_not_fit_sqlite_signed_integers() {
     let db = StateStore::in_memory().unwrap();
     let project = db
