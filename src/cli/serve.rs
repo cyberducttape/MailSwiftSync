@@ -1469,6 +1469,7 @@ mod tests {
         assert!(response.body.contains("target uniqueness is unknown"));
         let store = crate::core::StateStore::open_readonly(&state).unwrap();
         assert!(store.wave(&wave_id).unwrap().unwrap().approved_by.is_none());
+        drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }
 
