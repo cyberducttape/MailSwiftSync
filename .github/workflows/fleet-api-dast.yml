@@ -34,15 +34,22 @@ jobs:
           umask 077
           state_dir="$RUNNER_TEMP/fleet-api-dast-state"
           token_file="$RUNNER_TEMP/fleet-api-dast-token"
+          operators_file="$RUNNER_TEMP/fleet-api-dast-operators"
           pid_file="$RUNNER_TEMP/fleet-api-dast.pid"
           mkdir -m 700 "$state_dir"
           openssl rand -hex 32 > "$token_file"
           token="$(<"$token_file")"
+          operator_token="$(openssl rand -hex 32)"
+          printf '%s DAST Operator\n' "$operator_token" > "$operators_file"
+          chmod 600 "$operators_file"
           echo "::add-mask::$token"
+          echo "::add-mask::$operator_token"
           printf 'FLEET_API_DAST_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
+          printf 'FLEET_API_DAST_OPERATOR_TOKEN=%s\n' "$operator_token" >> "$GITHUB_ENV"
 
           target/debug/mailswiftsync serve "$state_dir" \
             --token-file "$token_file" \
+            --operators-file "$operators_file" \
             --listen 127.0.0.1:9464 \
             --refresh-seconds 5 \
             > "$RUNNER_TEMP/fleet-api-dast.log" 2>&1 &
@@ -62,6 +69,12 @@ jobs:
           echo "Fleet API did not become ready after $attempt attempts" >&2
           exit 1
 
+      - name: Exercise live reader and operator authorization boundaries
+        run: >-
+          python3 scripts/fleet-api-auth-smoke.py
+          --base-url http://127.0.0.1:9464
+          --report "$RUNNER_TEMP/fleet-api-auth-smoke.json"
+
       - name: Scan the live API with ZAP baseline rules
         uses: zaproxy/action-baseline@v0.15.0
         env:
@@ -76,6 +89,15 @@ jobs:
           fail_action: true
           allow_issue_writing: false
           artifact_name: fleet-api-zap-baseline
+
+      - name: Preserve live authorization matrix
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: fleet-api-auth-smoke
+          path: ${{ runner.temp }}/fleet-api-auth-smoke.json
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Stop the fleet API
         if: always()

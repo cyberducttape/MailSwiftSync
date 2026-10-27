@@ -1095,6 +1095,10 @@ fn fleet_api_dast_scans_an_authenticated_live_instance_with_pinned_zap() {
     assert!(workflow.contains("cargo build --locked --bin mailswiftsync"));
     assert!(workflow.contains("/v1/fleet"));
     assert!(workflow.contains("FLEET_API_DAST_TOKEN=%s\\n"));
+    assert!(workflow.contains("--operators-file \"$operators_file\""));
+    assert!(workflow.contains("FLEET_API_DAST_OPERATOR_TOKEN=%s\\n"));
+    assert!(workflow.contains("scripts/fleet-api-auth-smoke.py"));
+    assert!(workflow.contains("fleet-api-auth-smoke.json"));
     assert!(workflow.contains("ZAP_AUTH_HEADER_VALUE: Bearer ${{ env.FLEET_API_DAST_TOKEN }}"));
     assert!(workflow.contains("zaproxy/action-baseline@v0.15.0"));
     let action_lock = fs::read_to_string(".github/workflows/actions.lock")

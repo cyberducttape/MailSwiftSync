@@ -20,6 +20,7 @@ workflows:
         - 'dtolnay/rust-toolchain@master'
     '.github/workflows/fleet-api-dast.yml':
         - 'actions/checkout@v7.0.1'
+        - 'actions/upload-artifact@v7.0.2'
         - 'dtolnay/rust-toolchain@master'
         - 'zaproxy/action-baseline@v0.15.0'
     '.github/workflows/imap-fuzz.yml':
