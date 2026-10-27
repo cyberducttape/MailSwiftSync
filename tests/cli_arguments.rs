@@ -652,9 +652,14 @@ fn internal_launcher_rechecks_engine_identity_after_durable_release_gate() {
         .spawn()
         .expect("internal launcher should start and wait at its release gate");
 
+    // Replace the executable atomically. Mutating an executable in place can
+    // race with the launcher's final identity check and yield ETXTBSY on Linux,
+    // obscuring whether the identity gate itself behaved correctly.
     let replacement = format!("#!/bin/sh\nprintf ran > '{}'\nexit 0\n", marker.display());
-    std::fs::write(&engine, replacement).unwrap();
-    std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let replacement_path = directory.join("replacement.sh");
+    std::fs::write(&replacement_path, replacement).unwrap();
+    std::fs::set_permissions(&replacement_path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::rename(&replacement_path, &engine).unwrap();
     child
         .stdin
         .take()
@@ -671,11 +676,12 @@ fn internal_launcher_rechecks_engine_identity_after_durable_release_gate() {
     );
     assert!(!marker.exists(), "replacement engine must not execute");
 
-    std::fs::write(&engine, original).unwrap();
-    std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let unchanged_engine = directory.join("unchanged-engine.sh");
+    std::fs::write(&unchanged_engine, original).unwrap();
+    std::fs::set_permissions(&unchanged_engine, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
         .arg("--internal-launcher")
-        .arg(&engine)
+        .arg(&unchanged_engine)
         .arg(format!("--expected-identity={expected_identity}"))
         .arg("--")
         .stdin(Stdio::piped())

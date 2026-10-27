@@ -430,6 +430,30 @@ and SQLITE_FULL cases (the latter covered functionally by
 `controller-chaos-smoke.sh`) remain to be measured on the release host class
 before increasing local worker limits or advertising large queue capacity.
 
+The benchmark now also measures repeated `StateStore::open_readonly` latency
+after the write workload has produced run and evidence history. Each open runs
+current-schema validation, as does each unattended supervisor poll. The output
+reports p50/p95/p99/max over 101 warm-cache samples by default (override with
+`MAILSWIFTSYNC_LEDGER_OPEN_SAMPLES`). These values are informational until
+repeated at 1k/10k/100k mailbox jobs with representative run, evidence, and
+mismatch histories on supported persistent storage; no open-latency budget is
+claimed. A 2026-10-26 run on Linux x86_64 (kernel `7.0.0-38-generic`), an AMD
+Ryzen 7 7735U host, measured p50/p95/p99/max of 47.7/49.7/51.3/51.4 ms at
+2,000 jobs and 266.7/275.3/279.3/283.9 ms at 10,000 jobs (101 samples each).
+The worktree was on `/tmp` backed by tmpfs, so these are an initial CPU/schema-
+validation signal, not persistent-storage performance results or an unattended-
+service SLO. After removing duplicate layout validation and combining
+nonnegative-counter checks to scan each table once, one run measured repeated
+warm-open p50/p95/p99/max at 23.4/24.9/25.5/26.0 ms for 2,000 jobs and
+129.2/137.6/161.3/196.5 ms for 10,000 jobs. An earlier run before those
+optimizations measured p95 at 49.7 and 275.3 ms respectively. Intermediate
+2,000-job repeats ranged from 27.9 to 53.0 ms, showing notable host-load
+variability; do not treat the observed before/after difference as a controlled
+performance qualification. Latency still grows substantially with ledger
+history. The 10,000-job fixture produced 70,000 ledger writes and 10,000
+run/evidence histories. Repeat on supported persistent storage before using
+these measurements for capacity decisions.
+
 A repeat of the same release benchmark on 2026-10-25 at commit
 `d0da235bfcaa596c644c2c9fce6eed431fe909cb` measured 2,000 mailbox jobs and
 44,000 writes on Linux x86_64 (kernel `7.0.0-38-generic`), an AMD Ryzen 7

@@ -2773,6 +2773,123 @@ fn readonly_rejects_negative_unsigned_evidence_values() {
 }
 
 #[test]
+fn readonly_rejects_negative_values_in_every_unsigned_ledger_column() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-schema-negative-columns-{}",
+        Uuid::new_v4()
+    ));
+    create_private_test_directory(&directory);
+    let path = directory.join("state.db");
+    let store = StateStore::open(&path).unwrap();
+    let project = store
+        .create_project("negative-columns", "source", "destination")
+        .unwrap();
+    let job = store.add_mailbox(&project.id, "INBOX", "INBOX").unwrap();
+    let run_id = "negative-columns-run";
+    store.begin_run(&project.id, &job, run_id, "test").unwrap();
+    store
+        .connection
+        .execute_batch("PRAGMA ignore_check_constraints=ON;")
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO evidence(job_id, verification_method, verification_outcome, source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, authoritative, missing_messages, extra_messages, modified_messages, probable_messages, rfc_message_id_matches, synthetic_identity_matches, run_id) VALUES(?1, 'metadata_reconciliation', 'incomplete', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?2)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO evidence_history(job_id, run_id, source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders) VALUES(?1, ?2, 0, 0, 0, 0, 0, 0, 0, 0)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO evidence_flag_verification(job_id, run_id, compared_messages, mismatched_messages, excepted_messages) VALUES(?1, ?2, 0, 0, 0)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO message_mismatches(id, job_id, run_id, mismatch_type, source_uidvalidity, destination_uidvalidity, source_size_bytes, dest_size_bytes) VALUES('negative-columns-mismatch', ?1, ?2, 'missing', 0, 0, 0, 0)",
+            rusqlite::params![job, run_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO active_processes(run_id, job_id, pid, start_ticks, process_group, session_id) VALUES(?1, ?2, 1, 1, 1, 1)",
+            rusqlite::params![run_id, job],
+        )
+        .unwrap();
+    assert!(StateStore::open_readonly(&path).is_ok());
+
+    const GUARDED_COLUMNS: &[(&str, &str)] = &[
+        ("mailbox_jobs", "attempt"),
+        ("evidence", "source_messages"),
+        ("evidence", "destination_messages"),
+        ("evidence", "source_bytes"),
+        ("evidence", "destination_bytes"),
+        ("evidence", "unmatched_messages"),
+        ("evidence", "failed_messages"),
+        ("evidence", "source_folders"),
+        ("evidence", "destination_folders"),
+        ("evidence", "missing_messages"),
+        ("evidence", "extra_messages"),
+        ("evidence", "modified_messages"),
+        ("evidence", "probable_messages"),
+        ("evidence", "rfc_message_id_matches"),
+        ("evidence", "synthetic_identity_matches"),
+        ("evidence_history", "source_messages"),
+        ("evidence_history", "destination_messages"),
+        ("evidence_history", "source_bytes"),
+        ("evidence_history", "destination_bytes"),
+        ("evidence_history", "unmatched_messages"),
+        ("evidence_history", "failed_messages"),
+        ("evidence_history", "source_folders"),
+        ("evidence_history", "destination_folders"),
+        ("evidence_history", "missing_messages"),
+        ("evidence_history", "extra_messages"),
+        ("evidence_history", "modified_messages"),
+        ("evidence_history", "probable_messages"),
+        ("evidence_history", "rfc_message_id_matches"),
+        ("evidence_history", "synthetic_identity_matches"),
+        ("evidence_flag_verification", "compared_messages"),
+        ("evidence_flag_verification", "mismatched_messages"),
+        ("evidence_flag_verification", "excepted_messages"),
+        ("message_mismatches", "source_uidvalidity"),
+        ("message_mismatches", "destination_uidvalidity"),
+        ("message_mismatches", "source_size_bytes"),
+        ("message_mismatches", "dest_size_bytes"),
+        ("active_processes", "pid"),
+        ("active_processes", "start_ticks"),
+        ("active_processes", "process_group"),
+        ("active_processes", "session_id"),
+    ];
+    for (table, column) in GUARDED_COLUMNS {
+        let corrupt = format!("UPDATE {table} SET {column}=-1");
+        store.connection.execute(&corrupt, []).unwrap();
+        assert!(
+            StateStore::open_readonly(&path).is_err(),
+            "read-only open accepted a negative {table}.{column}"
+        );
+        let repair = format!("UPDATE {table} SET {column}=0");
+        store.connection.execute(&repair, []).unwrap();
+        assert!(
+            StateStore::open_readonly(&path).is_ok(),
+            "read-only open remained rejected after repairing {table}.{column}"
+        );
+    }
+
+    drop(store);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn evidence_rejects_values_that_do_not_fit_sqlite_signed_integers() {
     let db = StateStore::in_memory().unwrap();
     let project = db
@@ -7028,6 +7145,11 @@ fn ledger_write_workload_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(20);
+    let readonly_open_samples: usize = std::env::var("MAILSWIFTSYNC_LEDGER_OPEN_SAMPLES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(101)
+        .clamp(1, 1_001);
     const MESSAGES_PER_MAILBOX: u64 = 1_000;
 
     let directory = std::env::var_os("XDG_RUNTIME_DIR")
@@ -7195,8 +7317,20 @@ fn ledger_write_workload_benchmark() {
     let durable_bytes = std::fs::metadata(&path).unwrap().len()
         - baseline_bytes.min(std::fs::metadata(&path).unwrap().len());
 
+    // Read-only status opens perform schema and ledger-integrity validation.
+    // Measure them separately from the persistent reader query latency above:
+    // the unattended supervisor currently opens the ledger on every poll.
+    let mut readonly_open_latencies = Vec::with_capacity(readonly_open_samples);
+    for _ in 0..readonly_open_samples {
+        let open_started = Instant::now();
+        let readonly = StateStore::open_readonly(&path).unwrap();
+        readonly_open_latencies.push(open_started.elapsed());
+        drop(readonly);
+    }
+
     writes.sort_unstable();
     reads.sort_unstable();
+    readonly_open_latencies.sort_unstable();
     let percentile = |values: &[Duration], percent: usize| {
         values
             .get((values.len().saturating_sub(1)) * percent / 100)
@@ -7204,7 +7338,7 @@ fn ledger_write_workload_benchmark() {
     };
     let migrated_messages = mailboxes as u64 * MESSAGES_PER_MAILBOX;
     eprintln!(
-        "ledger-workload mailboxes={mailboxes} backup_ms={backup_ms} backup_blocked_by_writes={} writes={} elapsed_ms={} write_p50_us={} write_p95_us={} write_p99_us={} write_max_us={} read_p95_us={} reads={} busy_errors={} wal_max_kib={} checkpoint_ms={checkpoint_ms} bytes_per_mailbox={} bytes_per_million_messages={}",
+        "ledger-workload mailboxes={mailboxes} backup_ms={backup_ms} backup_blocked_by_writes={} writes={} elapsed_ms={} write_p50_us={} write_p95_us={} write_p99_us={} write_max_us={} read_p95_us={} reads={} readonly_open_samples={} readonly_open_p50_us={} readonly_open_p95_us={} readonly_open_p99_us={} readonly_open_max_us={} busy_errors={} wal_max_kib={} checkpoint_ms={checkpoint_ms} bytes_per_mailbox={} bytes_per_million_messages={}",
         u8::from(!backup_completed_during_writes),
         writes.len(),
         elapsed.as_millis(),
@@ -7214,6 +7348,13 @@ fn ledger_write_workload_benchmark() {
         writes.last().map_or(0, |value| value.as_micros()),
         percentile(&reads, 95),
         reads.len(),
+        readonly_open_latencies.len(),
+        percentile(&readonly_open_latencies, 50),
+        percentile(&readonly_open_latencies, 95),
+        percentile(&readonly_open_latencies, 99),
+        readonly_open_latencies
+            .last()
+            .map_or(0, |value| value.as_micros()),
         busy.load(Ordering::Relaxed),
         wal_max / 1024,
         durable_bytes / mailboxes.max(1) as u64,

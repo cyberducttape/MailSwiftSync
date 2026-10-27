@@ -205,8 +205,7 @@ impl StateStore {
                 .connection
                 .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         let current_schema_needs_repair = stored_schema_version == CURRENT_SCHEMA_VERSION
-            && (!Self::current_schema_is_clean(&store.connection)
-                || Self::validate_schema_layout(&store.connection).is_err());
+            && !Self::current_schema_is_clean(&store.connection);
         let migration_or_repair =
             stored_schema_version < CURRENT_SCHEMA_VERSION || current_schema_needs_repair;
         let should_backup = should_backup_database(path, migration_or_repair)
@@ -252,7 +251,7 @@ impl StateStore {
         }
         if stored_schema_version == CURRENT_SCHEMA_VERSION {
             Self::validate_schema_layout(&connection)?;
-            if Self::current_schema_is_clean(&connection) {
+            if Self::current_schema_data_is_clean_after_layout(&connection) {
                 return Ok(Self { connection });
             }
             let mut migrated = Connection::open_in_memory()?;
@@ -308,7 +307,7 @@ impl StateStore {
             ));
         }
         Self::validate_schema_layout(&connection)?;
-        if !Self::current_schema_is_clean(&connection) {
+        if !Self::current_schema_data_is_clean_after_layout(&connection) {
             return Err(super::ledger_rejection(
                 "the ledger needs a local repair before this control can be used",
             ));
@@ -400,7 +399,7 @@ impl StateStore {
         // blindly copying the original file, otherwise restore would install
         // the unrepaired source after using the copy only as a validator.
         let repaired_source = if source_schema_version == CURRENT_SCHEMA_VERSION
-            && Self::current_schema_is_clean(&source_connection)
+            && Self::current_schema_data_is_clean_after_layout(&source_connection)
         {
             None
         } else {
@@ -514,8 +513,7 @@ impl StateStore {
             // manually recovered ledger may contain invalid rows. Perform a
             // small invariant probe before skipping the migration transaction
             // rather than rewriting every row on every application launch.
-            let current_schema_is_clean = Self::current_schema_is_clean(&self.connection)
-                && Self::validate_schema_layout(&self.connection).is_ok();
+            let current_schema_is_clean = Self::current_schema_is_clean(&self.connection);
             if current_schema_is_clean {
                 // A clean current ledger needs no launch-time data rewrite. The
                 // identity is calculated when a mailbox is created or its

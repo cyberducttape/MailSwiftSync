@@ -39,3 +39,16 @@ for ledger_case in "${ledger_cases[@]}"; do
   fi
   printf 'PASS: ledger %s %s <= %s budget\n' "$metric" "$value" "$budget"
 done
+
+# Read-only opens run full current-schema validation and are intentionally
+# reported before a latency budget is established across representative hosts.
+readonly_open_p95=${line##* readonly_open_p95_us=}
+readonly_open_p95=${readonly_open_p95%% *}
+readonly_open_samples=${line##* readonly_open_samples=}
+readonly_open_samples=${readonly_open_samples%% *}
+if [[ ! "$readonly_open_p95" =~ ^[0-9]+$ || ! "$readonly_open_samples" =~ ^[0-9]+$ ]]; then
+  printf 'ERROR: invalid read-only-open measurements in benchmark result: %s\n' "$line" >&2
+  exit 1
+fi
+printf 'MEASURED (no budget yet): read-only-open p95 %s us across %s samples\n' \
+  "$readonly_open_p95" "$readonly_open_samples"
