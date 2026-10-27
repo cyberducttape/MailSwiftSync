@@ -885,6 +885,16 @@ fn verification_envelope_records_latest_main_scale_repeat_with_limits() {
     let envelope = fs::read_to_string("docs/verification-envelope.md")
         .expect("verification envelope measurements should exist");
     for evidence in [
+        "fresh full typical-shape matrix at current `main` was run on 2026-10-27",
+        "fdb630df8a1c3021b4cea58a88f603e81adc12c3",
+        "45,454/s",
+        "51,020/s",
+        "41,858/s",
+        "45,487/s",
+        "44,672/s",
+        "1,092,691,152 B / 100,893,904 B",
+        "688,721,920 B reconciliation writes",
+        "d10c52d2c8d68a4d16c5bc42a9a0dc1fccb5f823554a03583a66369f754011c7",
         "fresh typical-shape repeat was run on 2026-10-25",
         "d0da235bfcaa596c644c2c9fce6eed431fe909cb",
         "42,894 messages/s",
