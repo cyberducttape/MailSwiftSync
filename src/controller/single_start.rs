@@ -318,26 +318,37 @@ impl App {
         let prepared_env = prepared.env;
         let prepared_verification = prepared.verification;
         let run_id = uuid::Uuid::new_v4().to_string();
-        let organization_policy = match crate::organization_policy::OrganizationPolicy::load() {
-            Ok(policy) => policy,
-            Err(error) => {
+        let organization_policy =
+            match super::single_admission::policy_snapshot_for_admission(run_dry_run) {
+                Ok(policy) => policy,
+                Err(error) => {
+                    cleanup_paths(&cleanup);
+                    self.set_status(
+                        format!(
+                            "Could not read organization policy; migration was not started: {error}"
+                        ),
+                        StatusSeverity::Error,
+                    );
+                    return;
+                }
+            };
+        if !run_dry_run {
+            let Some(policy) = organization_policy.as_ref() else {
                 cleanup_paths(&cleanup);
                 self.set_status(
-                    format!(
-                        "Could not read organization policy; migration was not started: {error}"
-                    ),
+                    "Organization policy could not be loaded; execution will be blocked.",
+                    StatusSeverity::Error,
+                );
+                return;
+            };
+            if let Err(error) = policy.check_form(&self.form) {
+                cleanup_paths(&cleanup);
+                self.set_status(
+                    format!("Migration blocked by current organization policy: {error}"),
                     StatusSeverity::Error,
                 );
                 return;
             }
-        };
-        if let Err(error) = organization_policy.check_form(&self.form) {
-            cleanup_paths(&cleanup);
-            self.set_status(
-                format!("Migration blocked by current organization policy: {error}"),
-                StatusSeverity::Error,
-            );
-            return;
         }
         let worker_project_id = run_project_id.clone();
         let active_run = match admit_single_run(
