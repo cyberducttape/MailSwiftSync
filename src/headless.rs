@@ -16,6 +16,25 @@ const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL: usize = 100_000;
 const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
 const MAX_HEADLESS_RUN_DETAIL_BYTES: usize = 4_096;
+const HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX: &str =
+    "; latest run detail unavailable because the ledger lookup failed: ";
+
+fn latest_run_detail_suffix(result: rusqlite::Result<Option<String>>) -> String {
+    match result {
+        Ok(Some(detail)) if !detail.trim().is_empty() => format!(
+            "; run detail: {}",
+            crate::ui::truncate_utf8(&detail, MAX_HEADLESS_RUN_DETAIL_BYTES)
+        ),
+        Ok(Some(_)) | Ok(None) => String::new(),
+        Err(error) => {
+            let detail = error.to_string();
+            format!(
+                "{HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX}{}",
+                crate::ui::truncate_utf8(&detail, MAX_HEADLESS_RUN_DETAIL_BYTES)
+            )
+        }
+    }
+}
 
 /// Preserve joins inside a support artifact without exposing ledger IDs or
 /// making raw identifiers correlate across export namespaces.
@@ -824,20 +843,11 @@ pub(crate) fn headless_execute_with_credentials(
         // The durable run detail carries the reason an operator needs (for
         // example a ledger rejection or verifier limit); the status line alone
         // only says that review is required.
-        let run_detail = app
-            .store
-            .latest_run(&job_id)
-            .ok()
-            .flatten()
-            .map(|run| run.detail)
-            .filter(|detail| !detail.trim().is_empty())
-            .map(|detail| {
-                format!(
-                    "; run detail: {}",
-                    crate::ui::truncate_utf8(&detail, MAX_HEADLESS_RUN_DETAIL_BYTES)
-                )
-            })
-            .unwrap_or_default();
+        let run_detail = latest_run_detail_suffix(
+            app.store
+                .latest_run(&job_id)
+                .map(|run| run.map(|run| run.detail)),
+        );
         return Err(HeadlessFailure {
             code,
             message: format!(
@@ -1492,7 +1502,11 @@ fn last_durability_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_durability_detail, last_verification_detail, validate_cutover_run_admission};
+    use super::{
+        HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX, MAX_HEADLESS_RUN_DETAIL_BYTES,
+        last_durability_detail, last_verification_detail, latest_run_detail_suffix,
+        validate_cutover_run_admission,
+    };
     use crate::BoundedLineBuffer;
 
     fn approved_cutover(stage: crate::core::CutoverStage) -> crate::core::CutoverWorkflow {
@@ -1660,6 +1674,33 @@ mod tests {
         output.push_bounded("[durability] latest issue".into(), 10, 1024);
 
         assert_eq!(last_durability_detail(&output), Some("latest issue"));
+    }
+
+    #[test]
+    fn headless_failure_reports_run_detail_lookup_errors() {
+        let error = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("busy detail".into()),
+        );
+        let suffix = latest_run_detail_suffix(Err(error));
+        assert!(suffix.contains("ledger lookup failed"));
+        assert!(suffix.contains("busy detail"));
+        assert_eq!(latest_run_detail_suffix(Ok(None)), "");
+        assert_eq!(latest_run_detail_suffix(Ok(Some("  ".into()))), "");
+        assert_eq!(
+            latest_run_detail_suffix(Ok(Some("quota exceeded".into()))),
+            "; run detail: quota exceeded"
+        );
+
+        let oversized = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("x".repeat(MAX_HEADLESS_RUN_DETAIL_BYTES * 2)),
+        );
+        let suffix = latest_run_detail_suffix(Err(oversized));
+        assert!(
+            suffix.len()
+                <= HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX.len() + MAX_HEADLESS_RUN_DETAIL_BYTES
+        );
     }
 
     #[test]
