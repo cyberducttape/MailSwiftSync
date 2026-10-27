@@ -7,10 +7,7 @@ use super::rate_domains::{Admission, DomainKey, RateDomainLimiter, RateDomainPat
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
-    controller::failure::{
-        FailureClass, classified_failure_detail_for_provider, classify_failure_for_provider,
-        should_retry_batch_error_for_provider, transient_retry_delay_for_provider,
-    },
+    controller::failure::{ClassifiedFailure, FailureClass},
     core,
     credentials::CleanupGuard,
     imap_probe::{SidedProbeError, fresh_dual_imaps_readiness},
@@ -57,20 +54,23 @@ fn successful_batch_detail(
     }
 }
 
-fn provider_for_error(form: &crate::Form, error: &str) -> &'static str {
-    let side = failure_sides(error);
-    match side.as_slice() {
-        [crate::imap_probe::MailSide::Source] => {
-            provider_for_side(form, crate::imap_probe::MailSide::Source)
-        }
-        [crate::imap_probe::MailSide::Destination] => {
-            provider_for_side(form, crate::imap_probe::MailSide::Destination)
-        }
-        // Do not guess the source provider when an engine diagnostic does
-        // not identify which endpoint emitted it. Provider-specific
-        // signatures stay disabled until side attribution is explicit.
-        _ => crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER,
-    }
+/// Classify an attempt failure once, against the provider of the endpoint
+/// the diagnostic names. Do not guess the source provider when an engine
+/// diagnostic does not identify which endpoint emitted it: provider-specific
+/// signatures stay disabled until side attribution is explicit.
+fn classify_attempt_failure(form: &crate::Form, error: &str) -> ClassifiedFailure {
+    ClassifiedFailure::attributed(error, failure_sides(error), |side| {
+        provider_for_side(form, side)
+    })
+}
+
+/// Classify a failure whose endpoint is already known.
+fn classify_sided_failure(
+    form: &crate::Form,
+    side: crate::imap_probe::MailSide,
+    error: &str,
+) -> ClassifiedFailure {
+    ClassifiedFailure::attributed(error, vec![side], |side| provider_for_side(form, side))
 }
 
 fn provider_for_side(form: &crate::Form, side: crate::imap_probe::MailSide) -> &'static str {
@@ -79,20 +79,6 @@ fn provider_for_side(form: &crate::Form, side: crate::imap_probe::MailSide) -> &
         crate::imap_probe::MailSide::Destination => &form.profile.destination_host,
     };
     crate::core::provider_intelligence::canonical_provider(host)
-}
-
-fn credential_refresh_retryable(
-    form: &crate::Form,
-    failure: &CredentialRefreshFailure,
-    attempt: usize,
-    retry_count: usize,
-) -> bool {
-    should_retry_batch_error_for_provider(
-        provider_for_side(form, failure.side),
-        &failure.message,
-        attempt,
-        retry_count,
-    )
 }
 
 /// Redact one mailbox's secrets from controller-generated text. Errors can
@@ -861,10 +847,10 @@ impl BatchAttemptRunner {
         });
     }
 
-    fn fail(&self, task: &MailboxTask, error: &str) {
-        let provider = provider_for_error(&task.form, error);
-        let cancelled =
-            classify_failure_for_provider(provider, error) == FailureClass::Cancellation;
+    /// Settle `task` as failed (or cancelled) with the class `failure` was
+    /// given at the boundary; `presented` is the operator-facing text.
+    fn fail(&self, task: &MailboxTask, failure: &ClassifiedFailure, presented: &str) {
+        let cancelled = failure.class() == FailureClass::Cancellation;
         if !cancelled {
             self.failed.store(true, Ordering::Relaxed);
         }
@@ -872,7 +858,7 @@ impl BatchAttemptRunner {
             task,
             if cancelled { "Cancelled" } else { "Failed" },
             if cancelled { "cancelled" } else { "failed" },
-            classified_failure_detail_for_provider(provider, &redact_child_text(&task.form, error)),
+            failure.durable_detail(&redact_child_text(&task.form, presented)),
             None,
         );
     }
@@ -902,7 +888,7 @@ impl BatchAttemptRunner {
     /// Settle a task whose rate domains can no longer be evaluated.
     pub(crate) fn fail_unschedulable(&self, task: MailboxTask, reason: &str) {
         self.line(&task, format!("[{}] {reason}", task.index + 1));
-        self.fail(&task, reason);
+        self.fail(&task, &classify_attempt_failure(&task.form, reason), reason);
         self.finish_transcript(&task);
     }
 
@@ -956,7 +942,7 @@ impl BatchAttemptRunner {
     fn retry_later(
         &self,
         mut task: MailboxTask,
-        provider: &str,
+        failure: &ClassifiedFailure,
         error: &str,
         what: &str,
     ) -> AttemptOutcome {
@@ -965,7 +951,7 @@ impl BatchAttemptRunner {
             format!(
                 "[{}] [{}] {what}; retrying: {error}",
                 task.index + 1,
-                classify_failure_for_provider(provider, error).label()
+                failure.class().label()
             ),
         );
         let _ = send_reliable_event(
@@ -976,7 +962,7 @@ impl BatchAttemptRunner {
                 state: "Retrying".into(),
             },
         );
-        let delay = transient_retry_delay_for_provider(provider, error, task.attempt);
+        let delay = failure.retry_delay(task.attempt);
         let _ = self.tx.try_send(Event::RetryScheduled {
             job_id: task.job_id.clone(),
             // `attempt` is the retry ordinal (the first retry is 1), while
@@ -984,7 +970,7 @@ impl BatchAttemptRunner {
             attempt: u32::try_from(task.attempt.saturating_add(1)).unwrap_or(u32::MAX),
             max_retries: u32::try_from(self.retry_count).unwrap_or(u32::MAX),
             delay,
-            failure_class: classify_failure_for_provider(provider, error).label(),
+            failure_class: failure.class().label(),
         });
         task.attempt += 1;
         AttemptOutcome::Retry {
@@ -1014,10 +1000,8 @@ impl BatchAttemptRunner {
                 &task,
                 "Failed",
                 "failed",
-                classified_failure_detail_for_provider(
-                    provider_for_error(&task.form, &error),
-                    &redact_child_text(&task.form, &error),
-                ),
+                classify_attempt_failure(&task.form, &error)
+                    .durable_detail(&redact_child_text(&task.form, &error)),
                 None,
             );
             return AttemptOutcome::Finished;
@@ -1034,19 +1018,17 @@ impl BatchAttemptRunner {
             // a large queue cannot consume an expired bearer token.
             if let Err(error) = refresh_live_credentials(&mut task.form, &self.oauth_refresh_locks)
             {
-                let provider = provider_for_side(&task.form, error.side);
-                if credential_refresh_retryable(&task.form, &error, attempt, self.retry_count) {
-                    let penalized = self.provider_limiter.observe_failure_on(
-                        &admission,
-                        &error.message,
-                        vec![error.side],
-                    );
+                let failure = classify_sided_failure(&task.form, error.side, &error.message);
+                if failure.should_retry(attempt, self.retry_count) {
+                    let penalized = self
+                        .provider_limiter
+                        .observe_classified(&admission, &failure);
                     adapt_launch_rate(&self.launch_limiter, &penalized);
                     report_cooldowns(&self.tx, &self.provider_limiter, penalized);
                     drop(admission);
                     return self.retry_later(
                         task,
-                        provider,
+                        &failure,
                         &error.message,
                         "transient OAuth credential refresh failure",
                     );
@@ -1065,10 +1047,7 @@ impl BatchAttemptRunner {
                     &task,
                     "Failed",
                     "failed",
-                    classified_failure_detail_for_provider(
-                        provider,
-                        &redact_child_text(&task.form, &error.message),
-                    ),
+                    failure.durable_detail(&redact_child_text(&task.form, &error.message)),
                     None,
                 );
                 self.finish_transcript(&task);
@@ -1079,22 +1058,17 @@ impl BatchAttemptRunner {
                 message: error,
             }) = fresh_dual_imaps_readiness(&task.form)
             {
-                let provider = provider_for_side(&task.form, side);
-                if should_retry_batch_error_for_provider(
-                    provider,
-                    &error,
-                    attempt,
-                    self.retry_count,
-                ) {
-                    let penalized =
-                        self.provider_limiter
-                            .observe_failure_on(&admission, &error, vec![side]);
+                let failure = classify_sided_failure(&task.form, side, &error);
+                if failure.should_retry(attempt, self.retry_count) {
+                    let penalized = self
+                        .provider_limiter
+                        .observe_classified(&admission, &failure);
                     adapt_launch_rate(&self.launch_limiter, &penalized);
                     report_cooldowns(&self.tx, &self.provider_limiter, penalized);
                     drop(admission);
                     return self.retry_later(
                         task,
-                        provider,
+                        &failure,
                         &error,
                         "transient fresh authentication probe failure",
                     );
@@ -1115,10 +1089,7 @@ impl BatchAttemptRunner {
                     &task,
                     "Failed",
                     "failed",
-                    classified_failure_detail_for_provider(
-                        provider,
-                        &redact_child_text(&task.form, &error),
-                    ),
+                    failure.durable_detail(&redact_child_text(&task.form, &error)),
                     None,
                 );
                 self.finish_transcript(&task);
@@ -1144,7 +1115,7 @@ impl BatchAttemptRunner {
                 Err(BatchClaimError::Rejected(error)) => {
                     drop(admission);
                     self.line(&task, format!("[{}] {}", task.index + 1, error));
-                    self.fail(&task, &error);
+                    self.fail(&task, &classify_attempt_failure(&task.form, &error), &error);
                     self.finish_transcript(&task);
                     return AttemptOutcome::Finished;
                 }
@@ -1263,29 +1234,21 @@ impl BatchAttemptRunner {
                 self.finish_transcript(&task);
                 AttemptOutcome::Finished
             }
-            Err(error)
-                if should_retry_batch_error_for_provider(
-                    provider_for_error(&task.form, &error),
-                    &error,
-                    attempt,
-                    self.retry_count,
-                ) =>
-            {
-                let penalized = admission.as_ref().map_or_else(Vec::new, |admission| {
-                    self.provider_limiter.observe_failure(admission, &error)
-                });
-                adapt_launch_rate(&self.launch_limiter, &penalized);
-                report_cooldowns(&self.tx, &self.provider_limiter, penalized);
-                drop(admission);
-                let provider = provider_for_error(&task.form, &error);
-                self.retry_later(task, provider, &error, "transient failure")
-            }
             Err(error) => {
+                let failure = classify_attempt_failure(&task.form, &error);
+                if failure.should_retry(attempt, self.retry_count) {
+                    let penalized = admission.as_ref().map_or_else(Vec::new, |admission| {
+                        self.provider_limiter
+                            .observe_classified(admission, &failure)
+                    });
+                    adapt_launch_rate(&self.launch_limiter, &penalized);
+                    report_cooldowns(&self.tx, &self.provider_limiter, penalized);
+                    drop(admission);
+                    return self.retry_later(task, &failure, &error, "transient failure");
+                }
                 drop(admission);
-                let provider = provider_for_error(&task.form, &error);
-                let failure_class = classify_failure_for_provider(provider, &error);
-                let exhausted_retry_budget = attempt >= self.retry_count
-                    && should_retry_batch_error_for_provider(provider, &error, attempt, usize::MAX);
+                let exhausted_retry_budget =
+                    attempt >= self.retry_count && failure.should_retry(attempt, usize::MAX);
                 let detail = if exhausted_retry_budget {
                     format!(
                         "retry budget exhausted after {} retries: {error}",
@@ -1299,10 +1262,10 @@ impl BatchAttemptRunner {
                     format!(
                         "[{}] [{}] failed: {detail}",
                         task.index + 1,
-                        failure_class.label()
+                        failure.class().label()
                     ),
                 );
-                self.fail(&task, &detail);
+                self.fail(&task, &failure, &detail);
                 self.finish_transcript(&task);
                 AttemptOutcome::Finished
             }
@@ -1446,13 +1409,11 @@ mod tests {
         form.profile.source_host = "imap.gmail.com".into();
         form.profile.destination_host = "outlook.office365.com".into();
 
-        assert_eq!(provider_for_error(&form, "Host1: rate limited"), "gmail");
+        let provider = |error| classify_attempt_failure(&form, error).provider().to_owned();
+        assert_eq!(provider("Host1: rate limited"), "gmail");
+        assert_eq!(provider("Host2: rate limited"), "microsoft365");
         assert_eq!(
-            provider_for_error(&form, "Host2: rate limited"),
-            "microsoft365"
-        );
-        assert_eq!(
-            provider_for_error(&form, "rate limited"),
+            provider("rate limited"),
             crate::core::provider_intelligence::UNATTRIBUTED_PROVIDER
         );
     }
@@ -1588,14 +1549,17 @@ mod tests {
             side: crate::imap_probe::MailSide::Destination,
             message: "Request is throttled. Suggested Backoff Time: 12000 milliseconds".into(),
         };
-        assert!(credential_refresh_retryable(&form, &throttled, 0, 2));
-        assert!(!credential_refresh_retryable(&form, &throttled, 2, 2));
+        let retryable = |failure: &CredentialRefreshFailure, attempt| {
+            classify_sided_failure(&form, failure.side, &failure.message).should_retry(attempt, 2)
+        };
+        assert!(retryable(&throttled, 0));
+        assert!(!retryable(&throttled, 2));
 
         let rejected = CredentialRefreshFailure {
             side: crate::imap_probe::MailSide::Destination,
             message: "invalid_grant: refresh token expired".into(),
         };
-        assert!(!credential_refresh_retryable(&form, &rejected, 0, 2));
+        assert!(!retryable(&rejected, 0));
     }
 
     #[test]
@@ -1604,10 +1568,11 @@ mod tests {
         let runner = test_runner(tx);
         let task = test_unpreparable_task(5);
         let worker = thread::spawn(move || {
+            let error = "Host2: NO [UNAVAILABLE] server busy";
             runner.retry_later(
                 task,
-                "generic",
-                "Host2: NO [UNAVAILABLE] server busy",
+                &ClassifiedFailure::new("generic", error),
+                error,
                 "transient failure",
             )
         });
@@ -1646,10 +1611,11 @@ mod tests {
         let mut task = test_unpreparable_task(5);
         task.attempt = 1;
         let worker = thread::spawn(move || {
+            let error = "Host2: NO [UNAVAILABLE] server busy";
             runner.retry_later(
                 task,
-                "generic",
-                "Host2: NO [UNAVAILABLE] server busy",
+                &ClassifiedFailure::new("generic", error),
+                error,
                 "transient failure",
             )
         });

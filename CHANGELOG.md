@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Classify a batch or single-run failure once, at the execution boundary, and
+  drive retry eligibility, backoff, rate-domain cooldowns, the log label, and
+  the durable detail from that one result. A failure whose retry budget ran
+  out no longer loses its controller class marker to the "retry budget
+  exhausted" prefix.
 - Pin the libFuzzer compiler to the already-qualified `nightly-2026-10-02`.
   Add GitHub's workflow dependency lockfile and a pinned verification workflow;
   lock all direct and transitive Actions dependencies after replacing an
