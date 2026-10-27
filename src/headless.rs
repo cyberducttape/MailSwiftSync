@@ -16,6 +16,8 @@ const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL: usize = 100_000;
 const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
 const MAX_HEADLESS_RUN_DETAIL_BYTES: usize = 4_096;
+const HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX: &str =
+    "; latest run detail unavailable because the ledger lookup failed: ";
 
 fn latest_run_detail_suffix(result: rusqlite::Result<Option<String>>) -> String {
     match result {
@@ -25,7 +27,11 @@ fn latest_run_detail_suffix(result: rusqlite::Result<Option<String>>) -> String 
         ),
         Ok(Some(_)) | Ok(None) => String::new(),
         Err(error) => {
-            format!("; latest run detail unavailable because the ledger lookup failed: {error}")
+            let detail = error.to_string();
+            format!(
+                "{HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX}{}",
+                crate::ui::truncate_utf8(&detail, MAX_HEADLESS_RUN_DETAIL_BYTES)
+            )
         }
     }
 }
@@ -1497,6 +1503,7 @@ fn last_durability_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
+        HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX, MAX_HEADLESS_RUN_DETAIL_BYTES,
         last_durability_detail, last_verification_detail, latest_run_detail_suffix,
         validate_cutover_run_admission,
     };
@@ -1683,6 +1690,16 @@ mod tests {
         assert_eq!(
             latest_run_detail_suffix(Ok(Some("quota exceeded".into()))),
             "; run detail: quota exceeded"
+        );
+
+        let oversized = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("x".repeat(MAX_HEADLESS_RUN_DETAIL_BYTES * 2)),
+        );
+        let suffix = latest_run_detail_suffix(Err(oversized));
+        assert!(
+            suffix.len()
+                <= HEADLESS_RUN_DETAIL_LOOKUP_FAILURE_PREFIX.len() + MAX_HEADLESS_RUN_DETAIL_BYTES
         );
     }
 
