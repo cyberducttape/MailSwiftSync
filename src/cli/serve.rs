@@ -432,7 +432,17 @@ fn read_request_head(stream: &mut impl Read) -> Result<Vec<u8>, Response> {
                     "request head too large\n",
                 ));
             }
-            head.truncate(end + 4);
+            // This server handles exactly one request and never reads a body.
+            // Do not truncate bytes that happened to arrive in the same read:
+            // they could be a body sent despite zero/absent framing or a
+            // pipelined second request whose interpretation differs upstream.
+            if head.len() != end + 4 {
+                return Err(Response::text(
+                    400,
+                    "Bad Request",
+                    "unexpected data after request head\n",
+                ));
+            }
             break;
         }
         if head.len() > MAX_REQUEST_HEAD_BYTES {
@@ -1630,6 +1640,18 @@ mod tests {
             read_request_head(&mut complete).unwrap(),
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"
         );
+    }
+
+    #[test]
+    fn refuses_bytes_buffered_after_the_request_head() {
+        for request in [
+            &b"POST /v1/projects/p/hold?reason=x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\nbody"[..],
+            &b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\nGET /metrics HTTP/1.1\r\nHost: x\r\n\r\n"[..],
+        ] {
+            let error = read_request_head(&mut std::io::Cursor::new(request.to_vec()))
+                .expect_err("buffered trailing bytes must not be silently discarded");
+            assert_eq!(error.status, 400);
+        }
     }
 
     #[test]
