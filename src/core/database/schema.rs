@@ -1302,6 +1302,13 @@ impl StateStore {
         if Self::validate_schema_layout(connection).is_err() {
             return false;
         }
+        Self::current_schema_data_is_clean_after_layout(connection)
+    }
+
+    /// Validate row and cross-row invariants after the caller has already
+    /// checked the schema layout. Keeping this separate avoids repeating the
+    /// sqlite_master/layout scan on read-only status opens and control paths.
+    pub(super) fn current_schema_data_is_clean_after_layout(connection: &Connection) -> bool {
         if Self::validate_schema_constraints(connection).is_err() {
             return false;
         }

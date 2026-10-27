@@ -442,10 +442,15 @@ Ryzen 7 7735U host, measured p50/p95/p99/max of 47.7/49.7/51.3/51.4 ms at
 2,000 jobs and 266.7/275.3/279.3/283.9 ms at 10,000 jobs (101 samples each).
 The worktree was on `/tmp` backed by tmpfs, so these are an initial CPU/schema-
 validation signal, not persistent-storage performance results or an unattended-
-service SLO. The 10,000-job fixture produced 70,000 ledger writes and 10,000
-run/evidence histories; its p95 open time was about 5.5 times the 2,000-job
-result. Repeat on supported persistent storage before using these measurements
-for capacity decisions.
+service SLO. One post-change run measured repeated warm-open p50/p95/p99/max
+at 25.1/27.9/29.3/31.1 ms for 2,000 jobs and 139.1/205.2/232.6/235.0 ms for
+10,000 jobs. Two further 2,000-job repeats measured p95 at 27.9 and 53.0 ms,
+showing notable host-load variability. A single before/after pair showed lower
+latency after removing a duplicate schema-layout pass, but this is not a
+controlled performance qualification. Latency still grows substantially with
+ledger history. The 10,000-job fixture produced 70,000 ledger writes and
+10,000 run/evidence histories. Repeat on supported persistent storage before
+using these measurements for capacity decisions.
 
 A repeat of the same release benchmark on 2026-10-25 at commit
 `d0da235bfcaa596c644c2c9fce6eed431fe909cb` measured 2,000 mailbox jobs and
