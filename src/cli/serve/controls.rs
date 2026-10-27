@@ -255,7 +255,8 @@ fn stored_schema_version(path: &Path) -> Result<i64, String> {
 /// Find the one ledger under `root` for which `contains` holds. A copy of a
 /// ledger under the same root (a stray backup, a restored shard) would make
 /// the target ambiguous, so more than one match is refused rather than
-/// guessed. Unreadable candidates are skipped; `/v1/fleet` reports them.
+/// guessed. An unreadable candidate also makes uniqueness unknowable, so
+/// control operations fail closed; `/v1/fleet` reports those candidates.
 fn locate_ledger(
     root: &Path,
     kind: &str,
@@ -263,27 +264,38 @@ fn locate_ledger(
 ) -> Result<PathBuf, Response> {
     let candidates = crate::headless::discover_ledger_candidates(root)
         .map_err(|error| Response::json_error(503, "Service Unavailable", &error))?;
-    let mut matches = candidates.into_iter().filter(|path| {
-        core::StateStore::open_readonly(path)
+    let mut found = None;
+    for path in candidates {
+        let contains_target = core::StateStore::open_readonly(&path)
             .and_then(|store| contains(&store))
-            .unwrap_or(false)
-    });
-    let Some(found) = matches.next() else {
+            .map_err(|_| {
+                Response::json_error(
+                    503,
+                    "Service Unavailable",
+                    "a ledger under the served directory could not be inspected; target uniqueness is unknown and no control action was performed",
+                )
+            })?;
+        if !contains_target {
+            continue;
+        }
+        if found.is_some() {
+            return Err(Response::json_error(
+                409,
+                "Conflict",
+                &format!(
+                    "more than one ledger under the served directory contains that {kind}; remove the duplicate ledger copy first"
+                ),
+            ));
+        }
+        found = Some(path);
+    }
+    let Some(found) = found else {
         return Err(Response::json_error(
             404,
             "Not Found",
             &format!("no ledger under the served directory contains that {kind}"),
         ));
     };
-    if matches.next().is_some() {
-        return Err(Response::json_error(
-            409,
-            "Conflict",
-            &format!(
-                "more than one ledger under the served directory contains that {kind}; remove the duplicate ledger copy first"
-            ),
-        ));
-    }
     Ok(found)
 }
 
