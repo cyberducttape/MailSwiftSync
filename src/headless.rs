@@ -1671,8 +1671,13 @@ mod tests {
 
     #[test]
     fn headless_failure_reports_run_detail_lookup_errors() {
-        let suffix = latest_run_detail_suffix(Err(rusqlite::Error::InvalidQuery));
+        let error = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("busy detail".into()),
+        );
+        let suffix = latest_run_detail_suffix(Err(error));
         assert!(suffix.contains("ledger lookup failed"));
+        assert!(suffix.contains("busy detail"));
         assert_eq!(latest_run_detail_suffix(Ok(None)), "");
         assert_eq!(latest_run_detail_suffix(Ok(Some("  ".into()))), "");
         assert_eq!(
