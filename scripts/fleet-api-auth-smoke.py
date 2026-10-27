@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import http.client
 import json
 import os
+import re
 import socket
 import sys
 from urllib.parse import urlsplit
@@ -81,8 +83,11 @@ def main() -> int:
 
     reader = os.environ.get("FLEET_API_DAST_TOKEN", "")
     operator = os.environ.get("FLEET_API_DAST_OPERATOR_TOKEN", "")
+    commit = os.environ.get("GITHUB_SHA", "")
     if len(reader) < 32 or len(operator) < 32 or reader == operator:
         parser.error("distinct reader and operator tokens of at least 32 characters are required")
+    if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", commit):
+        parser.error("GITHUB_SHA must contain a full 40- or 64-character commit identifier")
 
     cases: list[tuple[str, str, str, int]] = [
         ("anonymous", "GET", "/v1/fleet", 401),
@@ -132,7 +137,14 @@ def main() -> int:
 
     report = {
         "schema_version": 1,
+        "commit": commit.lower(),
+        "workflow_run_id": os.environ.get("GITHUB_RUN_ID"),
+        "started_at": datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "target": args.base_url,
+        "transport": "http",
+        "authentication_profiles": ["anonymous", "invalid", "reader", "operator"],
         "checks": results,
         "summary": {
             "passed": sum(check["result"] == "pass" for check in results),
