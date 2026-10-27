@@ -597,11 +597,51 @@ fn allowed_methods(segments: &[&str]) -> Option<&'static str> {
     }
 }
 
+/// Reject duplicate headers whose interpretation can affect authentication,
+/// authority, or message framing. Although this server closes every
+/// connection after one request, accepting conflicting values here can make
+/// authorization differ from a reverse proxy's interpretation of the same
+/// request.
+fn has_ambiguous_security_headers(headers: &[(String, String)]) -> bool {
+    const SINGLETON_HEADERS: [&str; 4] = [
+        "authorization",
+        "host",
+        "content-length",
+        "transfer-encoding",
+    ];
+    let mut seen = [false; SINGLETON_HEADERS.len()];
+    let mut content_length = false;
+    let mut transfer_encoding = false;
+    for (name, _) in headers {
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = true;
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            transfer_encoding = true;
+        }
+        if let Some(index) = SINGLETON_HEADERS
+            .iter()
+            .position(|singleton| name.eq_ignore_ascii_case(singleton))
+        {
+            if seen[index] {
+                return true;
+            }
+            seen[index] = true;
+        }
+    }
+
+    // Reject request-smuggling framing combinations even though the API
+    // intentionally does not consume request bodies.
+    content_length && transfer_encoding
+}
+
 fn respond<T: AsRef<[u8]> + ?Sized>(head: &T, context: &ApiContext) -> Response {
     let request = match http::parse_request_head(head.as_ref()) {
         Ok(request) => request,
         Err(_) => return Response::text(400, "Bad Request", "malformed request\n"),
     };
+    if has_ambiguous_security_headers(&request.headers) {
+        return Response::text(400, "Bad Request", "ambiguous security headers\n");
+    }
     let headers = request
         .headers
         .iter()
@@ -1191,6 +1231,30 @@ mod tests {
             &context,
         );
         assert_eq!(malformed.status, 400);
+    }
+
+    #[test]
+    fn rejects_duplicate_auth_authority_and_framing_headers() {
+        let context = context(snapshot());
+        let duplicate_authorization = format!(
+            "GET /v1/fleet HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\nAuthorization: Bearer {OPERATOR}\r\n\r\n"
+        );
+        let duplicate_host = "GET /healthz HTTP/1.1\r\nHost: localhost\r\nHost: other\r\n\r\n";
+        let duplicate_content_length = "POST /v1/projects/project/hold HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 1\r\n\r\n";
+        let conflicting_framing = "POST /v1/projects/project/hold HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n";
+
+        for request in [
+            duplicate_authorization.as_str(),
+            duplicate_host,
+            duplicate_content_length,
+            conflicting_framing,
+        ] {
+            assert_eq!(
+                respond(request, &context).status,
+                400,
+                "request with ambiguous security headers was accepted: {request:?}"
+            );
+        }
     }
 
     #[test]
