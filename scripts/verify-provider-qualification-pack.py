@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import stat
@@ -41,6 +42,16 @@ def reject_nonfinite_constant(value: str):
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
 
+def parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
+
 def parse_pack(path: Path) -> dict:
     if path.is_symlink():
         raise ValueError("pack must not be a symlink")
@@ -66,6 +77,7 @@ def parse_pack(path: Path) -> dict:
             raw,
             object_pairs_hook=reject_duplicate_keys,
             parse_constant=reject_nonfinite_constant,
+            parse_float=parse_finite_float,
         )
     except (OSError, UnicodeError, ValueError) as error:
         raise ValueError(f"could not read pack JSON: {error}") from error

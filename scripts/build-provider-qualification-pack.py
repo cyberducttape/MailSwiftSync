@@ -110,6 +110,16 @@ def reject_nonfinite_constant(value: str):
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
 
+def parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
+
 def reject_duplicate_keys(pairs):
     value = {}
     for key, item in pairs:
@@ -141,6 +151,7 @@ def load_json(path: Path, maximum_bytes: int = MAX_JSON_FILE_BYTES) -> dict:
             raw.decode("utf-8"),
             object_pairs_hook=reject_duplicate_keys,
             parse_constant=reject_nonfinite_constant,
+            parse_float=parse_finite_float,
         )
     except (OSError, UnicodeError, ValueError) as error:
         fail(f"{path}: invalid JSON: {error}")

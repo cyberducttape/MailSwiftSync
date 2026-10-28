@@ -246,6 +246,22 @@ class ProviderQualificationPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
             self.build()
 
+        evidence_path.write_text('{"metric":1e9999}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            self.build()
+
+        self.policy_path.write_text(
+            json.dumps(policy()).replace(
+                '"minimum_bytes": 100', '"minimum_bytes": 1e-9999'
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            self.build()
+        evidence_path.write_text('{"metric":1e-9999}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            self.build()
+
         self.write_phase("live_pilot", evidence("live_pilot"))
         self.policy_path.write_text(
             json.dumps(policy()).replace(
@@ -254,6 +270,15 @@ class ProviderQualificationPackTests(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            self.build()
+
+        self.policy_path.write_text(
+            json.dumps(policy()).replace(
+                '"minimum_bytes": 100', '"minimum_bytes": 1e9999'
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
             self.build()
 
     def test_canonical_digest_serialization_rejects_nonfinite_values(self):
@@ -410,6 +435,20 @@ class ProviderQualificationPackTests(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            VERIFY_MODULE.parse_pack(path)
+
+        path.write_text(
+            '{"evidence_digest":"' + ("0" * 64) + '","value":1e9999}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            VERIFY_MODULE.parse_pack(path)
+
+        path.write_text(
+            '{"evidence_digest":"' + ("0" * 64) + '","value":1e-9999}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
             VERIFY_MODULE.parse_pack(path)
 
     def test_pack_verifier_rejects_symlinks_and_oversized_inputs(self):
