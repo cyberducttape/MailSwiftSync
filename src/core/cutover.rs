@@ -121,17 +121,22 @@ pub(super) fn maybe_emit_cutover_ready(
     else {
         return Ok(());
     };
-    let latest_ready_detail: Option<String> = tx
+    let latest_ready: Option<(i64, String)> = tx
         .query_row(
-            "SELECT detail FROM events WHERE project_id=?1 AND kind='cutover_ready' ORDER BY id DESC LIMIT 1",
+            "SELECT id,detail FROM events WHERE project_id=?1 AND kind='cutover_ready' ORDER BY id DESC LIMIT 1",
             [project_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    if latest_ready_detail
-        .as_deref()
-        .is_some_and(cutover_ready_event_is_current)
-    {
+    let latest_invalidation: Option<i64> = tx.query_row(
+        "SELECT MAX(id) FROM events WHERE project_id=?1 AND kind='cutover_readiness_invalidated'",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    if latest_ready.as_ref().is_some_and(|(ready_id, detail)| {
+        latest_invalidation.is_none_or(|invalidation_id| *ready_id > invalidation_id)
+            && cutover_ready_event_is_current(detail)
+    }) {
         return Ok(());
     }
     let Some(attested_at) = source_quiescence_at else {
@@ -151,6 +156,52 @@ pub(super) fn maybe_emit_cutover_ready(
     Ok(())
 }
 
+/// Invalidate a previously published project readiness event when a new run
+/// is admitted for one of its mailboxes during final Verification. The event
+/// is linked to the mailbox run so a fresh result for that mailbox can be
+/// distinguished from an audit-only scan that leaves the current projection
+/// untouched.
+pub(super) fn invalidate_cutover_readiness_for_new_run(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+    job_id: &str,
+    run_id: &str,
+) -> rusqlite::Result<()> {
+    let final_verification: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM cutover_workflows WHERE project_id=?1 AND stage='verification')",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    if !final_verification {
+        return Ok(());
+    }
+    let latest_ready: Option<i64> = tx.query_row(
+        "SELECT MAX(id) FROM events WHERE project_id=?1 AND kind='cutover_ready'",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    let Some(latest_ready) = latest_ready else {
+        return Ok(());
+    };
+    let invalidated_after_ready: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events e JOIN runs r ON r.id=e.run_id WHERE e.project_id=?1 AND e.kind='cutover_readiness_invalidated' AND r.job_id=?2 AND e.id>?3)",
+        params![project_id, job_id, latest_ready],
+        |row| row.get(0),
+    )?;
+    if invalidated_after_ready {
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'cutover_readiness_invalidated',?3)",
+        params![
+            project_id,
+            run_id,
+            format!("final-verification readiness withdrawn because mailbox {job_id} began a new verification run")
+        ],
+    )?;
+    Ok(())
+}
+
 /// Cutover readiness must be tied to the current Verification-stage evidence,
 /// not merely to a mailbox state string. Independent IMAP evidence additionally
 /// requires its persisted post-scan source and destination cursor checks. The
@@ -162,14 +213,26 @@ fn final_verification_evidence_summary(
     project_id: &str,
 ) -> rusqlite::Result<Option<(i64, i64)>> {
     let mut statement = tx.prepare(
-        "SELECT j.id,e.run_id,e.verification_method,e.verification_outcome,r.phase_at_start,r.status,e.source_folders,e.destination_folders FROM mailbox_jobs j LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN runs r ON r.id=e.run_id WHERE j.project_id=?1 AND j.state IN ('verified','verified_with_exceptions') ORDER BY j.id",
+        "SELECT j.id,e.run_id,e.verification_method,e.verification_outcome,r.phase_at_start,r.status,e.source_folders,e.destination_folders,(SELECT h.run_id FROM evidence_history h WHERE h.job_id=j.id ORDER BY h.captured_at DESC,h.id DESC LIMIT 1),EXISTS(SELECT 1 FROM runs active WHERE active.job_id=j.id AND active.status IN ('queued','running')),(SELECT MAX(invalidated.id) FROM events invalidated JOIN runs invalidated_run ON invalidated_run.id=invalidated.run_id WHERE invalidated.project_id=j.project_id AND invalidated.kind='cutover_readiness_invalidated' AND invalidated_run.job_id=j.id),(SELECT MAX(started.id) FROM events started WHERE started.run_id=e.run_id AND started.kind IN ('run_started','verification_started','mailbox_claimed')) FROM mailbox_jobs j LEFT JOIN evidence e ON e.job_id=j.id LEFT JOIN runs r ON r.id=e.run_id WHERE j.project_id=?1 AND j.state IN ('verified','verified_with_exceptions') ORDER BY j.id",
     )?;
     let mut rows = statement.query([project_id])?;
 
     let mut independently_revalidated = 0_i64;
     let mut engine_or_aggregate_only = 0_i64;
     while let Some(row) = rows.next()? {
-        let (run_id, method, outcome, phase, run_status, source_folders, destination_folders) = (
+        let (
+            run_id,
+            method,
+            outcome,
+            phase,
+            run_status,
+            source_folders,
+            destination_folders,
+            latest_history_run,
+            active_run,
+            latest_invalidation,
+            evidence_run_started,
+        ) = (
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
             row.get::<_, Option<String>>(3)?,
@@ -177,6 +240,10 @@ fn final_verification_evidence_summary(
             row.get::<_, Option<String>>(5)?,
             row.get::<_, Option<i64>>(6)?,
             row.get::<_, Option<i64>>(7)?,
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, bool>(9)?,
+            row.get::<_, Option<i64>>(10)?,
+            row.get::<_, Option<i64>>(11)?,
         );
         let (
             Some(run_id),
@@ -199,6 +266,14 @@ fn final_verification_evidence_summary(
             return Ok(None);
         };
         if phase != CutoverStage::Verification.as_str() || run_status != "completed" {
+            return Ok(None);
+        }
+        if latest_history_run.as_deref() != Some(run_id.as_str()) || active_run {
+            return Ok(None);
+        }
+        if latest_invalidation.is_some_and(|invalidated| {
+            evidence_run_started.is_none_or(|started| started <= invalidated)
+        }) {
             return Ok(None);
         }
         match method.as_str() {
@@ -237,6 +312,31 @@ fn final_verification_evidence_summary(
         }
     }
     Ok(Some((independently_revalidated, engine_or_aggregate_only)))
+}
+
+fn current_cutover_ready_event(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+) -> rusqlite::Result<bool> {
+    let latest_ready: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT id,detail FROM events WHERE project_id=?1 AND kind='cutover_ready' ORDER BY id DESC LIMIT 1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((ready_id, detail)) = latest_ready else {
+        return Ok(false);
+    };
+    let latest_invalidation: Option<i64> = tx.query_row(
+        "SELECT MAX(id) FROM events WHERE project_id=?1 AND kind='cutover_readiness_invalidated'",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    Ok(
+        latest_invalidation.is_none_or(|invalidated| ready_id > invalidated)
+            && cutover_ready_event_is_current(&detail),
+    )
 }
 
 fn cutover_ready_event_is_current(detail: &str) -> bool {
@@ -512,6 +612,11 @@ impl StateStore {
         {
             return Err(CutoverAdvanceError::Refused(
                 "final cutover requires completed Verification-stage evidence with current folder observations".into(),
+            ));
+        }
+        if next == CutoverStage::Completed && !current_cutover_ready_event(&tx, project_id)? {
+            return Err(CutoverAdvanceError::Refused(
+                "final cutover readiness is missing, expired, or was withdrawn by a newer verification run".into(),
             ));
         }
         if next == CutoverStage::FinalDelta
@@ -963,6 +1068,13 @@ mod tests {
             .connection
             .execute(
                 "INSERT INTO evidence(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,'final-verification-evidence','metadata_reconciliation','exact_metadata_match',1,1,128,128,0,0,1,1,0)",
+                [&job],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,'final-verification-evidence','metadata_reconciliation','exact_metadata_match',1,1,128,128,0,0,1,1,0)",
                 [&job],
             )
             .unwrap();
@@ -1505,6 +1617,192 @@ mod tests {
         assert_eq!(
             store.project(&project.id).unwrap().unwrap().phase,
             Phase::Verification
+        );
+    }
+
+    #[test]
+    fn audit_only_reverification_withdraws_cutover_readiness_until_fresh_final_evidence() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox(
+                "cutover-audit-invalidates-readiness",
+                "source",
+                "destination",
+                "a",
+                "a",
+            )
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-15T22:00:00Z", None)
+            .unwrap();
+        store.approve_cutover(&project.id, "operator").unwrap();
+        store
+            .connection
+            .execute("UPDATE mailbox_jobs SET state='ready' WHERE id=?1", [&job])
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET phase='verification' WHERE id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET stage='verification',source_quiescence_at=CURRENT_TIMESTAMP WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+
+        let clean_evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 128,
+            destination_bytes: 128,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+            rfc_message_id_matches: 0,
+            synthetic_identity_matches: 0,
+            flag_verification: None,
+        };
+        store
+            .begin_run(&project.id, &job, "cutover-first-final-run", "imapsync")
+            .unwrap();
+        store
+            .finish_run_for_mailbox_with_evidence(
+                &project.id,
+                &job,
+                "cutover-first-final-run",
+                "completed",
+                "verified",
+                "initial final verification",
+                &clean_evidence,
+            )
+            .unwrap();
+        let initial_ready_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(initial_ready_count, 1);
+
+        store
+            .begin_verification_run(
+                &project.id,
+                &job,
+                "cutover-audit-only-run",
+                "historical-plan-snapshot",
+            )
+            .unwrap();
+        let withdrawn_event: (String, String) = store
+            .connection
+            .query_row(
+                "SELECT d.event_type,e.kind FROM webhook_deliveries d JOIN events e ON d.event_id=printf('ledger-event-%lld',e.id) WHERE e.project_id=?1 AND e.run_id='cutover-audit-only-run'",
+                [&project.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            withdrawn_event,
+            (
+                "migration.cutover_readiness_invalidated".into(),
+                "cutover_readiness_invalidated".into()
+            )
+        );
+        assert!(
+            store
+                .advance_cutover(&project.id, Some("operator approved"))
+                .is_err(),
+            "an active re-verification must block completion"
+        );
+
+        let changed_evidence = MailboxEvidence {
+            source_messages: 2,
+            destination_messages: 1,
+            source_bytes: 256,
+            destination_bytes: 128,
+            unmatched_messages: Some(1),
+            missing_messages: 1,
+            ..clean_evidence.clone()
+        };
+        store
+            .finish_verification_only_run(
+                &project.id,
+                &job,
+                "cutover-audit-only-run",
+                super::super::VerificationOnlyRun {
+                    evidence: &changed_evidence,
+                    mismatches: &[],
+                    folders: &[],
+                    detail: "audit-only scan found changed mailbox contents",
+                },
+            )
+            .unwrap();
+        assert!(
+            store
+                .advance_cutover(&project.id, Some("operator approved"))
+                .is_err(),
+            "audit-only evidence must not authorize completion using the older projection"
+        );
+        store
+            .attest_cutover_source_quiescence(
+                &project.id,
+                "operator",
+                "Source remains paused while final verification is repeated",
+            )
+            .unwrap();
+        let ready_count_after_audit: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(ready_count_after_audit, 1);
+
+        store
+            .begin_run(&project.id, &job, "cutover-refreshed-final-run", "imapsync")
+            .unwrap();
+        store
+            .finish_run_for_mailbox_with_evidence(
+                &project.id,
+                &job,
+                "cutover-refreshed-final-run",
+                "completed",
+                "verified",
+                "fresh final verification after audit",
+                &clean_evidence,
+            )
+            .unwrap();
+        let fresh_ready_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='cutover_ready'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fresh_ready_count, 2);
+        assert_eq!(
+            store
+                .advance_cutover(&project.id, Some("Approved after fresh verification"))
+                .unwrap(),
+            CutoverStage::Completed
         );
     }
 

@@ -149,6 +149,7 @@ impl StateStore {
             "INSERT INTO runs(id,project_id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,?4,'imap-verification',?5,?6,'running')",
             params![run_id, project_id, job_id, transfer_run_id, phase, plan_snapshot],
         )?;
+        super::cutover::invalidate_cutover_readiness_for_new_run(&tx, project_id, job_id, run_id)?;
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'verification_started',?3)",
             params![project_id, run_id, format!("verification-only ({job_id})")],
@@ -227,6 +228,7 @@ impl StateStore {
             "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,'running')",
             params![run_id, project_id, job_id, engine, phase_at_start, plan_snapshot],
         )?;
+        super::cutover::invalidate_cutover_readiness_for_new_run(&tx, project_id, job_id, run_id)?;
         tx.execute(
             "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
             [job_id],
@@ -420,6 +422,12 @@ impl StateStore {
                     phase_at_start,
                     child_snapshot
                 ],
+            )?;
+            super::cutover::invalidate_cutover_readiness_for_new_run(
+                &tx,
+                project_id,
+                job_id,
+                &child_run_id,
             )?;
             if let Some(version) = child_plan.and_then(|plan| plan.engine_version.as_deref()) {
                 tx.execute(

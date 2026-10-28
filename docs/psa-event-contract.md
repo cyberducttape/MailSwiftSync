@@ -65,6 +65,7 @@ endpoints, or mailbox content is present.
 | `migration.final_delta_started` | Begin the approved final-delta window; keep source delivery paused | In progress |
 | `migration.cutover_verification_started` | Final Delta is complete and source quiescence has been reconfirmed; begin final independent verification | Verification in progress |
 | `migration.cutover_ready` | Final Verification-stage evidence is complete; request external cutover approval/action | Pending customer approval |
+| `migration.cutover_readiness_invalidated` | A mailbox has started a newer run after readiness was published; withdraw any pending approval based on the older evidence | Verification required |
 | `migration.completed` | Update totals and link evidence | Ready for review |
 | `migration.proof_ready` | Attach or link signed proof artifact | Customer signoff pending |
 | `migration.status_snapshot` | Reconcile current aggregate projection | Set current status |
@@ -89,10 +90,15 @@ The event is published only while that attestation is fresh (15 minutes); if
 verification finishes after expiry, refreshing the attestation during
 Verification can publish readiness without rescanning. Receivers must treat
 readiness as time-bounded and keep the source paused until external cutover
-approval. If a previously published readiness window expires, a later fresh
-attestation emits a new `migration.cutover_ready` event with a new event ID;
-receivers should use the latest event and its expiry rather than treating an
-older event as current. Cursor revalidation detects changes represented by
+approval. Starting a new run for a mailbox during final Verification emits
+`migration.cutover_readiness_invalidated` when that mailbox contributed to a
+current readiness event. Receivers must withdraw any pending approval based
+on that event. Completion remains blocked until the affected mailbox has new
+final Verification evidence and readiness is republished. If a previously
+published readiness window expires, a later fresh attestation emits a new
+`migration.cutover_ready` event with a new event ID; receivers should use the
+latest event and its expiry rather than treating an older event as current.
+Cursor revalidation detects changes represented by
 the observed IMAP folder inventory and UIDVALIDITY/UIDNEXT/EXISTS and, when
 available, CONDSTORE HIGHESTMODSEQ. It narrows the observation window but is
 not an atomic cross-server snapshot and cannot prove uninterrupted source
