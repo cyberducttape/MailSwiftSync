@@ -94,9 +94,10 @@ fn create_staging_database() -> Result<StagingDatabase, String> {
                      side INTEGER NOT NULL,
                      category TEXT NOT NULL,
                      identity TEXT NOT NULL,
-                     payload TEXT NOT NULL
+                     payload TEXT NOT NULL,
+                     payload_hash BLOB NOT NULL
                  );
-                 CREATE INDEX records_lookup ON records(side, category, identity, payload);",
+                 CREATE INDEX records_lookup ON records(side, category, identity, payload_hash);",
             )
             .map_err(|error| error.to_string())?;
         Ok((connection, path))
@@ -210,15 +211,22 @@ impl<'de> Visitor<'de> for CategorySeed<'_> {
             .map_err(serde::de::Error::custom)?;
         let mut insert = transaction
             .prepare_cached(
-                "INSERT INTO records(side,category,identity,payload) VALUES(?1,?2,?3,?4)",
+                "INSERT INTO records(side,category,identity,payload,payload_hash) VALUES(?1,?2,?3,?4,?5)",
             )
             .map_err(serde::de::Error::custom)?;
         while let Some(item) = sequence.next_element::<Value>()? {
             let (identity, _) =
                 identity(&self.category, &item).map_err(serde::de::Error::custom)?;
             let payload = serde_json::to_string(&item).map_err(serde::de::Error::custom)?;
+            let payload_hash = Sha256::digest(payload.as_bytes());
             insert
-                .execute(params![self.side, self.category, identity, payload])
+                .execute(params![
+                    self.side,
+                    self.category,
+                    identity,
+                    payload,
+                    payload_hash.as_slice()
+                ])
                 .map_err(serde::de::Error::custom)?;
         }
         drop(insert);
@@ -608,13 +616,14 @@ fn staged_unmatched_representative(
             "SELECT own.payload
              FROM records AS own
              LEFT JOIN (
-                 SELECT payload, COUNT(*) AS count
+                 SELECT payload_hash, payload, COUNT(*) AS count
                  FROM records
                  WHERE side=?4 AND category=?2 AND identity=?3
-                 GROUP BY payload
-             ) AS other ON other.payload=own.payload
+                 GROUP BY payload_hash, payload
+             ) AS other ON other.payload_hash=own.payload_hash
+                         AND other.payload=own.payload
              WHERE own.side=?1 AND own.category=?2 AND own.identity=?3
-             GROUP BY own.payload, other.count
+             GROUP BY own.payload_hash, own.payload, other.count
              HAVING COUNT(*) > COALESCE(other.count, 0)
              ORDER BY own.payload LIMIT 1",
             params![side, category, identity, other_side],
@@ -665,14 +674,14 @@ fn compare_staged_category(
                  SELECT identity FROM destination_groups
              ),
              source_payloads AS (
-                 SELECT identity, payload, COUNT(*) AS count
+                 SELECT identity, payload_hash, payload, COUNT(*) AS count
                  FROM records WHERE side=?1 AND category=?2
-                 GROUP BY identity, payload
+                 GROUP BY identity, payload_hash, payload
              ),
              destination_payloads AS (
-                 SELECT identity, payload, COUNT(*) AS count
+                 SELECT identity, payload_hash, payload, COUNT(*) AS count
                  FROM records WHERE side=?3 AND category=?2
-                 GROUP BY identity, payload
+                 GROUP BY identity, payload_hash, payload
              ),
              exact_groups AS (
                  SELECT source_payloads.identity,
@@ -684,6 +693,7 @@ fn compare_staged_category(
                  FROM source_payloads
                  JOIN destination_payloads
                    ON destination_payloads.identity=source_payloads.identity
+                  AND destination_payloads.payload_hash=source_payloads.payload_hash
                   AND destination_payloads.payload=source_payloads.payload
                  GROUP BY source_payloads.identity
              )
@@ -890,6 +900,33 @@ pub(crate) fn compare_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staged_comparison_checks_exact_payload_after_digest_match() {
+        let staging = create_staging_database().unwrap();
+        let forced_hash_collision = [0x5a_u8; 32];
+        for (side, payload) in [
+            (SOURCE_SIDE, "source payload"),
+            (DESTINATION_SIDE, "destination payload"),
+        ] {
+            staging
+                .connection
+                .execute(
+                    "INSERT INTO records(side,category,identity,payload,payload_hash) VALUES(?1,'widgets','id:1',?2,?3)",
+                    params![side, payload, forced_hash_collision.as_slice()],
+                )
+                .unwrap();
+        }
+
+        let (report, differences) =
+            compare_staged_category(&staging.connection, "widgets").unwrap();
+        assert_eq!(differences, 1);
+        assert_eq!(report["matched"], 0);
+        assert_eq!(report["missing"], 0);
+        assert_eq!(report["extra"], 0);
+        assert_eq!(report["modified"], 1);
+        staging.finish().unwrap();
+    }
 
     #[test]
     fn absolute_path_parent_components_never_escape_filesystem_root() {
