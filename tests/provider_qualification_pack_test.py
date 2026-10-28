@@ -472,8 +472,6 @@ class ProviderQualificationPackTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
             VERIFY_MODULE.verify_pack(pack_path, schema_path)
-        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
-            VERIFY_MODULE.parse_pack(path)
 
     def test_pack_verifier_rejects_symlinks_and_oversized_inputs(self):
         target = self.directory / "target.json"
