@@ -264,15 +264,23 @@ pub(crate) fn is_allowed_public_egress(address: IpAddr) -> bool {
         IpAddr::V6(address) => {
             let segments = address.segments();
             let is_global_unicast_prefix = (segments[0] & 0xe000) == 0x2000;
+            // Do not treat transition or protocol-assignment space as an
+            // ordinary public endpoint. In particular, 6to4 can route via
+            // relays while embedding an IPv4 destination, and IANA marks the
+            // broad 2001::/23 protocol-assignment block as not globally
+            // reachable unless a more-specific allocation says otherwise.
+            // This policy intentionally rejects the whole broad allocation
+            // rather than maintaining a fragile list of its exceptions.
+            let is_ietf_protocol_assignment = segments[0] == 0x2001 && segments[1] <= 0x01ff;
+            let is_6to4 = segments[0] == 0x2002;
             is_global_unicast_prefix
+                && !is_ietf_protocol_assignment
+                && !is_6to4
                 && address.to_ipv4().is_none()
                 && !address.is_loopback()
                 && !address.is_unspecified()
                 && !address.is_multicast()
                 && (segments[0] != 0x2001 || segments[1] != 0x0db8)
-                && !(segments[0] == 0x2001 && segments[1] == 0x0000)
-                && !(segments[0] == 0x2001 && segments[1] == 0x0002)
-                && !(segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010)
         }
     }
 }
@@ -776,6 +784,10 @@ mod tests {
             "203.0.113.1",
             "240.0.0.1",
             "2001:db8::1",
+            // Unassigned IETF protocol-assignment space and 6to4 addresses
+            // must not pass the public OAuth/webhook egress policy.
+            "2001:5::1",
+            "2002:7f00:1::1",
         ] {
             let address = address.parse().unwrap();
             assert!(!super::is_allowed_public_egress(address), "{address}");
