@@ -74,7 +74,7 @@ def parse_pack(path: Path) -> dict:
             if descriptor >= 0:
                 os.close(descriptor)
         value = json.loads(
-            raw,
+            raw.decode("utf-8"),
             object_pairs_hook=reject_duplicate_keys,
             parse_constant=reject_nonfinite_constant,
             parse_float=parse_finite_float,

@@ -450,6 +450,14 @@ class ProviderQualificationPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
             VERIFY_MODULE.parse_pack(path)
 
+    def test_pack_verifier_requires_utf8_json(self):
+        path = self.directory / "utf16.json"
+        path.write_bytes(
+            ('{"evidence_digest":"' + ("0" * 64) + '"}').encode("utf-16")
+        )
+        with self.assertRaisesRegex(ValueError, "could not read pack JSON"):
+            VERIFY_MODULE.parse_pack(path)
+
     def test_pack_verifier_rejects_out_of_range_numbers_in_custom_schema(self):
         if jsonschema is None:
             self.skipTest("jsonschema is installed by provider-evidence CI")
