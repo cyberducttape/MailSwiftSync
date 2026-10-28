@@ -58,6 +58,7 @@ echo "=================================================="
 # installed on CI runners.
 POLICY_OUTPUT="$(python3 - "$POLICY_FILE" <<'PY'
 import json
+import math
 import sys
 
 def reject_duplicate_keys(pairs):
@@ -71,6 +72,15 @@ def reject_duplicate_keys(pairs):
 def reject_nonfinite_constant(value):
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
+def parse_finite_float(value):
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
@@ -80,6 +90,7 @@ def load_json(path, maximum):
         raw.decode("utf-8"),
         object_pairs_hook=reject_duplicate_keys,
         parse_constant=reject_nonfinite_constant,
+        parse_float=parse_finite_float,
     )
 
 def valid_tsv_field(value):
@@ -173,6 +184,7 @@ for row in "${POLICY_ROWS[@]}"; do
     [[ -n "$evidence_file" ]] || continue
 file_provider=$(python3 - "$evidence_file" <<'PY'
 import json
+import math
 import sys
 
 def reject_duplicate_keys(pairs):
@@ -186,6 +198,15 @@ def reject_duplicate_keys(pairs):
 def reject_nonfinite_constant(value):
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
+def parse_finite_float(value):
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
@@ -195,6 +216,7 @@ def load_json(path, maximum):
         raw.decode("utf-8"),
         object_pairs_hook=reject_duplicate_keys,
         parse_constant=reject_nonfinite_constant,
+        parse_float=parse_finite_float,
     )
 
 try:
@@ -236,6 +258,15 @@ def reject_duplicate_keys(pairs):
 def reject_nonfinite_constant(value):
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
+def parse_finite_float(value):
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
@@ -245,6 +276,7 @@ def load_json(path, maximum):
         raw.decode("utf-8"),
         object_pairs_hook=reject_duplicate_keys,
         parse_constant=reject_nonfinite_constant,
+        parse_float=parse_finite_float,
     )
 
 def sha256_file(path):

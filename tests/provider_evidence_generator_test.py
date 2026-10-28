@@ -125,6 +125,8 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
             for raw, expected in (
                 ('{"format":"first","format":"second"}', "duplicate JSON key"),
                 ('{"format":"mailswiftsync-customer-proof","value":NaN}', "non-finite JSON number"),
+                ('{"format":"mailswiftsync-customer-proof","value":1e9999}', "outside the supported finite range"),
+                ('{"format":"mailswiftsync-customer-proof","value":1e-9999}', "outside the supported finite range"),
             ):
                 with self.subTest(expected=expected):
                     path.write_text(raw, encoding="utf-8")

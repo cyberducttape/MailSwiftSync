@@ -168,6 +168,36 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("Traceback", result.stdout + result.stderr)
             self.assertIn("non-finite JSON number is not permitted: NaN", result.stderr)
 
+            (evidence_dir / "overflow.json").write_text(
+                '{"source_provider":"gmail","destination_provider":"microsoft365","metric":1e9999}',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertIn("JSON number is outside the supported finite range: 1e9999", result.stderr)
+
+            (evidence_dir / "underflow.json").write_text(
+                '{"source_provider":"gmail","destination_provider":"microsoft365","metric":1e-9999}',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertIn("JSON number is outside the supported finite range: 1e-9999", result.stderr)
+
     def test_oversized_evidence_json_is_rejected_before_parsing(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence_dir = Path(directory)

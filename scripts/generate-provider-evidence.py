@@ -19,6 +19,7 @@ requires scenario coverage and high-confidence message verification.
 """
 
 import json
+import math
 import sys
 import hashlib
 import re
@@ -71,6 +72,16 @@ def reject_nonfinite_constant(value: str):
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
 
+def parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
+
 def generate_evidence(proof_path: str, source_provider: str, destination_provider: str,
                       phase: str, engine: str = "imapsync", engine_version: str | None = None,
                       run_id: str | None = None, mailswiftsync_version: str | None = None,
@@ -86,6 +97,7 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
                 f,
                 object_pairs_hook=reject_duplicate_keys,
                 parse_constant=reject_nonfinite_constant,
+                parse_float=parse_finite_float,
             )
     except (OSError, ValueError) as e:
         raise ValueError(f"Failed to read customer-proof: {e}")
@@ -404,7 +416,7 @@ def main():
         sys.exit(1)
 
     # Output result
-    output_json = json.dumps(evidence, indent=2)
+    output_json = json.dumps(evidence, indent=2, allow_nan=False)
 
     if output_path:
         try:
