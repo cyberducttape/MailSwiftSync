@@ -698,7 +698,12 @@ mod tests {
     #[test]
     fn delayed_durable_process_registration_does_not_burst_engine_releases() {
         const WORKERS: usize = 4;
-        const STARTS_PER_SECOND: usize = 4;
+        // Keep the fake engine active for far less than one launch interval.
+        // macOS CI can deschedule a short-lived shell for hundreds of
+        // milliseconds; a 4/s ceiling made this overlap-based assertion
+        // sensitive to scheduler stalls rather than unpaced gatekeeper
+        // releases.
+        const STARTS_PER_SECOND: usize = 1;
         let directory = composed::temp_directory();
         let engine = composed::overlap_detecting_engine(&directory);
         let forms = (0..WORKERS)
