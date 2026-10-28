@@ -97,9 +97,17 @@ def fail(message: str) -> "NoReturn":
 
 
 def canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def reject_nonfinite_constant(value: str):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
 
 def reject_duplicate_keys(pairs):
@@ -129,7 +137,11 @@ def load_json(path: Path, maximum_bytes: int = MAX_JSON_FILE_BYTES) -> dict:
             raw = handle.read(maximum_bytes + 1)
         if len(raw) > maximum_bytes:
             fail(f"{path}: JSON exceeds the {maximum_bytes}-byte validation limit")
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_constant,
+        )
     except (OSError, UnicodeError, ValueError) as error:
         fail(f"{path}: invalid JSON: {error}")
     if not isinstance(value, dict):

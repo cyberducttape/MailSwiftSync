@@ -28,9 +28,17 @@ def reject_duplicate_keys(pairs):
 
 
 def canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def reject_nonfinite_constant(value: str):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
 
 def parse_pack(path: Path) -> dict:
@@ -54,8 +62,12 @@ def parse_pack(path: Path) -> dict:
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
-        value = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        value = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_constant,
+        )
+    except (OSError, UnicodeError, ValueError) as error:
         raise ValueError(f"could not read pack JSON: {error}") from error
     if not isinstance(value, dict):
         raise ValueError("pack root must be an object")

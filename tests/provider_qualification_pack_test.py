@@ -240,6 +240,28 @@ class ProviderQualificationPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate JSON key: provider"):
             self.build()
 
+    def test_pack_builder_rejects_nonfinite_json_numbers(self):
+        evidence_path = self.evidence_dir / "live_pilot.json"
+        evidence_path.write_text('{"metric":NaN}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            self.build()
+
+        self.write_phase("live_pilot", evidence("live_pilot"))
+        self.policy_path.write_text(
+            json.dumps(policy()).replace(
+                '"minimum_bytes": 100', '"minimum_bytes": Infinity'
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            self.build()
+
+    def test_canonical_digest_serialization_rejects_nonfinite_values(self):
+        for module in (MODULE, VERIFY_MODULE):
+            with self.subTest(module=module.__name__):
+                with self.assertRaises(ValueError):
+                    module.canonical_json({"measurement": float("inf")})
+
     def test_pack_builder_bounds_json_evidence_input(self):
         path = self.evidence_dir / "live_pilot.json"
         with path.open("wb") as handle:
@@ -379,6 +401,15 @@ class ProviderQualificationPackTests(unittest.TestCase):
             VERIFY_MODULE.verify_pack(path)
         path.write_text('{"status":"a","status":"b"}', encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+            VERIFY_MODULE.parse_pack(path)
+
+    def test_pack_verifier_rejects_nonfinite_json_numbers(self):
+        path = self.directory / "nonfinite.json"
+        path.write_text(
+            '{"evidence_digest":"' + ("0" * 64) + '","value":NaN}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
             VERIFY_MODULE.parse_pack(path)
 
     def test_pack_verifier_rejects_symlinks_and_oversized_inputs(self):
