@@ -443,11 +443,27 @@ class ProviderQualificationPackTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
             VERIFY_MODULE.parse_pack(path)
-
         path.write_text(
             '{"evidence_digest":"' + ("0" * 64) + '","value":1e-9999}',
             encoding="utf-8",
         )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            VERIFY_MODULE.parse_pack(path)
+
+    def test_pack_verifier_rejects_out_of_range_numbers_in_custom_schema(self):
+        if jsonschema is None:
+            self.skipTest("jsonschema is installed by provider-evidence CI")
+        pack = self.build()
+        pack_path = self.directory / "pack.json"
+        pack_path.write_text(json.dumps(pack), encoding="utf-8")
+        schema_path = self.directory / "schema.json"
+        schema_path.write_text(
+            '{"$schema":"https://json-schema.org/draft/2020-12/schema",'
+            '"type":"object","maximum":1e9999}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            VERIFY_MODULE.verify_pack(pack_path, schema_path)
         with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
             VERIFY_MODULE.parse_pack(path)
 

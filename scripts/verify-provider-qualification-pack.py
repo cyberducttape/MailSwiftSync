@@ -103,11 +103,21 @@ def verify_pack(path: Path, schema_path: Path = DEFAULT_SCHEMA) -> dict:
             "jsonschema is required; install scripts/requirements-provider-qualification.txt with pip --require-hashes"
         ) from error
     try:
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema = json.loads(
+            schema_path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_constant,
+            parse_float=parse_finite_float,
+        )
         jsonschema.Draft202012Validator.check_schema(schema)
         jsonschema.Draft202012Validator(schema).validate(value)
-    except (OSError, UnicodeError, json.JSONDecodeError, jsonschema.SchemaError,
-            jsonschema.ValidationError) as error:
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        jsonschema.SchemaError,
+        jsonschema.ValidationError,
+    ) as error:
         raise ValueError(f"pack schema validation failed: {error}") from error
     return value
 
