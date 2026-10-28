@@ -67,6 +67,12 @@ class ProviderProofSignatureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "signature is invalid"):
             verify_proof_signature(tampered, self.public_key_hex)
 
+    def test_refuses_nonfinite_values_in_signed_payload(self):
+        tampered = dict(self.proof)
+        tampered["measurement"] = float("nan")
+        with self.assertRaises(ValueError):
+            verify_proof_signature(tampered, self.public_key_hex)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -68,12 +68,19 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def reject_nonfinite_constant(value):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    return json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_nonfinite_constant,
+    )
 
 def valid_tsv_field(value):
     return (
@@ -176,12 +183,19 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def reject_nonfinite_constant(value):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    return json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_nonfinite_constant,
+    )
 
 try:
     evidence = load_json(sys.argv[1], 16 * 1024 * 1024)
@@ -219,12 +233,19 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def reject_nonfinite_constant(value):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    return json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_nonfinite_constant,
+    )
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -458,7 +479,13 @@ for filename in files:
             unsigned = dict(proof)
             expected_proof_digest = unsigned.pop("proof_digest", None)
             unsigned.pop("proof_signature", None)
-            canonical = json.dumps(unsigned, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+            canonical = json.dumps(
+                unsigned,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            )
             calculated = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             if expected_proof_digest != calculated or expected_proof_digest != proof_digest:
                 errors.append(f"{filename}: referenced customer proof digest does not match evidence")
