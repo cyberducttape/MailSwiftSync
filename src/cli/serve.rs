@@ -1450,6 +1450,30 @@ mod tests {
     }
 
     #[test]
+    fn approval_refuses_when_an_unreadable_candidate_could_hide_a_duplicate() {
+        let root = private_root();
+        let (state, _, wave_id) = ledger_with_wave(&root);
+        std::fs::write(root.join("unreadable.db"), b"not a SQLite database").unwrap();
+        let context = context_at(root.clone(), snapshot());
+        let operator = Some(format!("Bearer {OPERATOR}"));
+        let response = respond(
+            &request_with(
+                "POST",
+                &format!("/v1/waves/{wave_id}/approve"),
+                operator.as_deref(),
+            ),
+            &context,
+        );
+
+        assert_eq!(response.status, 503, "{}", response.body);
+        assert!(response.body.contains("target uniqueness is unknown"));
+        let store = crate::core::StateStore::open_readonly(&state).unwrap();
+        assert!(store.wave(&wave_id).unwrap().unwrap().approved_by.is_none());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_failed_refresh_is_reported_rather_than_serving_stale_data() {
         let failed = context(FleetSnapshot {
             generated_at: 1,
