@@ -71,7 +71,10 @@ endpoints, or mailbox content is present.
 
 `migration.cutover_ready` is emitted only after every mailbox's final
 Verification-stage evidence is durable, or its difference has an explicit
-acceptance. Its detail includes separate `clean_verified` and
+acceptance tied to the same run as the mailbox's current evidence projection.
+An audit-only reverify cannot substitute for the final cutover evidence; rerun
+final verification before accepting a difference found only by that audit.
+Its detail includes separate `clean_verified` and
 `accepted_exceptions` counts, the source-quiescence attestation expiry, and
 separate `independent_cursor_revalidated` and `engine_or_aggregate_only`
 mailbox counts. Metadata/content evidence is ineligible for readiness unless
