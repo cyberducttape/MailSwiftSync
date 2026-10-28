@@ -100,9 +100,10 @@ payload can contain customer-sensitive operational metadata. Non-public,
 reserved, loopback, link-local, and local-only hostname targets, including
 every non-global address returned by DNS for a public-looking hostname, are
 rejected by default. IPv6 6to4 addresses and the broad IANA `2001::/23`
-protocol-assignment range are also refused rather than treated as ordinary
-public unicast; this deliberately favors a false rejection over routing
-policy-controlled requests through transition or unassigned protocol space.
+protocol-assignment range, along with the `3fff::/20` documentation prefix,
+are also refused rather than treated as ordinary public unicast; this
+deliberately favors a false rejection over routing policy-controlled requests
+through transition, unassigned protocol, or documentation space.
 Delivery uses the bounded, policy-checked address set so a DNS answer cannot be
 re-resolved to bypass the check during the request. Set
 `allow_private_networks = true` only for a deliberately controlled local

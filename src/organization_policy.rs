@@ -269,13 +269,16 @@ pub(crate) fn is_allowed_public_egress(address: IpAddr) -> bool {
             // relays while embedding an IPv4 destination, and IANA marks the
             // broad 2001::/23 protocol-assignment block as not globally
             // reachable unless a more-specific allocation says otherwise.
+            // The 3fff::/20 documentation prefix is likewise non-global.
             // This policy intentionally rejects the whole broad allocation
             // rather than maintaining a fragile list of its exceptions.
             let is_ietf_protocol_assignment = segments[0] == 0x2001 && segments[1] <= 0x01ff;
             let is_6to4 = segments[0] == 0x2002;
+            let is_documentation = segments[0] == 0x3fff && segments[1] & 0xf000 == 0;
             is_global_unicast_prefix
                 && !is_ietf_protocol_assignment
                 && !is_6to4
+                && !is_documentation
                 && address.to_ipv4().is_none()
                 && !address.is_loopback()
                 && !address.is_unspecified()
@@ -787,7 +790,10 @@ mod tests {
             // Unassigned IETF protocol-assignment space and 6to4 addresses
             // must not pass the public OAuth/webhook egress policy.
             "2001:5::1",
+            "2001:1ff::1",
             "2002:7f00:1::1",
+            "3fff::1",
+            "3fff:f::1",
         ] {
             let address = address.parse().unwrap();
             assert!(!super::is_allowed_public_egress(address), "{address}");
