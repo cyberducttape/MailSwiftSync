@@ -210,7 +210,9 @@ reconciliation as successful.
   endpoint-unbound until delivery configuration is supplied, so credentials
   and URLs remain outside durable state. `migration.cutover_ready` is emitted
   only after all final Verification-stage evidence is durable (including any
-  explicit exception acceptances), not when Final Delta or Verification starts;
+  explicit exception acceptances tied to the current evidence run), not when
+  Final Delta or Verification starts. Audit-only reverify evidence cannot stand
+  in for the managed final-verification run;
   clean and accepted-exception counts are distinct in its detail.
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review

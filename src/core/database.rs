@@ -614,7 +614,7 @@ impl StateStore {
         tx.execute_batch(
             "DROP TRIGGER IF EXISTS events_webhook_outbox;
              CREATE TRIGGER events_webhook_outbox AFTER INSERT ON events
-             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted','proof_ready','cutover_final_delta_started','cutover_verification_started','cutover_ready')
+             WHEN NEW.kind IN ('run_started','run_finished','verification_exception_accepted','proof_ready','cutover_final_delta_started','cutover_verification_started','cutover_ready','cutover_readiness_invalidated')
                  OR (NEW.kind='phase_changed' AND NEW.detail='complete')
              BEGIN
                  INSERT OR IGNORE INTO webhook_deliveries(event_id,project_id,event_type,payload,endpoint_digest)
@@ -625,6 +625,7 @@ impl StateStore {
                          WHEN NEW.kind='cutover_final_delta_started' THEN 'migration.final_delta_started'
                          WHEN NEW.kind='cutover_verification_started' THEN 'migration.cutover_verification_started'
                          WHEN NEW.kind='cutover_ready' THEN 'migration.cutover_ready'
+                         WHEN NEW.kind='cutover_readiness_invalidated' THEN 'migration.cutover_readiness_invalidated'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL AND r.phase_at_start='preflight' AND r.status='failed') THEN 'mailbox.preflight_failed'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
                          WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state IN ('failed','cancelled','attention')) THEN 'mailbox.failed'
@@ -640,6 +641,7 @@ impl StateStore {
                              WHEN NEW.kind='cutover_final_delta_started' THEN 'migration.final_delta_started'
                              WHEN NEW.kind='cutover_verification_started' THEN 'migration.cutover_verification_started'
                              WHEN NEW.kind='cutover_ready' THEN 'migration.cutover_ready'
+                             WHEN NEW.kind='cutover_readiness_invalidated' THEN 'migration.cutover_readiness_invalidated'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=NEW.run_id AND r.job_id IS NOT NULL AND r.phase_at_start='preflight' AND r.status='failed') THEN 'mailbox.preflight_failed'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state='verification_difference') THEN 'mailbox.verification_difference'
                              WHEN NEW.kind='run_finished' AND EXISTS(SELECT 1 FROM mailbox_jobs j JOIN runs r ON r.id=NEW.run_id WHERE j.id=r.job_id AND j.state IN ('failed','cancelled','attention')) THEN 'mailbox.failed'
