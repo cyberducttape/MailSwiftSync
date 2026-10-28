@@ -251,8 +251,10 @@ schema = None
 if has_jsonschema:
     try:
         schema = load_json(schema_file, 1 * 1024 * 1024)
-    except (OSError, ValueError) as error:
-        errors.append(f"Warning: Could not load schema for validation: {error}")
+        jsonschema.Draft7Validator.check_schema(schema)
+    except (OSError, ValueError, jsonschema.SchemaError) as error:
+        errors.append(f"schema could not be loaded or validated: {error}")
+        schema = None
 
 for filename in files:
     try:
@@ -262,7 +264,7 @@ for filename in files:
         continue
 
     # Validate against schema if available
-    if schema and has_jsonschema:
+    if schema is not None and has_jsonschema:
         try:
             jsonschema.validate(evidence, schema)
         except jsonschema.ValidationError as error:

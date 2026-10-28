@@ -428,6 +428,27 @@ class EvidenceGateTests(unittest.TestCase):
                 "large-mailbox-50gb per-mailbox observation does not match verified customer-proof evidence",
                 output,
             )
+
+            invalid_schema = Path(directory) / "invalid-schema.json"
+            invalid_schema.write_text("{ invalid schema", encoding="utf-8")
+            result = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir),
+                    "MAILSWIFTSYNC_SCHEMA_FILE": str(invalid_schema),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            self.assertIn(
+                "FAIL: gmail->microsoft365: schema could not be loaded or validated:",
+                output,
+            )
+            self.assertNotIn("Warning: Could not load schema", output)
             self.assertIn(
                 "large-mailbox-100gb per-mailbox observation does not match verified customer-proof evidence",
                 output,
