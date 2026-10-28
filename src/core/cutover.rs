@@ -109,7 +109,7 @@ pub(super) fn maybe_emit_cutover_ready(
         return Ok(());
     }
     let (total, clean_verified, accepted_exceptions): (i64, i64, i64) = tx.query_row(
-        "SELECT COUNT(*),COALESCE(SUM(state='verified'),0),COALESCE(SUM(state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)),0) FROM mailbox_jobs WHERE project_id=?1",
+        "SELECT COUNT(*),COALESCE(SUM(state='verified'),0),COALESCE(SUM(state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a JOIN evidence e ON e.job_id=a.job_id AND e.run_id=a.run_id WHERE a.job_id=mailbox_jobs.id)),0) FROM mailbox_jobs WHERE project_id=?1",
         [project_id],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
@@ -495,7 +495,7 @@ impl StateStore {
             ));
         }
         let (total, clean_verified, accepted_exceptions): (i64, i64, i64) = tx.query_row(
-            "SELECT COUNT(*),COALESCE(SUM(state='verified'),0),COALESCE(SUM(state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a WHERE a.job_id=mailbox_jobs.id)),0) FROM mailbox_jobs WHERE project_id=?1",
+            "SELECT COUNT(*),COALESCE(SUM(state='verified'),0),COALESCE(SUM(state='verified_with_exceptions' AND EXISTS(SELECT 1 FROM verification_acceptances a JOIN evidence e ON e.job_id=a.job_id AND e.run_id=a.run_id WHERE a.job_id=mailbox_jobs.id)),0) FROM mailbox_jobs WHERE project_id=?1",
             [project_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
@@ -507,6 +507,13 @@ impl StateStore {
         let next = stage.next().ok_or_else(|| {
             CutoverAdvanceError::Refused("cutover workflow is already at its terminal stage".into())
         })?;
+        if next == CutoverStage::Completed
+            && final_verification_evidence_summary(&tx, project_id)?.is_none()
+        {
+            return Err(CutoverAdvanceError::Refused(
+                "final cutover requires completed Verification-stage evidence with current folder observations".into(),
+            ));
+        }
         if next == CutoverStage::FinalDelta
             || stage == CutoverStage::FinalDelta
             || next == CutoverStage::Completed
@@ -1449,6 +1456,59 @@ mod tests {
     }
 
     #[test]
+    fn cutover_completion_requires_current_final_verification_evidence() {
+        let store = StateStore::in_memory().unwrap();
+        let (project, job) = store
+            .create_project_with_mailbox(
+                "cutover-final-evidence-required",
+                "source",
+                "destination",
+                "a",
+                "a",
+            )
+            .unwrap();
+        store.transition(&project.id, Phase::Preflight).unwrap();
+        store
+            .create_cutover_workflow(&project.id, "2026-10-15T22:00:00Z", None)
+            .unwrap();
+        store.approve_cutover(&project.id, "operator").unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='verified' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET phase='verification' WHERE id=?1",
+                [&project.id],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE cutover_workflows SET stage='verification',source_quiescence_at=datetime('now') WHERE project_id=?1",
+                [&project.id],
+            )
+            .unwrap();
+
+        let error = store
+            .advance_cutover(&project.id, Some("Approved MX cutover CHG-123"))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("final cutover requires completed Verification-stage evidence")
+        );
+        assert_eq!(
+            store.project(&project.id).unwrap().unwrap().phase,
+            Phase::Verification
+        );
+    }
+
+    #[test]
     fn accepted_difference_cannot_bypass_cutover_confirmation() {
         let store = StateStore::in_memory().unwrap();
         let (project, job) = store
@@ -1548,6 +1608,64 @@ mod tests {
                 &project.id,
                 &job,
                 "cutover-exception-run",
+                "completed",
+                "verification_difference",
+                "difference requires review",
+                &evidence,
+            )
+            .unwrap();
+        store
+            .begin_verification_run(
+                &project.id,
+                &job,
+                "cutover-audit-only-recheck",
+                "historical-plan-snapshot",
+            )
+            .unwrap();
+        store
+            .finish_verification_only_run(
+                &project.id,
+                &job,
+                "cutover-audit-only-recheck",
+                super::super::VerificationOnlyRun {
+                    evidence: &evidence,
+                    mismatches: &[],
+                    folders: &[],
+                    detail: "audit-only recheck still found a difference",
+                },
+            )
+            .unwrap();
+        assert!(
+            store
+                .accept_verification_difference(
+                    &project.id,
+                    &job,
+                    "operator",
+                    "must be tied to the final cutover evidence",
+                )
+                .is_err(),
+            "an audit-only recheck cannot be substituted for the cutover evidence projection"
+        );
+        assert_eq!(
+            store.mailbox_state(&job).unwrap().as_deref(),
+            Some("verification_difference")
+        );
+
+        // A fresh final-pass run replaces the projection, so its own
+        // difference can be accepted and used in the cutover decision.
+        store
+            .begin_run(
+                &project.id,
+                &job,
+                "cutover-exception-run-refreshed",
+                "imapsync",
+            )
+            .unwrap();
+        store
+            .finish_run_for_mailbox_with_evidence(
+                &project.id,
+                &job,
+                "cutover-exception-run-refreshed",
                 "completed",
                 "verification_difference",
                 "difference requires review",

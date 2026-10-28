@@ -693,6 +693,21 @@ impl StateStore {
             [job_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
+        let managed_final_run: Option<Option<String>> = tx
+            .query_row(
+                "SELECT e.run_id FROM cutover_workflows c LEFT JOIN evidence e ON e.job_id=?1 WHERE c.project_id=?2 AND c.stage='verification'",
+                params![job_id, project_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if managed_final_run
+            .as_ref()
+            .is_some_and(|current_run| current_run.as_deref() != Some(run_id.as_str()))
+        {
+            return Err(super::ledger_rejection(
+                "managed cutover exceptions must be accepted against the current final-verification evidence; rerun final verification before accepting",
+            ));
+        }
         if flags_complete
             && matches!(
                 outcome.as_str(),
