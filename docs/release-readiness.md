@@ -467,6 +467,19 @@ environment-specific ledger workload result; it is not an IMAP transfer
 benchmark, a host-class qualification, or evidence for customer-scale
 capacity.
 
+A repeat on 2026-10-28 at merged `main` commit
+`86f4a8aeb08f15d898e329e1f9877ef4a9843980` used Rust 1.92.0 on the same Linux
+x86_64 AMD Ryzen 7 7735U host and ran the benchmark under `/tmp`, which is
+tmpfs. At 2,000 jobs / 44,000 writes, read-only-open p50/p95/p99/max was
+22.390/22.982/23.397/24.563 ms. At 10,000 jobs / 220,000 writes, it was
+124.738/126.768/128.381/130.658 ms. The latter run also measured write
+p50/p95/p99/max of 69/859/1,663/7,544 µs, 32.552 ms read p95, zero busy
+errors, a 15,840 KiB WAL high-water mark, a 4 ms checkpoint, 3,296 durable
+bytes per mailbox, and a 490 ms concurrent backup. These are workload
+observations on a tmpfs-backed test ledger, not persistent-storage or
+host-class qualification; the 10,000-job warm-open latency remains
+informational and has no asserted budget.
+
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a
 long verification scan occupies transfer capacity. **Queue settings →
