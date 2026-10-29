@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add `mailswiftsync control`, an optional central control plane for MSP
+  fleets: users with Argon2id passwords, expiring sessions and account
+  lockout; administrator, manager, engineer, technician, auditor, and
+  customer roles enforced per tenant; tenant-scoped queries that answer
+  other tenants' identifiers as not found; tenant- and permission-scoped
+  expiring API keys; second-person plan approval; and a hash-chained,
+  append-only audit log with `control audit-verify`. Mailbox credentials
+  stay on workers. See docs/control-plane.md.
 - Record each transfer attempt's failure class with the provider of the
   endpoint that failed, the same classification the controller uses for retry
   and terminal state, instead of a provider-blind guess.

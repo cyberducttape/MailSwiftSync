@@ -167,8 +167,8 @@ evidence = "status, status --summary, and fleet-status JSON carry a format ident
 
 [[production_features]]
 feature = "MSP RBAC and tenant isolation"
-status = "not_implemented"
-evidence = "The local application has no authenticated multi-user control plane, role enforcement, row-level tenant boundary, or worker fencing; see docs/msp-rbac-and-tenant-isolation.md."
+status = "partial"
+evidence = "The optional `mailswiftsync control` service authenticates users (Argon2id passwords, expiring sessions, account lockout), enforces the documented administrator/manager/engineer/technician/auditor/customer roles per tenant with deny-by-default checks, scopes every tenant-owned query by tenant, issues tenant- and permission-scoped expiring API keys, requires a second person to approve a plan, and keeps a hash-chained append-only audit log; see docs/control-plane.md. Worker enrollment with fenced assignment leases, OIDC sign-in, and live multi-user qualification remain open, and the desktop application itself is still single-user."
 
 [[production_features]]
 feature = "PSA/ticket lifecycle integration"

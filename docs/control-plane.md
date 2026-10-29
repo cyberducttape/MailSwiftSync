@@ -1,0 +1,140 @@
+# Central control plane
+
+`mailswiftsync control` is an optional service for MSPs that run migrations
+for several customers. It adds authenticated users, organizational roles,
+tenant isolation, scoped API keys, and a tamper-evident audit log. The
+desktop application stays the local-first workstation interface, and each
+worker keeps its own SQLite execution ledger.
+
+**Mailbox credentials never reach the control plane.** Passwords, OAuth
+refresh tokens, and app passwords stay on the worker that runs the
+migration. Project plans sent to the service are non-secret settings, and
+the service refuses any plan field whose name looks like a credential
+(`password`, `secret`, `token`, `credential`, `private_key`).
+
+This implements the authentication, authorization, tenant-isolation, and
+audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
+Still to come: worker enrollment with fenced assignment leases, and OIDC
+sign-in.
+
+## Running it
+
+```sh
+umask 077
+printf '%s' 'a-long-admin-password' > admin-password
+mailswiftsync control init /srv/mailswiftsync/control.db \
+  --admin-email admin@msp.example --admin-password-file admin-password
+mailswiftsync control serve /srv/mailswiftsync/control.db \
+  --listen 0.0.0.0:9470 --tls-cert server.pem --tls-key server-key.pem
+mailswiftsync control audit-verify /srv/mailswiftsync/control.db
+```
+
+- `init` creates the database (owner-only, `0600`) and the first
+  administrator. It refuses to run once any user exists; add further
+  administrators through the API so the change is audited.
+- `serve` listens on `127.0.0.1:9470` by default. A non-loopback address
+  needs `--tls-cert`/`--tls-key`, or `--allow-non-loopback` to acknowledge a
+  TLS-terminating reverse proxy in front.
+- `audit-verify` recomputes the audit hash chain offline.
+
+The service is single-node: one process owns the SQLite file. Do not put the
+file on a network filesystem or share it between processes.
+
+## Roles
+
+Roles follow the contract. The administrator role is service-wide; every
+other role is granted per tenant, and a user can hold different roles in
+different tenants. Anything not listed is denied.
+
+| Permission | Administrator | Manager | Engineer | Technician | Auditor | Customer |
+|---|---|---|---|---|---|---|
+| `service:admin` (tenants, users, grants, every key and audit entry) | ✓ | | | | | |
+| `tenant:read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `project:read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `project:write` | ✓ | ✓ | | | | |
+| `project:approve` | ✓ | ✓ | | | | |
+| `assignment:read` | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| `assignment:create` | ✓ | ✓ | ✓ | | | |
+| `worker:manage` | ✓ | ✓ | | | | |
+| `evidence:read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `audit:read` | ✓ | ✓ | | | ✓ | |
+
+**Separation of duties:** whoever last changed a project's plan cannot
+approve it. Approval names the plan revision being approved, and any later
+plan change withdraws the approval.
+
+## Tenant isolation
+
+- Every tenant-owned route carries the tenant in its path
+  (`/v1/tenants/{tenant}/…`). The caller's permission is checked for that
+  tenant, and the database query also filters by it. A project ID from
+  another tenant matches nothing.
+- A tenant (or a resource in a tenant) the caller cannot see is answered
+  `404 Not Found`, not `403`, so tenant and project IDs cannot be
+  enumerated. The refusal is still audited.
+- `GET /v1/tenants` lists only tenants the caller holds a role in
+  (administrators see all).
+
+## Credentials
+
+| Credential | Prefix | Lifetime | Notes |
+|---|---|---|---|
+| Session | `mss_s_` | 12 hours | From `POST /v1/auth/login`; revoked by `POST /v1/auth/logout` or when the user is disabled. |
+| API key | `mss_k_` | 1–365 days, required | Bound to one tenant and a set of scopes. |
+
+Only SHA-256 digests of tokens are stored. Present tokens as
+`Authorization: Bearer <token>`.
+
+**Passwords** are hashed with Argon2id at the RFC 9106 / OWASP defaults and
+need at least 12 characters. Five consecutive failures lock the account for
+15 minutes. Unknown accounts, wrong passwords, and disabled accounts all get
+the same answer and cost the same hashing time.
+
+**API keys:**
+- Issued only from a signed-in session; a key cannot mint keys.
+- Each requested scope must be a permission the owner currently holds in
+  that tenant. `service:admin` can never be a key scope.
+- Every request re-checks the key's scopes against the owner's current
+  grants, so removing a grant also narrows the owner's existing keys.
+- Disabling a user revokes all their sessions and keys.
+
+## Audit log
+
+Every mutation writes its audit entry in the same SQLite transaction as the
+change itself, so a committed change can never be missing from the log.
+Refusals (wrong role, other tenant, conflict, invalid input) and reads of
+tenant data are audited too. Each entry records:
+
+- time, request ID, and actor (user, plus the API key if one was used)
+- tenant, action, and resource
+- the decision (`allow` or `deny`) and a short detail
+
+Entries are hash-chained: each hash covers the previous entry's hash and
+every field of the entry. Triggers make the table append-only, and
+`audit-verify` (or `GET /v1/audit/verify`) detects any edit, deletion, or
+reordering made to the file directly.
+
+## API
+
+Request bodies are JSON (`Content-Type: application/json`, at most 64 KiB,
+`Content-Length` framing only). Every response carries `X-Request-Id`, which
+matches the audit entry.
+
+| Method and path | Permission |
+|---|---|
+| `GET /healthz` | none |
+| `POST /v1/auth/login` `{email, password}` | none |
+| `POST /v1/auth/logout` | session |
+| `GET /v1/me` | any |
+| `GET /v1/tenants` / `POST /v1/tenants` `{name}` | any (filtered) / `service:admin` |
+| `GET /v1/users` / `POST /v1/users` `{email, display_name, password?}` | `service:admin` |
+| `POST /v1/users/{id}/disable` | `service:admin` |
+| `POST /v1/users/{id}/grants` and `/grants/remove` `{role, tenant_id?}` | `service:admin` |
+| `POST /v1/tenants/{t}/api-keys` `{name, scopes, expires_in_days}` | session in tenant |
+| `GET /v1/api-keys`, `POST /v1/api-keys/{id}/revoke` | own keys (all for administrators) |
+| `GET`/`POST /v1/tenants/{t}/projects` `{name, plan}` | `project:read` / `project:write` |
+| `GET /v1/tenants/{t}/projects/{p}` | `project:read` |
+| `PUT /v1/tenants/{t}/projects/{p}/plan` `{plan, revision}` | `project:write` |
+| `POST /v1/tenants/{t}/projects/{p}/approve` `{revision}` | `project:approve`, not the last editor |
+| `GET /v1/tenants/{t}/audit?limit=&before=` | `audit:read` |
+| `GET /v1/audit`, `GET /v1/audit/verify` | `service:admin` |
