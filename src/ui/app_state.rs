@@ -168,6 +168,13 @@ pub(crate) struct App {
     pub(crate) capability_observation_fingerprint: Option<String>,
     /// Last per-frame readiness staleness check; see `poll`.
     pub(crate) capability_staleness_checked_at: Option<std::time::Instant>,
+    /// Organization-policy assurance minimum shown on the Plan view, with
+    /// when it was read. The view renders every frame; the policy file is
+    /// re-read at most once a second rather than on each repaint.
+    pub(crate) policy_assurance_cache: Option<(
+        std::time::Instant,
+        Result<Option<core::AssuranceLevel>, String>,
+    )>,
     /// Fresh authentication completed immediately before an IMAPS live run.
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
