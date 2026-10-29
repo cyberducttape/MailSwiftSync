@@ -243,7 +243,7 @@ fn read_csv_with_ack(
         64 * 1024,
         file.take(crate::MAX_BULK_IMPORT_BYTES.saturating_add(1)),
     );
-    let delimiter = detect_csv_delimiter(input.fill_buf().map_err(|error| error.to_string())?);
+    let delimiter = detect_csv_delimiter(input.fill_buf().map_err(|error| error.to_string())?)?;
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .from_reader(input);
@@ -294,25 +294,66 @@ fn read_csv_with_ack(
 
 /// Choose the field separator from the header line. Excel in many European
 /// locales (German among them) saves "CSV" with semicolons, and some exports
-/// use tabs. Header names never contain these characters, so the most
-/// frequent one on the first line is the separator; comma wins ties.
-fn detect_csv_delimiter(start: &[u8]) -> u8 {
-    let header = start
-        .split(|byte| *byte == b'\n')
-        .next()
-        .unwrap_or_default();
-    let count = |delimiter: u8| header.iter().filter(|byte| **byte == delimiter).count();
-    [b';', b'\t']
-        .into_iter()
-        .fold((b',', count(b',')), |best, candidate| {
-            let candidate_count = count(candidate);
-            if candidate_count > best.1 {
-                (candidate, candidate_count)
-            } else {
-                best
+/// use tabs. Each candidate parses the header with CSV quoting rules, so a
+/// separator inside a quoted header field is not counted, and the candidate
+/// whose header names the most required columns wins. Two candidates that
+/// both name every required column but split the header differently are
+/// refused rather than guessed; with no required column anywhere, comma is
+/// used and header validation reports what is missing.
+fn detect_csv_delimiter(start: &[u8]) -> Result<u8, String> {
+    const REQUIRED: [&str; 4] = [
+        "source_host",
+        "source_user",
+        "destination_host",
+        "destination_user",
+    ];
+    let header_for = |delimiter: u8| {
+        csv::ReaderBuilder::new()
+            .delimiter(delimiter)
+            .from_reader(start)
+            .headers()
+            .map(|record| {
+                record
+                    .iter()
+                    .map(|field| field.trim().to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+            })
+            .ok()
+    };
+    let mut best: Option<(u8, usize, Vec<String>)> = None;
+    for delimiter in [b',', b';', b'\t'] {
+        let Some(header) = header_for(delimiter) else {
+            continue;
+        };
+        let recognized = REQUIRED
+            .iter()
+            .filter(|required| header.iter().any(|field| field == *required))
+            .count();
+        match &best {
+            Some((chosen, count, chosen_header))
+                if recognized == REQUIRED.len()
+                    && *count == REQUIRED.len()
+                    && *chosen_header != header =>
+            {
+                return Err(format!(
+                    "The CSV header is ambiguous: it splits into the required columns with both {} and {} as the separator. Save the file with one separator that does not appear inside header names.",
+                    delimiter_name(*chosen),
+                    delimiter_name(delimiter)
+                ));
             }
-        })
-        .0
+            Some((_, count, _)) if recognized <= *count => {}
+            _ => best = Some((delimiter, recognized, header)),
+        }
+    }
+    Ok(best.map_or(b',', |(delimiter, _, _)| delimiter))
+}
+
+fn delimiter_name(delimiter: u8) -> &'static str {
+    match delimiter {
+        b';' => "semicolon",
+        b'\t' => "tab",
+        _ => "comma",
+    }
 }
 
 pub(crate) fn workbook_sheets(path: &Path) -> Result<Vec<String>, String> {
@@ -1382,8 +1423,58 @@ mod tests {
             let jobs = jobs.unwrap_or_else(|error| panic!("{label}: {error}"));
             assert_eq!(jobs[0].source_host, "imap.source.example", "{label}");
         }
-        assert_eq!(super::detect_csv_delimiter(b"a,b;c,d\nx;y;z;w"), b',');
-        assert_eq!(super::detect_csv_delimiter(b""), b',');
+        assert_eq!(super::detect_csv_delimiter(b"a,b;c,d\nx;y;z;w"), Ok(b','));
+        assert_eq!(super::detect_csv_delimiter(b""), Ok(b','));
+    }
+
+    /// A separator inside a quoted header field is part of that field, not a
+    /// column boundary, so it must not outvote the real separator.
+    #[test]
+    fn delimiter_detection_ignores_separators_inside_quoted_headers() {
+        for (header, expected) in [
+            (
+                &b"\"label, previous, legacy, old, retired, archived\";source_host;source_user;destination_host;destination_user\n"[..],
+                b';',
+            ),
+            (
+                &b"\"label; notes; owner\",source_host,source_user,destination_host,destination_user\n"[..],
+                b',',
+            ),
+            (
+                &b"\"say \"\"a,b,c\"\"\"\tsource_host\tsource_user\tdestination_host\tdestination_user\n"[..],
+                b'\t',
+            ),
+            (
+                "\u{feff}\"a,b,c\";source_host;source_user;destination_host;destination_user\n"
+                    .as_bytes(),
+                b';',
+            ),
+        ] {
+            assert_eq!(
+                super::detect_csv_delimiter(header),
+                Ok(expected),
+                "{}",
+                String::from_utf8_lossy(header)
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_comma_header_in_semicolon_csv_imports() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-quoted-header-{}.csv",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(
+            &path,
+            "\u{feff}\"label, previous, legacy, old, retired, archived\";source_host;source_user;destination_host;destination_user\n\"Team \"\"A\"\", West\";imap.source.example;a@source.example;imap.destination.example;a@destination.example\n",
+        )
+        .unwrap();
+        let jobs = super::read_csv(&path, &crate::Form::default());
+        std::fs::remove_file(&path).unwrap();
+        let jobs = jobs.expect("a quoted comma must not choose the comma separator");
+        assert_eq!(jobs[0].source_host, "imap.source.example");
+        assert_eq!(jobs[0].destination_user, "a@destination.example");
     }
 
     #[test]

@@ -499,9 +499,12 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
+        // O_NONBLOCK keeps a FIFO or device at this path from blocking the
+        // open indefinitely; the regular-file check below then rejects it.
+        // It has no effect on reads from a regular file.
         OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)
             .map_err(|error| format!("could not open secret file: {error}"))?
     };
@@ -1159,6 +1162,29 @@ mod tests {
         assert!(error.contains("hard-linked"));
         fs::remove_file(link).unwrap();
         fs::remove_file(target).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_reader_rejects_a_fifo_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-secret-fifo-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        // Without a writer, a blocking open of a FIFO never returns.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader_path = path.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(read_secret_file(&reader_path).map(|_| ()));
+        });
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reading a FIFO secret path must not block");
+        assert!(result.unwrap_err().contains("regular file"));
+        fs::remove_file(path).unwrap();
     }
 
     #[cfg(unix)]

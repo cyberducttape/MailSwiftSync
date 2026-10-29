@@ -8,6 +8,25 @@
   flags a mailbox above the 1,000,000-message verification limit or the
   body-content byte budget before any transfer, instead of the operator
   learning it from a `verification_limit_exceeded` result afterwards.
+- Detect a CSV import's separator by parsing the header with CSV quoting
+  rules for each candidate and choosing the one that yields the required
+  columns, so a comma inside a quoted header no longer selects the comma for a
+  semicolon- or tab-separated file. A header that splits into the required
+  columns under two separators is refused as ambiguous.
+- Bound the OAuth redirect listener: stop after 16 invalid callbacks (start
+  the authorization again), check the flow deadline on every connection
+  rather than only when the listener is idle, and bound the whole request
+  head read so a client trickling bytes cannot hold the listener past the
+  deadline or cancellation. Empty preconnects no longer count as invalid
+  callbacks.
+- Refuse a FIFO or device at a secret-file path (headless credentials,
+  webhook secrets, organization policy) instead of blocking forever in
+  `open()` waiting for a writer.
+- Read the organization policy for the Plan view's assurance summary at most
+  once a second instead of on every repaint.
+- Validate provider evidence with the JSON Schema draft the gate checked the
+  schema against (Draft 7), not whichever draft the schema's own `$schema`
+  member names.
 - Record each transfer attempt's failure class with the provider of the
   endpoint that failed, the same classification the controller uses for retry
   and terminal state, instead of a provider-blind guess.

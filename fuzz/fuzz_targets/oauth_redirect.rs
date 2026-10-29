@@ -14,5 +14,7 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
         oauth_redirect::RedirectOutcome::ProviderRejected(_)
         | oauth_redirect::RedirectOutcome::InvalidCallback(_)
         | oauth_redirect::RedirectOutcome::Unrelated => {}
+        // Only the listener reports an idle connection; parsing a head never does.
+        oauth_redirect::RedirectOutcome::Idle => panic!("parse_redirect_request returned Idle"),
     }
 });
