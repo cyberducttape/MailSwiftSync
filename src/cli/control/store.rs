@@ -1363,24 +1363,24 @@ mod tests {
         }
     }
 
-    fn bootstrapped() -> (Store, String) {
+    fn bootstrapped() -> (Store, String, String) {
         let store = Store::in_memory();
+        let password = authn::test_secret();
         let admin = store
-            .bootstrap_administrator("admin@msp.example", "Admin", "admin-password-123")
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
             .unwrap();
-        (store, admin)
+        (store, admin, password)
     }
 
     #[test]
     fn bootstrap_is_one_time_and_login_issues_a_session() {
-        let (store, admin) = bootstrapped();
+        let (store, admin, password) = bootstrapped();
+        let second_password = authn::test_secret();
         assert!(matches!(
-            store.bootstrap_administrator("second@msp.example", "Second", "second-password-1"),
+            store.bootstrap_administrator("second@msp.example", "Second", &second_password),
             Err(StoreError::Conflict(_))
         ));
-        let (token, expires) = store
-            .login("ADMIN@msp.example", "admin-password-123", "r1")
-            .unwrap();
+        let (token, expires) = store.login("ADMIN@msp.example", &password, "r1").unwrap();
         assert!(expires > now());
         let principal = store.principal(&token).unwrap().unwrap();
         assert_eq!(principal.user_id, admin);
@@ -1392,33 +1392,35 @@ mod tests {
 
     #[test]
     fn failed_logins_lock_the_account_without_revealing_which_accounts_exist() {
-        let (store, _) = bootstrapped();
+        let (store, _, password) = bootstrapped();
+        let wrong_password = authn::test_secret();
         assert_eq!(
-            store.login("nobody@msp.example", "whatever-password", "r"),
+            store.login("nobody@msp.example", &wrong_password, "r"),
             Err(LoginError::Rejected)
         );
         for _ in 0..LOCKOUT_FAILURES {
             assert_eq!(
-                store.login("admin@msp.example", "wrong-password-xx", "r"),
+                store.login("admin@msp.example", &wrong_password, "r"),
                 Err(LoginError::Rejected)
             );
         }
         assert_eq!(
-            store.login("admin@msp.example", "admin-password-123", "r"),
+            store.login("admin@msp.example", &password, "r"),
             Err(LoginError::Locked)
         );
     }
 
     #[test]
     fn disabling_a_user_revokes_sessions_and_keys() {
-        let (store, admin) = bootstrapped();
+        let (store, admin, _) = bootstrapped();
+        let engineer_password = authn::test_secret();
         let admin_actor = actor(&format!("user:{admin}"));
         let tenant = store.create_tenant("Acme", &admin_actor).unwrap();
         let user = store
             .create_user(
                 "eng@msp.example",
                 "Eng",
-                Some("engineer-password"),
+                Some(&engineer_password),
                 &admin_actor,
             )
             .unwrap();
@@ -1426,7 +1428,7 @@ mod tests {
             .add_grant(&user, Role::Engineer, Some(&tenant.id), &admin_actor)
             .unwrap();
         let (session, _) = store
-            .login("eng@msp.example", "engineer-password", "r")
+            .login("eng@msp.example", &engineer_password, "r")
             .unwrap();
         let principal = store.principal(&session).unwrap().unwrap();
         let (_, key) = store
@@ -1445,14 +1447,14 @@ mod tests {
         assert!(store.principal(&session).unwrap().is_none());
         assert!(store.principal(&key).unwrap().is_none());
         assert_eq!(
-            store.login("eng@msp.example", "engineer-password", "r"),
+            store.login("eng@msp.example", &engineer_password, "r"),
             Err(LoginError::Rejected)
         );
     }
 
     #[test]
     fn api_keys_cannot_exceed_the_owner_grants() {
-        let (store, admin) = bootstrapped();
+        let (store, admin, _) = bootstrapped();
         let admin_actor = actor(&format!("user:{admin}"));
         let tenant = store.create_tenant("Acme", &admin_actor).unwrap();
         let user = store
@@ -1496,7 +1498,7 @@ mod tests {
 
     #[test]
     fn projects_are_tenant_scoped_and_approval_separates_duties() {
-        let (store, admin) = bootstrapped();
+        let (store, admin, _) = bootstrapped();
         let admin_actor = actor(&format!("user:{admin}"));
         let acme = store.create_tenant("Acme", &admin_actor).unwrap();
         let globex = store.create_tenant("Globex", &admin_actor).unwrap();
@@ -1552,7 +1554,7 @@ mod tests {
 
     #[test]
     fn plans_with_credential_fields_are_refused() {
-        let (store, admin) = bootstrapped();
+        let (store, admin, _) = bootstrapped();
         let admin_actor = actor(&format!("user:{admin}"));
         let acme = store.create_tenant("Acme", &admin_actor).unwrap();
         for plan in [
@@ -1569,7 +1571,7 @@ mod tests {
 
     #[test]
     fn the_audit_log_is_append_only_and_hash_chained() {
-        let (store, admin) = bootstrapped();
+        let (store, admin, _) = bootstrapped();
         let admin_actor = actor(&format!("user:{admin}"));
         store.create_tenant("Acme", &admin_actor).unwrap();
         assert!(store.create_tenant("Acme", &admin_actor).is_err());
@@ -1625,7 +1627,7 @@ mod tests {
 
     #[test]
     fn the_last_administrator_cannot_be_removed() {
-        let (store, admin) = bootstrapped();
+        let (store, admin, _) = bootstrapped();
         let admin_actor = actor(&format!("user:{admin}"));
         assert!(matches!(
             store.remove_grant(&admin, Role::Administrator, None, &admin_actor),

@@ -681,8 +681,9 @@ mod tests {
 
     fn fixture() -> Fixture {
         let store = Store::in_memory();
+        let password = authn::test_secret();
         let admin_id = store
-            .bootstrap_administrator("admin@msp.example", "Admin", "admin-password-123")
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
             .unwrap();
         let admin = Actor {
             request_id: "test",

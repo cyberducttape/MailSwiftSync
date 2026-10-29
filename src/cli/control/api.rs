@@ -1045,16 +1045,19 @@ mod tests {
 
     struct Harness {
         context: Context,
+        admin_password: String,
     }
 
     impl Harness {
         fn new() -> Self {
             let store = Store::in_memory();
+            let admin_password = crate::cli::control::authn::test_secret();
             store
-                .bootstrap_administrator("admin@msp.example", "Admin", "admin-password-123")
+                .bootstrap_administrator("admin@msp.example", "Admin", &admin_password)
                 .unwrap();
             Self {
                 context: Context { store, oidc: None },
+                admin_password,
             }
         }
 
@@ -1094,11 +1097,12 @@ mod tests {
         }
 
         fn user(&self, admin: &str, email: &str, role: &str, tenant: &str) -> String {
+            let password = crate::cli::control::authn::test_secret();
             let (status, body) = self.call(
                 "POST",
                 "/v1/users",
                 Some(admin),
-                Some(json!({ "email": email, "display_name": email, "password": "user-password-123" })),
+                Some(json!({ "email": email, "display_name": email, "password": password })),
             );
             assert_eq!(status, 201, "{body}");
             let id = body["id"].as_str().unwrap().to_owned();
@@ -1109,7 +1113,7 @@ mod tests {
                 Some(json!({ "role": role, "tenant_id": tenant })),
             );
             assert_eq!(status, 200, "{body}");
-            self.login(email, "user-password-123")
+            self.login(email, &password)
         }
 
         fn tenant(&self, admin: &str, name: &str) -> String {
@@ -1127,6 +1131,7 @@ mod tests {
     #[test]
     fn requests_without_valid_credentials_are_rejected() {
         let harness = Harness::new();
+        let wrong_password = crate::cli::control::authn::test_secret();
         assert_eq!(harness.call("GET", "/v1/me", None, None).0, 401);
         assert_eq!(
             harness.call("GET", "/v1/me", Some("mss_s_forged"), None).0,
@@ -1137,7 +1142,7 @@ mod tests {
             "POST",
             "/v1/auth/login",
             None,
-            Some(json!({ "email": "admin@msp.example", "password": "wrong-password-1" })),
+            Some(json!({ "email": "admin@msp.example", "password": &wrong_password })),
         );
         assert_eq!(status, 401);
     }
@@ -1145,6 +1150,7 @@ mod tests {
     #[test]
     fn locked_and_unknown_accounts_have_identical_login_responses() {
         let harness = Harness::new();
+        let wrong_password = crate::cli::control::authn::test_secret();
         for _ in 0..store::LOCKOUT_FAILURES {
             assert_eq!(
                 harness
@@ -1154,7 +1160,7 @@ mod tests {
                         None,
                         Some(json!({
                             "email": "admin@msp.example",
-                            "password": "wrong-password-1"
+                            "password": &wrong_password
                         })),
                     )
                     .0,
@@ -1167,7 +1173,7 @@ mod tests {
             None,
             Some(json!({
                 "email": "admin@msp.example",
-                "password": "wrong-password-1"
+                "password": &wrong_password
             })),
         );
         let unknown = harness.call(
@@ -1176,7 +1182,7 @@ mod tests {
             None,
             Some(json!({
                 "email": "nobody@msp.example",
-                "password": "wrong-password-1"
+                "password": &wrong_password
             })),
         );
         assert_eq!(locked, unknown);
@@ -1185,7 +1191,7 @@ mod tests {
     #[test]
     fn cross_tenant_identifiers_are_not_found_and_audited() {
         let harness = Harness::new();
-        let admin = harness.login("admin@msp.example", "admin-password-123");
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
         let acme = harness.tenant(&admin, "Acme");
         let globex = harness.tenant(&admin, "Globex");
         let acme_manager = harness.user(&admin, "m@acme.example", "manager", &acme);
@@ -1232,7 +1238,7 @@ mod tests {
     #[test]
     fn roles_limit_actions_within_a_tenant() {
         let harness = Harness::new();
-        let admin = harness.login("admin@msp.example", "admin-password-123");
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
         let acme = harness.tenant(&admin, "Acme");
         let customer = harness.user(&admin, "c@acme.example", "customer", &acme);
         let manager = harness.user(&admin, "m@acme.example", "manager", &acme);
@@ -1292,7 +1298,7 @@ mod tests {
     #[test]
     fn scoped_api_keys_reach_only_their_tenant_and_scopes() {
         let harness = Harness::new();
-        let admin = harness.login("admin@msp.example", "admin-password-123");
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
         let acme = harness.tenant(&admin, "Acme");
         let globex = harness.tenant(&admin, "Globex");
         let manager = harness.user(&admin, "m@acme.example", "manager", &acme);
@@ -1381,7 +1387,7 @@ mod tests {
     #[test]
     fn approval_requires_a_second_person_and_the_current_revision() {
         let harness = Harness::new();
-        let admin = harness.login("admin@msp.example", "admin-password-123");
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
         let acme = harness.tenant(&admin, "Acme");
         let first = harness.user(&admin, "one@acme.example", "manager", &acme);
         let second = harness.user(&admin, "two@acme.example", "manager", &acme);
@@ -1419,7 +1425,7 @@ mod tests {
     #[test]
     fn workers_enroll_lease_and_are_fenced_over_http() {
         let harness = Harness::new();
-        let admin = harness.login("admin@msp.example", "admin-password-123");
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
         let acme = harness.tenant(&admin, "Acme");
         let globex = harness.tenant(&admin, "Globex");
         let manager = harness.user(&admin, "m@acme.example", "manager", &acme);
@@ -1598,7 +1604,7 @@ mod tests {
             404,
             "OIDC is off by default"
         );
-        let admin = harness.login("admin@msp.example", "admin-password-123");
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
         harness.call(
             "POST",
             "/v1/users",
@@ -1611,6 +1617,7 @@ mod tests {
                 store: harness.context.store,
                 oidc: Some(idp::oidc(&fake, true)),
             },
+            admin_password: harness.admin_password,
         };
         let request = |target: &str| Request {
             method: "GET".into(),
@@ -1697,7 +1704,12 @@ mod tests {
             target: "/v1/auth/login".into(),
             authorization: None,
             content_type: Some("text/plain".into()),
-            body: br#"{"email":"admin@msp.example","password":"admin-password-123"}"#.to_vec(),
+            body: json!({
+                "email": "admin@msp.example",
+                "password": crate::cli::control::authn::test_secret()
+            })
+            .to_string()
+            .into_bytes(),
             peer: None,
         };
         assert_eq!(handle(&harness.context, &request).status, 415);

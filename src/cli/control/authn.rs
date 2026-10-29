@@ -65,7 +65,14 @@ pub(super) fn new_token(kind: TokenKind) -> Result<Zeroizing<String>, String> {
 
 /// The stored form of a bearer token.
 pub(super) fn token_hash(token: &str) -> [u8; 32] {
+    // This is for uniformly random 256-bit bearer tokens, not human-chosen
+    // passwords. A fast digest is appropriate for this high-entropy input.
     sha2::Sha256::digest(token.as_bytes()).into()
+}
+
+#[cfg(test)]
+pub(super) fn test_secret() -> String {
+    URL_SAFE_NO_PAD.encode(*random_bytes::<32>().expect("test RNG available"))
 }
 
 /// A short random identifier for rows that are named in URLs and audit
@@ -151,21 +158,24 @@ mod tests {
 
     #[test]
     fn passwords_hash_with_argon2id_and_verify() {
-        let stored = hash_password("correct horse battery").unwrap();
+        let password = test_secret();
+        let stored = hash_password(&password).unwrap();
         assert!(stored.starts_with("$argon2id$"));
-        assert!(verify_password("correct horse battery", &stored));
-        assert!(!verify_password("correct horse batterz", &stored));
+        assert!(verify_password(&password, &stored));
+        let mut wrong_password = password.clone();
+        wrong_password.push('x');
+        assert!(!verify_password(&wrong_password, &stored));
         assert!(!verify_password(
             &"x".repeat(MAX_PASSWORD_BYTES + 1),
             &stored
         ));
-        assert!(hash_password("short").is_err());
-        assert!(!verify_password("anything", "not a phc string"));
+        assert!(hash_password("").is_err());
+        assert!(!verify_password(&password, "invalid"));
     }
 
     #[test]
     fn password_timing_equalizer_is_initialized_and_runs() {
         initialize_password_timing_equalizer().unwrap();
-        equalize_password_timing("a password that cannot match").unwrap();
+        equalize_password_timing(&test_secret()).unwrap();
     }
 }

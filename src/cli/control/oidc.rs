@@ -664,8 +664,9 @@ pub(super) mod tests {
 
     fn store_with_user(email: &str) -> (Store, String) {
         let store = Store::in_memory();
+        let password = authn::test_secret();
         let admin = store
-            .bootstrap_administrator("admin@msp.example", "Admin", "admin-password-123")
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
             .unwrap();
         let actor = Actor {
             request_id: "t",
@@ -752,7 +753,7 @@ pub(super) mod tests {
         // A token for a different sign-in's nonce is refused.
         let (state, _, _) = begin(&oidc, &store);
         *idp.next_claims.lock().unwrap() =
-            claims("someone-elses-nonce", "sub-1", "eng@msp.example", true);
+            claims(&authn::test_secret(), "sub-1", "eng@msp.example", true);
         assert!(matches!(
             oidc.callback(&store, "idp", "c", &state, "r"),
             Err(OidcError::Rejected(_))
