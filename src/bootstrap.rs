@@ -474,6 +474,7 @@ impl App {
             capability_probe_fingerprint: None,
             capability_observation_fingerprint: None,
             capability_staleness_checked_at: None,
+            policy_assurance_cache: None,
             live_auth_receiver: None,
             manual_oauth_refresh_receiver: None,
             report_export_receiver: None,
