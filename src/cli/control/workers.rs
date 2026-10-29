@@ -466,6 +466,28 @@ impl Store {
         let at = now();
         let mut connection = self.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let worker_is_active: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM workers WHERE id=?1 AND tenant_id=?2 AND revoked_at IS NULL)",
+            params![worker.id, worker.tenant],
+            |row| row.get(0),
+        )?;
+        if !worker_is_active {
+            append_audit(
+                &tx,
+                &AuditEntry {
+                    at,
+                    request_id,
+                    actor: &worker.actor(),
+                    tenant: Some(&worker.tenant),
+                    action: "assignment.lease",
+                    resource: "assignment:queue",
+                    allowed: false,
+                    detail: "worker is revoked or no longer exists",
+                },
+            )?;
+            tx.commit()?;
+            return Err(StoreError::NotFound);
+        }
         tx.execute(
             "UPDATE assignments SET state='failed',lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?2,
                 result='{\"error\":\"the lease expired after the maximum number of attempts\"}'
@@ -859,6 +881,11 @@ mod tests {
             1
         );
         assert_eq!(fixture.store.worker_identity(&credential).unwrap(), None);
+        assert_eq!(
+            fixture.store.lease(&worker, 300, "r"),
+            Err(StoreError::NotFound),
+            "a stale identity snapshot cannot lease work after revocation"
+        );
         assert!(
             fixture
                 .store
