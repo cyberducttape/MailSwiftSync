@@ -1457,11 +1457,12 @@ mod tests {
         let (store, admin, _) = bootstrapped();
         let admin_actor = actor(&format!("user:{admin}"));
         let tenant = store.create_tenant("Acme", &admin_actor).unwrap();
+        let technician_password = authn::test_secret();
         let user = store
             .create_user(
                 "tech@msp.example",
                 "Tech",
-                Some("technician-pass"),
+                Some(&technician_password),
                 &admin_actor,
             )
             .unwrap();
@@ -1469,7 +1470,7 @@ mod tests {
             .add_grant(&user, Role::Technician, Some(&tenant.id), &admin_actor)
             .unwrap();
         let (session, _) = store
-            .login("tech@msp.example", "technician-pass", "r")
+            .login("tech@msp.example", &technician_password, "r")
             .unwrap();
         let principal = store.principal(&session).unwrap().unwrap();
         assert!(matches!(

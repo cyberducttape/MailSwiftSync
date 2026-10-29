@@ -169,7 +169,7 @@ mod tests {
             &"x".repeat(MAX_PASSWORD_BYTES + 1),
             &stored
         ));
-        assert!(hash_password("").is_err());
+        assert!(hash_password(&password[..0]).is_err());
         assert!(!verify_password(&password, "invalid"));
     }
 
