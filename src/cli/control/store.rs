@@ -240,6 +240,7 @@ impl Store {
     }
 
     fn from_connection(connection: Connection) -> Result<Self, String> {
+        authn::initialize_password_timing_equalizer()?;
         connection
             .execute_batch(
                 "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;",
@@ -437,11 +438,11 @@ impl Store {
             .optional()
             .map_err(internal)?;
         let Some((user_id, Some(stored), locked_until, disabled)) = account else {
-            authn::equalize_password_timing(password);
+            authn::equalize_password_timing(password).map_err(LoginError::Internal)?;
             return Err(LoginError::Rejected);
         };
         if locked_until.is_some_and(|until| until > at) {
-            authn::equalize_password_timing(password);
+            authn::equalize_password_timing(password).map_err(LoginError::Internal)?;
             return Err(LoginError::Locked);
         }
         let verified = authn::verify_password(password, &stored);

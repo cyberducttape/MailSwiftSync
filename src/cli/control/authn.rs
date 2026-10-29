@@ -109,17 +109,28 @@ pub(super) fn verify_password(password: &str, stored: &str) -> bool {
 
 /// Spend the same work as a real verification, so a login for an unknown
 /// or password-less account takes as long as one with a wrong password.
-pub(super) fn equalize_password_timing(password: &str) {
-    static DUMMY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    // A random secret nobody knows, so no password can ever match it.
-    let dummy = DUMMY.get_or_init(|| {
-        random_bytes::<24>()
-            .ok()
-            .and_then(|bytes| hash_password(&URL_SAFE_NO_PAD.encode(*bytes)).ok())
-    });
-    if let Some(stored) = dummy {
-        let _ = verify_password(password, stored);
-    }
+pub(super) fn initialize_password_timing_equalizer() -> Result<(), String> {
+    dummy_password_hash().map(drop)
+}
+
+pub(super) fn equalize_password_timing(password: &str) -> Result<(), String> {
+    let stored = dummy_password_hash()?;
+    let _ = verify_password(password, stored);
+    Ok(())
+}
+
+fn dummy_password_hash() -> Result<&'static str, String> {
+    static DUMMY: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    // A random secret nobody knows, so no password can ever match it. Build
+    // this before serving requests; lazy first-login work would reveal whether
+    // an account exists through a one-time timing difference.
+    DUMMY
+        .get_or_init(|| {
+            let bytes = random_bytes::<24>()?;
+            hash_password(&URL_SAFE_NO_PAD.encode(*bytes))
+        })
+        .as_deref()
+        .map_err(Clone::clone)
 }
 
 #[cfg(test)]
@@ -150,5 +161,11 @@ mod tests {
         ));
         assert!(hash_password("short").is_err());
         assert!(!verify_password("anything", "not a phc string"));
+    }
+
+    #[test]
+    fn password_timing_equalizer_is_initialized_and_runs() {
+        initialize_password_timing_equalizer().unwrap();
+        equalize_password_timing("a password that cannot match").unwrap();
     }
 }
