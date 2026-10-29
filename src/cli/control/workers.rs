@@ -145,6 +145,18 @@ impl Outcome {
 const ASSIGNMENT_COLUMNS: &str = "id,project_id,plan_revision,mailbox,state,fencing_token,lease_worker_id,lease_expires_at,attempts,result";
 
 fn assignment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssignmentView> {
+    let result_json: Option<String> = row.get(9)?;
+    let result = result_json
+        .map(|text| {
+            serde_json::from_str(&text).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    9,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })
+        })
+        .transpose()?;
     Ok(AssignmentView {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -155,9 +167,7 @@ fn assignment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssignmentVi
         lease_worker_id: row.get(6)?,
         lease_expires_at: row.get(7)?,
         attempts: row.get(8)?,
-        result: row
-            .get::<_, Option<String>>(9)?
-            .and_then(|text| serde_json::from_str(&text).ok()),
+        result,
     })
 }
 
@@ -517,13 +527,21 @@ impl Store {
             "SELECT a.fencing_token,a.project_id,a.plan_revision,p.plan,a.mailbox FROM assignments a JOIN projects p ON p.id=a.project_id AND p.tenant_id=a.tenant_id WHERE a.tenant_id=?1 AND a.id=?2",
             params![worker.tenant, id],
             |row| {
+                let plan_json: String = row.get(3)?;
+                let plan = serde_json::from_str(&plan_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
                 Ok(Lease {
                     assignment_id: id.clone(),
                     fencing_token: row.get(0)?,
                     lease_expires_at: expires_at,
                     project_id: row.get(1)?,
                     plan_revision: row.get(2)?,
-                    plan: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or(serde_json::Value::Null),
+                    plan,
                     mailbox: row.get(4)?,
                 })
             },
@@ -912,6 +930,75 @@ mod tests {
                 .revoke_worker(&fixture.other_tenant, &replacement.id, &fixture.admin),
             Err(StoreError::NotFound),
             "a worker cannot be revoked through another tenant"
+        );
+    }
+
+    #[test]
+    fn malformed_persisted_json_fails_closed_without_claiming_work() {
+        let first = fixture();
+        first.approve();
+        let [assignment] = &first
+            .store
+            .create_assignments(
+                &first.tenant,
+                &first.project,
+                &["a@acme.example".into()],
+                &first.admin,
+            )
+            .unwrap()[..]
+        else {
+            panic!("one assignment")
+        };
+        let worker = first.worker(&first.tenant, "w1");
+        first
+            .store
+            .lock()
+            .execute(
+                "UPDATE projects SET plan='not-json' WHERE tenant_id=?1 AND id=?2",
+                params![first.tenant, first.project],
+            )
+            .unwrap();
+
+        assert!(first.store.lease(&worker, 300, "r").is_err());
+        let connection = first.store.lock();
+        let (state, fencing_token): (String, i64) = connection
+            .query_row(
+                "SELECT state,fencing_token FROM assignments WHERE tenant_id=?1 AND id=?2",
+                params![first.tenant, assignment.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((state.as_str(), fencing_token), ("queued", 0));
+        drop(connection);
+        assert!(first.store.project(&first.tenant, &first.project).is_err());
+
+        let second = fixture();
+        second.approve();
+        let [assignment] = &second
+            .store
+            .create_assignments(
+                &second.tenant,
+                &second.project,
+                &["b@acme.example".into()],
+                &second.admin,
+            )
+            .unwrap()[..]
+        else {
+            panic!("one assignment")
+        };
+        second
+            .store
+            .lock()
+            .execute(
+                "UPDATE assignments SET result='not-json' WHERE tenant_id=?1 AND id=?2",
+                params![second.tenant, assignment.id],
+            )
+            .unwrap();
+        assert!(
+            second
+                .store
+                .assignments(&second.tenant, &second.project)
+                .is_err()
         );
     }
 

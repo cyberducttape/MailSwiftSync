@@ -25,6 +25,8 @@
   disabled, and locked accounts.
 - Recheck worker revocation inside the assignment-lease transaction, so a
   credential revoked after request authentication cannot take a new lease.
+- Reject malformed persisted project plans and assignment results instead of
+  silently replacing or omitting them during worker/API reads.
 - Refuse a FIFO or device at a secret-file path (headless credentials,
   webhook secrets, organization policy) instead of blocking forever in
   `open()` waiting for a writer.

@@ -1171,11 +1171,15 @@ const PROJECT_COLUMNS: &str =
 fn project_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     let plan_revision: i64 = row.get(4)?;
     let approved_revision: Option<i64> = row.get(6)?;
+    let plan_json: String = row.get(3)?;
+    let plan = serde_json::from_str(&plan_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
+    })?;
     Ok(Project {
         id: row.get(0)?,
         tenant_id: row.get(1)?,
         name: row.get(2)?,
-        plan: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or(serde_json::Value::Null),
+        plan,
         plan_revision,
         plan_changed_by: row.get(5)?,
         approved: approved_revision == Some(plan_revision),
