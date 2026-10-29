@@ -26,7 +26,13 @@ def verify_proof_signature(proof: dict, trusted_public_key_hex: str) -> None:
     payload_signature = dict(signature)
     payload_signature.pop("signature", None)
     payload["proof_signature"] = payload_signature
-    canonical = json.dumps(payload, separators=(",", ":"), ensure_ascii=False, sort_keys=True).encode("utf-8")
+    canonical = json.dumps(
+        payload,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
     if algorithm == "Ed25519-SHA256":
         canonical = hashlib.sha256(canonical).digest()
     try:

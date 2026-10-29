@@ -58,6 +58,7 @@ echo "=================================================="
 # installed on CI runners.
 POLICY_OUTPUT="$(python3 - "$POLICY_FILE" <<'PY'
 import json
+import math
 import sys
 
 def reject_duplicate_keys(pairs):
@@ -68,12 +69,29 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def reject_nonfinite_constant(value):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
+def parse_finite_float(value):
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    return json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_nonfinite_constant,
+        parse_float=parse_finite_float,
+    )
 
 def valid_tsv_field(value):
     return (
@@ -166,6 +184,7 @@ for row in "${POLICY_ROWS[@]}"; do
     [[ -n "$evidence_file" ]] || continue
 file_provider=$(python3 - "$evidence_file" <<'PY'
 import json
+import math
 import sys
 
 def reject_duplicate_keys(pairs):
@@ -176,12 +195,29 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def reject_nonfinite_constant(value):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
+def parse_finite_float(value):
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    return json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_nonfinite_constant,
+        parse_float=parse_finite_float,
+    )
 
 try:
     evidence = load_json(sys.argv[1], 16 * 1024 * 1024)
@@ -219,12 +255,29 @@ def reject_duplicate_keys(pairs):
         value[key] = item
     return value
 
+def reject_nonfinite_constant(value):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
+def parse_finite_float(value):
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
+
 def load_json(path, maximum):
     with open(path, "rb") as handle:
         raw = handle.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError(f"JSON exceeds the {maximum}-byte validation limit")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    return json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_nonfinite_constant,
+        parse_float=parse_finite_float,
+    )
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -251,8 +304,10 @@ schema = None
 if has_jsonschema:
     try:
         schema = load_json(schema_file, 1 * 1024 * 1024)
-    except (OSError, ValueError) as error:
-        errors.append(f"Warning: Could not load schema for validation: {error}")
+        jsonschema.Draft7Validator.check_schema(schema)
+    except (OSError, ValueError, jsonschema.SchemaError) as error:
+        errors.append(f"schema could not be loaded or validated: {error}")
+        schema = None
 
 for filename in files:
     try:
@@ -262,7 +317,7 @@ for filename in files:
         continue
 
     # Validate against schema if available
-    if schema and has_jsonschema:
+    if schema is not None and has_jsonschema:
         try:
             jsonschema.validate(evidence, schema)
         except jsonschema.ValidationError as error:
@@ -456,7 +511,13 @@ for filename in files:
             unsigned = dict(proof)
             expected_proof_digest = unsigned.pop("proof_digest", None)
             unsigned.pop("proof_signature", None)
-            canonical = json.dumps(unsigned, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+            canonical = json.dumps(
+                unsigned,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            )
             calculated = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             if expected_proof_digest != calculated or expected_proof_digest != proof_digest:
                 errors.append(f"{filename}: referenced customer proof digest does not match evidence")

@@ -19,6 +19,7 @@ requires scenario coverage and high-confidence message verification.
 """
 
 import json
+import math
 import sys
 import hashlib
 import re
@@ -48,8 +49,37 @@ def canonical_proof_digest(proof: dict) -> str:
     # serde_json's default Map representation is ordered, so mirror its
     # canonical object-key ordering rather than relying on input insertion
     # order from the proof file.
-    canonical = json.dumps(unsigned, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    canonical = json.dumps(
+        unsigned,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def reject_nonfinite_constant(value: str):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
+
+def parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
 
 
 def generate_evidence(proof_path: str, source_provider: str, destination_provider: str,
@@ -63,8 +93,13 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
 
     try:
         with open(proof_path, 'r', encoding='utf-8') as f:
-            proof = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
+            proof = json.load(
+                f,
+                object_pairs_hook=reject_duplicate_keys,
+                parse_constant=reject_nonfinite_constant,
+                parse_float=parse_finite_float,
+            )
+    except (OSError, ValueError) as e:
         raise ValueError(f"Failed to read customer-proof: {e}")
 
     if not isinstance(proof, dict):
@@ -381,7 +416,7 @@ def main():
         sys.exit(1)
 
     # Output result
-    output_json = json.dumps(evidence, indent=2)
+    output_json = json.dumps(evidence, indent=2, allow_nan=False)
 
     if output_path:
         try:

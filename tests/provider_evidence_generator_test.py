@@ -119,6 +119,29 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
                 qualification_bundle_id=arguments.pop("qualification_bundle_id"), **arguments
             )
 
+    def test_proof_input_rejects_duplicate_keys_and_nonfinite_numbers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "proof.json"
+            for raw, expected in (
+                ('{"format":"first","format":"second"}', "duplicate JSON key"),
+                ('{"format":"mailswiftsync-customer-proof","value":NaN}', "non-finite JSON number"),
+                ('{"format":"mailswiftsync-customer-proof","value":1e9999}', "outside the supported finite range"),
+                ('{"format":"mailswiftsync-customer-proof","value":1e-9999}', "outside the supported finite range"),
+            ):
+                with self.subTest(expected=expected):
+                    path.write_text(raw, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, expected):
+                        MODULE.generate_evidence(
+                            str(path),
+                            "gmail",
+                            "microsoft365",
+                            "live_pilot",
+                            **self.IDENTITY,
+                        )
+
+        with self.assertRaises(ValueError):
+            MODULE.canonical_proof_digest({"measurement": float("inf")})
+
     def test_synthetic_qualification_augmented_proof_generates_nonqualifying_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "proof.json"
