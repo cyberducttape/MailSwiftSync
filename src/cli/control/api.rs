@@ -6,6 +6,7 @@
 use super::audit::AuditEntry;
 use super::authz::{Permission, Principal, Role};
 use super::store::{self, Actor, LoginError, Store, StoreError};
+use super::workers::{self, Outcome, WorkerIdentity};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -148,6 +149,25 @@ fn route(call: &Call<'_>) -> Handled {
         ("POST", ["v1", "tenants", tenant, "projects", project, "approve"]) => {
             approve_project(call, tenant, project)
         }
+        ("GET", ["v1", "tenants", tenant, "workers"]) => list_workers(call, tenant),
+        ("POST", ["v1", "tenants", tenant, "workers", "enrollments"]) => {
+            create_enrollment(call, tenant)
+        }
+        ("POST", ["v1", "tenants", tenant, "workers", worker, "revoke"]) => {
+            revoke_worker(call, tenant, worker)
+        }
+        ("GET", ["v1", "tenants", tenant, "projects", project, "assignments"]) => {
+            list_assignments(call, tenant, project)
+        }
+        ("POST", ["v1", "tenants", tenant, "projects", project, "assignments"]) => {
+            create_assignments(call, tenant, project)
+        }
+        ("POST", ["v1", "worker", "enroll"]) => enroll_worker(call),
+        ("POST", ["v1", "worker", "lease"]) => lease(call),
+        ("POST", ["v1", "worker", "assignments", assignment, "renew"]) => renew(call, assignment),
+        ("POST", ["v1", "worker", "assignments", assignment, "complete"]) => {
+            complete(call, assignment)
+        }
         ("GET", ["v1", "tenants", tenant, "audit"]) => audit_log(call, Some(tenant), query),
         ("GET", ["v1", "audit"]) => audit_log(call, None, query),
         ("GET", ["v1", "audit", "verify"]) => verify_audit(call),
@@ -172,6 +192,19 @@ impl Call<'_> {
         };
         self.store()
             .principal(token)
+            .map_err(Response::from)?
+            .ok_or_else(Response::unauthorized)
+    }
+
+    /// The enrolled worker presenting a worker credential. Worker
+    /// credentials authenticate only these endpoints, and user credentials
+    /// never authenticate them.
+    fn worker(&self) -> Result<WorkerIdentity, Response> {
+        let Some(token) = self.bearer() else {
+            return Err(Response::unauthorized());
+        };
+        self.store()
+            .worker_identity(token)
             .map_err(Response::from)?
             .ok_or_else(Response::unauthorized)
     }
@@ -661,6 +694,217 @@ fn approve_project(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
     Ok(Response::ok(&json!(approved)))
 }
 
+fn list_workers(call: &Call<'_>, tenant: &str) -> Handled {
+    let principal = call.principal()?;
+    call.require_in_tenant(
+        &principal,
+        Permission::WorkerManage,
+        tenant,
+        "worker.list",
+        "worker",
+    )?;
+    Ok(Response::ok(
+        &json!({ "workers": call.store().workers(tenant)? }),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollmentBody {
+    name: String,
+    #[serde(default = "default_enrollment_minutes")]
+    expires_in_minutes: i64,
+}
+
+fn default_enrollment_minutes() -> i64 {
+    15
+}
+
+fn create_enrollment(call: &Call<'_>, tenant: &str) -> Handled {
+    let principal = call.principal()?;
+    call.require_in_tenant(
+        &principal,
+        Permission::WorkerManage,
+        tenant,
+        "worker.enrollment_create",
+        "worker",
+    )?;
+    let body: EnrollmentBody = call.body()?;
+    let (token, expires_at) = call.store().create_enrollment(
+        tenant,
+        &body.name,
+        body.expires_in_minutes,
+        &call.actor(&principal),
+    )?;
+    Ok(Response::created(&json!({
+        "enrollment_token": token.as_str(),
+        "expires_at": expires_at,
+        "note": "give this single-use token to the worker; it is not shown again",
+    })))
+}
+
+fn revoke_worker(call: &Call<'_>, tenant: &str, worker: &str) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("worker:{worker}");
+    call.require_in_tenant(
+        &principal,
+        Permission::WorkerManage,
+        tenant,
+        "worker.revoke",
+        &resource,
+    )?;
+    let requeued = call
+        .store()
+        .revoke_worker(tenant, worker, &call.actor(&principal))?;
+    Ok(Response::ok(
+        &json!({ "revoked": worker, "requeued_assignments": requeued }),
+    ))
+}
+
+fn list_assignments(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("project:{project}");
+    call.require_in_tenant(
+        &principal,
+        Permission::AssignmentRead,
+        tenant,
+        "assignment.list",
+        &resource,
+    )?;
+    let assignments = call.store().assignments(tenant, project)?;
+    call.audit(
+        &principal.actor(),
+        Some(tenant),
+        "assignment.list",
+        &resource,
+        true,
+    );
+    Ok(Response::ok(&json!({ "assignments": assignments })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssignmentsBody {
+    mailboxes: Vec<String>,
+}
+
+fn create_assignments(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("project:{project}");
+    call.require_in_tenant(
+        &principal,
+        Permission::AssignmentCreate,
+        tenant,
+        "assignment.create",
+        &resource,
+    )?;
+    let body: AssignmentsBody = call.body()?;
+    let created = call.store().create_assignments(
+        tenant,
+        project,
+        &body.mailboxes,
+        &call.actor(&principal),
+    )?;
+    Ok(Response::created(&json!({ "assignments": created })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollBody {
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
+fn enroll_worker(call: &Call<'_>) -> Handled {
+    let Some(token) = call.bearer() else {
+        return Err(Response::unauthorized());
+    };
+    let body: EnrollBody = call.body()?;
+    match call
+        .store()
+        .enroll_worker(token, &body.capabilities, &call.request_id)
+    {
+        Ok((worker, credential)) => Ok(Response::created(&json!({
+            "worker": worker,
+            "credential": credential.as_str(),
+            "note": "store this credential on the worker; it is not shown again",
+        }))),
+        Err(StoreError::NotFound) => Err(Response::unauthorized()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LeaseBody {
+    #[serde(default = "default_lease_seconds")]
+    lease_seconds: i64,
+}
+
+fn default_lease_seconds() -> i64 {
+    workers::DEFAULT_LEASE_SECONDS
+}
+
+fn lease(call: &Call<'_>) -> Handled {
+    let worker = call.worker()?;
+    let body: LeaseBody = call.body()?;
+    let lease = call
+        .store()
+        .lease(&worker, body.lease_seconds, &call.request_id)?;
+    Ok(Response::ok(&json!({ "lease": lease })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenewBody {
+    fencing_token: i64,
+    #[serde(default = "default_lease_seconds")]
+    lease_seconds: i64,
+}
+
+fn renew(call: &Call<'_>, assignment: &str) -> Handled {
+    let worker = call.worker()?;
+    let body: RenewBody = call.body()?;
+    let expires_at = call.store().renew_lease(
+        &worker,
+        assignment,
+        body.fencing_token,
+        body.lease_seconds,
+        &call.request_id,
+    )?;
+    Ok(Response::ok(&json!({ "lease_expires_at": expires_at })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompleteBody {
+    fencing_token: i64,
+    outcome: String,
+    #[serde(default = "empty_plan")]
+    result: Value,
+}
+
+fn complete(call: &Call<'_>, assignment: &str) -> Handled {
+    let worker = call.worker()?;
+    let body: CompleteBody = call.body()?;
+    let outcome = Outcome::parse(&body.outcome).ok_or_else(|| {
+        Response::error(
+            422,
+            "Unprocessable Content",
+            "outcome must be completed or failed",
+        )
+    })?;
+    call.store().complete(
+        &worker,
+        assignment,
+        body.fencing_token,
+        outcome,
+        &body.result,
+        &call.request_id,
+    )?;
+    Ok(Response::ok(&json!({ "recorded": assignment })))
+}
+
 fn audit_log(call: &Call<'_>, tenant: Option<&str>, query: &str) -> Handled {
     let principal = call.principal()?;
     match tenant {
@@ -1047,6 +1291,179 @@ mod tests {
         );
         assert_eq!(status, 200, "{approved}");
         assert_eq!(approved["approved"], true);
+    }
+
+    #[test]
+    fn workers_enroll_lease_and_are_fenced_over_http() {
+        let harness = Harness::new();
+        let admin = harness.login("admin@msp.example", "admin-password-123");
+        let acme = harness.tenant(&admin, "Acme");
+        let globex = harness.tenant(&admin, "Globex");
+        let manager = harness.user(&admin, "m@acme.example", "manager", &acme);
+        let engineer = harness.user(&admin, "e@acme.example", "engineer", &acme);
+        let globex_manager = harness.user(&admin, "m@globex.example", "manager", &globex);
+
+        let enroll_path = format!("/v1/tenants/{acme}/workers/enrollments");
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &enroll_path,
+                    Some(&engineer),
+                    Some(json!({ "name": "w1" }))
+                )
+                .0,
+            403
+        );
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &enroll_path,
+                    Some(&globex_manager),
+                    Some(json!({ "name": "w1" }))
+                )
+                .0,
+            404
+        );
+        let (status, enrollment) = harness.call(
+            "POST",
+            &enroll_path,
+            Some(&manager),
+            Some(json!({ "name": "w1" })),
+        );
+        assert_eq!(status, 201, "{enrollment}");
+        let enrollment = enrollment["enrollment_token"].as_str().unwrap();
+        let (status, enrolled) = harness.call(
+            "POST",
+            "/v1/worker/enroll",
+            Some(enrollment),
+            Some(json!({ "capabilities": ["imapsync"] })),
+        );
+        assert_eq!(status, 201, "{enrolled}");
+        let credential = enrolled["credential"].as_str().unwrap().to_owned();
+        let worker_id = enrolled["worker"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    "/v1/worker/enroll",
+                    Some(enrollment),
+                    Some(json!({}))
+                )
+                .0,
+            401,
+            "enrollment tokens are single-use"
+        );
+
+        // Credentials do not cross: a worker cannot call user endpoints and a
+        // user session cannot lease work.
+        assert_eq!(
+            harness.call("GET", "/v1/me", Some(&credential), None).0,
+            401
+        );
+        assert_eq!(
+            harness
+                .call("POST", "/v1/worker/lease", Some(&manager), Some(json!({})))
+                .0,
+            401
+        );
+
+        let (_, project) = harness.call(
+            "POST",
+            &format!("/v1/tenants/{acme}/projects"),
+            Some(&manager),
+            Some(json!({ "name": "Move", "plan": { "source_host": "imap.acme.example" } })),
+        );
+        let project = project["id"].as_str().unwrap().to_owned();
+        let assignments = format!("/v1/tenants/{acme}/projects/{project}/assignments");
+        let body = json!({ "mailboxes": ["a@acme.example"] });
+        assert_eq!(
+            harness
+                .call("POST", &assignments, Some(&engineer), Some(body.clone()))
+                .0,
+            409
+        );
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &format!("/v1/tenants/{acme}/projects/{project}/approve"),
+                    Some(&admin),
+                    Some(json!({ "revision": 1 }))
+                )
+                .0,
+            200
+        );
+        assert_eq!(
+            harness
+                .call("POST", &assignments, Some(&engineer), Some(body))
+                .0,
+            201
+        );
+
+        let (status, leased) = harness.call(
+            "POST",
+            "/v1/worker/lease",
+            Some(&credential),
+            Some(json!({})),
+        );
+        assert_eq!(status, 200, "{leased}");
+        let assignment = leased["lease"]["assignment_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let token = leased["lease"]["fencing_token"].as_i64().unwrap();
+        let renew = format!("/v1/worker/assignments/{assignment}/renew");
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &renew,
+                    Some(&credential),
+                    Some(json!({ "fencing_token": token }))
+                )
+                .0,
+            200
+        );
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &renew,
+                    Some(&credential),
+                    Some(json!({ "fencing_token": token - 1 }))
+                )
+                .0,
+            409
+        );
+
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &format!("/v1/tenants/{acme}/workers/{worker_id}/revoke"),
+                    Some(&manager),
+                    None
+                )
+                .0,
+            200
+        );
+        let complete = format!("/v1/worker/assignments/{assignment}/complete");
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &complete,
+                    Some(&credential),
+                    Some(json!({ "fencing_token": token, "outcome": "completed" }))
+                )
+                .0,
+            401,
+            "a revoked worker's credential stops working"
+        );
+        let (_, listed) = harness.call("GET", &assignments, Some(&engineer), None);
+        assert_eq!(listed["assignments"][0]["state"], "queued");
     }
 
     #[test]

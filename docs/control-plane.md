@@ -12,10 +12,10 @@ migration. Project plans sent to the service are non-secret settings, and
 the service refuses any plan field whose name looks like a credential
 (`password`, `secret`, `token`, `credential`, `private_key`).
 
-This implements the authentication, authorization, tenant-isolation, and
-audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
-Still to come: worker enrollment with fenced assignment leases, and OIDC
-sign-in.
+This implements the authentication, authorization, tenant-isolation, worker
+fencing, and audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
+Still to come: OIDC sign-in, and a worker agent that runs leased assignments
+through the local engine (today the worker protocol is server-side only).
 
 ## Running it
 
@@ -81,6 +81,8 @@ plan change withdraws the approval.
 |---|---|---|---|
 | Session | `mss_s_` | 12 hours | From `POST /v1/auth/login`; revoked by `POST /v1/auth/logout` or when the user is disabled. |
 | API key | `mss_k_` | 1–365 days, required | Bound to one tenant and a set of scopes. |
+| Enrollment | `mss_e_` | 1–60 minutes, single use | Exchanged once for a worker credential. |
+| Worker | `mss_w_` | until revoked | One tenant; worker endpoints only. |
 
 Only SHA-256 digests of tokens are stored. Present tokens as
 `Authorization: Bearer <token>`.
@@ -114,6 +116,48 @@ every field of the entry. Triggers make the table append-only, and
 `audit-verify` (or `GET /v1/audit/verify`) detects any edit, deletion, or
 reordering made to the file directly.
 
+## Workers and fenced leases
+
+A worker belongs to exactly one tenant, so it never receives another
+customer's work.
+
+1. **Enroll.** A user with `worker:manage` in the tenant calls
+   `POST /v1/tenants/{t}/workers/enrollments` `{name, expires_in_minutes}`
+   (1–60 minutes, default 15). This returns a single-use `mss_e_` enrollment
+   token.
+2. **Exchange.** The worker calls `POST /v1/worker/enroll`
+   `{capabilities: [...]}` with that token as its bearer and receives a
+   `mss_w_` worker credential, shown once. Worker credentials authenticate
+   only the `/v1/worker/…` endpoints, and user credentials never
+   authenticate them.
+3. **Queue work.** A user with `assignment:create` queues one assignment per
+   mailbox label: `POST /v1/tenants/{t}/projects/{p}/assignments`
+   `{mailboxes: [...]}`. The project's plan must be approved at its current
+   revision.
+4. **Lease.** The worker calls `POST /v1/worker/lease` `{lease_seconds}`
+   (30–900, default 300) and receives one assignment: the non-secret plan,
+   the mailbox label, and a **fencing token**. The mailbox's credentials are
+   already on the worker.
+5. **Renew and complete.** `POST /v1/worker/assignments/{a}/renew` and
+   `/complete` `{fencing_token, outcome: completed|failed, result}` succeed
+   only for the worker holding the lease, presenting the current token,
+   before the lease expires. Otherwise the answer is `409 Conflict` (or `401`
+   if the worker was revoked), and the worker must stop.
+
+Fencing rules:
+- Every lease, including re-leasing an expired one, raises the fencing
+  token. A worker that stalls past its lease therefore cannot overwrite the
+  result of the worker that took over.
+- After 10 leases that expired without completing, the assignment fails.
+- Revoking a worker (`POST /v1/tenants/{t}/workers/{w}/revoke`) stops its
+  credential at once and returns its leases to the queue.
+- A plan change withdraws approval. Its queued assignments stop leasing,
+  and renewals of running leases are refused so workers stop.
+- Results are non-secret JSON and refused if they carry credential-like
+  fields.
+- Every lease, renewal, completion, and refusal is audited with the worker
+  as actor.
+
 ## API
 
 Request bodies are JSON (`Content-Type: application/json`, at most 64 KiB,
@@ -136,5 +180,9 @@ matches the audit entry.
 | `GET /v1/tenants/{t}/projects/{p}` | `project:read` |
 | `PUT /v1/tenants/{t}/projects/{p}/plan` `{plan, revision}` | `project:write` |
 | `POST /v1/tenants/{t}/projects/{p}/approve` `{revision}` | `project:approve`, not the last editor |
+| `GET /v1/tenants/{t}/workers`, `POST …/workers/enrollments`, `POST …/workers/{w}/revoke` | `worker:manage` |
+| `GET`/`POST /v1/tenants/{t}/projects/{p}/assignments` `{mailboxes}` | `assignment:read` / `assignment:create` |
+| `POST /v1/worker/enroll` `{capabilities}` | enrollment token |
+| `POST /v1/worker/lease`, `POST /v1/worker/assignments/{a}/renew` and `/complete` | worker credential |
 | `GET /v1/tenants/{t}/audit?limit=&before=` | `audit:read` |
 | `GET /v1/audit`, `GET /v1/audit/verify` | `service:admin` |

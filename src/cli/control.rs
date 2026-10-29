@@ -12,6 +12,7 @@ mod authn;
 mod authz;
 mod server;
 mod store;
+mod workers;
 
 use std::ffi::OsString;
 use std::net::SocketAddr;

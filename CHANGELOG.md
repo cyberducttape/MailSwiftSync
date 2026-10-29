@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Control plane workers: tenant-bound worker enrollment with single-use
+  enrollment tokens; assignments queued only for approved plans; leases
+  with fencing tokens so a worker whose lease expired, moved, or was revoked
+  cannot renew or report; revocation requeues a worker's leases; a plan
+  change stops further leasing and renewals.
 - Add `mailswiftsync control`, an optional central control plane for MSP
   fleets: users with Argon2id passwords, expiring sessions and account
   lockout; administrator, manager, engineer, technician, auditor, and
