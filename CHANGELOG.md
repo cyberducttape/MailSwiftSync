@@ -20,6 +20,9 @@
   expiring API keys; second-person plan approval; and a hash-chained,
   append-only audit log with `control audit-verify`. Mailbox credentials
   stay on workers. See docs/control-plane.md.
+- Initialize the randomized dummy Argon2 hash before the control plane serves
+  requests, and use the same generic login response for unknown, incorrect,
+  disabled, and locked accounts.
 - Refuse a FIFO or device at a secret-file path (headless credentials,
   webhook secrets, organization policy) instead of blocking forever in
   `open()` waiting for a writer.
