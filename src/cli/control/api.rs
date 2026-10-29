@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 
 pub(super) struct Context {
     pub(super) store: Store,
+    pub(super) oidc: Option<super::oidc::Oidc>,
 }
 
 pub(super) struct Request {
@@ -127,6 +128,10 @@ fn route(call: &Call<'_>) -> Handled {
         ("GET", ["healthz"]) => Ok(Response::ok(&json!({ "status": "ok" }))),
         ("POST", ["v1", "auth", "login"]) => login(call),
         ("POST", ["v1", "auth", "logout"]) => logout(call),
+        ("GET", ["v1", "auth", "oidc", provider, "start"]) => oidc_start(call, provider),
+        ("GET", ["v1", "auth", "oidc", provider, "callback"]) => {
+            oidc_callback(call, provider, query)
+        }
         ("GET", ["v1", "me"]) => me(call),
         ("GET", ["v1", "tenants"]) => list_tenants(call),
         ("POST", ["v1", "tenants"]) => create_tenant(call),
@@ -327,6 +332,89 @@ fn login(call: &Call<'_>) -> Handled {
         )),
         Err(LoginError::Internal(message)) => Err(StoreError::Internal(message).into()),
     }
+}
+
+fn oidc<'a>(call: &Call<'a>) -> Result<&'a super::oidc::Oidc, Response> {
+    call.context.oidc.as_ref().ok_or_else(Response::not_found)
+}
+
+fn oidc_failure(error: super::oidc::OidcError) -> Response {
+    use super::oidc::OidcError;
+    match error {
+        OidcError::UnknownProvider => Response::not_found(),
+        OidcError::Rejected(message) => Response::error(401, "Unauthorized", &message),
+        OidcError::Upstream(message) => {
+            eprintln!("Control plane OIDC provider error: {message}");
+            Response::error(
+                502,
+                "Bad Gateway",
+                "the identity provider could not complete the sign-in",
+            )
+        }
+        OidcError::Internal(message) => {
+            eprintln!("Control plane OIDC error: {message}");
+            Response::error(500, "Internal Server Error", "internal error")
+        }
+    }
+}
+
+/// Send the browser to the identity provider. The URL is also in the body
+/// for clients that open it themselves.
+fn oidc_start(call: &Call<'_>, provider: &str) -> Handled {
+    let url = oidc(call)?
+        .start(call.store(), provider)
+        .map_err(oidc_failure)?;
+    let mut response = Response::json(302, "Found", &json!({ "authorization_url": url }));
+    response.headers.push(("Location", url));
+    Ok(response)
+}
+
+fn oidc_callback(call: &Call<'_>, provider: &str, query: &str) -> Handled {
+    let oidc = oidc(call)?;
+    let mut code = None;
+    let mut state = None;
+    let mut error = None;
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        let slot = match name.as_ref() {
+            "code" => &mut code,
+            "state" => &mut state,
+            "error" => &mut error,
+            _ => continue,
+        };
+        if slot.replace(value.into_owned()).is_some() {
+            return Err(Response::error(
+                400,
+                "Bad Request",
+                "a callback parameter was repeated",
+            ));
+        }
+    }
+    if let Some(error) = error {
+        let error = error
+            .chars()
+            .filter(char::is_ascii_graphic)
+            .take(64)
+            .collect::<String>();
+        return Err(Response::error(
+            401,
+            "Unauthorized",
+            &format!("the identity provider declined the sign-in ({error})"),
+        ));
+    }
+    let (Some(code), Some(state)) = (code, state) else {
+        return Err(Response::error(
+            400,
+            "Bad Request",
+            "the callback needs code and state",
+        ));
+    };
+    let (token, expires_at) = oidc
+        .callback(call.store(), provider, &code, &state, &call.request_id)
+        .map_err(oidc_failure)?;
+    Ok(Response::created(&json!({
+        "token": token.as_str(),
+        "expires_at": expires_at,
+    })))
 }
 
 fn logout(call: &Call<'_>) -> Handled {
@@ -971,7 +1059,7 @@ mod tests {
                 .bootstrap_administrator("admin@msp.example", "Admin", "admin-password-123")
                 .unwrap();
             Self {
-                context: Context { store },
+                context: Context { store, oidc: None },
             }
         }
 
@@ -1464,6 +1552,106 @@ mod tests {
         );
         let (_, listed) = harness.call("GET", &assignments, Some(&engineer), None);
         assert_eq!(listed["assignments"][0]["state"], "queued");
+    }
+
+    #[test]
+    fn oidc_sign_in_runs_over_http_and_issues_a_session() {
+        use super::super::oidc::tests as idp;
+        let harness = Harness::new();
+        assert_eq!(
+            harness.call("GET", "/v1/auth/oidc/idp/start", None, None).0,
+            404,
+            "OIDC is off by default"
+        );
+        let admin = harness.login("admin@msp.example", "admin-password-123");
+        harness.call(
+            "POST",
+            "/v1/users",
+            Some(&admin),
+            Some(json!({ "email": "eng@msp.example", "display_name": "Eng" })),
+        );
+        let fake = idp::fake_idp();
+        let harness = Harness {
+            context: Context {
+                store: harness.context.store,
+                oidc: Some(idp::oidc(&fake, true)),
+            },
+        };
+        let request = |target: &str| Request {
+            method: "GET".into(),
+            target: target.into(),
+            authorization: None,
+            content_type: None,
+            body: Vec::new(),
+            peer: None,
+        };
+        let started = handle(&harness.context, &request("/v1/auth/oidc/idp/start"));
+        assert_eq!(started.status, 302);
+        let location = started
+            .headers
+            .iter()
+            .find(|(name, _)| *name == "Location")
+            .unwrap()
+            .1
+            .clone();
+        let location = url::Url::parse(&location).unwrap();
+        let query = |name: &str| {
+            location
+                .query_pairs()
+                .find(|(key, _)| key == name)
+                .unwrap()
+                .1
+                .into_owned()
+        };
+        *fake.next_claims.lock().unwrap() =
+            idp::claims(&query("nonce"), "sub-1", "eng@msp.example", true);
+
+        let callback = format!(
+            "/v1/auth/oidc/idp/callback?code=abc&state={}",
+            query("state")
+        );
+        let (status, body) = harness.call("GET", &callback, None, None);
+        assert_eq!(status, 201, "{body}");
+        let session = body["token"].as_str().unwrap();
+        let (status, me) = harness.call("GET", "/v1/me", Some(session), None);
+        assert_eq!(
+            (status, me["user"]["email"].clone()),
+            (200, json!("eng@msp.example"))
+        );
+
+        assert_eq!(
+            harness.call("GET", &callback, None, None).0,
+            401,
+            "a callback cannot be replayed"
+        );
+        assert_eq!(
+            harness
+                .call(
+                    "GET",
+                    "/v1/auth/oidc/idp/callback?error=access_denied",
+                    None,
+                    None
+                )
+                .0,
+            401
+        );
+        assert_eq!(
+            harness
+                .call(
+                    "GET",
+                    "/v1/auth/oidc/idp/callback?code=a&code=b&state=s",
+                    None,
+                    None
+                )
+                .0,
+            400
+        );
+        assert_eq!(
+            harness
+                .call("GET", "/v1/auth/oidc/other/start", None, None)
+                .0,
+            404
+        );
     }
 
     #[test]

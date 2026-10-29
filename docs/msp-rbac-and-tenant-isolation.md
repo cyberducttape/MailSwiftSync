@@ -3,9 +3,9 @@
 This is the required control-plane design. The optional
 [`mailswiftsync control` service](control-plane.md) implements its
 authentication, role, tenant-isolation, scoped-API-key, separation-of-duties,
-audit-log, and worker enrollment/fenced-lease requirements. OIDC sign-in is
-not implemented yet, and worker enrollment uses single-use enrollment tokens
-over TLS rather than mTLS. The local GUI, a worker's SQLite
+audit-log, worker enrollment/fenced-lease, and OIDC sign-in requirements.
+Worker enrollment uses single-use enrollment tokens over TLS rather than
+mTLS. The local GUI, a worker's SQLite
 ledger, and `fleet-status` remain outside this boundary and must not be
 presented as an authorization boundary.
 
