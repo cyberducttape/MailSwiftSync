@@ -991,6 +991,10 @@ mod tests {
                 let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
                     break;
                 };
+                // Once the listener stops accepting, the kernel can still
+                // complete handshakes into its backlog; never wait forever
+                // for a reply that will not come.
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                 let _ = stream.write_all(b"GET /?state=wrong&code=forged HTTP/1.1\r\n\r\n");
                 let mut response = String::new();
                 let _ = stream.read_to_string(&mut response);
@@ -1001,6 +1005,7 @@ mod tests {
             .wait_for_code("expected", Duration::from_secs(30))
             .unwrap_err();
         stop.store(true, Ordering::Relaxed);
+        drop(listener);
         client.join().unwrap();
         assert!(error.contains("too many invalid callback"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(10));
@@ -1026,6 +1031,7 @@ mod tests {
             .wait_for_code("expected", Duration::from_millis(500))
             .unwrap_err();
         stop.store(true, Ordering::Relaxed);
+        drop(listener);
         client.join().unwrap();
         assert!(error.contains("no authorization redirect"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(5));
