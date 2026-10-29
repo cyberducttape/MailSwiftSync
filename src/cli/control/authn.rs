@@ -111,7 +111,13 @@ pub(super) fn verify_password(password: &str, stored: &str) -> bool {
 /// or password-less account takes as long as one with a wrong password.
 pub(super) fn equalize_password_timing(password: &str) {
     static DUMMY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    if let Some(stored) = DUMMY.get_or_init(|| hash_password("timing-equalizer-password").ok()) {
+    // A random secret nobody knows, so no password can ever match it.
+    let dummy = DUMMY.get_or_init(|| {
+        random_bytes::<24>()
+            .ok()
+            .and_then(|bytes| hash_password(&URL_SAFE_NO_PAD.encode(*bytes)).ok())
+    });
+    if let Some(stored) = dummy {
         let _ = verify_password(password, stored);
     }
 }
