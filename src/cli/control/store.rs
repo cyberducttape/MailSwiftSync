@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
 const LOCKOUT_FAILURES: i64 = 5;
@@ -249,12 +249,17 @@ impl Store {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
         match version {
-            0 | 1 => {
+            0..=2 => {
                 let base = if version == 0 { SCHEMA } else { "" };
+                let workers = if version <= 1 {
+                    super::workers::SCHEMA_V2
+                } else {
+                    ""
+                };
                 connection
                     .execute_batch(&format!(
-                        "BEGIN IMMEDIATE; {base} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
-                        super::workers::SCHEMA_V2
+                        "BEGIN IMMEDIATE; {base} {workers} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
+                        super::oidc::SCHEMA_V3
                     ))
                     .map_err(|error| format!("could not create or upgrade the schema: {error}"))?;
             }
@@ -501,7 +506,6 @@ impl Store {
     }
 
     /// Open a session for a user already authenticated another way (OIDC).
-    #[allow(dead_code)]
     pub(super) fn open_session(
         &self,
         user_id: &str,

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Control plane OIDC sign-in: authorization code with PKCE, state, and
+  nonce; RS256/ES256 ID tokens verified against the provider's JWKS with
+  issuer, audience, `azp`, expiry, and nonce checks; identities link to
+  existing users only through a verified email (opt-in per provider) and
+  never create accounts. Configure with `control serve --oidc-config`.
 - Control plane workers: tenant-bound worker enrollment with single-use
   enrollment tokens; assignments queued only for approved plans; leases
   with fencing tokens so a worker whose lease expired, moved, or was revoked

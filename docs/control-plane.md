@@ -14,8 +14,8 @@ the service refuses any plan field whose name looks like a credential
 
 This implements the authentication, authorization, tenant-isolation, worker
 fencing, and audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
-Still to come: OIDC sign-in, and a worker agent that runs leased assignments
-through the local engine (today the worker protocol is server-side only).
+Still to come: a worker agent that runs leased assignments through the local
+engine (today the worker protocol is server-side only).
 
 ## Running it
 
@@ -39,6 +39,69 @@ mailswiftsync control audit-verify /srv/mailswiftsync/control.db
 
 The service is single-node: one process owns the SQLite file. Do not put the
 file on a network filesystem or share it between processes.
+
+## Signing in with OIDC
+
+Users can sign in through the MSP's identity provider (Microsoft Entra ID,
+Google, Okta, Keycloak, or any OpenID Connect provider) instead of, or as
+well as, a password. Pass an owner-only (`0600`) TOML file to `serve`:
+
+```toml
+# --oidc-config /srv/mailswiftsync/oidc.toml
+public_url = "https://control.msp.example"   # how browsers reach this service
+
+[[provider]]
+name = "entra"                                # used in the URL: /v1/auth/oidc/entra/…
+issuer = "https://login.microsoftonline.com/<directory-id>/v2.0"
+client_id = "<application id>"
+client_secret_file = "/srv/mailswiftsync/entra-secret"   # optional; owner-only
+link_verified_email = true                    # see below
+allowed_email_domains = ["msp.example"]       # optional
+```
+
+Register `https://control.msp.example/v1/auth/oidc/<name>/callback` as the
+redirect URI at the provider.
+
+**Sign-in flow:**
+1. A browser opens `GET /v1/auth/oidc/<name>/start`, which redirects to the
+   provider (authorization code with PKCE S256, plus a random `state` and
+   `nonce`).
+2. The provider redirects back to `…/callback`. The service exchanges the
+   code and returns `{token, expires_at}`: the same 12-hour session as a
+   password sign-in.
+3. Each pending sign-in is stored by the digest of its `state`, expires in
+   10 minutes, and can be completed once.
+
+**ID-token checks.** The ID token must:
+- be signed with RS256 or ES256 by a key in the provider's JWKS (`none` and
+  HMAC are refused; keys are matched by `kid` and algorithm; the JWKS is
+  cached for an hour and refetched at most once a minute on an unknown key)
+- name the configured issuer, and this client as audience (and as `azp`
+  when there are several audiences)
+- be unexpired, allowing 60 seconds of clock skew
+- carry this sign-in's nonce
+
+Discovery and token requests use HTTPS only, follow no redirects, and are
+bounded in time and size.
+
+**Accounts are never created by signing in.** An administrator creates the
+user first (a password is optional). The first OIDC sign-in links the
+provider identity (issuer + subject) to that user only if all of these hold:
+- the provider has `link_verified_email = true`
+- the ID token says `email_verified: true`
+- the email matches the user and, when `allowed_email_domains` is set, one
+  of those domains
+- the user has no identity from that issuer yet
+
+Later sign-ins match on the subject alone, so a changed email address does
+not move the account, and a second provider account cannot take over a
+linked user. Linking is audited.
+
+> **Providers without `email_verified`:** some providers, Microsoft Entra ID
+> among them, do not put an `email_verified: true` claim in ID tokens by
+> default. Only that claim enables linking; other provider-specific claims
+> are not consulted. For such a provider, verified-email linking never
+> happens, so an identity that is not already linked cannot sign in.
 
 ## Roles
 
@@ -169,6 +232,7 @@ matches the audit entry.
 | `GET /healthz` | none |
 | `POST /v1/auth/login` `{email, password}` | none |
 | `POST /v1/auth/logout` | session |
+| `GET /v1/auth/oidc/{provider}/start`, `GET …/callback?code=&state=` | none (OIDC configured) |
 | `GET /v1/me` | any |
 | `GET /v1/tenants` / `POST /v1/tenants` `{name}` | any (filtered) / `service:admin` |
 | `GET /v1/users` / `POST /v1/users` `{email, display_name, password?}` | `service:admin` |
