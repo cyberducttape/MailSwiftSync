@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import stat
@@ -28,9 +29,27 @@ def reject_duplicate_keys(pairs):
 
 
 def canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def reject_nonfinite_constant(value: str):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
+
+def parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
 
 
 def parse_pack(path: Path) -> dict:
@@ -54,8 +73,13 @@ def parse_pack(path: Path) -> dict:
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
-        value = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_constant,
+            parse_float=parse_finite_float,
+        )
+    except (OSError, UnicodeError, ValueError) as error:
         raise ValueError(f"could not read pack JSON: {error}") from error
     if not isinstance(value, dict):
         raise ValueError("pack root must be an object")
@@ -79,11 +103,21 @@ def verify_pack(path: Path, schema_path: Path = DEFAULT_SCHEMA) -> dict:
             "jsonschema is required; install scripts/requirements-provider-qualification.txt with pip --require-hashes"
         ) from error
     try:
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema = json.loads(
+            schema_path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_constant,
+            parse_float=parse_finite_float,
+        )
         jsonschema.Draft202012Validator.check_schema(schema)
         jsonschema.Draft202012Validator(schema).validate(value)
-    except (OSError, UnicodeError, json.JSONDecodeError, jsonschema.SchemaError,
-            jsonschema.ValidationError) as error:
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        jsonschema.SchemaError,
+        jsonschema.ValidationError,
+    ) as error:
         raise ValueError(f"pack schema validation failed: {error}") from error
     return value
 

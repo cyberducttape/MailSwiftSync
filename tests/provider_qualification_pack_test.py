@@ -240,6 +240,53 @@ class ProviderQualificationPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate JSON key: provider"):
             self.build()
 
+    def test_pack_builder_rejects_nonfinite_json_numbers(self):
+        evidence_path = self.evidence_dir / "live_pilot.json"
+        evidence_path.write_text('{"metric":NaN}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            self.build()
+
+        evidence_path.write_text('{"metric":1e9999}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            self.build()
+
+        self.policy_path.write_text(
+            json.dumps(policy()).replace(
+                '"minimum_bytes": 100', '"minimum_bytes": 1e-9999'
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            self.build()
+        evidence_path.write_text('{"metric":1e-9999}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            self.build()
+
+        self.write_phase("live_pilot", evidence("live_pilot"))
+        self.policy_path.write_text(
+            json.dumps(policy()).replace(
+                '"minimum_bytes": 100', '"minimum_bytes": Infinity'
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            self.build()
+
+        self.policy_path.write_text(
+            json.dumps(policy()).replace(
+                '"minimum_bytes": 100', '"minimum_bytes": 1e9999'
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            self.build()
+
+    def test_canonical_digest_serialization_rejects_nonfinite_values(self):
+        for module in (MODULE, VERIFY_MODULE):
+            with self.subTest(module=module.__name__):
+                with self.assertRaises(ValueError):
+                    module.canonical_json({"measurement": float("inf")})
+
     def test_pack_builder_bounds_json_evidence_input(self):
         path = self.evidence_dir / "live_pilot.json"
         with path.open("wb") as handle:
@@ -380,6 +427,51 @@ class ProviderQualificationPackTests(unittest.TestCase):
         path.write_text('{"status":"a","status":"b"}', encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
             VERIFY_MODULE.parse_pack(path)
+
+    def test_pack_verifier_rejects_nonfinite_json_numbers(self):
+        path = self.directory / "nonfinite.json"
+        path.write_text(
+            '{"evidence_digest":"' + ("0" * 64) + '","value":NaN}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+            VERIFY_MODULE.parse_pack(path)
+
+        path.write_text(
+            '{"evidence_digest":"' + ("0" * 64) + '","value":1e9999}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            VERIFY_MODULE.parse_pack(path)
+        path.write_text(
+            '{"evidence_digest":"' + ("0" * 64) + '","value":1e-9999}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            VERIFY_MODULE.parse_pack(path)
+
+    def test_pack_verifier_requires_utf8_json(self):
+        path = self.directory / "utf16.json"
+        path.write_bytes(
+            ('{"evidence_digest":"' + ("0" * 64) + '"}').encode("utf-16")
+        )
+        with self.assertRaisesRegex(ValueError, "could not read pack JSON"):
+            VERIFY_MODULE.parse_pack(path)
+
+    def test_pack_verifier_rejects_out_of_range_numbers_in_custom_schema(self):
+        if jsonschema is None:
+            self.skipTest("jsonschema is installed by provider-evidence CI")
+        pack = self.build()
+        pack_path = self.directory / "pack.json"
+        pack_path.write_text(json.dumps(pack), encoding="utf-8")
+        schema_path = self.directory / "schema.json"
+        schema_path.write_text(
+            '{"$schema":"https://json-schema.org/draft/2020-12/schema",'
+            '"type":"object","maximum":1e9999}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "outside the supported finite range"):
+            VERIFY_MODULE.verify_pack(pack_path, schema_path)
 
     def test_pack_verifier_rejects_symlinks_and_oversized_inputs(self):
         target = self.directory / "target.json"

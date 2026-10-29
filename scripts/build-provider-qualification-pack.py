@@ -97,9 +97,27 @@ def fail(message: str) -> "NoReturn":
 
 
 def canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def reject_nonfinite_constant(value: str):
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
+
+def parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    significand = value.lower().split("e", 1)[0]
+    if not math.isfinite(parsed) or (
+        parsed == 0.0 and any(digit in "123456789" for digit in significand)
+    ):
+        raise ValueError(f"JSON number is outside the supported finite range: {value}")
+    return parsed
 
 
 def reject_duplicate_keys(pairs):
@@ -129,7 +147,12 @@ def load_json(path: Path, maximum_bytes: int = MAX_JSON_FILE_BYTES) -> dict:
             raw = handle.read(maximum_bytes + 1)
         if len(raw) > maximum_bytes:
             fail(f"{path}: JSON exceeds the {maximum_bytes}-byte validation limit")
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_constant,
+            parse_float=parse_finite_float,
+        )
     except (OSError, UnicodeError, ValueError) as error:
         fail(f"{path}: invalid JSON: {error}")
     if not isinstance(value, dict):
