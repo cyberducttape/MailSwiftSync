@@ -41,15 +41,6 @@ pub(super) fn read_imap_list_response<S: Read>(
     read_imap_list_response_inner(stream, tag, buffer, None, None)
 }
 
-pub(super) fn read_imap_list_response_with_budget<S: Read>(
-    stream: &mut S,
-    tag: &str,
-    buffer: &mut [u8; 4096],
-    budget: &MessageFetchBudget<'_>,
-) -> Result<ListInventorySummary, String> {
-    read_imap_list_response_inner(stream, tag, buffer, None, Some(budget))
-}
-
 #[cfg(test)]
 pub(super) fn read_imap_list_response_with_mailboxes<S: Read>(
     stream: &mut S,

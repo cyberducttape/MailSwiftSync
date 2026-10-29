@@ -26,6 +26,17 @@ name, not a claim that every message in every mailbox was covered. Customer and
 operator outputs must retain the explicit Level 3 “bounded content fingerprints”
 label and coverage/exception counts.
 
+**Before a run.** Testing the accounts counts each account's messages with one
+`STATUS (MESSAGES)` per selectable folder (adding `SIZE` when the server
+advertises RFC 8438 `STATUS=SIZE`), counting a message once per folder exactly
+as verification does. The preflight “Verification capacity” row compares those
+counts with the 1,000,000-message-per-account limit and, for body-content
+verification, the combined byte budget. Over a limit, the row is blocked and
+says the mailbox will finish as “verification limit exceeded” rather than
+verified; the transfer itself is not refused. Accounts with more than 5,000
+selectable folders, a refused `STATUS`, or a census that runs past 30 seconds
+show the capacity as not established, never as within limits.
+
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
 | Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |

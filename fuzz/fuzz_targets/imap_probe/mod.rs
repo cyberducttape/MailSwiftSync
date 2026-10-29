@@ -73,10 +73,12 @@ pub fn fuzz_stream(bytes: &[u8]) {
         deadline: Instant::now() + Duration::from_secs(60),
         cancel: &cancel,
     };
-    let _ = folders::read_imap_list_response_with_budget(
+    let mut mailboxes = Vec::new();
+    let _ = folders::read_imap_list_response_with_details(
         &mut stream,
         "a005",
         &mut buffer,
+        &mut mailboxes,
         &budget,
     );
 }

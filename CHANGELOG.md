@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Show verification capacity before a run. Testing the accounts now counts
+  each account's messages (and bytes, where the server reports `STATUS=SIZE`)
+  across its folders, and preflight adds a “Verification capacity” row that
+  flags a mailbox above the 1,000,000-message verification limit or the
+  body-content byte budget before any transfer, instead of the operator
+  learning it from a `verification_limit_exceeded` result afterwards.
 - Record each transfer attempt's failure class with the provider of the
   endpoint that failed, the same classification the controller uses for retry
   and terminal state, instead of a provider-blind guess.
