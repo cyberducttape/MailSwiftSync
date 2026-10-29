@@ -28,6 +28,11 @@ const MAX_REDIRECT_REQUEST_BYTES: usize = 16 * 1024;
 /// Browsers commonly request `/favicon.ico` next to the redirect. Bound how
 /// many unrelated requests are tolerated before the flow gives up.
 const MAX_UNRELATED_REQUESTS: usize = 8;
+/// A mistyped or replayed callback must not end the flow, but a local
+/// process sending a stream of bad callbacks must not keep the listener busy
+/// for the whole consent window either. Past this budget the flow stops and
+/// the operator starts a fresh authorization.
+const MAX_INVALID_CALLBACKS: usize = 16;
 
 /// Endpoints and request shape for one provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,6 +443,11 @@ impl RedirectListener {
             if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Err("OAuth authorization was cancelled; no token was stored".into());
             }
+            // Checked on every pass, not only when the listener is idle: a
+            // steady stream of connections must not extend the wait.
+            if Instant::now() >= deadline {
+                return Err(redirect_timeout_error(timeout, invalid_callbacks));
+            }
             let mut accepted = None;
             for listener in &self.listeners {
                 match listener.accept() {
@@ -452,21 +462,10 @@ impl RedirectListener {
                 }
             }
             let Some(mut stream) = accepted else {
-                if Instant::now() >= deadline {
-                    let ignored = if invalid_callbacks == 0 {
-                        String::new()
-                    } else {
-                        format!("; ignored {invalid_callbacks} invalid callback request(s)")
-                    };
-                    return Err(format!(
-                        "no authorization redirect arrived within {} seconds{ignored}",
-                        timeout.as_secs(),
-                    ));
-                }
                 std::thread::sleep(Duration::from_millis(50));
                 continue;
             };
-            match handle_redirect(&mut stream, expected_state) {
+            match handle_redirect(&mut stream, expected_state, deadline) {
                 RedirectOutcome::Code(code) => {
                     respond(
                         &mut stream,
@@ -490,7 +489,13 @@ impl RedirectListener {
                         "MailSwiftSync rejected this callback. The authorization flow is still waiting for the provider.",
                     );
                     invalid_callbacks = invalid_callbacks.saturating_add(1);
+                    if invalid_callbacks > MAX_INVALID_CALLBACKS {
+                        return Err(format!(
+                            "too many invalid callback requests ({invalid_callbacks}) reached the redirect listener; no token was stored. Start the authorization again"
+                        ));
+                    }
                 }
+                RedirectOutcome::Idle => {}
                 RedirectOutcome::Unrelated => {
                     respond(&mut stream, "404 Not Found", "Not found.");
                     unrelated += 1;
@@ -505,22 +510,59 @@ impl RedirectListener {
     }
 }
 
-fn handle_redirect(stream: &mut TcpStream, expected_state: &str) -> RedirectOutcome {
-    let head = match read_request_head(stream) {
+fn redirect_timeout_error(timeout: Duration, invalid_callbacks: usize) -> String {
+    let ignored = if invalid_callbacks == 0 {
+        String::new()
+    } else {
+        format!("; ignored {invalid_callbacks} invalid callback request(s)")
+    };
+    format!(
+        "no authorization redirect arrived within {} seconds{ignored}",
+        timeout.as_secs(),
+    )
+}
+
+fn handle_redirect(
+    stream: &mut TcpStream,
+    expected_state: &str,
+    flow_deadline: Instant,
+) -> RedirectOutcome {
+    let head = match read_request_head(stream, flow_deadline) {
         Ok(head) => head,
         Err(error) => return RedirectOutcome::InvalidCallback(error),
     };
+    // A connection that closed or idled without sending anything (a browser
+    // preconnect) is neither a callback nor an unrelated request.
+    if head.is_empty() {
+        return RedirectOutcome::Idle;
+    }
     parse_redirect_request(&head, expected_state)
 }
 
-fn read_request_head(stream: &mut TcpStream) -> Result<Zeroizing<String>, String> {
+/// Read one request head. The read timeout bounds each read; this also
+/// bounds the whole head, so a client trickling bytes cannot hold the
+/// single-threaded listener past the flow deadline or its cancellation.
+fn read_request_head(
+    stream: &mut TcpStream,
+    flow_deadline: Instant,
+) -> Result<Zeroizing<String>, String> {
+    let deadline = flow_deadline.min(Instant::now() + REDIRECT_READ_TIMEOUT);
     stream
         .set_nonblocking(false)
-        .and_then(|()| stream.set_read_timeout(Some(REDIRECT_READ_TIMEOUT)))
         .map_err(|error| format!("could not read the authorization redirect: {error}"))?;
     let mut head = Zeroizing::new(Vec::new());
     let mut buffer = [0_u8; 1024];
     while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            if head.is_empty() {
+                break;
+            }
+            return Err("the authorization redirect request was not completed in time".into());
+        }
+        stream
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| format!("could not read the authorization redirect: {error}"))?;
         let count = match stream.read(&mut buffer) {
             Ok(count) => count,
             // Browsers open speculative preconnect sockets that may never
@@ -936,6 +978,86 @@ mod tests {
             .unwrap();
         client.join().unwrap();
         assert_eq!(code.as_str(), "good");
+    }
+
+    #[test]
+    fn a_flood_of_invalid_callbacks_ends_the_flow_without_a_token() {
+        let listener = RedirectListener::bind(RedirectHost::Ipv4Loopback).unwrap();
+        let port = listener.port();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let client_stop = std::sync::Arc::clone(&stop);
+        let client = thread::spawn(move || {
+            while !client_stop.load(Ordering::Relaxed) {
+                let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+                    break;
+                };
+                // Once the listener stops accepting, the kernel can still
+                // complete handshakes into its backlog; never wait forever
+                // for a reply that will not come.
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+                let _ = stream.write_all(b"GET /?state=wrong&code=forged HTTP/1.1\r\n\r\n");
+                let mut response = String::new();
+                let _ = stream.read_to_string(&mut response);
+            }
+        });
+        let started = Instant::now();
+        let error = listener
+            .wait_for_code("expected", Duration::from_secs(30))
+            .unwrap_err();
+        stop.store(true, Ordering::Relaxed);
+        drop(listener);
+        client.join().unwrap();
+        assert!(error.contains("too many invalid callback"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn continuous_connections_do_not_extend_the_wait_past_its_deadline() {
+        let listener = RedirectListener::bind(RedirectHost::Ipv4Loopback).unwrap();
+        let port = listener.port();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let client_stop = std::sync::Arc::clone(&stop);
+        // Preconnects that close at once are not counted against any
+        // budget, so only the deadline can end this wait.
+        let client = thread::spawn(move || {
+            while !client_stop.load(Ordering::Relaxed) {
+                if TcpStream::connect(("127.0.0.1", port)).is_err() {
+                    break;
+                }
+            }
+        });
+        let started = Instant::now();
+        let error = listener
+            .wait_for_code("expected", Duration::from_millis(500))
+            .unwrap_err();
+        stop.store(true, Ordering::Relaxed);
+        drop(listener);
+        client.join().unwrap();
+        assert!(error.contains("no authorization redirect"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_trickled_request_head_cannot_hold_the_listener_past_the_deadline() {
+        let listener = RedirectListener::bind(RedirectHost::Ipv4Loopback).unwrap();
+        let port = listener.port();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            // One byte at a time, each well inside the per-read timeout.
+            for byte in b"GET /?state=expected&code=slow".iter().cycle().take(40) {
+                if stream.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let started = Instant::now();
+        let error = listener
+            .wait_for_code("expected", Duration::from_secs(1))
+            .unwrap_err();
+        assert!(error.contains("no authorization redirect"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        client.join().unwrap();
     }
 
     #[test]

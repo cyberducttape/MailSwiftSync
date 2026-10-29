@@ -29,6 +29,17 @@
   silently replacing or omitting them during worker/API reads.
 - Generate per-test random credentials for control-plane auth fixtures so
   CodeQL cannot mistake test passwords for embedded production secrets.
+- Detect a CSV import's separator by parsing the header with CSV quoting
+  rules for each candidate and choosing the one that yields the required
+  columns, so a comma inside a quoted header no longer selects the comma for a
+  semicolon- or tab-separated file. A header that splits into the required
+  columns under two separators is refused as ambiguous.
+- Bound the OAuth redirect listener: stop after 16 invalid callbacks (start
+  the authorization again), check the flow deadline on every connection
+  rather than only when the listener is idle, and bound the whole request
+  head read so a client trickling bytes cannot hold the listener past the
+  deadline or cancellation. Empty preconnects no longer count as invalid
+  callbacks.
 - Refuse a FIFO or device at a secret-file path (headless credentials,
   webhook secrets, organization policy) instead of blocking forever in
   `open()` waiting for a writer.

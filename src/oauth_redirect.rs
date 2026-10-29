@@ -7,6 +7,8 @@ pub(crate) enum RedirectOutcome {
     ProviderRejected(String),
     InvalidCallback(String),
     Unrelated,
+    /// The connection closed or idled without sending a request.
+    Idle,
 }
 
 const MAX_AUTHORIZATION_CODE_BYTES: usize = 4096;
