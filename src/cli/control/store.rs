@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 const SCHEMA_VERSION: i64 = 3;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
-const LOCKOUT_FAILURES: i64 = 5;
+pub(super) const LOCKOUT_FAILURES: i64 = 5;
 const LOCKOUT_SECONDS: i64 = 15 * 60;
 pub(super) const MAX_PLAN_BYTES: usize = 256 * 1024;
 const MAX_NAME_CHARS: usize = 200;

@@ -320,15 +320,10 @@ fn login(call: &Call<'_>) -> Handled {
             "token": token.as_str(),
             "expires_at": expires_at,
         }))),
-        Err(LoginError::Rejected) => Err(Response::error(
+        Err(LoginError::Rejected | LoginError::Locked) => Err(Response::error(
             401,
             "Unauthorized",
             "the email address or password is not correct",
-        )),
-        Err(LoginError::Locked) => Err(Response::error(
-            429,
-            "Too Many Requests",
-            "too many failed sign-ins; try again later",
         )),
         Err(LoginError::Internal(message)) => Err(StoreError::Internal(message).into()),
     }
@@ -1145,6 +1140,46 @@ mod tests {
             Some(json!({ "email": "admin@msp.example", "password": "wrong-password-1" })),
         );
         assert_eq!(status, 401);
+    }
+
+    #[test]
+    fn locked_and_unknown_accounts_have_identical_login_responses() {
+        let harness = Harness::new();
+        for _ in 0..store::LOCKOUT_FAILURES {
+            assert_eq!(
+                harness
+                    .call(
+                        "POST",
+                        "/v1/auth/login",
+                        None,
+                        Some(json!({
+                            "email": "admin@msp.example",
+                            "password": "wrong-password-1"
+                        })),
+                    )
+                    .0,
+                401
+            );
+        }
+        let locked = harness.call(
+            "POST",
+            "/v1/auth/login",
+            None,
+            Some(json!({
+                "email": "admin@msp.example",
+                "password": "wrong-password-1"
+            })),
+        );
+        let unknown = harness.call(
+            "POST",
+            "/v1/auth/login",
+            None,
+            Some(json!({
+                "email": "nobody@msp.example",
+                "password": "wrong-password-1"
+            })),
+        );
+        assert_eq!(locked, unknown);
     }
 
     #[test]
