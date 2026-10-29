@@ -10,8 +10,11 @@ mod api;
 mod audit;
 mod authn;
 mod authz;
+mod jwt;
+mod oidc;
 mod server;
 mod store;
+mod workers;
 
 use std::ffi::OsString;
 use std::net::SocketAddr;
@@ -20,7 +23,7 @@ use std::sync::Arc;
 
 const USAGE: &str = "Usage:
   mailswiftsync control init <state.db> --admin-email <email> --admin-password-file <file> [--admin-name <name>]
-  mailswiftsync control serve <state.db> [--listen 127.0.0.1:9470] [--tls-cert <pem> --tls-key <pem>] [--allow-non-loopback]
+  mailswiftsync control serve <state.db> [--listen 127.0.0.1:9470] [--tls-cert <pem> --tls-key <pem>] [--oidc-config <toml>] [--allow-non-loopback]
   mailswiftsync control audit-verify <state.db>";
 const DEFAULT_LISTEN: &str = "127.0.0.1:9470";
 
@@ -36,6 +39,7 @@ enum Command {
         state: PathBuf,
         listen: SocketAddr,
         tls: Option<(PathBuf, PathBuf)>,
+        oidc: Option<PathBuf>,
     },
     AuditVerify {
         state: PathBuf,
@@ -60,7 +64,8 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             | "--admin-password-file"
             | "--listen"
             | "--tls-cert"
-            | "--tls-key") => {
+            | "--tls-key"
+            | "--oidc-config") => {
                 let value = arguments.next().transpose()?.ok_or(USAGE)?;
                 if options.insert(flag.to_owned(), value).is_some() {
                     return Err(format!("{flag} was given more than once"));
@@ -95,7 +100,7 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             })
         }
         "serve" => {
-            allowed(&["--listen", "--tls-cert", "--tls-key"])?;
+            allowed(&["--listen", "--tls-cert", "--tls-key", "--oidc-config"])?;
             let listen = options
                 .remove("--listen")
                 .unwrap_or_else(|| DEFAULT_LISTEN.into())
@@ -109,7 +114,12 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             if !listen.ip().is_loopback() && tls.is_none() && !allow_non_loopback {
                 return Err("without --tls-cert/--tls-key the control plane speaks plain HTTP, so a non-loopback --listen would expose passwords and bearer tokens on the network; enable TLS, or put a TLS reverse proxy in front and pass --allow-non-loopback to acknowledge".into());
             }
-            Ok(Command::Serve { state, listen, tls })
+            Ok(Command::Serve {
+                state,
+                listen,
+                tls,
+                oidc: options.remove("--oidc-config").map(PathBuf::from),
+            })
         }
         "audit-verify" => {
             allowed(&[])?;
@@ -154,8 +164,14 @@ fn run(command: Command) -> Result<(), String> {
             );
             Ok(())
         }
-        Command::Serve { state, listen, tls } => {
+        Command::Serve {
+            state,
+            listen,
+            tls,
+            oidc,
+        } => {
             let store = store::Store::open(&state)?;
+            let oidc = oidc.as_deref().map(oidc::Oidc::load).transpose()?;
             let tls = tls
                 .map(|(certificate, key)| crate::cli::serve::tls::server_config(&certificate, &key))
                 .transpose()?;
@@ -167,7 +183,17 @@ fn run(command: Command) -> Result<(), String> {
                 if tls.is_some() { "https" } else { "http" },
                 listener.local_addr().unwrap_or(listen)
             );
-            server::serve(listener, Arc::new(api::Context { store }), tls)
+            if let Some(oidc) = &oidc {
+                eprintln!(
+                    "OIDC sign-in enabled for: {}",
+                    oidc.providers
+                        .iter()
+                        .map(|provider| provider.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            server::serve(listener, Arc::new(api::Context { store, oidc }), tls)
         }
         Command::AuditVerify { state } => {
             let store = store::Store::open(&state)?;
@@ -194,6 +220,7 @@ mod tests {
                 state: "state.db".into(),
                 listen: DEFAULT_LISTEN.parse().unwrap(),
                 tls: None,
+                oidc: None,
             }
         );
         assert!(matches!(

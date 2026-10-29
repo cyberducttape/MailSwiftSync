@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 3;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
 const LOCKOUT_FAILURES: i64 = 5;
@@ -249,12 +249,19 @@ impl Store {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
         match version {
-            0 => {
+            0..=2 => {
+                let base = if version == 0 { SCHEMA } else { "" };
+                let workers = if version <= 1 {
+                    super::workers::SCHEMA_V2
+                } else {
+                    ""
+                };
                 connection
                     .execute_batch(&format!(
-                        "BEGIN IMMEDIATE; {SCHEMA} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                        "BEGIN IMMEDIATE; {base} {workers} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
+                        super::oidc::SCHEMA_V3
                     ))
-                    .map_err(|error| format!("could not create the schema: {error}"))?;
+                    .map_err(|error| format!("could not create or upgrade the schema: {error}"))?;
             }
             SCHEMA_VERSION => {}
             other => {
@@ -268,7 +275,7 @@ impl Store {
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.connection
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -499,7 +506,6 @@ impl Store {
     }
 
     /// Open a session for a user already authenticated another way (OIDC).
-    #[allow(dead_code)]
     pub(super) fn open_session(
         &self,
         user_id: &str,
@@ -1103,7 +1109,7 @@ impl Store {
 
     /// Run `change` and its audit entry in one transaction; a failed change
     /// is audited as a refusal instead.
-    fn mutate<T>(
+    pub(super) fn mutate<T>(
         &self,
         actor: &Actor<'_>,
         tenant: Option<&str>,
@@ -1265,7 +1271,7 @@ pub(super) fn append_audit(tx: &Transaction<'_>, entry: &AuditEntry<'_>) -> Stor
     Ok(())
 }
 
-fn new_id(prefix: &str) -> StoreResult<String> {
+pub(super) fn new_id(prefix: &str) -> StoreResult<String> {
     authn::new_id(prefix).map_err(StoreError::Internal)
 }
 
@@ -1273,7 +1279,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn validate_name(value: &str, what: &str) -> StoreResult<String> {
+pub(super) fn validate_name(value: &str, what: &str) -> StoreResult<String> {
     let value = value.trim();
     if value.is_empty()
         || value.chars().count() > MAX_NAME_CHARS
@@ -1300,7 +1306,7 @@ fn validate_email(value: &str) -> StoreResult<String> {
 /// Plans are non-secret migration settings. Refuse any field whose name
 /// suggests a credential, so the central service never becomes a store of
 /// mailbox secrets by accident; workers keep those locally.
-fn validate_plan(plan: &serde_json::Value) -> StoreResult<String> {
+pub(super) fn validate_plan(plan: &serde_json::Value) -> StoreResult<String> {
     fn credential_field(value: &serde_json::Value) -> Option<String> {
         const MARKERS: [&str; 6] = [
             "password",
@@ -1584,6 +1590,32 @@ mod tests {
             .unwrap();
         drop(connection);
         assert!(store.verify_audit_chain().unwrap_err().contains("entry 2"));
+    }
+
+    #[test]
+    fn a_version_one_database_upgrades_in_place() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(&format!("{SCHEMA} PRAGMA user_version=1;"))
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO tenants(id,name,created_at) VALUES('ten_old','Old',1)",
+                [],
+            )
+            .unwrap();
+        let store = Store::from_connection(connection).unwrap();
+        let version: i64 = store
+            .lock()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(store.tenant_exists("ten_old").unwrap());
+        assert!(store.workers("ten_old").unwrap().is_empty());
+
+        let newer = Connection::open_in_memory().unwrap();
+        newer.execute_batch("PRAGMA user_version=99;").unwrap();
+        assert!(Store::from_connection(newer).is_err());
     }
 
     #[test]
