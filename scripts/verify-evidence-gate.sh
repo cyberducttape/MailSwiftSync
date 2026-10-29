@@ -305,6 +305,7 @@ if has_jsonschema:
     try:
         schema = load_json(schema_file, 1 * 1024 * 1024)
         jsonschema.Draft7Validator.check_schema(schema)
+        validator = jsonschema.Draft7Validator(schema)
     except (OSError, ValueError, jsonschema.SchemaError) as error:
         errors.append(f"schema could not be loaded or validated: {error}")
         schema = None
@@ -319,7 +320,9 @@ for filename in files:
     # Validate against schema if available
     if schema is not None and has_jsonschema:
         try:
-            jsonschema.validate(evidence, schema)
+            # Validate with the draft the schema was checked against, not
+            # whichever draft its own "$schema" member happens to name.
+            validator.validate(evidence)
         except jsonschema.ValidationError as error:
             errors.append(f"{filename}: schema validation failed: {error.message}")
             continue
