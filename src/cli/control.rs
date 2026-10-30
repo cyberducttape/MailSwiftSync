@@ -6,6 +6,7 @@
 //!
 //! See docs/control-plane.md.
 
+mod agent;
 mod api;
 mod audit;
 mod authn;
@@ -24,7 +25,8 @@ use std::sync::Arc;
 const USAGE: &str = "Usage:
   mailswiftsync control init <state.db> --admin-email <email> --admin-password-file <file> [--admin-name <name>]
   mailswiftsync control serve <state.db> [--listen 127.0.0.1:9470] [--tls-cert <pem> --tls-key <pem>] [--oidc-config <toml>] [--allow-non-loopback]
-  mailswiftsync control audit-verify <state.db>";
+  mailswiftsync control audit-verify <state.db>
+  mailswiftsync control worker plan|enroll|run ...  (see `control worker`)";
 const DEFAULT_LISTEN: &str = "127.0.0.1:9470";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,6 +46,7 @@ enum Command {
     AuditVerify {
         state: PathBuf,
     },
+    Worker(agent::Command),
 }
 
 fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, String> {
@@ -53,6 +56,10 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             .map_err(|_| "arguments must be valid UTF-8".to_owned())
     });
     let subcommand = arguments.next().transpose()?.ok_or(USAGE)?;
+    if subcommand == "worker" {
+        let rest = arguments.collect::<Result<Vec<_>, _>>()?;
+        return agent::parse(rest.into_iter()).map(Command::Worker);
+    }
     let mut state = None;
     let mut options = std::collections::BTreeMap::<String, String>::new();
     let mut allow_non_loopback = false;
@@ -195,6 +202,7 @@ fn run(command: Command) -> Result<(), String> {
             }
             server::serve(listener, Arc::new(api::Context { store, oidc }), tls)
         }
+        Command::Worker(command) => agent::run(command),
         Command::AuditVerify { state } => {
             let store = store::Store::open(&state)?;
             let count = store.verify_audit_chain()?;
