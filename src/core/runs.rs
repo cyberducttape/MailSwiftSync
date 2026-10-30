@@ -530,7 +530,10 @@ impl StateStore {
                 "the batch run is no longer running",
             ));
         }
-        if !matches!(child_status.as_str(), "queued" | "running") {
+        // A claim starts a queued child. A child that is already running
+        // belongs to an earlier claim and needs reconciliation, not a
+        // second claim.
+        if child_status != "queued" {
             return Err(super::ledger_rejection_owned(format!(
                 "the child run is already {child_status}"
             )));
@@ -555,14 +558,21 @@ impl StateStore {
                 "a mailbox in state {current} cannot start"
             )));
         }
-        tx.execute(
-            "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=attempt+1 WHERE id=?1 AND project_id=?2",
-            params![job_id, project_id],
+        // Both transitions must move exactly one row, or the transaction
+        // rolls back instead of committing half a claim.
+        let mailboxes = tx.execute(
+            "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=attempt+1 WHERE id=?1 AND project_id=?2 AND state=?3",
+            params![job_id, project_id, current],
         )?;
-        tx.execute(
+        let children = tx.execute(
             "UPDATE runs SET status='running' WHERE id=?1 AND project_id=?2 AND job_id=?3 AND parent_run_id=?4 AND status='queued'",
             params![child_run_id, project_id, job_id, parent_run_id],
         )?;
+        if mailboxes != 1 || children != 1 {
+            return Err(super::ledger_rejection(
+                "the mailbox or child run changed during the claim",
+            ));
+        }
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'mailbox_claimed',?3)",
             params![
@@ -1244,4 +1254,53 @@ fn mismatch_row_is_invalid(mismatch: &MessageMismatch, job_id: &str, run_id: &st
         .into_iter()
         .flatten()
         .any(|value| value.chars().any(char::is_control))
+}
+
+/// Event kind recording a batch retry and its wall-clock deadline.
+pub(crate) const RETRY_SCHEDULED_EVENT: &str = "retry_scheduled";
+const NOT_BEFORE_FIELD: &str = "; not_before_unix=";
+
+/// The non-secret detail of a `retry_scheduled` event. The deadline is the
+/// last field so `pending_retry_deadlines` can read it back.
+pub(crate) fn retry_scheduled_detail(
+    attempt: u32,
+    max_retries: u32,
+    failure_class: &str,
+    not_before_unix: u64,
+) -> String {
+    format!(
+        "retry {attempt} of {max_retries} after {failure_class}{NOT_BEFORE_FIELD}{not_before_unix}"
+    )
+}
+
+impl StateStore {
+    /// The latest retry deadline each mailbox in `project_id` recorded, when
+    /// it is later than `now_unix`. A batch interrupted during a retry wait
+    /// leaves one behind, and the next run holds that mailbox until then
+    /// instead of contacting the provider early.
+    pub fn pending_retry_deadlines(
+        &self,
+        project_id: &str,
+        now_unix: u64,
+    ) -> rusqlite::Result<std::collections::HashMap<String, u64>> {
+        let mut statement = self.connection.prepare(
+            "SELECT r.job_id,e.detail FROM events e JOIN runs r ON r.id=e.run_id WHERE e.project_id=?1 AND e.kind=?2 AND r.job_id IS NOT NULL ORDER BY e.id",
+        )?;
+        let rows = statement.query_map(params![project_id, RETRY_SCHEDULED_EVENT], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut latest = std::collections::HashMap::new();
+        for row in rows {
+            let (job_id, detail) = row?;
+            let Some(at) = detail
+                .rsplit_once(NOT_BEFORE_FIELD)
+                .and_then(|(_, at)| at.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            latest.insert(job_id, at);
+        }
+        latest.retain(|_, at| *at > now_unix);
+        Ok(latest)
+    }
 }

@@ -1,7 +1,27 @@
 //! Failure taxonomy and retry policy for migration controller outcomes.
 
 use crate::core;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+/// The exponential part of a retry delay stops growing here. A longer
+/// server-requested delay is still honoured.
+const RETRY_CEILING_MILLIS: u64 = 120_000;
+
+/// A uniform draw from `low..=high` milliseconds. If the OS random source
+/// fails, the longest delay is used, so a fault slows retries down rather
+/// than synchronising them.
+fn uniform_millis(low: u64, high: u64) -> u64 {
+    use ring::rand::SecureRandom;
+    if high <= low {
+        return low;
+    }
+    let mut bytes = [0_u8; 8];
+    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
+        return high;
+    }
+    // The modulo bias is below 2^-40 for spans up to a few minutes.
+    low + u64::from_le_bytes(bytes) % (high - low + 1)
+}
 
 /// External success may advance the durable lifecycle only after the
 /// terminal result has been committed and no durability fault remains.
@@ -551,24 +571,19 @@ impl ClassifiedFailure {
             },
             |delay| delay.as_millis().min(u128::from(u64::MAX)) as u64,
         );
+        // Full jitter above the floor: the delay is drawn uniformly from
+        // [floor, max(min(cap, floor * 2^attempt), 1.5 * floor)], where the
+        // floor is the server-requested, provider-documented, or class
+        // delay. It is never sooner than required. Draws come from the OS
+        // random source, because a clock- or PID-derived value correlates
+        // between mailboxes failing at the same moment, and with no jitter
+        // at the cap every capped retry woke at the same time.
         let multiplier = 1_u64 << attempt.min(5);
-        let exponential = base_millis.saturating_mul(multiplier).min(120_000);
-        // Add per-attempt entropy so concurrent workers do not wake on the
-        // same deterministic boundary. This is deliberately bounded and
-        // local; it is a collision-avoidance jitter, not a claim that
-        // provider capacity reset.
-        let entropy = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.subsec_nanos() as u64)
-            ^ std::process::id() as u64
-            ^ attempt as u64;
-        let jitter = if exponential >= 120_000 {
-            0
-        } else {
-            entropy % (exponential / 2 + 1)
-        };
-        // Never retry sooner than the server asked, even past the usual cap.
-        Duration::from_millis(exponential.saturating_add(jitter).min(120_000))
+        let ceiling = base_millis
+            .saturating_mul(multiplier)
+            .min(RETRY_CEILING_MILLIS)
+            .max(base_millis.saturating_add(base_millis / 2));
+        Duration::from_millis(uniform_millis(base_millis, ceiling))
             .max(server_requested.unwrap_or_default())
     }
 

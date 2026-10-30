@@ -694,11 +694,27 @@ impl App {
                     }
                     Event::RetryScheduled {
                         job_id,
+                        child_run_id,
+                        not_before_unix,
                         attempt,
                         max_retries,
                         delay,
                         failure_class,
                     } => {
+                        if let Some(run) = active_run.as_ref()
+                            && run.batch_child_index(&job_id, &child_run_id).is_some()
+                        {
+                            pending_db_events.push(PendingDbEvent::new(
+                                child_run_id,
+                                core::RETRY_SCHEDULED_EVENT.into(),
+                                core::retry_scheduled_detail(
+                                    attempt,
+                                    max_retries,
+                                    failure_class,
+                                    not_before_unix,
+                                ),
+                            ));
+                        }
                         if active_run.is_some() {
                             self.run_telemetry.record_retry(
                                 &job_id,
