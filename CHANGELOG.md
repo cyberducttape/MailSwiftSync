@@ -21,6 +21,12 @@
   matching local batch mailbox only if its plan digest still equals the
   approved one, renews the lease while it runs, cancels the local run when
   the lease is lost, and reports a non-secret result.
+- Show verification capacity before a run. Testing the accounts now counts
+  each account's messages (and bytes, where the server reports `STATUS=SIZE`)
+  across its folders, and preflight adds a “Verification capacity” row that
+  flags a mailbox above the 1,000,000-message verification limit or the
+  body-content byte budget before any transfer, instead of the operator
+  learning it from a `verification_limit_exceeded` result afterwards.
 - Control plane OIDC sign-in: authorization code with PKCE, state, and
   nonce; RS256/ES256 ID tokens verified against the provider's JWKS with
   issuer, audience, `azp`, expiry, and nonce checks; identities link to
@@ -29,8 +35,8 @@
 - Control plane workers: tenant-bound worker enrollment with single-use
   enrollment tokens; assignments queued only for approved plans; leases
   with fencing tokens so a worker whose lease expired, moved, or was revoked
-  cannot renew or report; revocation requeues a worker's leases; a plan
-  change stops further leasing and renewals.
+  cannot renew or report; a plan change stops further leasing and
+  renewals.
 - Add `mailswiftsync control`, an optional central control plane for MSP
   fleets: users with Argon2id passwords, expiring sessions and account
   lockout; administrator, manager, engineer, technician, auditor, and

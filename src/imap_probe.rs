@@ -14,6 +14,7 @@ mod fetch_parser;
 mod folders;
 mod list_parser;
 mod literal_framing;
+mod message_census;
 #[path = "imap_probe/namespace.rs"]
 mod namespace_parser;
 mod protocol;
@@ -38,10 +39,7 @@ use folders::{
     ListInventorySummary, read_imap_list_response, read_imap_list_response_with_mailboxes,
     record_list_entry,
 };
-use folders::{
-    authenticated_list_command, read_imap_list_response_with_budget,
-    read_imap_list_response_with_details,
-};
+use folders::{authenticated_list_command, read_imap_list_response_with_details};
 #[cfg(test)]
 use list_parser::tokens as parse_list_tokens;
 #[cfg(test)]
@@ -141,7 +139,7 @@ const MAX_UID_SET_BYTES: usize = 7_000;
 /// Sequence-number FETCH pages scale with the number of messages in a
 /// mailbox, not with its historical UIDNEXT after years of expunges.
 const MESSAGE_UID_ENUMERATION_PAGE_SIZE: u64 = 512;
-const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
+pub(crate) const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
 pub(crate) const MAX_BODY_HASH_MESSAGES_PER_ENDPOINT: usize = 100_000;
 // This is a fail-closed bound for one fetched page's transient Rust state. Live
 // metadata is staged into SQLite immediately after parsing, so the bound is
@@ -966,14 +964,43 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
         Some(budget),
         "could not write LIST",
     )?;
-    let list_summary =
-        read_imap_list_response_with_budget(&mut stream, "a005", &mut buffer, budget)
-            .map_err(|error| format!("{host}: folder inventory failed: {error}"))?;
+    let mut mailbox_details = Vec::new();
+    let list_summary = read_imap_list_response_with_details(
+        &mut stream,
+        "a005",
+        &mut buffer,
+        &mut mailbox_details,
+        budget,
+    )
+    .map_err(|error| format!("{host}: folder inventory failed: {error}"))?;
     if list_summary.mailbox_count == 0 {
         return Err(format!(
             "{host}: folder inventory returned no untagged LIST records"
         ));
     }
+    // Count messages now so verification capacity is known before a run,
+    // leaving the rest of the probe budget for the quota check and LOGOUT.
+    let selectable = mailbox_details
+        .iter()
+        .filter(|mailbox| mailbox.selectable)
+        .map(|mailbox| mailbox.wire_name.as_str())
+        .collect::<Vec<_>>();
+    let census_deadline = (Instant::now() + message_census::CENSUS_TIME_BUDGET).min(
+        budget
+            .deadline
+            .checked_sub(Duration::from_secs(15))
+            .unwrap_or_else(Instant::now),
+    );
+    let message_census = message_census::count_account_messages(
+        &mut stream,
+        host,
+        &selectable,
+        advertises_capability(&post_auth_response, "STATUS=SIZE"),
+        budget,
+        census_deadline,
+    )?;
+    drop(selectable);
+    drop(mailbox_details);
     let caps = crate::core::ServerCapabilities::from_inventory_summary(
         &post_auth_response,
         list_summary.mailbox_count,
@@ -986,6 +1013,7 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     }
     let mut caps = caps;
     caps.namespace = namespace_parser::parse(&namespace_response);
+    caps.message_census = message_census;
     if caps.supports("QUOTA") {
         let mut quota_response = String::new();
         write_imap_command(
