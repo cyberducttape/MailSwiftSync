@@ -101,7 +101,28 @@ Each finding was checked against the code before any change.
 | C3. Panic containment without process supervision | Valid on Unix | Fixed on the same branch: a panicking supervisor ends the engine's process group and keeps its durable identity unless the group is gone. |
 | S1. Claim accepts a running child | Valid | Fixed on the same branch, with a regression test that fails on the old code. |
 | S2. Ownership needs fencing and isolation | Partly valid | Leases, fencing tokens, and agent self-stop already existed. Fixed here: reassignment waits a 60-second grace after expiry, revocation no longer re-queues at once, fenced writes refuse revoked workers, and the agent times its lease from the request. |
+| R1. Rate limits live in one controller's memory | Valid for a fleet | Not yet fixed. Two controllers cannot share a provider quota today. Proposed as M6 (below). |
+| R2. Correlated retry jitter | Valid | Fixed in #151: OS-random full jitter above the required floor. The old jitter was zero at the 120-second cap. |
+| R3. Retry state and admission limits | Mostly already true | Retries park without holding a worker; #151 persists their deadlines. The scheduler pages plans 64 at a time within a lookahead bounded by concurrency. |
+| M1. JobSource holds every job ID | Accurate, minor | Three strings per mailbox, with batches capped at 100,000 (about 15 MB). Plans and credentials are already paged. Low priority. |
+| M2. Process cleanup needs fleet supervision | Addressed | C3 (Unix group kill on panic), S2 (reassignment grace, revoked leases held), and agent self-stop. |
+| M3. Blocking HTTP clients | Not a defect here | No Tokio runtime exists. Clients have timeouts. Revisit only with an async coordinator. |
+| Observability | Partly valid | #151 adds the alert the review called most important: `oldest_running_heartbeat_age_seconds`. Other proposed series and trace correlation are part of M6. |
+| Proposed PostgreSQL scheduler crate | Scope decision | This would replace the SQLite ledger's ownership layer for multi-controller fleets. Not started without a maintainer decision (M6). |
 | S3. Exactly-once delivery cannot be assumed | Accurate; the design already assumes at-least-once | Uncertain runs go to operator review (`process_identity_unverified`, `interrupted`), never to automatic replay, and verification reports extra destination messages. A per-message journal with a scoped reconciliation key is M5, which still needs a scope decision. |
+
+### M6. Multi-controller fleet (needs a scope decision)
+
+Today one controller owns its ledger. The control plane (M2) coordinates
+workers, but each worker runs its own rate limiter. A fleet that shares
+provider quotas needs:
+
+- a central quota authority that grants bounded capacity and pauses work
+  when it is unreachable;
+- trace correlation from tenant to worker;
+- possibly the PostgreSQL scheduler the review proposes.
+
+This is an architectural change, so it waits for a maintainer decision.
 
 ## Blocked on people (not code work)
 
