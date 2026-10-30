@@ -90,6 +90,19 @@ imapsync is external, so per-message progress has to be observed from its
 output. Needs a scope decision from the maintainer before work starts:
 journal granularity, retention, and whether resume may skip work based on it.
 
+### R1. External architecture review (2026-10-29)
+
+Each finding was checked against the code before any change.
+
+| Finding | Verdict | Outcome |
+|---|---|---|
+| C1. Thread and subprocess model, not Tokio | Accurate description, not a defect | No change. Concurrency is bounded by the rate limiter and bounded channels. Distributed work goes through the control-plane lease protocol (M2), not an async rewrite. |
+| C2. Retry schedule only in memory | Valid | Fixed on `fix/batch-claim-and-retry-durability`: retries are recorded with a wall-clock deadline, and later runs honour it. |
+| C3. Panic containment without process supervision | Valid on Unix | Fixed on the same branch: a panicking supervisor ends the engine's process group and keeps its durable identity unless the group is gone. |
+| S1. Claim accepts a running child | Valid | Fixed on the same branch, with a regression test that fails on the old code. |
+| S2. Ownership needs fencing and isolation | Partly valid | Leases, fencing tokens, and agent self-stop already existed. Fixed here: reassignment waits a 60-second grace after expiry, revocation no longer re-queues at once, fenced writes refuse revoked workers, and the agent times its lease from the request. |
+| S3. Exactly-once delivery cannot be assumed | Accurate; the design already assumes at-least-once | Uncertain runs go to operator review (`process_identity_unverified`, `interrupted`), never to automatic replay, and verification reports extra destination messages. A per-message journal with a scoped reconciliation key is M5, which still needs a scope decision. |
+
 ## Blocked on people (not code work)
 
 | Item | Needs |

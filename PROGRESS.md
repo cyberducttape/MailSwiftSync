@@ -4,6 +4,26 @@ Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
 ## 2026-10-29
 
+### R1. External architecture review
+
+See the table in DEVELOPMENT_PLAN.md for each verdict.
+
+- `fix/batch-claim-and-retry-durability` (from `main`), commit `d577e8e1`
+  (S1, C2, C3).
+  - Gate: `make check` passed; `make test` reported 1,483 passed, 0
+    failed, 12 ignored; the Windows clippy cross-check passed.
+  - In one earlier full run, `imap_probe::resolver::tests::hung_helper_is_killed_at_the_deadline_or_on_cancellation`
+    failed with "helper never started". The test has a 10-second startup
+    wait, and that code was not changed. It then passed 5 of 5 isolated
+    runs and the full rerun.
+- This branch (S2):
+  - Store tests cover each case: the 60-second reassignment grace, a
+    revoked worker's lease held until expiry plus grace, and a revoked
+    worker refused at renew and complete.
+  - The HTTP test now expects a revoked worker's lease to stay `leased`.
+- Not testable here: the real duration of an engine stop under load, which
+  the 60-second grace is meant to cover. It needs the Docker IMAP lab.
+
 ### M2. Control-plane worker agent: done (live drill outstanding)
 
 Branch `feat/control-plane-worker-agent`, stacked on

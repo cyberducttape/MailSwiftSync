@@ -836,11 +836,11 @@ fn revoke_worker(call: &Call<'_>, tenant: &str, worker: &str) -> Handled {
         "worker.revoke",
         &resource,
     )?;
-    let requeued = call
+    let held = call
         .store()
         .revoke_worker(tenant, worker, &call.actor(&principal))?;
     Ok(Response::ok(
-        &json!({ "revoked": worker, "requeued_assignments": requeued }),
+        &json!({ "revoked": worker, "leases_awaiting_expiry": held }),
     ))
 }
 
@@ -1591,8 +1591,10 @@ mod tests {
             401,
             "a revoked worker's credential stops working"
         );
+        // The revoked worker may still be stopping its engine, so the lease
+        // stays assigned until it expires and the reassignment grace passes.
         let (_, listed) = harness.call("GET", &assignments, Some(&engineer), None);
-        assert_eq!(listed["assignments"][0]["state"], "queued");
+        assert_eq!(listed["assignments"][0]["state"], "leased");
     }
 
     #[test]

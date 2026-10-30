@@ -212,8 +212,15 @@ Fencing rules:
   token. A worker that stalls past its lease therefore cannot overwrite the
   result of the worker that took over.
 - After 10 leases that expired without completing, the assignment fails.
+- A lease that expired goes to another worker only 60 seconds after it
+  expired. IMAP servers do not check fencing tokens, so the control plane
+  cannot stop an old worker's engine. Instead the old worker stops itself
+  before its lease expires, and this grace covers the engine shutdown before
+  a second worker may write to the mailbox.
 - Revoking a worker (`POST /v1/tenants/{t}/workers/{w}/revoke`) stops its
-  credential at once and returns its leases to the queue.
+  credential at once. Its leases stay assigned: it can no longer renew, so
+  it stops its runs, and the leases become available after they expire plus
+  the grace. The response's `leases_awaiting_expiry` counts them.
 - A plan change withdraws approval. Its queued assignments stop leasing,
   and renewals of running leases are refused so workers stop.
 - Results are non-secret JSON and refused if they carry credential-like
@@ -257,10 +264,11 @@ For each lease, the agent:
   `headless batch-live --mailboxes <job-id>`. An assignment completes only
   when the mailbox reaches a verified terminal state. Any other result is
   reported as `failed` with the controller's message.
-- Renews the lease every third of its length. If a renewal is refused
-  (`409` or `401`), or the service stays unreachable until the lease would
-  expire, it cancels the local run, waits for the engine to stop, and
-  reports nothing, because the service would refuse that result.
+- Renews the lease every third of its length, timing the lease from just
+  before it asked for it. If a renewal is refused (`409` or `401`), or the
+  service stays unreachable until the lease would expire, it cancels the
+  local run, waits for the engine to stop, and reports nothing, because the
+  service would refuse that result.
 
 `--server` must be `https`, except for a loopback address. The agent
 ignores proxy settings, does not follow redirects, and sends its credential

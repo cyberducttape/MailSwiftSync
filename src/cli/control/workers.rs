@@ -9,7 +9,9 @@
 //! on an unexpired lease held by the same worker. A worker whose lease
 //! expired, was revoked, or was re-leased to another worker is refused, so
 //! a stale worker cannot overwrite the result of the worker that replaced
-//! it. Assignments are created only for plans approved at their current
+//! it. A lease is handed to another worker only `REASSIGN_GRACE_SECONDS`
+//! after it expired, including after a revocation, so the old worker has
+//! stopped its engine before a new one can start on the mailbox. Assignments are created only for plans approved at their current
 //! revision, and a plan change stops further lease renewals.
 
 use super::audit::AuditEntry;
@@ -64,6 +66,13 @@ pub(super) const MAX_ENROLLMENT_MINUTES: i64 = 60;
 pub(super) const DEFAULT_LEASE_SECONDS: i64 = 300;
 pub(super) const MAX_LEASE_SECONDS: i64 = 900;
 const MAX_LEASE_ATTEMPTS: i64 = 10;
+/// How long an expired or revoked worker's lease stays unavailable after it
+/// expires. The control plane cannot stop that worker's engine: IMAP servers
+/// do not check fencing tokens. The old worker stops itself before its local
+/// lease expires, and this margin covers its engine shutdown (SIGTERM, then
+/// SIGKILL after five seconds) and controller drain before anyone else may
+/// write to the mailbox.
+pub(super) const REASSIGN_GRACE_SECONDS: i64 = 60;
 const MAX_ASSIGNMENTS_PER_REQUEST: usize = 1_000;
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 const MAX_CAPABILITIES: usize = 32;
@@ -178,6 +187,10 @@ fn lease_lost() -> StoreError {
 }
 
 /// An approved, unchanged plan for the assignment's project.
+/// The leasing worker still exists and is not revoked. A revoked worker's
+/// leases stay assigned until they expire, so every fenced write checks this.
+const WORKER_NOT_REVOKED: &str = "EXISTS(SELECT 1 FROM workers w WHERE w.id=assignments.lease_worker_id AND w.tenant_id=assignments.tenant_id AND w.revoked_at IS NULL)";
+
 const PLAN_STILL_APPROVED: &str = "EXISTS(SELECT 1 FROM projects p WHERE p.id=assignments.project_id AND p.tenant_id=assignments.tenant_id AND p.approved_revision=p.plan_revision AND p.plan_revision=assignments.plan_revision)";
 
 impl Store {
@@ -361,10 +374,14 @@ impl Store {
             if changed == 0 {
                 return Err(StoreError::NotFound);
             }
-            Ok(tx.execute(
-                "UPDATE assignments SET state='queued',lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?3 WHERE tenant_id=?1 AND lease_worker_id=?2 AND state='leased'",
-                params![tenant, worker, at],
-            )?)
+            // The revoked worker may still be running an engine. Its leases
+            // stay put: it can no longer renew, so it stops itself before
+            // they expire, and they become available again after the grace.
+            Ok(tx.query_row(
+                "SELECT COUNT(*) FROM assignments WHERE tenant_id=?1 AND lease_worker_id=?2 AND state='leased'",
+                params![tenant, worker],
+                |row| row.get::<_, i64>(0),
+            )? as usize)
         })
     }
 
@@ -501,15 +518,15 @@ impl Store {
         tx.execute(
             "UPDATE assignments SET state='failed',lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?2,
                 result='{\"error\":\"the lease expired after the maximum number of attempts\"}'
-             WHERE tenant_id=?1 AND state='leased' AND lease_expires_at<=?2 AND attempts>=?3",
-            params![worker.tenant, at, MAX_LEASE_ATTEMPTS],
+             WHERE tenant_id=?1 AND state='leased' AND lease_expires_at+?4<=?2 AND attempts>=?3",
+            params![worker.tenant, at, MAX_LEASE_ATTEMPTS, REASSIGN_GRACE_SECONDS],
         )?;
         let candidate: Option<String> = tx
             .query_row(
                 &format!(
-                    "SELECT id FROM assignments WHERE tenant_id=?1 AND (state='queued' OR (state='leased' AND lease_expires_at<=?2)) AND {PLAN_STILL_APPROVED} ORDER BY created_at,id LIMIT 1"
+                    "SELECT id FROM assignments WHERE tenant_id=?1 AND (state='queued' OR (state='leased' AND lease_expires_at+?3<=?2)) AND {PLAN_STILL_APPROVED} ORDER BY created_at,id LIMIT 1"
                 ),
-                params![worker.tenant, at],
+                params![worker.tenant, at, REASSIGN_GRACE_SECONDS],
                 |row| row.get(0),
             )
             .optional()?;
@@ -583,7 +600,7 @@ impl Store {
         self.fenced(worker, assignment, fencing_token, "assignment.renew", request_id, |tx| {
             let changed = tx.execute(
                 &format!(
-                    "UPDATE assignments SET lease_expires_at=?6,updated_at=?5 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5 AND {PLAN_STILL_APPROVED}"
+                    "UPDATE assignments SET lease_expires_at=?6,updated_at=?5 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5 AND {WORKER_NOT_REVOKED} AND {PLAN_STILL_APPROVED}"
                 ),
                 params![worker.tenant, assignment, worker.id, fencing_token, at, expires_at],
             )?;
@@ -618,8 +635,8 @@ impl Store {
         let at = now();
         self.fenced(worker, assignment, fencing_token, "assignment.complete", request_id, |tx| {
             let changed = tx.execute(
-                "UPDATE assignments SET state=?6,result=?7,lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?5
-                 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5",
+                &format!("UPDATE assignments SET state=?6,result=?7,lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?5
+                 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5 AND {WORKER_NOT_REVOKED}"),
                 params![worker.tenant, assignment, worker.id, fencing_token, at, outcome.as_str(), text],
             )?;
             if changed == 0 {
@@ -750,12 +767,17 @@ mod tests {
             identity
         }
 
+        /// Expire a lease and let its reassignment grace pass.
         fn expire_lease(&self, assignment: &str) {
+            self.set_lease_expiry(assignment, now() - REASSIGN_GRACE_SECONDS - 1);
+        }
+
+        fn set_lease_expiry(&self, assignment: &str, at: i64) {
             self.store
                 .lock()
                 .execute(
                     "UPDATE assignments SET lease_expires_at=?2 WHERE id=?1",
-                    params![assignment, now() - 1],
+                    params![assignment, at],
                 )
                 .unwrap();
         }
@@ -872,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn revoking_a_worker_requeues_its_leases_and_stops_its_credential() {
+    fn revoking_a_worker_stops_its_credential_and_holds_its_leases_until_expiry() {
         let fixture = fixture();
         fixture.approve();
         fixture
@@ -919,6 +941,12 @@ mod tests {
                 .is_err()
         );
         let replacement = fixture.worker(&fixture.tenant, "w2");
+        assert_eq!(
+            fixture.store.lease(&replacement, 300, "r").unwrap(),
+            None,
+            "the revoked worker may still be stopping its engine"
+        );
+        fixture.expire_lease(&lease.assignment_id);
         let next = fixture
             .store
             .lease(&replacement, 300, "r")
@@ -1035,6 +1063,39 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fixture.store.lease(&worker, 300, "r").unwrap(), None);
+    }
+
+    #[test]
+    fn an_expired_lease_is_reassigned_only_after_the_grace() {
+        let fixture = fixture();
+        fixture.approve();
+        fixture
+            .store
+            .create_assignments(
+                &fixture.tenant,
+                &fixture.project,
+                &["a@acme.example".into()],
+                &fixture.admin,
+            )
+            .unwrap();
+        let first = fixture.worker(&fixture.tenant, "w1");
+        let second = fixture.worker(&fixture.tenant, "w2");
+        let lease = fixture.store.lease(&first, 300, "r").unwrap().unwrap();
+
+        // Expired, but the first worker may still be stopping its engine.
+        fixture.set_lease_expiry(&lease.assignment_id, now() - REASSIGN_GRACE_SECONDS + 5);
+        assert_eq!(fixture.store.lease(&second, 300, "r").unwrap(), None);
+        assert!(
+            fixture
+                .store
+                .renew_lease(&first, &lease.assignment_id, lease.fencing_token, 300, "r")
+                .is_err(),
+            "an expired lease cannot be renewed during the grace"
+        );
+
+        fixture.expire_lease(&lease.assignment_id);
+        let next = fixture.store.lease(&second, 300, "r").unwrap().unwrap();
+        assert_eq!(next.fencing_token, lease.fencing_token + 1);
     }
 
     #[test]

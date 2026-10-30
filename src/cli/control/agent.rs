@@ -493,6 +493,10 @@ pub(super) fn handle_one(
     executor: &impl Executor,
     config: &AgentConfig,
 ) -> Result<Handled, ControlError> {
+    // The service starts the lease when it handles the request, so the
+    // local clock starts before sending it. The local deadline can then only
+    // fall before the service's, never after.
+    let requested = Instant::now();
     let Some(lease) = control.lease(config.lease_seconds)? else {
         return Ok(Handled::Idle);
     };
@@ -544,7 +548,17 @@ pub(super) fn handle_one(
     let lease_lost = AtomicBool::new(false);
     let (done, finished) = crossbeam_channel::bounded::<()>(0);
     let outcome = std::thread::scope(|scope| {
-        scope.spawn(|| keep_renewing(control, config, &lease, &finished, &stop, &lease_lost));
+        scope.spawn(|| {
+            keep_renewing(
+                control,
+                config,
+                &lease,
+                requested,
+                &finished,
+                &stop,
+                &lease_lost,
+            )
+        });
         let outcome = executor.execute(&project, &lease.mailbox, &stop);
         drop(done);
         outcome
@@ -598,12 +612,14 @@ fn keep_renewing(
     control: &impl Control,
     config: &AgentConfig,
     lease: &Leased,
+    requested: Instant,
     finished: &crossbeam_channel::Receiver<()>,
     stop: &AtomicBool,
     lease_lost: &AtomicBool,
 ) {
-    // Measured locally so clock skew with the service cannot extend it.
-    let mut expires = Instant::now() + Duration::from_secs(config.lease_seconds as u64);
+    // Measured locally from when the lease was requested, so neither clock
+    // skew nor network delay can extend it past the service's deadline.
+    let mut expires = requested + Duration::from_secs(config.lease_seconds as u64);
     let give_up = |reason: &str| {
         eprintln!(
             "Worker: stopping assignment {}: {reason}",
