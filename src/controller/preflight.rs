@@ -154,6 +154,11 @@ pub(crate) fn assess_plan(
     append_capability_check(&mut checks, "Source", source_capabilities, false);
     append_capability_check(&mut checks, "Destination", destination_capabilities, true);
     checks.push(destination_capacity_check(destination_capabilities));
+    if let Some(check) =
+        verification_capacity_check(form, source_capabilities, destination_capabilities)
+    {
+        checks.push(check);
+    }
     if let (Some(source), Some(destination)) = (source_capabilities, destination_capabilities)
         && let (Some(source_ns), Some(destination_ns)) = (&source.namespace, &destination.namespace)
     {
@@ -269,6 +274,124 @@ fn destination_capacity_check(
     )
 }
 
+/// Compare the probe's message census with message-level verification
+/// limits before anything transfers. Exceeding a limit does not stop a
+/// transfer, but the mailbox would end as "verification limit exceeded"
+/// rather than verified, so the operator must see that up front.
+fn verification_capacity_check(
+    form: &Form,
+    source: Option<&core::ServerCapabilities>,
+    destination: Option<&core::ServerCapabilities>,
+) -> Option<(String, String, PreflightCheckStatus)> {
+    const LABEL: &str = "Verification capacity";
+    if source.is_none() && destination.is_none() {
+        return None;
+    }
+    if form.engine() == core::Engine::Dovecot {
+        return Some((
+            LABEL.into(),
+            "Dovecot runs use engine evidence; no message-level verification limit applies".into(),
+            PreflightCheckStatus::Passed,
+        ));
+    }
+    let limit = crate::imap_probe::MAX_MESSAGE_FETCH_RECORDS as u64;
+    let body_hash = form.profile.body_hash_verification;
+    let mut parts = Vec::new();
+    let mut over = Vec::new();
+    let mut unknown = Vec::new();
+    let mut total_bytes = Some(0_u64);
+    for (side, capabilities) in [("source", source), ("destination", destination)] {
+        let Some(census) = capabilities.map(|capabilities| &capabilities.message_census) else {
+            unknown.push(format!("{side} account not tested"));
+            total_bytes = None;
+            continue;
+        };
+        let Some(messages) = census.messages else {
+            unknown.push(format!(
+                "{side} message count unknown ({})",
+                census
+                    .incomplete_reason
+                    .as_deref()
+                    .unwrap_or("not measured by this probe")
+            ));
+            total_bytes = None;
+            continue;
+        };
+        parts.push(format!(
+            "{side} {messages} message(s) in {} folder(s){}",
+            census.folders_counted,
+            census
+                .bytes
+                .map(|bytes| format!(", {bytes} bytes"))
+                .unwrap_or_default()
+        ));
+        if messages > limit {
+            over.push(format!(
+                "{side} has {messages} messages, above the {limit}-message-per-account verification limit"
+            ));
+        }
+        total_bytes = total_bytes
+            .zip(census.bytes)
+            .map(|(sum, bytes)| sum.saturating_add(bytes));
+    }
+    if body_hash
+        && let Some(bytes) = total_bytes
+        && bytes > form.profile.body_hash_max_total_bytes
+    {
+        over.push(format!(
+            "source plus destination hold {bytes} bytes, above the {}-byte body-content verification budget",
+            form.profile.body_hash_max_total_bytes
+        ));
+    }
+    let counted = if parts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Counted {} (a message in several folders counts once per folder). ",
+            parts.join("; ")
+        )
+    };
+    if !over.is_empty() {
+        return Some((
+            LABEL.into(),
+            format!(
+                "{counted}{}. The transfer can still run, but this mailbox will finish as \"verification limit exceeded\", not verified; split the mailbox or plan separate verification.",
+                over.join("; ")
+            ),
+            PreflightCheckStatus::Blocked,
+        ));
+    }
+    if !unknown.is_empty() {
+        return Some((
+            LABEL.into(),
+            format!("{counted}Not established: {}.", unknown.join("; ")),
+            PreflightCheckStatus::Unknown,
+        ));
+    }
+    if body_hash && total_bytes.is_none() {
+        return Some((
+            LABEL.into(),
+            format!(
+                "{counted}Within the {limit}-message limit; the server does not report folder sizes, so the {}-byte body-content budget is unchecked.",
+                form.profile.body_hash_max_total_bytes
+            ),
+            PreflightCheckStatus::Unknown,
+        ));
+    }
+    Some((
+        LABEL.into(),
+        format!(
+            "{counted}Within the {limit}-message-per-account verification limit{}.",
+            if body_hash {
+                " and the body-content byte budget"
+            } else {
+                ""
+            }
+        ),
+        PreflightCheckStatus::Passed,
+    ))
+}
+
 fn quota_summary(capabilities: &core::ServerCapabilities, quota_is_blocking: bool) -> String {
     if !capabilities.supports("QUOTA") {
         "quota not advertised".into()
@@ -313,7 +436,7 @@ fn namespace_entries(entries: &[core::NamespaceEntry]) -> String {
 mod tests {
     use super::{
         CapabilityProbeResult, PreflightCheckStatus, assess_plan, capability_observation_matches,
-        capability_probe_result_matches, destination_capacity_check,
+        capability_probe_result_matches, destination_capacity_check, verification_capacity_check,
     };
     use crate::{Form, core};
 
@@ -377,6 +500,78 @@ mod tests {
             PreflightCheckStatus::Blocked
         );
         assert_eq!(checks[2].2, PreflightCheckStatus::Passed);
+    }
+
+    fn counted(messages: Option<u64>, bytes: Option<u64>) -> core::ServerCapabilities {
+        let mut capabilities =
+            core::ServerCapabilities::from_inventory_summary("* CAPABILITY IMAP4rev1\r\n", 3, 0);
+        capabilities.message_census = core::MessageCensus {
+            messages,
+            bytes,
+            folders_counted: if messages.is_some() { 3 } else { 1 },
+            incomplete_reason: messages
+                .is_none()
+                .then(|| "the server refused STATUS".to_owned()),
+        };
+        capabilities
+    }
+
+    #[test]
+    fn verification_capacity_is_shown_before_a_run() {
+        let form = Form::default();
+        assert!(verification_capacity_check(&form, None, None).is_none());
+
+        let small = counted(Some(1_200), Some(50_000));
+        let (name, detail, status) =
+            verification_capacity_check(&form, Some(&small), Some(&counted(Some(0), None)))
+                .unwrap();
+        assert_eq!(name, "Verification capacity");
+        assert_eq!(status, PreflightCheckStatus::Passed, "{detail}");
+        assert!(detail.contains("source 1200 message(s)"), "{detail}");
+
+        let huge = counted(Some(1_000_001), None);
+        let (_, detail, status) =
+            verification_capacity_check(&form, Some(&huge), Some(&small)).unwrap();
+        assert_eq!(status, PreflightCheckStatus::Blocked);
+        assert!(detail.contains("verification limit exceeded"), "{detail}");
+
+        let refused = counted(None, None);
+        let (_, detail, status) =
+            verification_capacity_check(&form, Some(&small), Some(&refused)).unwrap();
+        assert_eq!(status, PreflightCheckStatus::Unknown);
+        assert!(detail.contains("refused STATUS"), "{detail}");
+        let (_, detail, status) = verification_capacity_check(&form, Some(&small), None).unwrap();
+        assert_eq!(status, PreflightCheckStatus::Unknown);
+        assert!(
+            detail.contains("destination account not tested"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn body_content_budget_is_checked_only_when_sizes_are_reported() {
+        let mut form = Form::default();
+        form.profile.body_hash_verification = true;
+        form.profile.body_hash_max_total_bytes = 1_000;
+        let sized = |bytes| counted(Some(10), Some(bytes));
+        assert_eq!(
+            verification_capacity_check(&form, Some(&sized(400)), Some(&sized(400)))
+                .unwrap()
+                .2,
+            PreflightCheckStatus::Passed
+        );
+        let (_, detail, status) =
+            verification_capacity_check(&form, Some(&sized(800)), Some(&sized(400))).unwrap();
+        assert_eq!(status, PreflightCheckStatus::Blocked);
+        assert!(
+            detail.contains("body-content verification budget"),
+            "{detail}"
+        );
+        let (_, detail, status) =
+            verification_capacity_check(&form, Some(&sized(10)), Some(&counted(Some(1), None)))
+                .unwrap();
+        assert_eq!(status, PreflightCheckStatus::Unknown);
+        assert!(detail.contains("unchecked"), "{detail}");
     }
 
     #[test]

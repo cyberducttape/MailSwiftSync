@@ -35,6 +35,21 @@ pub struct ServerCapabilities {
     /// RFC 7889 APPENDLIMIT, in octets, when the server advertises it.
     pub append_limit_bytes: Option<u64>,
     pub namespace: Option<NamespaceInfo>,
+    /// Message count observed by the readiness probe, before any transfer.
+    pub message_census: MessageCensus,
+}
+
+/// Messages (and, when the server reports RFC 8438 `STATUS SIZE`, bytes)
+/// summed over an account's selectable folders. A message held in several
+/// folders counts once per folder, as message-level verification counts it.
+/// `messages` is `None` unless every folder was counted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MessageCensus {
+    pub messages: Option<u64>,
+    pub bytes: Option<u64>,
+    pub folders_counted: usize,
+    /// Why the count is missing; `None` with no count means not attempted.
+    pub incomplete_reason: Option<String>,
 }
 
 impl ServerCapabilities {
@@ -104,6 +119,7 @@ impl ServerCapabilities {
             quota_resources: BTreeMap::new(),
             append_limit_bytes,
             namespace: None,
+            message_census: MessageCensus::default(),
         }
     }
 
