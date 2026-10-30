@@ -1,8 +1,13 @@
 # MSP RBAC and tenant isolation contract
 
-This is a required control-plane design, not a capability provided by the
-current desktop application. The local GUI, SQLite ledger, and `fleet-status`
-command must not be presented as an authorization boundary.
+This is the required control-plane design. The optional
+[`mailswiftsync control` service](control-plane.md) implements its
+authentication, role, tenant-isolation, scoped-API-key, separation-of-duties,
+audit-log, worker enrollment/fenced-lease, and OIDC sign-in requirements.
+Worker enrollment uses single-use enrollment tokens over TLS rather than
+mTLS. The local GUI, a worker's SQLite
+ledger, and `fleet-status` remain outside this boundary and must not be
+presented as an authorization boundary.
 
 ## Required security model
 
