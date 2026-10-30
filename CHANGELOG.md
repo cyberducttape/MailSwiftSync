@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Control plane worker agent: `control worker plan` exports a non-secret
+  plan document with a SHA-256 of each local durable batch mailbox's plan,
+  `control worker enroll` exchanges an enrollment token for an owner-only
+  credential file, and `control worker run` leases assignments, runs the
+  matching local batch mailbox only if its plan digest still equals the
+  approved one, renews the lease while it runs, cancels the local run when
+  the lease is lost, and reports a non-secret result.
 - Control plane OIDC sign-in: authorization code with PKCE, state, and
   nonce; RS256/ES256 ID tokens verified against the provider's JWKS with
   issuer, audience, `azp`, expiry, and nonce checks; identities link to

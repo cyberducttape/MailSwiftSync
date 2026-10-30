@@ -221,6 +221,53 @@ Fencing rules:
 - Every lease, renewal, completion, and refusal is audited with the worker
   as actor.
 
+## Running a worker agent
+
+`mailswiftsync control worker` runs on the host that holds the mailbox
+credentials. It executes leases against that host's own ledger, so the
+batch must already be imported and validated there, the same as for
+`headless batch-live`.
+
+1. **Export the plan.** `mailswiftsync control worker plan <state.db>
+   [--project <ledger-project-id>]` prints a plan document (format
+   `mailswiftsync.worker-plan` v1). It holds the ledger project ID and, for
+   each durable batch mailbox, its label and a SHA-256 of that row's
+   effective plan, keyed by the local job ID. It contains no credentials or
+   plan settings.
+2. **Approve it.** Store the document as the project's plan
+   (`PUT /v1/tenants/{t}/projects/{p}/plan`) and have a second person approve
+   it. Queue assignments using the job IDs from the document as mailbox
+   labels.
+3. **Enroll.** `mailswiftsync control worker enroll --server <url>
+   --enrollment-token-file <file> --credential-out <file>` exchanges the
+   single-use token and writes the worker credential to a new owner-only
+   file.
+4. **Run.** `mailswiftsync control worker run <state.db> --server <url>
+   --credential-file <file> [--ca-cert <pem>] [--lease-seconds 300]
+   [--poll-seconds 30] [--once] [--acknowledge-destination-loss]` leases one
+   assignment at a time.
+
+For each lease, the agent:
+- Recomputes the local row's plan digest. If the approved document names
+  another ledger project, does not list the mailbox, or lists a different
+  digest, the agent reports the assignment as `failed` ("refused before
+  starting") and starts no transfer. Re-export and re-approve after any
+  local plan change.
+- Runs the mailbox through the same preflight and live batch path as
+  `headless batch-live --mailboxes <job-id>`. An assignment completes only
+  when the mailbox reaches a verified terminal state. Any other result is
+  reported as `failed` with the controller's message.
+- Renews the lease every third of its length. If a renewal is refused
+  (`409` or `401`), or the service stays unreachable until the lease would
+  expire, it cancels the local run, waits for the engine to stop, and
+  reports nothing, because the service would refuse that result.
+
+`--server` must be `https`, except for a loopback address. The agent
+ignores proxy settings, does not follow redirects, and sends its credential
+only to that URL. `--ca-cert` adds a private CA for the service
+certificate. A refused worker credential ends the agent with an error.
+Network failures are retried with capped backoff.
+
 ## API
 
 Request bodies are JSON (`Content-Type: application/json`, at most 64 KiB,
