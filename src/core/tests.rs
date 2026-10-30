@@ -4950,6 +4950,59 @@ fn transient_batch_failure_releases_child_for_a_fresh_claim() {
 }
 
 #[test]
+fn heartbeat_age_tracks_the_stalest_running_mailbox() {
+    let db = StateStore::in_memory().unwrap();
+    let (project, jobs) = db
+        .create_project_with_mailboxes(
+            "heartbeat",
+            "source",
+            "destination",
+            &[("one".into(), "one".into()), ("two".into(), "two".into())],
+        )
+        .unwrap();
+    assert_eq!(
+        db.project_operation_metrics(&project.id)
+            .unwrap()
+            .oldest_running_heartbeat_age_seconds,
+        0,
+        "nothing is running"
+    );
+    let children = db
+        .begin_batch_run_with_children(&project.id, &jobs, "heartbeat-batch", "batch", &[], "", &[])
+        .unwrap();
+    for (job, child) in jobs.iter().zip(&children) {
+        db.claim_batch_mailbox_for_child(&project.id, job, "heartbeat-batch", child)
+            .unwrap();
+    }
+    // The first mailbox was claimed ten minutes ago and has not reported
+    // since; the second was just claimed.
+    db.connection
+        .execute(
+            "UPDATE events SET created_at=datetime('now','-600 seconds') WHERE run_id=?1",
+            [&children[0]],
+        )
+        .unwrap();
+    let age = db
+        .project_operation_metrics(&project.id)
+        .unwrap()
+        .oldest_running_heartbeat_age_seconds;
+    assert!((600..660).contains(&age), "{age}");
+
+    // A progress checkpoint is a heartbeat.
+    db.record_events_for_runs_batch(&[(
+        &children[0],
+        "transfer_progress_checkpoint",
+        "{\"attempt\":1,\"progress\":{\"messages_copied\":1}}",
+    )])
+    .unwrap();
+    let age = db
+        .project_operation_metrics(&project.id)
+        .unwrap()
+        .oldest_running_heartbeat_age_seconds;
+    assert!(age < 60, "{age}");
+}
+
+#[test]
 fn claim_refuses_an_already_running_child_and_changes_nothing() {
     let db = StateStore::in_memory().unwrap();
     let (project, jobs) = db

@@ -11,6 +11,11 @@
   also cleared the engine's durable process identity, so a retry could
   overlap it. That identity is now kept unless the group is confirmed gone.
   Windows already did this through the job object.
+- Export `mailswiftsync_oldest_running_heartbeat_age_seconds`: seconds since
+  the stalest running mailbox's last claim, progress checkpoint, or scheduled
+  retry. It has no labels, so it adds no per-mailbox or per-tenant series.
+  It lets an alert catch a mailbox that stays `running` with nothing
+  advancing it.
 - Draw batch retry delays uniformly, from the OS random source, between the
   required delay (server-requested, provider-documented, or class default)
   and the exponential ceiling. The old jitter was derived from the clock and

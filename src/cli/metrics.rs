@@ -138,6 +138,21 @@ pub(super) fn render_metrics_across(
         output,
         "mailswiftsync_registered_engine_processes {registered_processes}"
     );
+    let oldest_running_heartbeat_age_seconds = summaries
+        .iter()
+        .flat_map(|summary| &summary.projects)
+        .map(|project| project.operations.oldest_running_heartbeat_age_seconds)
+        .max()
+        .unwrap_or(0);
+    gauge_header(
+        &mut output,
+        "mailswiftsync_oldest_running_heartbeat_age_seconds",
+        "Seconds since the stalest running mailbox's last claim, progress checkpoint, or scheduled retry; 0 when none is running. Alert when a mailbox stays running with no sign of progress.",
+    );
+    let _ = writeln!(
+        output,
+        "mailswiftsync_oldest_running_heartbeat_age_seconds {oldest_running_heartbeat_age_seconds}"
+    );
     let mut transfer_attempts = 0_usize;
     let mut transfer_retries = 0_usize;
     let mut unfinished_attempt_messages_copied = 0_u64;
@@ -319,6 +334,7 @@ mod tests {
                     retried_attempts: 1,
                     unfinished_attempt_messages_copied: 4,
                     unfinished_attempt_bytes_copied: 4096,
+                    oldest_running_heartbeat_age_seconds: 75,
                     attempt_outcomes: [
                         ("completed".into(), 2),
                         ("failed:capacity".into(), 1),
@@ -345,6 +361,7 @@ mod tests {
         assert!(output.contains("mailswiftsync_mailbox_jobs{state=\"queued\"} 1"));
         assert!(output.contains("mailswiftsync_transfer_retries_total 1"));
         assert!(output.contains("mailswiftsync_unfinished_attempt_messages_copied 4"));
+        assert!(output.contains("mailswiftsync_oldest_running_heartbeat_age_seconds 75"));
         assert!(output.contains("mailswiftsync_unfinished_attempt_bytes_copied 4096"));
         assert!(output.contains("mailswiftsync_transfer_attempts_total 4"));
         assert!(output.contains("# TYPE mailswiftsync_transfer_attempt_outcomes gauge"));
