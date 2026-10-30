@@ -2,14 +2,18 @@
 
 ## Unreleased
 
-- Control plane: hand an expired lease to another worker only 60 seconds
-  after it expired, and keep a revoked worker's leases assigned until then
-  instead of re-queuing them immediately. IMAP servers ignore fencing
-  tokens, so this grace is what keeps a second worker from writing to a
-  mailbox while the old worker's engine is still stopping. Renewals and
-  completions now also refuse a revoked worker inside the store, and the
-  agent times its lease from just before it asks for one. The revoke
-  response field `requeued_assignments` is now `leases_awaiting_expiry`.
+- Control plane: never hand an expired lease to another worker
+  automatically. IMAP servers ignore fencing tokens, so the service cannot
+  know whether the old worker's engine stopped. 60 seconds after expiry the
+  assignment moves to `needs_reconciliation`, and an operator returns it to
+  the queue with `POST …/assignments/{a}/requeue` and a reason, which is
+  audited. This replaces the automatic re-lease and its 10-attempt limit.
+  A revoked worker's leases stay assigned instead of being re-queued at
+  once. Renewals and completions refuse a revoked worker inside the store,
+  and the agent times its lease from just before it asks for one. The
+  revoke response field `requeued_assignments` is now
+  `leases_awaiting_expiry`. The control-plane database moves to schema v4,
+  and the upgrade is applied automatically.
 - Control plane worker agent: `control worker plan` exports a non-secret
   plan document with a SHA-256 of each local durable batch mailbox's plan,
   `control worker enroll` exchanges an enrollment token for an owner-only

@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
 pub(super) const LOCKOUT_FAILURES: i64 = 5;
@@ -250,17 +250,22 @@ impl Store {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
         match version {
-            0..=2 => {
+            0..=3 => {
                 let base = if version == 0 { SCHEMA } else { "" };
                 let workers = if version <= 1 {
                     super::workers::SCHEMA_V2
                 } else {
                     ""
                 };
+                let oidc = if version <= 2 {
+                    super::oidc::SCHEMA_V3
+                } else {
+                    ""
+                };
                 connection
                     .execute_batch(&format!(
-                        "BEGIN IMMEDIATE; {base} {workers} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
-                        super::oidc::SCHEMA_V3
+                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
+                        super::workers::SCHEMA_V4
                     ))
                     .map_err(|error| format!("could not create or upgrade the schema: {error}"))?;
             }
@@ -1624,6 +1629,48 @@ mod tests {
         let newer = Connection::open_in_memory().unwrap();
         newer.execute_batch("PRAGMA user_version=99;").unwrap();
         assert!(Store::from_connection(newer).is_err());
+    }
+
+    #[test]
+    fn a_version_three_database_gains_the_reconciliation_state() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(&format!(
+                "{SCHEMA} {} {} PRAGMA user_version=3;",
+                super::super::workers::SCHEMA_V2,
+                super::super::oidc::SCHEMA_V3
+            ))
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO tenants(id,name,created_at) VALUES('ten_old','Old',1)",
+                [],
+            )
+            .unwrap();
+        let store = Store::from_connection(connection).unwrap();
+        let connection = store.lock();
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let table: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='assignments'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table.contains("'needs_reconciliation'"), "{table}");
+        let indexes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('assignments_lease','assignments_project')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 2);
+        drop(connection);
+        assert!(store.tenant_exists("ten_old").unwrap());
     }
 
     #[test]

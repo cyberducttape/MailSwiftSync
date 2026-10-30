@@ -208,19 +208,23 @@ customer's work.
    if the worker was revoked), and the worker must stop.
 
 Fencing rules:
-- Every lease, including re-leasing an expired one, raises the fencing
-  token. A worker that stalls past its lease therefore cannot overwrite the
-  result of the worker that took over.
-- After 10 leases that expired without completing, the assignment fails.
-- A lease that expired goes to another worker only 60 seconds after it
-  expired. IMAP servers do not check fencing tokens, so the control plane
-  cannot stop an old worker's engine. Instead the old worker stops itself
-  before its lease expires, and this grace covers the engine shutdown before
-  a second worker may write to the mailbox.
+- Every lease raises the fencing token. A worker that stalls past its lease
+  therefore cannot overwrite the result of a worker that ran later.
+- A lease that expires without a result is never handed to another worker
+  automatically. IMAP servers do not check fencing tokens, so the control
+  plane cannot know whether the old worker's engine stopped: the agent
+  stops itself before its lease expires, but an agent that was killed or a
+  host that was suspended may leave an engine running. 60 seconds after
+  expiry the assignment moves to `needs_reconciliation` (audited as
+  `assignment.needs_reconciliation`), and a late result for it is refused.
+- An operator with `assignment:create` returns it to the queue with
+  `POST /v1/tenants/{t}/projects/{p}/assignments/{a}/requeue` `{reason}`
+  once the old worker is confirmed stopped. The reason is required and
+  audited. Only `needs_reconciliation` assignments can be requeued.
 - Revoking a worker (`POST /v1/tenants/{t}/workers/{w}/revoke`) stops its
   credential at once. Its leases stay assigned: it can no longer renew, so
-  it stops its runs, and the leases become available after they expire plus
-  the grace. The response's `leases_awaiting_expiry` counts them.
+  it stops its runs, and the leases then need reconciliation like any
+  other expired lease. The response's `leases_awaiting_expiry` counts them.
 - A plan change withdraws approval. Its queued assignments stop leasing,
   and renewals of running leases are refused so workers stop.
 - Results are non-secret JSON and refused if they carry credential-like
@@ -301,6 +305,7 @@ matches the audit entry.
 | `POST /v1/tenants/{t}/projects/{p}/approve` `{revision}` | `project:approve`, not the last editor |
 | `GET /v1/tenants/{t}/workers`, `POST …/workers/enrollments`, `POST …/workers/{w}/revoke` | `worker:manage` |
 | `GET`/`POST /v1/tenants/{t}/projects/{p}/assignments` `{mailboxes}` | `assignment:read` / `assignment:create` |
+| `POST /v1/tenants/{t}/projects/{p}/assignments/{a}/requeue` `{reason}` | `assignment:create` |
 | `POST /v1/worker/enroll` `{capabilities}` | enrollment token |
 | `POST /v1/worker/lease`, `POST /v1/worker/assignments/{a}/renew` and `/complete` | worker credential |
 | `GET /v1/tenants/{t}/audit?limit=&before=` | `audit:read` |

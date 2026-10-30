@@ -167,6 +167,19 @@ fn route(call: &Call<'_>) -> Handled {
         ("POST", ["v1", "tenants", tenant, "projects", project, "assignments"]) => {
             create_assignments(call, tenant, project)
         }
+        (
+            "POST",
+            [
+                "v1",
+                "tenants",
+                tenant,
+                "projects",
+                project,
+                "assignments",
+                assignment,
+                "requeue",
+            ],
+        ) => requeue_assignment(call, tenant, project, assignment),
         ("POST", ["v1", "worker", "enroll"]) => enroll_worker(call),
         ("POST", ["v1", "worker", "lease"]) => lease(call),
         ("POST", ["v1", "worker", "assignments", assignment, "renew"]) => renew(call, assignment),
@@ -893,6 +906,33 @@ fn create_assignments(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RequeueBody {
+    reason: String,
+}
+
+fn requeue_assignment(call: &Call<'_>, tenant: &str, project: &str, assignment: &str) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("assignment:{assignment}");
+    call.require_in_tenant(
+        &principal,
+        Permission::AssignmentCreate,
+        tenant,
+        "assignment.requeue",
+        &resource,
+    )?;
+    let body: RequeueBody = call.body()?;
+    let requeued = call.store().requeue_assignment(
+        tenant,
+        project,
+        assignment,
+        &body.reason,
+        &call.actor(&principal),
+    )?;
+    Ok(Response::ok(&json!({ "assignment": requeued })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EnrollBody {
     #[serde(default)]
     capabilities: Vec<String>,
@@ -1595,6 +1635,66 @@ mod tests {
         // stays assigned until it expires and the reassignment grace passes.
         let (_, listed) = harness.call("GET", &assignments, Some(&engineer), None);
         assert_eq!(listed["assignments"][0]["state"], "leased");
+
+        // Once the lease and its grace have passed, the engine's fate is
+        // unknown: an operator requeues the assignment with a reason.
+        let requeue = format!("{assignments}/{assignment}/requeue");
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &requeue,
+                    Some(&engineer),
+                    Some(json!({ "reason": "checked" }))
+                )
+                .0,
+            409,
+            "a live lease cannot be requeued"
+        );
+        harness
+            .context
+            .store
+            .lock()
+            .execute(
+                "UPDATE assignments SET lease_expires_at=?2 WHERE id=?1",
+                rusqlite::params![
+                    assignment,
+                    super::super::store::now() - super::super::workers::REASSIGN_GRACE_SECONDS - 1
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            harness
+                .call(
+                    "POST",
+                    &requeue,
+                    Some(&engineer),
+                    Some(json!({ "reason": "" }))
+                )
+                .0,
+            422,
+            "a requeue needs a reason"
+        );
+        let (status, requeued) = harness.call(
+            "POST",
+            &requeue,
+            Some(&engineer),
+            Some(json!({ "reason": "w1 decommissioned; mailbox verified" })),
+        );
+        assert_eq!(status, 200, "{requeued}");
+        assert_eq!(requeued["assignment"]["state"], "queued");
+        let (_, audit) = harness.call(
+            "GET",
+            &format!("/v1/tenants/{acme}/audit"),
+            Some(&admin),
+            None,
+        );
+        let actions = audit.to_string();
+        assert!(
+            actions.contains("assignment.needs_reconciliation"),
+            "{actions}"
+        );
+        assert!(actions.contains("assignment.requeue"), "{actions}");
     }
 
     #[test]
