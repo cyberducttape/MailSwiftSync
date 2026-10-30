@@ -11,6 +11,11 @@
   also cleared the engine's durable process identity, so a retry could
   overlap it. That identity is now kept unless the group is confirmed gone.
   Windows already did this through the job object.
+- Draw batch retry delays uniformly, from the OS random source, between the
+  required delay (server-requested, provider-documented, or class default)
+  and the exponential ceiling. The old jitter was derived from the clock and
+  the process ID, so mailboxes failing at the same moment got near-identical
+  delays, and at the 120-second cap every retry woke at once.
 - Record each batch retry in the ledger as a `retry_scheduled` event with a
   wall-clock deadline. A later run holds that mailbox until the deadline
   (capped at one hour), so provider backoff survives a crash, cancel, or

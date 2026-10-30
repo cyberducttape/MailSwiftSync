@@ -1948,11 +1948,8 @@ impl UnwindTerminator {
 
 impl Drop for UnwindTerminator {
     fn drop(&mut self) {
-        if !thread::panicking() {
-            return;
-        }
         #[cfg(unix)]
-        {
+        if thread::panicking() {
             let leader = self.process_group as libc::pid_t;
             terminate_process_group_id(self.process_group);
             // Reap the leader so a zombie does not keep the group visible.
