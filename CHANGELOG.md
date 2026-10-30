@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Control plane: never hand an expired lease to another worker
+  automatically. IMAP servers ignore fencing tokens, so the service cannot
+  know whether the old worker's engine stopped. 60 seconds after expiry the
+  assignment moves to `needs_reconciliation`, and an operator returns it to
+  the queue with `POST …/assignments/{a}/requeue` and a reason, which is
+  audited. This replaces the automatic re-lease and its 10-attempt limit.
+  A revoked worker's leases stay assigned instead of being re-queued at
+  once. Renewals and completions refuse a revoked worker inside the store,
+  and the agent times its lease from just before it asks for one. The
+  revoke response field `requeued_assignments` is now
+  `leases_awaiting_expiry`. Existing control-plane databases are upgraded
+  automatically to allow the new state.
+- Control plane worker agent: `control worker plan` exports a non-secret
+  plan document with a SHA-256 of each local durable batch mailbox's plan,
+  `control worker enroll` exchanges an enrollment token for an owner-only
+  credential file, and `control worker run` leases assignments, runs the
+  matching local batch mailbox only if its plan digest still equals the
+  approved one, renews the lease while it runs, cancels the local run when
+  the lease is lost, and reports a non-secret result.
 - Refuse a batch claim unless the child run is still queued, and roll the
   claim back unless the mailbox and the child run each move exactly one row.
   Previously a child that was already running passed validation, and the
@@ -39,8 +58,8 @@
 - Control plane workers: tenant-bound worker enrollment with single-use
   enrollment tokens; assignments queued only for approved plans; leases
   with fencing tokens so a worker whose lease expired, moved, or was revoked
-  cannot renew or report; revocation requeues a worker's leases; a plan
-  change stops further leasing and renewals.
+  cannot renew or report; a plan change stops further leasing and
+  renewals.
 - Add `mailswiftsync control`, an optional central control plane for MSP
   fleets: users with Argon2id passwords, expiring sessions and account
   lockout; administrator, manager, engineer, technician, auditor, and

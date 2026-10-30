@@ -9,7 +9,9 @@
 //! on an unexpired lease held by the same worker. A worker whose lease
 //! expired, was revoked, or was re-leased to another worker is refused, so
 //! a stale worker cannot overwrite the result of the worker that replaced
-//! it. Assignments are created only for plans approved at their current
+//! it. A lease is handed to another worker only `REASSIGN_GRACE_SECONDS`
+//! after it expired, including after a revocation, so the old worker has
+//! stopped its engine before a new one can start on the mailbox. Assignments are created only for plans approved at their current
 //! revision, and a plan change stops further lease renewals.
 
 use super::audit::AuditEntry;
@@ -60,10 +62,91 @@ CREATE INDEX assignments_lease ON assignments(tenant_id, state, created_at);
 CREATE INDEX assignments_project ON assignments(tenant_id, project_id);
 ";
 
+/// Schema v4 adds `needs_reconciliation`: a lease that expired without a
+/// result is never handed out again automatically, because the old
+/// worker's engine may still have written to the mailbox. SQLite cannot
+/// alter a CHECK constraint, so the table is rebuilt.
+pub(super) const SCHEMA_V4: &str = "
+CREATE TABLE assignments_v4(
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    plan_revision INTEGER NOT NULL,
+    mailbox TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('queued','leased','needs_reconciliation','completed','failed','cancelled')),
+    fencing_token INTEGER NOT NULL DEFAULT 0 CHECK(fencing_token >= 0),
+    lease_worker_id TEXT REFERENCES workers(id),
+    lease_expires_at INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    result TEXT,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK((state = 'leased') = (lease_worker_id IS NOT NULL AND lease_expires_at IS NOT NULL))
+) STRICT;
+INSERT INTO assignments_v4 SELECT id,tenant_id,project_id,plan_revision,mailbox,state,fencing_token,lease_worker_id,lease_expires_at,attempts,result,created_by,created_at,updated_at FROM assignments;
+DROP TABLE assignments;
+ALTER TABLE assignments_v4 RENAME TO assignments;
+CREATE INDEX assignments_lease ON assignments(tenant_id, state, created_at);
+CREATE INDEX assignments_project ON assignments(tenant_id, project_id);
+";
+
 pub(super) const MAX_ENROLLMENT_MINUTES: i64 = 60;
 pub(super) const DEFAULT_LEASE_SECONDS: i64 = 300;
 pub(super) const MAX_LEASE_SECONDS: i64 = 900;
-const MAX_LEASE_ATTEMPTS: i64 = 10;
+/// How long after expiry a lease that never reported moves to
+/// `needs_reconciliation`, where an operator can requeue it. The control
+/// plane cannot stop the old worker's engine: IMAP servers do not check
+/// fencing tokens. The old worker stops itself before its local lease
+/// expires, and this margin covers its engine shutdown (SIGTERM, then
+/// SIGKILL after five seconds) and controller drain.
+pub(super) const REASSIGN_GRACE_SECONDS: i64 = 60;
+const MAX_REQUEUE_REASON_BYTES: usize = 500;
+const RECONCILIATION_RESULT: &str = "{\"error\":\"the lease expired without a result; the worker's engine may have written to the mailbox, so reconcile it before requeueing\"}";
+
+/// Move every lease in `tenant` that expired more than the grace ago, and
+/// never reported, to `needs_reconciliation`, auditing each one.
+fn reconcile_expired_leases(
+    tx: &rusqlite::Transaction<'_>,
+    tenant: &str,
+    at: i64,
+    request_id: &str,
+) -> StoreResult<()> {
+    let expired = tx
+        .prepare(
+            "SELECT id,lease_worker_id,fencing_token FROM assignments WHERE tenant_id=?1 AND state='leased' AND lease_expires_at+?2<=?3",
+        )?
+        .query_map(params![tenant, REASSIGN_GRACE_SECONDS, at], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (id, worker, token) in expired {
+        tx.execute(
+            "UPDATE assignments SET state='needs_reconciliation',lease_worker_id=NULL,lease_expires_at=NULL,result=?3,updated_at=?2 WHERE id=?1",
+            params![id, at, RECONCILIATION_RESULT],
+        )?;
+        append_audit(
+            tx,
+            &AuditEntry {
+                at,
+                request_id,
+                actor: "control-plane",
+                tenant: Some(tenant),
+                action: "assignment.needs_reconciliation",
+                resource: &format!("assignment:{id}"),
+                allowed: true,
+                detail: &format!(
+                    "lease of worker:{worker} (fencing token {token}) expired without a result"
+                ),
+            },
+        )?;
+    }
+    Ok(())
+}
 const MAX_ASSIGNMENTS_PER_REQUEST: usize = 1_000;
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 const MAX_CAPABILITIES: usize = 32;
@@ -178,6 +261,10 @@ fn lease_lost() -> StoreError {
 }
 
 /// An approved, unchanged plan for the assignment's project.
+/// The leasing worker still exists and is not revoked. A revoked worker's
+/// leases stay assigned until they expire, so every fenced write checks this.
+const WORKER_NOT_REVOKED: &str = "EXISTS(SELECT 1 FROM workers w WHERE w.id=assignments.lease_worker_id AND w.tenant_id=assignments.tenant_id AND w.revoked_at IS NULL)";
+
 const PLAN_STILL_APPROVED: &str = "EXISTS(SELECT 1 FROM projects p WHERE p.id=assignments.project_id AND p.tenant_id=assignments.tenant_id AND p.approved_revision=p.plan_revision AND p.plan_revision=assignments.plan_revision)";
 
 impl Store {
@@ -361,10 +448,14 @@ impl Store {
             if changed == 0 {
                 return Err(StoreError::NotFound);
             }
-            Ok(tx.execute(
-                "UPDATE assignments SET state='queued',lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?3 WHERE tenant_id=?1 AND lease_worker_id=?2 AND state='leased'",
-                params![tenant, worker, at],
-            )?)
+            // The revoked worker may still be running an engine. Its leases
+            // stay put: it can no longer renew, so it stops itself before
+            // they expire, and they become available again after the grace.
+            Ok(tx.query_row(
+                "SELECT COUNT(*) FROM assignments WHERE tenant_id=?1 AND lease_worker_id=?2 AND state='leased'",
+                params![tenant, worker],
+                |row| row.get::<_, i64>(0),
+            )? as usize)
         })
     }
 
@@ -459,9 +550,66 @@ impl Store {
         Ok(assignments)
     }
 
-    /// Lease the oldest available assignment in the worker's tenant: queued
-    /// work, or a lease that expired without completing. Each lease raises
-    /// the fencing token. Expired leases that have used every attempt fail.
+    /// Return an assignment that needs reconciliation to the queue. The
+    /// operator states why it is safe, for example that the old worker's host
+    /// was checked and the mailbox verified; the reason is audited.
+    pub(super) fn requeue_assignment(
+        &self,
+        tenant: &str,
+        project: &str,
+        assignment: &str,
+        reason: &str,
+        actor: &Actor<'_>,
+    ) -> StoreResult<AssignmentView> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > MAX_REQUEUE_REASON_BYTES {
+            return Err(StoreError::Invalid(format!(
+                "a requeue needs a reason of 1 to {MAX_REQUEUE_REASON_BYTES} bytes"
+            )));
+        }
+        self.mutate(
+            actor,
+            Some(tenant),
+            "assignment.requeue",
+            &format!("assignment:{assignment}"),
+            reason,
+            |tx| {
+                let at = now();
+                reconcile_expired_leases(tx, tenant, at, actor.request_id)?;
+                let state: Option<String> = tx
+                    .query_row(
+                        "SELECT state FROM assignments WHERE tenant_id=?1 AND project_id=?2 AND id=?3",
+                        params![tenant, project, assignment],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                match state.as_deref() {
+                    None => return Err(StoreError::NotFound),
+                    Some("needs_reconciliation") => {}
+                    Some(other) => {
+                        return Err(StoreError::Conflict(format!(
+                            "only an assignment that needs reconciliation can be requeued; this one is {other}"
+                        )));
+                    }
+                }
+                tx.execute(
+                    "UPDATE assignments SET state='queued',result=NULL,updated_at=?4 WHERE tenant_id=?1 AND project_id=?2 AND id=?3",
+                    params![tenant, project, assignment, at],
+                )?;
+                Ok(tx.query_row(
+                    &format!(
+                        "SELECT {ASSIGNMENT_COLUMNS} FROM assignments WHERE tenant_id=?1 AND id=?2"
+                    ),
+                    params![tenant, assignment],
+                    assignment_from_row,
+                )?)
+            },
+        )
+    }
+
+    /// Lease the oldest queued assignment in the worker's tenant. Each lease
+    /// raises the fencing token. A lease that expired without a result is
+    /// never handed out again: it moves to `needs_reconciliation` first.
     pub(super) fn lease(
         &self,
         worker: &WorkerIdentity,
@@ -498,18 +646,13 @@ impl Store {
             tx.commit()?;
             return Err(StoreError::NotFound);
         }
-        tx.execute(
-            "UPDATE assignments SET state='failed',lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?2,
-                result='{\"error\":\"the lease expired after the maximum number of attempts\"}'
-             WHERE tenant_id=?1 AND state='leased' AND lease_expires_at<=?2 AND attempts>=?3",
-            params![worker.tenant, at, MAX_LEASE_ATTEMPTS],
-        )?;
+        reconcile_expired_leases(&tx, &worker.tenant, at, request_id)?;
         let candidate: Option<String> = tx
             .query_row(
                 &format!(
-                    "SELECT id FROM assignments WHERE tenant_id=?1 AND (state='queued' OR (state='leased' AND lease_expires_at<=?2)) AND {PLAN_STILL_APPROVED} ORDER BY created_at,id LIMIT 1"
+                    "SELECT id FROM assignments WHERE tenant_id=?1 AND state='queued' AND {PLAN_STILL_APPROVED} ORDER BY created_at,id LIMIT 1"
                 ),
-                params![worker.tenant, at],
+                params![worker.tenant],
                 |row| row.get(0),
             )
             .optional()?;
@@ -583,7 +726,7 @@ impl Store {
         self.fenced(worker, assignment, fencing_token, "assignment.renew", request_id, |tx| {
             let changed = tx.execute(
                 &format!(
-                    "UPDATE assignments SET lease_expires_at=?6,updated_at=?5 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5 AND {PLAN_STILL_APPROVED}"
+                    "UPDATE assignments SET lease_expires_at=?6,updated_at=?5 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5 AND {WORKER_NOT_REVOKED} AND {PLAN_STILL_APPROVED}"
                 ),
                 params![worker.tenant, assignment, worker.id, fencing_token, at, expires_at],
             )?;
@@ -618,8 +761,8 @@ impl Store {
         let at = now();
         self.fenced(worker, assignment, fencing_token, "assignment.complete", request_id, |tx| {
             let changed = tx.execute(
-                "UPDATE assignments SET state=?6,result=?7,lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?5
-                 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5",
+                &format!("UPDATE assignments SET state=?6,result=?7,lease_worker_id=NULL,lease_expires_at=NULL,updated_at=?5
+                 WHERE tenant_id=?1 AND id=?2 AND state='leased' AND lease_worker_id=?3 AND fencing_token=?4 AND lease_expires_at>?5 AND {WORKER_NOT_REVOKED}"),
                 params![worker.tenant, assignment, worker.id, fencing_token, at, outcome.as_str(), text],
             )?;
             if changed == 0 {
@@ -750,12 +893,17 @@ mod tests {
             identity
         }
 
+        /// Expire a lease and let its reassignment grace pass.
         fn expire_lease(&self, assignment: &str) {
+            self.set_lease_expiry(assignment, now() - REASSIGN_GRACE_SECONDS - 1);
+        }
+
+        fn set_lease_expiry(&self, assignment: &str, at: i64) {
             self.store
                 .lock()
                 .execute(
                     "UPDATE assignments SET lease_expires_at=?2 WHERE id=?1",
-                    params![assignment, now() - 1],
+                    params![assignment, at],
                 )
                 .unwrap();
         }
@@ -825,6 +973,17 @@ mod tests {
         );
 
         fixture.expire_lease(&assignment.id);
+        assert_eq!(fixture.store.lease(&second, 300, "r").unwrap(), None);
+        fixture
+            .store
+            .requeue_assignment(
+                &fixture.tenant,
+                &fixture.project,
+                &assignment.id,
+                "first worker's host checked",
+                &fixture.admin,
+            )
+            .unwrap();
         let taken_over = fixture.store.lease(&second, 300, "r").unwrap().unwrap();
         assert_eq!(taken_over.fencing_token, 2);
 
@@ -872,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn revoking_a_worker_requeues_its_leases_and_stops_its_credential() {
+    fn revoking_a_worker_stops_its_credential_and_holds_its_leases_until_expiry() {
         let fixture = fixture();
         fixture.approve();
         fixture
@@ -919,6 +1078,27 @@ mod tests {
                 .is_err()
         );
         let replacement = fixture.worker(&fixture.tenant, "w2");
+        assert_eq!(
+            fixture.store.lease(&replacement, 300, "r").unwrap(),
+            None,
+            "the revoked worker may still be stopping its engine"
+        );
+        fixture.expire_lease(&lease.assignment_id);
+        assert_eq!(
+            fixture.store.lease(&replacement, 300, "r").unwrap(),
+            None,
+            "an expired lease of a revoked worker needs reconciliation first"
+        );
+        fixture
+            .store
+            .requeue_assignment(
+                &fixture.tenant,
+                &fixture.project,
+                &lease.assignment_id,
+                "revoked worker's host is decommissioned",
+                &fixture.admin,
+            )
+            .unwrap();
         let next = fixture
             .store
             .lease(&replacement, 300, "r")
@@ -1038,7 +1218,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_leases_fail_after_the_attempt_limit_and_results_stay_secret_free() {
+    fn an_expired_lease_needs_reconciliation_and_is_never_handed_out_again() {
         let fixture = fixture();
         fixture.approve();
         fixture
@@ -1050,21 +1230,100 @@ mod tests {
                 &fixture.admin,
             )
             .unwrap();
-        let worker = fixture.worker(&fixture.tenant, "w1");
-        let mut last = None;
-        for _ in 0..MAX_LEASE_ATTEMPTS {
-            let lease = fixture.store.lease(&worker, 300, "r").unwrap().unwrap();
-            fixture.expire_lease(&lease.assignment_id);
-            last = Some(lease);
-        }
-        assert_eq!(fixture.store.lease(&worker, 300, "r").unwrap(), None);
-        let stored = &fixture
-            .store
-            .assignments(&fixture.tenant, &fixture.project)
-            .unwrap()[0];
-        assert_eq!(stored.state, "failed");
+        let first = fixture.worker(&fixture.tenant, "w1");
+        let second = fixture.worker(&fixture.tenant, "w2");
+        let lease = fixture.store.lease(&first, 300, "r").unwrap().unwrap();
+        let state = |fixture: &Fixture| {
+            fixture
+                .store
+                .assignments(&fixture.tenant, &fixture.project)
+                .unwrap()[0]
+                .state
+                .clone()
+        };
 
-        let fixture = self::fixture();
+        // Expired, but the first worker may still be stopping its engine.
+        fixture.set_lease_expiry(&lease.assignment_id, now() - REASSIGN_GRACE_SECONDS + 5);
+        assert_eq!(fixture.store.lease(&second, 300, "r").unwrap(), None);
+        assert_eq!(state(&fixture), "leased");
+        assert!(
+            fixture
+                .store
+                .renew_lease(&first, &lease.assignment_id, lease.fencing_token, 300, "r")
+                .is_err(),
+            "an expired lease cannot be renewed"
+        );
+
+        // Past the grace, the engine's fate is still unknown to the service:
+        // the assignment waits for an operator instead of a new worker.
+        fixture.expire_lease(&lease.assignment_id);
+        assert_eq!(fixture.store.lease(&second, 300, "r").unwrap(), None);
+        assert_eq!(state(&fixture), "needs_reconciliation");
+        assert!(
+            fixture
+                .store
+                .complete(
+                    &first,
+                    &lease.assignment_id,
+                    lease.fencing_token,
+                    Outcome::Completed,
+                    &serde_json::json!({}),
+                    "r"
+                )
+                .is_err(),
+            "a late result cannot settle an assignment under reconciliation"
+        );
+
+        // An operator requeues it with a reason; only then can it run again.
+        assert!(matches!(
+            fixture.store.requeue_assignment(
+                &fixture.tenant,
+                &fixture.project,
+                &lease.assignment_id,
+                "  ",
+                &fixture.admin
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        let requeued = fixture
+            .store
+            .requeue_assignment(
+                &fixture.tenant,
+                &fixture.project,
+                &lease.assignment_id,
+                "w1's host checked: no engine running; mailbox verified",
+                &fixture.admin,
+            )
+            .unwrap();
+        assert_eq!(requeued.state, "queued");
+        assert!(matches!(
+            fixture.store.requeue_assignment(
+                &fixture.tenant,
+                &fixture.project,
+                &lease.assignment_id,
+                "again",
+                &fixture.admin
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+        let next = fixture.store.lease(&second, 300, "r").unwrap().unwrap();
+        assert_eq!(next.fencing_token, lease.fencing_token + 1);
+        assert_eq!(
+            fixture.store.requeue_assignment(
+                &fixture.other_tenant,
+                &fixture.project,
+                &lease.assignment_id,
+                "cross-tenant",
+                &fixture.admin
+            ),
+            Err(StoreError::NotFound),
+            "another tenant cannot requeue it"
+        );
+    }
+
+    #[test]
+    fn worker_results_stay_secret_free() {
+        let fixture = fixture();
         fixture.approve();
         fixture
             .store
@@ -1088,7 +1347,6 @@ mod tests {
             ),
             Err(StoreError::Invalid(_))
         ));
-        drop(last);
     }
 
     #[test]

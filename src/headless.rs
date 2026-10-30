@@ -8,7 +8,12 @@ use crate::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::atomic::{AtomicBool, Ordering},
+    thread,
+    time::Duration,
+};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
 const MAX_SUPPORT_MAILBOX_ROWS_TOTAL: usize = 100_000;
@@ -881,6 +886,31 @@ pub(crate) fn headless_batch_execute_selected(
         None,
         None,
         None,
+        None,
+    )
+}
+
+/// Run one durable batch mailbox of `project_id` for the control-plane
+/// worker agent. Raising `stop` (the agent lost its lease) cancels the run;
+/// the call then drains the controller and returns an error.
+pub(crate) fn headless_worker_execute(
+    state_path: &std::path::Path,
+    project_id: &str,
+    job_id: &str,
+    acknowledge_destination_loss: bool,
+    stop: &AtomicBool,
+) -> Result<String, String> {
+    let requested = HashSet::from([job_id.to_owned()]);
+    headless_batch_execute_selected_inner(
+        state_path,
+        true,
+        Some(&requested),
+        acknowledge_destination_loss,
+        None,
+        Some(project_id),
+        None,
+        None,
+        Some(stop),
     )
 }
 
@@ -899,6 +929,7 @@ fn headless_batch_execute_project(
         Some(project_id),
         None,
         Some(&mut instance_owned),
+        None,
     ) {
         Err(_message) if instance_owned => Err(HeadlessBatchError::InstanceOwned),
         Err(message) => Err(HeadlessBatchError::Message(message)),
@@ -940,6 +971,7 @@ pub(crate) fn headless_cutover_batch_execute(
         None,
         None,
         Some((project_id, expected_stage)),
+        None,
         None,
     )
 }
@@ -998,6 +1030,7 @@ fn headless_batch_execute_selected_inner(
     queue_project_override: Option<&str>,
     cutover_guard: Option<(&str, core::CutoverStage)>,
     instance_owned: Option<&mut bool>,
+    stop: Option<&AtomicBool>,
 ) -> Result<String, String> {
     let mut app = App::try_from_state_path_for_project(Some(state_path), queue_project_override)
         .map_err(|failure| failure.to_string())?;
@@ -1139,7 +1172,7 @@ fn headless_batch_execute_selected_inner(
             app.bulk_message
         ));
     }
-    wait_for_headless_controller(&mut app)?;
+    wait_for_headless_controller_until(&mut app, stop)?;
     if app.queue.project_id() != Some(project_id.as_str()) {
         return Err(format!(
             "batch preflight lost its durable project: {}",
@@ -1177,6 +1210,9 @@ fn headless_batch_execute_selected_inner(
         ));
     }
 
+    if stop.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+        return Err(STOPPED_BEFORE_COMPLETION.into());
+    }
     app.form.dry_run = false;
     app.bulk_mode = BatchExecutionMode::Live;
     app.bulk_live_confirmed = true;
@@ -1195,7 +1231,7 @@ fn headless_batch_execute_selected_inner(
             "batch live promotion changed the durable project identity; refusing success".into(),
         );
     }
-    wait_for_headless_controller(&mut app)?;
+    wait_for_headless_controller_until(&mut app, stop)?;
     let final_selected = app
         .store
         .batch_admission_states(&project_id, &job_ids)
@@ -1435,6 +1471,21 @@ fn supervisor_should_retry_storage_error(error: &rusqlite::Error) -> bool {
 }
 
 pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {
+    wait_for_headless_controller_until(app, None)
+}
+
+/// Why a run ended early when its caller raised the stop flag.
+pub(crate) const STOPPED_BEFORE_COMPLETION: &str =
+    "the run was cancelled before completion because its caller asked it to stop";
+
+/// Wait for the controller, cancelling the run once `stop` is raised. The
+/// controller is still drained after cancelling, so no engine process
+/// outlives the call; the result is then an error, never success.
+fn wait_for_headless_controller_until(
+    app: &mut App,
+    stop: Option<&AtomicBool>,
+) -> Result<(), String> {
+    let mut stopped = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
     let mut last_debug = std::time::Instant::now();
     // Include every background channel, notably asynchronous keyring
@@ -1442,6 +1493,14 @@ pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> 
     // would report a failed preflight that never ran.
     while app.background_work_pending() {
         app.poll();
+        if stop.is_some_and(|stop| stop.load(Ordering::Relaxed)) {
+            // Repeated on every poll: the cancel flag only exists once the
+            // batch has started, which can be after the stop was raised.
+            stopped = true;
+            if let Some(cancel) = &app.cancel_requested {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }
         if crate::runner::process_supervision_debug_enabled()
             && last_debug.elapsed() >= Duration::from_secs(15)
         {
@@ -1482,6 +1541,9 @@ pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> 
             "durable terminal state was not confirmed: {}{verification_detail}{durability_detail}",
             app.status.text
         ));
+    }
+    if stopped {
+        return Err(STOPPED_BEFORE_COMPLETION.into());
     }
     Ok(())
 }

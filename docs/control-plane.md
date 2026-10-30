@@ -208,18 +208,77 @@ customer's work.
    if the worker was revoked), and the worker must stop.
 
 Fencing rules:
-- Every lease, including re-leasing an expired one, raises the fencing
-  token. A worker that stalls past its lease therefore cannot overwrite the
-  result of the worker that took over.
-- After 10 leases that expired without completing, the assignment fails.
+- Every lease raises the fencing token. A worker that stalls past its lease
+  therefore cannot overwrite the result of a worker that ran later.
+- A lease that expires without a result is never handed to another worker
+  automatically. IMAP servers do not check fencing tokens, so the control
+  plane cannot know whether the old worker's engine stopped: the agent
+  stops itself before its lease expires, but an agent that was killed or a
+  host that was suspended may leave an engine running. 60 seconds after
+  expiry the assignment moves to `needs_reconciliation` (audited as
+  `assignment.needs_reconciliation`), and a late result for it is refused.
+- An operator with `assignment:create` returns it to the queue with
+  `POST /v1/tenants/{t}/projects/{p}/assignments/{a}/requeue` `{reason}`
+  once the old worker is confirmed stopped. The reason is required and
+  audited. Only `needs_reconciliation` assignments can be requeued.
 - Revoking a worker (`POST /v1/tenants/{t}/workers/{w}/revoke`) stops its
-  credential at once and returns its leases to the queue.
+  credential at once. Its leases stay assigned: it can no longer renew, so
+  it stops its runs, and the leases then need reconciliation like any
+  other expired lease. The response's `leases_awaiting_expiry` counts them.
 - A plan change withdraws approval. Its queued assignments stop leasing,
   and renewals of running leases are refused so workers stop.
 - Results are non-secret JSON and refused if they carry credential-like
   fields.
 - Every lease, renewal, completion, and refusal is audited with the worker
   as actor.
+
+## Running a worker agent
+
+`mailswiftsync control worker` runs on the host that holds the mailbox
+credentials. It executes leases against that host's own ledger, so the
+batch must already be imported and validated there, the same as for
+`headless batch-live`.
+
+1. **Export the plan.** `mailswiftsync control worker plan <state.db>
+   [--project <ledger-project-id>]` prints a plan document (format
+   `mailswiftsync.worker-plan` v1). It holds the ledger project ID and, for
+   each durable batch mailbox, its label and a SHA-256 of that row's
+   effective plan, keyed by the local job ID. It contains no credentials or
+   plan settings.
+2. **Approve it.** Store the document as the project's plan
+   (`PUT /v1/tenants/{t}/projects/{p}/plan`) and have a second person approve
+   it. Queue assignments using the job IDs from the document as mailbox
+   labels.
+3. **Enroll.** `mailswiftsync control worker enroll --server <url>
+   --enrollment-token-file <file> --credential-out <file>` exchanges the
+   single-use token and writes the worker credential to a new owner-only
+   file.
+4. **Run.** `mailswiftsync control worker run <state.db> --server <url>
+   --credential-file <file> [--ca-cert <pem>] [--lease-seconds 300]
+   [--poll-seconds 30] [--once] [--acknowledge-destination-loss]` leases one
+   assignment at a time.
+
+For each lease, the agent:
+- Recomputes the local row's plan digest. If the approved document names
+  another ledger project, does not list the mailbox, or lists a different
+  digest, the agent reports the assignment as `failed` ("refused before
+  starting") and starts no transfer. Re-export and re-approve after any
+  local plan change.
+- Runs the mailbox through the same preflight and live batch path as
+  `headless batch-live --mailboxes <job-id>`. An assignment completes only
+  when the mailbox reaches a verified terminal state. Any other result is
+  reported as `failed` with the controller's message.
+- Renews the lease every third of its length, timing the lease from just
+  before it asked for it. If a renewal is refused (`409` or `401`), or the
+  service stays unreachable until the lease would expire, it cancels the
+  local run, waits for the engine to stop, and reports nothing, because the
+  service would refuse that result.
+
+`--server` must be `https`, except for a loopback address. The agent
+ignores proxy settings, does not follow redirects, and sends its credential
+only to that URL. `--ca-cert` adds a private CA for the service
+certificate. A refused worker credential ends the agent with an error.
+Network failures are retried with capped backoff.
 
 ## API
 
@@ -246,6 +305,7 @@ matches the audit entry.
 | `POST /v1/tenants/{t}/projects/{p}/approve` `{revision}` | `project:approve`, not the last editor |
 | `GET /v1/tenants/{t}/workers`, `POST …/workers/enrollments`, `POST …/workers/{w}/revoke` | `worker:manage` |
 | `GET`/`POST /v1/tenants/{t}/projects/{p}/assignments` `{mailboxes}` | `assignment:read` / `assignment:create` |
+| `POST /v1/tenants/{t}/projects/{p}/assignments/{a}/requeue` `{reason}` | `assignment:create` |
 | `POST /v1/worker/enroll` `{capabilities}` | enrollment token |
 | `POST /v1/worker/lease`, `POST /v1/worker/assignments/{a}/renew` and `/complete` | worker credential |
 | `GET /v1/tenants/{t}/audit?limit=&before=` | `audit:read` |
