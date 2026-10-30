@@ -1,13 +1,13 @@
 //! Strict, bounded parsing for the fleet API's single HTTP/1 request head.
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct RequestHead {
-    pub(super) method: String,
-    pub(super) target: String,
-    pub(super) headers: Vec<(String, String)>,
+pub(crate) struct RequestHead {
+    pub(crate) method: String,
+    pub(crate) target: String,
+    pub(crate) headers: Vec<(String, String)>,
 }
 
-pub(super) fn parse_request_head(bytes: &[u8]) -> Result<RequestHead, String> {
+pub(crate) fn parse_request_head(bytes: &[u8]) -> Result<RequestHead, String> {
     const MAX_HEADERS: usize = 64;
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut request = httparse::Request::new(&mut headers);

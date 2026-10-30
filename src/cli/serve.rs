@@ -5,8 +5,8 @@
 //! per-ledger worker.
 
 mod controls;
-mod http;
-mod tls;
+pub(super) mod http;
+pub(super) mod tls;
 
 use super::*;
 use crate::headless::FleetStatus;

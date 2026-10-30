@@ -8,6 +8,33 @@
   flags a mailbox above the 1,000,000-message verification limit or the
   body-content byte budget before any transfer, instead of the operator
   learning it from a `verification_limit_exceeded` result afterwards.
+- Control plane OIDC sign-in: authorization code with PKCE, state, and
+  nonce; RS256/ES256 ID tokens verified against the provider's JWKS with
+  issuer, audience, `azp`, expiry, and nonce checks; identities link to
+  existing users only through a verified email (opt-in per provider) and
+  never create accounts. Configure with `control serve --oidc-config`.
+- Control plane workers: tenant-bound worker enrollment with single-use
+  enrollment tokens; assignments queued only for approved plans; leases
+  with fencing tokens so a worker whose lease expired, moved, or was revoked
+  cannot renew or report; revocation requeues a worker's leases; a plan
+  change stops further leasing and renewals.
+- Add `mailswiftsync control`, an optional central control plane for MSP
+  fleets: users with Argon2id passwords, expiring sessions and account
+  lockout; administrator, manager, engineer, technician, auditor, and
+  customer roles enforced per tenant; tenant-scoped queries that answer
+  other tenants' identifiers as not found; tenant- and permission-scoped
+  expiring API keys; second-person plan approval; and a hash-chained,
+  append-only audit log with `control audit-verify`. Mailbox credentials
+  stay on workers. See docs/control-plane.md.
+- Initialize the randomized dummy Argon2 hash before the control plane serves
+  requests, and use the same generic login response for unknown, incorrect,
+  disabled, and locked accounts.
+- Recheck worker revocation inside the assignment-lease transaction, so a
+  credential revoked after request authentication cannot take a new lease.
+- Reject malformed persisted project plans and assignment results instead of
+  silently replacing or omitting them during worker/API reads.
+- Generate per-test random credentials for control-plane auth fixtures so
+  CodeQL cannot mistake test passwords for embedded production secrets.
 - Detect a CSV import's separator by parsing the header with CSV quoting
   rules for each candidate and choosing the one that yields the required
   columns, so a comma inside a quoted header no longer selects the comma for a
