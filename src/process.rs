@@ -1122,6 +1122,30 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_panicking_supervisor_kills_an_engine_that_ignores_sigterm() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "trap '' TERM; while :; do sleep 1; done"]);
+        configure_process_group(&mut command);
+        let child = command.spawn().unwrap();
+        let group = child.id();
+        // Let the shell install its trap before the guard signals it.
+        thread::sleep(Duration::from_millis(200));
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _child = child;
+            let _terminator = UnwindTerminator::new(&_child);
+            panic!("supervisor bug");
+        }));
+
+        assert!(unwound.is_err());
+        assert!(
+            !process_group_exists(group),
+            "SIGKILL must follow an ignored SIGTERM"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn an_ordinary_return_leaves_the_engine_to_its_owner() {
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 30"]);
