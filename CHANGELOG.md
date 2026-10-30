@@ -25,6 +25,12 @@
   wall-clock deadline. A later run holds that mailbox until the deadline
   (capped at one hour), so provider backoff survives a crash, cancel, or
   restart instead of living only in the scheduler's memory.
+- Show verification capacity before a run. Testing the accounts now counts
+  each account's messages (and bytes, where the server reports `STATUS=SIZE`)
+  across its folders, and preflight adds a “Verification capacity” row that
+  flags a mailbox above the 1,000,000-message verification limit or the
+  body-content byte budget before any transfer, instead of the operator
+  learning it from a `verification_limit_exceeded` result afterwards.
 - Control plane OIDC sign-in: authorization code with PKCE, state, and
   nonce; RS256/ES256 ID tokens verified against the provider's JWKS with
   issuer, audience, `azp`, expiry, and nonce checks; identities link to
