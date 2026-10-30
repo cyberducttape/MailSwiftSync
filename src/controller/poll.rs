@@ -405,6 +405,70 @@ mod tests {
     }
 
     #[test]
+    fn a_batch_dry_run_records_each_mailboxs_verification_capacity() {
+        use crate::controller::{ActiveRunContext, Event, RunKind};
+        with_app(|app| {
+            let (project, job) = app
+                .store
+                .create_project_with_mailbox("capacity", "source", "destination", "a", "a")
+                .unwrap();
+            let children = app
+                .store
+                .begin_batch_run_with_children(
+                    &project.id,
+                    std::slice::from_ref(&job),
+                    "capacity-batch",
+                    "batch validation",
+                    &[],
+                    "",
+                    &[],
+                )
+                .unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "capacity-batch".into(),
+                project_id: project.id.clone(),
+                job_id: None,
+                batch_job_ids: vec![job.clone()],
+                batch_child_indices: [(children[0].clone(), 0)].into_iter().collect(),
+                batch_child_run_ids: children.clone(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Batch,
+                dry_run: true,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: None,
+                required_assurance: None,
+            });
+            let (events, receiver) = std::sync::mpsc::sync_channel(8);
+            app.receiver = Some(receiver);
+            let mut report = |child_run_id: &str, status: &'static str| {
+                events
+                    .send(Event::VerificationCapacity {
+                        job_id: job.clone(),
+                        child_run_id: child_run_id.into(),
+                        status,
+                        detail: format!("source counted; {status}"),
+                    })
+                    .unwrap();
+                app.poll();
+            };
+            // A row for a run this batch does not own is not recorded.
+            report("someone-else", "passed");
+            report(&children[0], "blocked");
+
+            let rows = app.store.latest_verification_capacity(&project.id).unwrap();
+            assert_eq!(
+                rows.get(&job),
+                Some(&("blocked".to_owned(), "source counted; blocked".to_owned()))
+            );
+            assert_eq!(rows.len(), 1);
+            assert!(!app.durability_error);
+        });
+    }
+
+    #[test]
     fn a_scheduled_retry_is_recorded_with_its_wall_clock_deadline() {
         use crate::controller::{ActiveRunContext, Event, RunKind};
         with_app(|app| {

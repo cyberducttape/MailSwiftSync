@@ -106,7 +106,11 @@ for each attempt that lacks a terminal outcome. These snapshots can be stale
 and retries can repeat work; they are neither unique mailbox coverage nor a
 throughput measure. `oldest_running_heartbeat_age_seconds` is the time
 since the stalest running mailbox's last claim, progress checkpoint, or
-scheduled retry (`0` when none is running). `verification_method_outcomes` provides the same
+scheduled retry (`0` when none is running). `verification_capacity` counts
+mailboxes by the status of their latest batch dry-run "Verification capacity"
+row: `passed`, `blocked` (above the message limit or body-content byte
+budget, so the mailbox will finish as "verification limit exceeded"), or
+`unknown` (an account could not be counted). `verification_method_outcomes` provides the same
 current evidence counts as `method:outcome` keys (for example,
 `metadata_reconciliation:exact_metadata_match` versus
 `native_dovecot:exact_metadata_match`) so aggregate totals are not mistaken for
@@ -150,6 +154,7 @@ mailbox, run, customer, or endpoint labels. The metric contract is:
 | `mailswiftsync_projects_on_hold` | Gauge | Projects whose operator hold currently stops new mailbox launches. |
 | `mailswiftsync_registered_engine_processes` | Gauge | Durable process registrations, not a process-liveness check. Validate process ownership before acting on a PID. |
 | `mailswiftsync_oldest_running_heartbeat_age_seconds` | Gauge | Seconds since the stalest `running` mailbox's last claim, progress checkpoint, or scheduled retry; `0` when none is running. Alert when it grows: a mailbox is still marked running while nothing advances it. Verification writes no checkpoints, so allow for the longest expected verification. |
+| `mailswiftsync_verification_capacity_mailboxes{status}` | Gauge | Mailboxes by their latest batch dry-run verification capacity row: `passed`, `blocked`, or `unknown`. A `blocked` mailbox will transfer but finish as "verification limit exceeded"; alert before a live run. |
 | `mailswiftsync_transfer_attempts_total` | Counter | Cumulative transfer attempts recorded in the projected ledger. |
 | `mailswiftsync_transfer_retries_total` | Counter | Cumulative attempts after the first attempt of a pass. |
 | `mailswiftsync_unfinished_attempt_messages_copied` | Gauge | Latest durable copied-message snapshots summed across attempts without terminal outcomes. Retries can repeat work, so this is not unique mailbox coverage. |

@@ -1201,6 +1201,45 @@ pub(crate) fn list_both_account_folders(
     Ok((source_folders, destination_folders))
 }
 
+/// Probe one account of a plan for its capabilities and message census.
+pub(crate) fn probe_account_capabilities(
+    form: &crate::Form,
+    side: MailSide,
+) -> Result<crate::core::ServerCapabilities, String> {
+    let profile = &form.profile;
+    let (host, port, user, password, auth, tls, ca_bundle, pin) = match side {
+        MailSide::Source => (
+            &profile.source_host,
+            &profile.source_port,
+            &profile.source_user,
+            &form.source_password,
+            &profile.source_auth,
+            &profile.source_tls,
+            &profile.source_ca_bundle,
+            &profile.source_certificate_pin_sha256,
+        ),
+        MailSide::Destination => (
+            &profile.destination_host,
+            &profile.destination_port,
+            &profile.destination_user,
+            &form.destination_password,
+            &profile.destination_auth,
+            &profile.destination_tls,
+            &profile.destination_ca_bundle,
+            &profile.destination_certificate_pin_sha256,
+        ),
+    };
+    probe_tls_capabilities_with_transport(
+        &endpoint_for_probe(host, port)?,
+        user,
+        password.as_str(),
+        auth,
+        tls,
+        ca_bundle,
+        pin,
+    )
+}
+
 pub(crate) fn fresh_dual_imaps_readiness(form: &crate::Form) -> Result<(), SidedProbeError> {
     if !fresh_imap_authentication_applies(form) {
         return Ok(());

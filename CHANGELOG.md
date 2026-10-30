@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Show verification capacity for every mailbox in a batch dry run, not only
+  for a single plan. Each mailbox that passes its dry run has both accounts
+  counted again. Its result then ends with the same passed, blocked or unknown
+  “Verification capacity” row, which is also recorded in the ledger. Status
+  summaries gain `verification_capacity` counts, and metrics gain
+  `mailswiftsync_verification_capacity_mailboxes{status}`.
 - Control plane: never hand an expired lease to another worker
   automatically. IMAP servers ignore fencing tokens, so the service cannot
   know whether the old worker's engine stopped. 60 seconds after expiry the

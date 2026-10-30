@@ -2,6 +2,35 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-10-30
+
+### M3. Per-row verification capacity for batch imports: done
+
+Branch `feat/batch-verification-capacity` (from `main`).
+
+- Gate: `make check` passed; `make test` reported 1,552 passed, 0 failed,
+  12 ignored; the Windows clippy cross-check passed.
+- New tests:
+  - `each_batch_mailbox_gets_the_single_plan_capacity_row` covers passed,
+    blocked, and unknown, including a failed probe.
+  - `batch_capacity_is_not_probed_where_it_cannot_apply` covers plain IMAP
+    and Dovecot.
+  - `a_dry_run_mailbox_records_its_capacity_row_without_secrets` covers
+    redaction and cancellation.
+  - `a_batch_dry_run_records_each_mailboxs_verification_capacity` covers
+    ledger persistence.
+  - `the_latest_verification_capacity_row_per_mailbox_is_counted` covers
+    the status counts.
+  - The metrics test checks the new gauge.
+- Not tested here: a batch dry run against real IMAP servers. The IMAP
+  integration lab in CI runs batch dry runs, but it does not assert the
+  capacity row.
+
+### M1. CodeQL alert #95: done
+
+The owner dismissed the alert as a false positive. GitHub shows no open
+code-scanning alerts.
+
 ## 2026-10-29
 
 ### R1. External architecture review

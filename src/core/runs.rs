@@ -1304,3 +1304,44 @@ impl StateStore {
         Ok(latest)
     }
 }
+
+pub(crate) const VERIFICATION_CAPACITY_EVENT: &str = "verification_capacity";
+const MAX_VERIFICATION_CAPACITY_DETAIL_BYTES: usize = 1_000;
+
+/// The detail of a `verification_capacity` event: the preflight row's status
+/// (`passed`, `blocked`, or `unknown`), then its explanation, bounded so a
+/// long probe error cannot grow the ledger.
+pub(crate) fn verification_capacity_detail(status: &str, explanation: &str) -> String {
+    let mut end = explanation
+        .len()
+        .min(MAX_VERIFICATION_CAPACITY_DETAIL_BYTES);
+    while !explanation.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{status}: {}", &explanation[..end])
+}
+
+impl StateStore {
+    /// The latest verification capacity row each mailbox in `project_id`
+    /// recorded during a batch dry run, as `(status, explanation)`.
+    pub fn latest_verification_capacity(
+        &self,
+        project_id: &str,
+    ) -> rusqlite::Result<std::collections::HashMap<String, (String, String)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT r.job_id,e.detail FROM events e JOIN runs r ON r.id=e.run_id WHERE e.project_id=?1 AND e.kind=?2 AND r.job_id IS NOT NULL ORDER BY e.id",
+        )?;
+        let rows = statement
+            .query_map(params![project_id, VERIFICATION_CAPACITY_EVENT], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+        let mut latest = std::collections::HashMap::new();
+        for row in rows {
+            let (job_id, detail) = row?;
+            if let Some((status, explanation)) = detail.split_once(": ") {
+                latest.insert(job_id, (status.to_owned(), explanation.to_owned()));
+            }
+        }
+        Ok(latest)
+    }
+}

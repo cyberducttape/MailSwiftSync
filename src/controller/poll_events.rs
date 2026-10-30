@@ -692,6 +692,22 @@ impl App {
                                 .push("could not encode transfer-progress checkpoint".into());
                         }
                     }
+                    Event::VerificationCapacity {
+                        job_id,
+                        child_run_id,
+                        status,
+                        detail,
+                    } => {
+                        if let Some(run) = active_run.as_ref()
+                            && run.batch_child_index(&job_id, &child_run_id).is_some()
+                        {
+                            pending_db_events.push(PendingDbEvent::new(
+                                child_run_id,
+                                core::VERIFICATION_CAPACITY_EVENT.into(),
+                                core::verification_capacity_detail(status, &detail),
+                            ));
+                        }
+                    }
                     Event::RetryScheduled {
                         job_id,
                         child_run_id,

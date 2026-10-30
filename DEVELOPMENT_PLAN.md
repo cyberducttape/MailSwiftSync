@@ -7,13 +7,13 @@ inventory in [capabilities.toml](capabilities.toml); this file orders the work
 and states how each milestone is judged done. Progress and evidence are logged
 in [PROGRESS.md](PROGRESS.md).
 
-## Where the release stands (2026-10-29)
+## Where the release stands (2026-10-30)
 
 - Code-side gates are green: `make check`, the full test suite, the
   cross-platform CI matrix, the IMAP integration lab, fuzzing, and the
   dependency audit.
-- No open GitHub issues. Two open PRs: #147 (pre-run verification capacity)
-  and #148 (control plane identity, stacked with workers and OIDC).
+- No open GitHub issues and no open code-scanning alerts. PRs #147, #148,
+  #151 and #153 are merged.
 - Most remaining 1.0 blockers are **external**: they need signing
   credentials, live provider tenants, or a person with a screen reader. They
   are listed under "Blocked on people" so they are not mistaken for code work.
@@ -27,13 +27,11 @@ Done when:
 - `make check` exits 0.
 - `cargo test --locked --all-targets --all-features` reports 0 failures.
 
-### M1. Clear the open CodeQL alert on PR #148: blocked
+### M1. Clear the open CodeQL alert on PR #148: done
 
-Alert #95 (`rust/weak-sensitive-data-hashing`) flags SHA-256 over the return
-value of `create_api_key` in a test. The value is a 256-bit random bearer
-token, not a password; passwords use Argon2id. Done when the alert is
-dismissed as a false positive with that justification. Dismissing it needs
-the repository owner (auto mode refused the API call).
+Alert #95 (`rust/weak-sensitive-data-hashing`) flagged SHA-256 over a
+256-bit random API token in a test, not a password; passwords use Argon2id.
+The repository owner dismissed it as a false positive.
 
 ### M2. Control-plane worker agent: done (live drill outstanding)
 
@@ -69,12 +67,22 @@ Criteria 1–5 are met by tests (see PROGRESS.md). For criterion 3, the
 agent-level stop is tested. Cancelling a real imapsync batch through the
 headless stop flag still needs a live drill in the Docker IMAP lab.
 
-### M3. Per-row verification capacity for batch imports
+### M3. Per-row verification capacity for batch imports: done
 
-PR #147 checks verification capacity only in the single-plan account test.
-Batch rows are not probed before admission. Done when batch preflight reports
+PR #147 checked verification capacity only in the single-plan account test.
+Batch rows were not probed before admission. Done when batch preflight reports
 the same blocked/unknown/passed capacity row per mailbox, with tests for
-each outcome. Depends on PR #147 merging.
+each outcome.
+
+Met on `feat/batch-verification-capacity`:
+
+- After a mailbox passes its batch dry run, both accounts are probed and the
+  single-plan row is computed from the counts.
+- The row is appended to the mailbox's dry-run result and recorded as a
+  `verification_capacity` ledger event.
+- It is counted in `status --summary` and in the metrics gauge.
+- Tests cover passed, blocked, unknown (a failed probe, plain IMAP), Dovecot,
+  secret redaction, cancellation, and ledger persistence.
 
 ### M4. Segmented verification beyond 1,000,000 messages per account
 
@@ -134,4 +142,3 @@ This is an architectural change, so it waits for a maintainer decision.
 | Screen-reader passes (Narrator, NVDA, VoiceOver, Orca) | A person on each platform |
 | Signed APT/YUM repositories | Hosting and the release key |
 | Published representative-scale migration evidence | Representative datasets and a release host |
-| Merging PRs #147 and #148 | Maintainer review |
