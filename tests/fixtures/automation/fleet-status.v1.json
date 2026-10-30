@@ -54,6 +54,7 @@
     "ledgers[].summary.projects[].operations.retried_attempts": "integer",
     "ledgers[].summary.projects[].operations.transfer_attempts": "integer",
     "ledgers[].summary.projects[].operations.unfinished_attempt_bytes_copied": "integer",
+    "ledgers[].summary.projects[].operations.oldest_running_heartbeat_age_seconds": "integer",
     "ledgers[].summary.projects[].operations.unfinished_attempt_messages_copied": "integer",
     "ledgers[].summary.projects[].operations.verification_message_findings": "map",
     "ledgers[].summary.projects[].operations.verification_message_findings{}": "integer",

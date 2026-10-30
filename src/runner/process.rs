@@ -281,10 +281,18 @@ pub(super) struct ProcessRegistrationGuard<'a> {
     tx: &'a mpsc::SyncSender<crate::Event>,
     run_id: String,
     job_id: String,
+    #[cfg(unix)]
+    child_id: u32,
 }
 
 impl Drop for ProcessRegistrationGuard<'_> {
     fn drop(&mut self) {
+        // After a panic, clear the durable identity only once the engine is
+        // gone. If it survived termination, recovery must still find it.
+        #[cfg(unix)]
+        if thread::panicking() && crate::process::engine_group_alive(self.child_id) {
+            return;
+        }
         if let Err(error) = send_reliable_event(
             self.tx,
             crate::Event::ProcessEnded {
@@ -421,9 +429,12 @@ pub(crate) fn run_capture_lines(
             tx,
             run_id: run_id.to_owned(),
             job_id: job_id.to_owned(),
+            #[cfg(unix)]
+            child_id: child.id(),
         }),
         _ => None,
     };
+    let _unwind_terminator = crate::process::UnwindTerminator::new(&child);
     let debug_supervision = process_supervision_debug_enabled();
     if debug_supervision {
         eprintln!("[process-debug] capture waiting for child {}", child.id());

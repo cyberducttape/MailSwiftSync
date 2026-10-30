@@ -785,6 +785,12 @@ pub struct ProjectOperationMetrics {
     /// evidence row. `probable` denotes lower-confidence matches, not a
     /// confirmed difference.
     pub verification_message_findings: std::collections::BTreeMap<String, usize>,
+    /// Seconds since the stalest running mailbox last showed durable signs
+    /// of life: its claim, a progress checkpoint, or a scheduled retry. Zero
+    /// when nothing is running. A large value means a mailbox is still
+    /// `running` while nothing is advancing it. Verification of a large
+    /// mailbox writes no checkpoints, so alert thresholds should allow for it.
+    pub oldest_running_heartbeat_age_seconds: u64,
 }
 
 impl StateStore {
@@ -858,6 +864,13 @@ impl StateStore {
                 .verification_method_outcomes
                 .insert(format!("{method}:{outcome}"), count);
         }
+        let oldest: Option<i64> = self.connection.query_row(
+            "SELECT MAX(CAST(strftime('%s','now') AS INTEGER)-CAST(strftime('%s',(SELECT MAX(e.created_at) FROM events e WHERE e.run_id=r.id AND e.kind IN ('mailbox_claimed','transfer_progress_checkpoint','retry_scheduled'))) AS INTEGER)) FROM runs r JOIN mailbox_jobs m ON m.id=r.job_id AND m.project_id=r.project_id WHERE m.project_id=?1 AND m.state='running' AND r.status='running'",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        metrics.oldest_running_heartbeat_age_seconds =
+            oldest.map_or(0, |age| u64::try_from(age).unwrap_or(0));
         let mut statement = self.connection.prepare(
             "SELECT e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1",
         )?;

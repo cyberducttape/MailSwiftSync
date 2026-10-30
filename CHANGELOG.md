@@ -21,6 +21,29 @@
   matching local batch mailbox only if its plan digest still equals the
   approved one, renews the lease while it runs, cancels the local run when
   the lease is lost, and reports a non-secret result.
+- Refuse a batch claim unless the child run is still queued, and roll the
+  claim back unless the mailbox and the child run each move exactly one row.
+  Previously a child that was already running passed validation, and the
+  mailbox could be committed as running while the child row stayed unchanged.
+- On Unix, end an engine's whole process group if the thread supervising it
+  panics. Previously the engine kept running with no owner, and the panic
+  also cleared the engine's durable process identity, so a retry could
+  overlap it. That identity is now kept unless the group is confirmed gone.
+  Windows already did this through the job object.
+- Export `mailswiftsync_oldest_running_heartbeat_age_seconds`: seconds since
+  the stalest running mailbox's last claim, progress checkpoint, or scheduled
+  retry. It has no labels, so it adds no per-mailbox or per-tenant series.
+  It lets an alert catch a mailbox that stays `running` with nothing
+  advancing it.
+- Draw batch retry delays uniformly, from the OS random source, between the
+  required delay (server-requested, provider-documented, or class default)
+  and the exponential ceiling. The old jitter was derived from the clock and
+  the process ID, so mailboxes failing at the same moment got near-identical
+  delays, and at the 120-second cap every retry woke at once.
+- Record each batch retry in the ledger as a `retry_scheduled` event with a
+  wall-clock deadline. A later run holds that mailbox until the deadline
+  (capped at one hour), so provider backoff survives a crash, cancel, or
+  restart instead of living only in the scheduler's memory.
 - Show verification capacity before a run. Testing the accounts now counts
   each account's messages (and bytes, where the server reports `STATUS=SIZE`)
   across its folders, and preflight adds a “Verification capacity” row that

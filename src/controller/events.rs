@@ -171,9 +171,12 @@ pub(crate) enum Event {
         attempt: u32,
         progress: crate::progress::TransferProgress,
     },
-    /// A batch mailbox will be retried after `delay`.
+    /// A batch mailbox will be retried after `delay`. `not_before_unix` is
+    /// the same deadline on the wall clock, so it survives a restart.
     RetryScheduled {
         job_id: String,
+        child_run_id: String,
+        not_before_unix: u64,
         attempt: u32,
         max_retries: u32,
         delay: std::time::Duration,

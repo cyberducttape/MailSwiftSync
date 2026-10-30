@@ -188,6 +188,8 @@ pub(crate) struct JobSource {
     pub(crate) loader: JobLoader,
     next: usize,
     page: std::collections::VecDeque<(usize, Result<BulkJob, String>)>,
+    /// Retry deadlines an earlier run recorded, keyed by job ID.
+    resume_at: HashMap<String, Instant>,
 }
 
 impl JobSource {
@@ -204,7 +206,14 @@ impl JobSource {
             loader,
             next: 0,
             page: std::collections::VecDeque::new(),
+            resume_at: HashMap::new(),
         }
+    }
+
+    /// Hold each listed job until its recorded retry deadline.
+    pub(crate) fn with_resume_deadlines(mut self, resume_at: HashMap<String, Instant>) -> Self {
+        self.resume_at = resume_at;
+        self
     }
 
     /// A source over jobs already in memory.
@@ -255,10 +264,13 @@ impl JobSource {
             return Some(Err(()));
         };
         let checkpoint = self.checkpoints.get(index).cloned().unwrap_or_default();
-        Some(Ok(match job {
+        let resume_at = self.resume_at.remove(&job_id);
+        let mut task = match job {
             Ok(job) => MailboxTask::new(index, job_id, child_run_id, checkpoint, &job),
             Err(error) => MailboxTask::unpreparable(index, job_id, child_run_id, error),
-        }))
+        };
+        task.resume_at = resume_at;
+        Some(Ok(task))
     }
 }
 
@@ -362,7 +374,10 @@ pub(crate) fn run_batch_schedule<R: AttemptExecutor>(
                 && ready.len() + timers.len() + slot_waiting.len() < max_parked
             {
                 match source.next_task() {
-                    Some(Ok(task)) => requeue(&mut ready, task, false),
+                    Some(Ok(mut task)) => match task.resume_at.take() {
+                        Some(at) if at > now => timers.park(at, task),
+                        _ => requeue(&mut ready, task, false),
+                    },
                     Some(Err(())) => {
                         runner.mark_failed();
                         result.enqueue_failed = true;
@@ -567,6 +582,7 @@ mod tests {
                     queue_checkpoints: vec![None; count],
                     batch_project_id: "project".into(),
                     batch_run_id: "batch".into(),
+                    retry_deadlines: Default::default(),
                     imapsync_executables: {
                         let mut executables = jobs
                             .iter()
@@ -977,6 +993,93 @@ mod tests {
             total < backoff * 3,
             "three overlapping backoffs took {total:?}; they were serialized"
         );
+    }
+
+    /// Records when each job starts and finishes it at once.
+    struct RecordingExecutor {
+        limiter: std::sync::Arc<crate::controller::rate_domains::RateDomainLimiter>,
+        started: std::sync::Mutex<Vec<(usize, std::time::Instant)>>,
+    }
+
+    impl super::AttemptExecutor for RecordingExecutor {
+        fn cancelled(&self) -> bool {
+            false
+        }
+
+        fn mark_failed(&self) {}
+
+        fn rate_limiter(
+            &self,
+        ) -> &std::sync::Arc<crate::controller::rate_domains::RateDomainLimiter> {
+            &self.limiter
+        }
+
+        fn run_attempt(
+            &self,
+            task: crate::controller::batch_work_item::MailboxTask,
+            admission: crate::controller::rate_domains::Admission,
+        ) -> crate::controller::batch_work_item::AttemptOutcome {
+            drop(admission);
+            self.started
+                .lock()
+                .unwrap()
+                .push((task.index, std::time::Instant::now()));
+            crate::controller::batch_work_item::AttemptOutcome::Finished
+        }
+
+        fn cancel_waiting(&self, _: crate::controller::batch_work_item::MailboxTask) {
+            panic!("nothing is cancelled");
+        }
+
+        fn fail_unschedulable(
+            &self,
+            _: crate::controller::batch_work_item::MailboxTask,
+            reason: &str,
+        ) {
+            panic!("{reason}");
+        }
+    }
+
+    /// A retry deadline left by an earlier run holds that mailbox until the
+    /// deadline, and the other mailboxes run in the meantime.
+    #[test]
+    fn a_recorded_retry_deadline_holds_only_its_mailbox() {
+        let hold = std::time::Duration::from_millis(400);
+        let executor = std::sync::Arc::new(RecordingExecutor {
+            limiter: std::sync::Arc::new(crate::controller::rate_domains::RateDomainLimiter::new(
+                1,
+            )),
+            started: Default::default(),
+        });
+        let jobs = (0..2)
+            .map(|index| {
+                let mut form = crate::Form::default();
+                form.profile.source_user = format!("user{index}@t.example");
+                crate::bulk_import::BulkJob::from_form(format!("job {index}"), form, "Ready".into())
+            })
+            .collect::<Vec<_>>();
+        let began = std::time::Instant::now();
+        let result = super::run_batch_schedule(
+            std::sync::Arc::clone(&executor),
+            1,
+            0,
+            super::JobSource::from_jobs(
+                jobs,
+                vec!["job-0".into(), "job-1".into()],
+                vec!["run-0".into(), "run-1".into()],
+                vec![None; 2],
+            )
+            .with_resume_deadlines(std::collections::HashMap::from([(
+                "job-0".to_owned(),
+                began + hold,
+            )])),
+        );
+        assert!(!result.worker_panicked && !result.enqueue_failed);
+        let started = executor.started.lock().unwrap().clone();
+        let order = started.iter().map(|(index, _)| *index).collect::<Vec<_>>();
+        assert_eq!(order, [1, 0]);
+        let held = started[1].1.duration_since(began);
+        assert!(held >= hold, "the held mailbox started after {held:?}");
     }
 
     /// Exercise the production scheduler and hierarchical limiter with many

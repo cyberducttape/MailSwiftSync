@@ -108,6 +108,15 @@ impl App {
             }
         };
         let prepared = admission.prepared;
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        // A missing deadline only means an earlier backoff is not honoured;
+        // it is not a reason to refuse the run.
+        let retry_deadlines = self
+            .store
+            .pending_retry_deadlines(&project_id, now_unix)
+            .unwrap_or_default();
         let selected_job_ids = prepared.selected_job_ids.clone();
         let job_count = selected_job_ids.len();
         let concurrency =
@@ -146,6 +155,7 @@ impl App {
             batch_project_id: project_id,
             batch_run_id: run_id,
             loader,
+            retry_deadlines,
             imapsync_executables: prepared.imapsync_executables,
             verification_state_path: self.state_path.clone(),
             diagnostic_logger: self.diagnostic_logger.clone(),

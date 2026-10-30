@@ -1729,9 +1729,11 @@ fn capacity_retries_back_off_longer_than_transport_retries() {
     assert!((Duration::from_secs(10)..=Duration::from_secs(15)).contains(&transport_delay));
     let capacity_delay = transient_retry_delay("server busy", 0);
     assert!((Duration::from_secs(5)..=Duration::from_millis(7_500)).contains(&capacity_delay));
-    assert_eq!(
-        transient_retry_delay("server busy", 99),
-        Duration::from_secs(120)
+    // At the cap the delay still spreads across the whole window instead of
+    // every capped retry waking at the same moment.
+    assert!(
+        (Duration::from_secs(5)..=Duration::from_secs(120))
+            .contains(&transient_retry_delay("server busy", 99))
     );
     assert_eq!(
         classified_failure_detail("too many requests"),
@@ -1746,10 +1748,42 @@ fn provider_rate_limit_recommendation_is_used_and_remains_bounded() {
         (Duration::from_secs(60)..=Duration::from_secs(90)).contains(&delay),
         "rate-limit retry should start from the provider-intelligence recommendation"
     );
-    assert_eq!(
-        transient_retry_delay("too many requests", 99),
-        Duration::from_secs(120)
+    assert!(
+        (Duration::from_secs(60)..=Duration::from_secs(120))
+            .contains(&transient_retry_delay("too many requests", 99))
     );
+}
+
+#[test]
+fn simultaneous_retries_spread_across_the_backoff_window() {
+    // Many mailboxes failing at the same instant, in one process, at the
+    // same attempt: the old clock-and-PID jitter gave them near-identical
+    // delays, and at the cap exactly 120 seconds each.
+    let floor = Duration::from_secs(5);
+    let delays = (0..400)
+        .map(|_| transient_retry_delay("server busy", 8))
+        .collect::<Vec<_>>();
+    assert!(delays.iter().all(|delay| *delay >= floor));
+    assert!(
+        delays
+            .iter()
+            .all(|delay| *delay <= Duration::from_secs(120))
+    );
+    let distinct = delays.iter().collect::<std::collections::HashSet<_>>();
+    assert!(
+        distinct.len() > 300,
+        "only {} distinct delays",
+        distinct.len()
+    );
+    let early = delays
+        .iter()
+        .filter(|delay| **delay < Duration::from_secs(40))
+        .count();
+    let late = delays
+        .iter()
+        .filter(|delay| **delay > Duration::from_secs(85))
+        .count();
+    assert!(early > 40 && late > 40, "early {early}, late {late}");
 }
 
 #[test]

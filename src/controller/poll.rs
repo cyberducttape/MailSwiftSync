@@ -405,6 +405,79 @@ mod tests {
     }
 
     #[test]
+    fn a_scheduled_retry_is_recorded_with_its_wall_clock_deadline() {
+        use crate::controller::{ActiveRunContext, Event, RunKind};
+        with_app(|app| {
+            let (project, job) = app
+                .store
+                .create_project_with_mailbox("retry-deadline", "source", "destination", "a", "a")
+                .unwrap();
+            let children = app
+                .store
+                .begin_batch_run_with_children(
+                    &project.id,
+                    std::slice::from_ref(&job),
+                    "retry-batch",
+                    "imapsync",
+                    &[],
+                    "",
+                    &[],
+                )
+                .unwrap();
+            app.active_run = Some(ActiveRunContext {
+                run_id: "retry-batch".into(),
+                project_id: project.id.clone(),
+                job_id: None,
+                batch_job_ids: vec![job.clone()],
+                batch_child_indices: [(children[0].clone(), 0)].into_iter().collect(),
+                batch_child_run_ids: children.clone(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: RunKind::Batch,
+                dry_run: false,
+                plan_fingerprint: String::new(),
+                credential_fingerprint: String::new(),
+                source_provider: "generic".into(),
+                destination_provider: "generic".into(),
+                verification_state_path: None,
+                required_assurance: None,
+            });
+            let (events, receiver) = std::sync::mpsc::sync_channel(8);
+            app.receiver = Some(receiver);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let mut schedule = |child_run_id: &str, not_before_unix: u64| {
+                events
+                    .send(Event::RetryScheduled {
+                        job_id: job.clone(),
+                        child_run_id: child_run_id.into(),
+                        not_before_unix,
+                        attempt: 1,
+                        max_retries: 2,
+                        delay: std::time::Duration::from_secs(90),
+                        failure_class: "capacity",
+                    })
+                    .unwrap();
+                app.poll();
+            };
+            // A retry for a run this batch does not own is not recorded.
+            schedule("someone-else", now + 600);
+            schedule(&children[0], now + 90);
+
+            let deadlines = app.store.pending_retry_deadlines(&project.id, now).unwrap();
+            assert_eq!(deadlines.get(&job), Some(&(now + 90)));
+            assert!(
+                app.store
+                    .pending_retry_deadlines(&project.id, now + 90)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(!app.durability_error);
+        });
+    }
+
+    #[test]
     fn a_held_project_refuses_the_claim_and_closes_the_child_without_failing_it() {
         use crate::controller::{ActiveRunContext, ClaimRefusal, Event, HELD_CHILD_STATE, RunKind};
         with_app(|app| {
