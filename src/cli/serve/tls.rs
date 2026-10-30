@@ -14,7 +14,7 @@ const MAX_CERTIFICATE_FILE_BYTES: u64 = 256 * 1024;
 /// Build the server configuration from a PEM certificate chain (leaf first)
 /// and a PEM private key. The key file goes through the same owner-only
 /// secret-file checks as the tokens.
-pub(super) fn server_config(
+pub(crate) fn server_config(
     certificate_path: &Path,
     key_path: &Path,
 ) -> Result<Arc<rustls::ServerConfig>, String> {
