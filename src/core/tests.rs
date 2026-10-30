@@ -4950,6 +4950,66 @@ fn transient_batch_failure_releases_child_for_a_fresh_claim() {
 }
 
 #[test]
+fn claim_refuses_an_already_running_child_and_changes_nothing() {
+    let db = StateStore::in_memory().unwrap();
+    let (project, jobs) = db
+        .create_project_with_mailboxes(
+            "batch-running-child",
+            "source",
+            "destination",
+            &[("one".into(), "one".into())],
+        )
+        .unwrap();
+    let child_runs = db
+        .begin_batch_run_with_children(
+            &project.id,
+            &jobs,
+            "run-running-child",
+            "batch",
+            &[],
+            "snapshot",
+            &[],
+        )
+        .unwrap();
+    // A child left running by an earlier claim while its mailbox is
+    // claimable again: the claim must refuse instead of committing a running
+    // mailbox next to an untouched child.
+    db.connection
+        .execute(
+            "UPDATE runs SET status='running' WHERE id=?1",
+            [&child_runs[0]],
+        )
+        .unwrap();
+    let attempt = |db: &StateStore| -> i64 {
+        db.connection
+            .query_row(
+                "SELECT attempt FROM mailbox_jobs WHERE id=?1",
+                [&jobs[0]],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let before = attempt(&db);
+    let state = db.mailbox_state(&jobs[0]).unwrap();
+    assert_ne!(state.as_deref(), Some("running"));
+    let error = db
+        .claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-running-child", &child_runs[0])
+        .unwrap_err();
+    assert!(error.to_string().contains("already running"), "{error}");
+    assert_eq!(db.mailbox_state(&jobs[0]).unwrap(), state);
+    assert_eq!(attempt(&db), before);
+    let claims: i64 = db
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='mailbox_claimed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(claims, 0);
+}
+
+#[test]
 fn batch_dry_completion_commits_preflight_digest_with_child_terminal_state() {
     let db = StateStore::in_memory().unwrap();
     let (project, jobs) = db

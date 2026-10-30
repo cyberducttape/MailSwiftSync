@@ -1098,6 +1098,44 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_panicking_supervisor_ends_the_whole_engine_group() {
+        let mut command = Command::new("sh");
+        // A background descendant must die too, not just the leader.
+        command.args(["-c", "sleep 30 & sleep 30"]);
+        configure_process_group(&mut command);
+        let child = command.spawn().unwrap();
+        let group = child.id();
+        assert!(process_group_exists(group));
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _child = child;
+            let _terminator = UnwindTerminator::new(&_child);
+            panic!("supervisor bug");
+        }));
+
+        assert!(unwound.is_err());
+        assert!(
+            !process_group_exists(group),
+            "the engine outlived its supervisor"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ordinary_return_leaves_the_engine_to_its_owner() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        drop(UnwindTerminator::new(&child));
+
+        assert!(child.try_wait().unwrap().is_none());
+        terminate_process_group(&mut child);
+        wait_for_graceful_exit(&mut child, Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn wait_reports_operator_cancellation_as_a_typed_outcome() {
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 30"]);
@@ -1884,6 +1922,66 @@ pub(crate) fn terminate_process_group(child: &mut Child) {
     terminate_process_group_id(child.id());
     #[cfg(not(unix))]
     let _ = child.kill();
+}
+
+/// Ends an engine's process group if the thread supervising it unwinds.
+/// `std::process::Child` neither kills nor reaps on drop, and Unix has no
+/// kernel container like the Windows job object, so without this a panic
+/// between spawn and wait would leave the engine running with no owner.
+/// Declare it after any guard that reports the process as ended, so it
+/// drops first and that report sees the group already gone.
+pub(crate) struct UnwindTerminator {
+    #[cfg(unix)]
+    process_group: u32,
+}
+
+impl UnwindTerminator {
+    pub(crate) fn new(child: &Child) -> Self {
+        #[cfg(not(unix))]
+        let _ = child;
+        Self {
+            #[cfg(unix)]
+            process_group: child.id(),
+        }
+    }
+}
+
+impl Drop for UnwindTerminator {
+    fn drop(&mut self) {
+        if !thread::panicking() {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            let leader = self.process_group as libc::pid_t;
+            terminate_process_group_id(self.process_group);
+            // Reap the leader so a zombie does not keep the group visible.
+            let reap = || {
+                // SAFETY: WNOHANG never blocks, and the null status pointer
+                // is permitted. The leader is this process's own child.
+                unsafe { libc::waitpid(leader, std::ptr::null_mut(), libc::WNOHANG) };
+            };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline && process_group_exists(self.process_group) {
+                reap();
+                thread::sleep(Duration::from_millis(50));
+            }
+            if process_group_exists(self.process_group) {
+                force_kill_process_group_id(self.process_group);
+                let deadline = Instant::now() + Duration::from_secs(1);
+                while Instant::now() < deadline && process_group_exists(self.process_group) {
+                    reap();
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+    }
+}
+
+/// Whether any member of an engine's process group is still alive.
+#[cfg(unix)]
+pub(crate) fn engine_group_alive(child_id: u32) -> bool {
+    process_group_exists(child_id)
 }
 
 fn force_kill_process_group(child: &mut Child) {

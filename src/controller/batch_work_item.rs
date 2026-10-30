@@ -324,6 +324,9 @@ pub(crate) struct MailboxTask {
     verification_failure: Option<String>,
     /// Why the job could not be prepared from its durable plan.
     preparation_error: Option<String>,
+    /// A retry deadline left by an earlier run; the scheduler holds the task
+    /// until then.
+    pub(crate) resume_at: Option<std::time::Instant>,
 }
 
 impl MailboxTask {
@@ -351,6 +354,7 @@ impl MailboxTask {
             transfer_attempt_number: 0,
             verification_failure: None,
             preparation_error: None,
+            resume_at: None,
         }
     }
 
@@ -379,6 +383,7 @@ impl MailboxTask {
             transfer_attempt_number: 0,
             verification_failure: None,
             preparation_error: Some(error),
+            resume_at: None,
         }
     }
 }
@@ -956,15 +961,26 @@ impl BatchAttemptRunner {
             },
         );
         let delay = failure.retry_delay(task.attempt);
-        let _ = self.tx.try_send(Event::RetryScheduled {
-            job_id: task.job_id.clone(),
-            // `attempt` is the retry ordinal (the first retry is 1), while
-            // `task.attempt` counts retries already performed.
-            attempt: u32::try_from(task.attempt.saturating_add(1)).unwrap_or(u32::MAX),
-            max_retries: u32::try_from(self.retry_count).unwrap_or(u32::MAX),
-            delay,
-            failure_class: failure.class().label(),
-        });
+        // The ledger keeps the deadline so a later run still honours the
+        // provider's backoff after a crash or restart.
+        let not_before_unix = std::time::SystemTime::now()
+            .checked_add(delay)
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |since| since.as_secs());
+        let _ = send_reliable_event(
+            &self.tx,
+            Event::RetryScheduled {
+                job_id: task.job_id.clone(),
+                child_run_id: task.child_run_id.clone(),
+                not_before_unix,
+                // `attempt` is the retry ordinal (the first retry is 1), while
+                // `task.attempt` counts retries already performed.
+                attempt: u32::try_from(task.attempt.saturating_add(1)).unwrap_or(u32::MAX),
+                max_retries: u32::try_from(self.retry_count).unwrap_or(u32::MAX),
+                delay,
+                failure_class: failure.class().label(),
+            },
+        );
         task.attempt += 1;
         AttemptOutcome::Retry {
             task: Box::new(task),

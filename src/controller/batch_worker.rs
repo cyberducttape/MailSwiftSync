@@ -142,6 +142,8 @@ pub(crate) struct BatchExecutionContext {
     pub(crate) batch_run_id: String,
     /// Resolves admitted job IDs to executable jobs, page by page.
     pub(crate) loader: JobLoader,
+    /// Retry deadlines (Unix seconds) left by earlier runs, keyed by job ID.
+    pub(crate) retry_deadlines: std::collections::HashMap<String, u64>,
     pub(crate) imapsync_executables: Vec<String>,
     pub(crate) verification_state_path: Option<std::path::PathBuf>,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
@@ -199,6 +201,7 @@ pub(crate) fn spawn_batch_worker_with(
         batch_project_id,
         batch_run_id,
         loader,
+        retry_deadlines,
         imapsync_executables,
         verification_state_path,
         diagnostic_logger,
@@ -236,6 +239,13 @@ pub(crate) fn spawn_batch_worker_with(
             verification_gate: (verification_workers > 0)
                 .then(|| Arc::new(VerificationGate::new(verification_workers))),
         });
+        let resume_at = resume_instants(&retry_deadlines);
+        if !resume_at.is_empty() {
+            let _ = tx.send(Event::Line(format!(
+                "{} mailbox(es) wait out a retry backoff recorded by an earlier run.",
+                resume_at.len()
+            )));
+        }
         let schedule = run_batch_schedule(
             runner,
             concurrency,
@@ -245,7 +255,8 @@ pub(crate) fn spawn_batch_worker_with(
                 child_run_ids.clone(),
                 queue_checkpoints,
                 loader,
-            ),
+            )
+            .with_resume_deadlines(resume_at),
         );
         if schedule.enqueue_failed {
             let _ = tx.send(Event::Line(
@@ -313,9 +324,53 @@ pub(crate) fn spawn_batch_worker_with(
     })
 }
 
+/// The longest hold a recorded retry deadline can impose. A deadline further
+/// out than this points at a skewed clock rather than provider backoff.
+const MAX_RESUME_HOLD: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Convert wall-clock retry deadlines to monotonic instants, dropping any
+/// that have passed and capping the rest at `MAX_RESUME_HOLD`.
+fn resume_instants(
+    deadlines: &std::collections::HashMap<String, u64>,
+) -> std::collections::HashMap<String, std::time::Instant> {
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let now = std::time::Instant::now();
+    deadlines
+        .iter()
+        .filter(|(_, at)| **at > now_unix)
+        .map(|(job, at)| {
+            let wait = std::time::Duration::from_secs(at - now_unix).min(MAX_RESUME_HOLD);
+            (job.clone(), now + wait)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::provider_scope_key;
+
+    #[test]
+    fn recorded_retry_deadlines_drop_when_passed_and_cap_at_an_hour() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let before = std::time::Instant::now();
+        let held = super::resume_instants(&std::collections::HashMap::from([
+            ("passed".to_owned(), now.saturating_sub(5)),
+            ("soon".to_owned(), now + 30),
+            ("skewed".to_owned(), now + 86_400),
+        ]));
+        assert!(!held.contains_key("passed"));
+        let soon = held["soon"].duration_since(before);
+        assert!(
+            soon > std::time::Duration::from_secs(28) && soon <= std::time::Duration::from_secs(31)
+        );
+        let skewed = held["skewed"].duration_since(before);
+        assert!(skewed <= super::MAX_RESUME_HOLD + std::time::Duration::from_secs(1));
+    }
 
     fn form(
         source_host: &str,

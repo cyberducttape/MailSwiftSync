@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Refuse a batch claim unless the child run is still queued, and roll the
+  claim back unless the mailbox and the child run each move exactly one row.
+  Previously a child that was already running passed validation, and the
+  mailbox could be committed as running while the child row stayed unchanged.
+- On Unix, end an engine's whole process group if the thread supervising it
+  panics. Previously the engine kept running with no owner, and the panic
+  also cleared the engine's durable process identity, so a retry could
+  overlap it. That identity is now kept unless the group is confirmed gone.
+  Windows already did this through the job object.
+- Record each batch retry in the ledger as a `retry_scheduled` event with a
+  wall-clock deadline. A later run holds that mailbox until the deadline
+  (capped at one hour), so provider backoff survives a crash, cancel, or
+  restart instead of living only in the scheduler's memory.
 - Detect a CSV import's separator by parsing the header with CSV quoting
   rules for each candidate and choosing the one that yields the required
   columns, so a comma inside a quoted header no longer selects the comma for a

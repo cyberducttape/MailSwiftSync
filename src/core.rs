@@ -84,6 +84,7 @@ pub use models::{
 pub use policy::destination_identity_from_parts;
 pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts, state_filter_members};
 pub use recovery_queue::{RecoveryGroup, RecoveryRow};
+pub(crate) use runs::{RETRY_SCHEDULED_EVENT, retry_scheduled_detail};
 pub(crate) use state::valid_mailbox_transition;
 pub use state::{AttentionReason, MailboxState, OperationalState, Phase};
 #[allow(unused_imports)]

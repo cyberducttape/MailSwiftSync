@@ -203,6 +203,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             ));
         }
     };
+    // The durable identity stays registered after a panic, so recovery
+    // still verifies the group even though this guard has ended it.
+    let _unwind_terminator = crate::process::UnwindTerminator::new(&child);
     let identity = process_identity(child.id());
     let (start_ticks, process_group, session_id) = identity
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
