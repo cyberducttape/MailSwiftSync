@@ -12,8 +12,8 @@
   once. Renewals and completions refuse a revoked worker inside the store,
   and the agent times its lease from just before it asks for one. The
   revoke response field `requeued_assignments` is now
-  `leases_awaiting_expiry`. The control-plane database moves to schema v4,
-  and the upgrade is applied automatically.
+  `leases_awaiting_expiry`. Existing control-plane databases are upgraded
+  automatically to allow the new state.
 - Control plane worker agent: `control worker plan` exports a non-secret
   plan document with a SHA-256 of each local durable batch mailbox's plan,
   `control worker enroll` exchanges an enrollment token for an owner-only
