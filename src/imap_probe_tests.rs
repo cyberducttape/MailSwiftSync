@@ -1074,9 +1074,17 @@ fn body_hash_message_envelope_is_enforced_before_the_next_fetch_page() {
 
 #[test]
 fn metadata_limit_rejects_the_projected_page_before_fetch_and_staging() {
-    assert!(!message_fetch_limit_exceeded(999_872, 128));
-    assert!(message_fetch_limit_exceeded(999_873, 128));
-    assert!(message_fetch_limit_exceeded(usize::MAX, 1));
+    let ephemeral = super::message_fetch_limit(false);
+    assert_eq!(ephemeral, 1_000_000);
+    assert!(!message_fetch_limit_exceeded(999_872, 128, ephemeral));
+    assert!(message_fetch_limit_exceeded(999_873, 128, ephemeral));
+    assert!(message_fetch_limit_exceeded(usize::MAX, 1, ephemeral));
+    // A durable stage verifies above the ephemeral limit in one pass.
+    let durable = super::message_fetch_limit(true);
+    assert_eq!(durable, 3_000_000);
+    assert!(!message_fetch_limit_exceeded(999_873, 128, durable));
+    assert!(!message_fetch_limit_exceeded(2_999_872, 128, durable));
+    assert!(message_fetch_limit_exceeded(2_999_873, 128, durable));
 }
 
 #[test]

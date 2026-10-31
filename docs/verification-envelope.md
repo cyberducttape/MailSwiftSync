@@ -30,12 +30,16 @@ label and coverage/exception counts.
 `STATUS (MESSAGES)` per selectable folder (adding `SIZE` when the server
 advertises RFC 8438 `STATUS=SIZE`), counting a message once per folder exactly
 as verification does. The preflight “Verification capacity” row compares those
-counts with the 1,000,000-message-per-account limit and, for body-content
+counts with the per-account message limit (3,000,000 when the run stages
+verification in its ledger's private SQLite file, 1,000,000 otherwise) and,
+for body-content
 verification, the combined byte budget. Over a limit, the row is blocked and
 says the mailbox will finish as “verification limit exceeded” rather than
 verified; the transfer itself is not refused. Accounts with more than 5,000
 selectable folders, a refused `STATUS`, or a census that runs past 30 seconds
-show the capacity as not established, never as within limits.
+show the capacity as not established, never as within limits. Above
+1,000,000 messages the row also states the free disk the stage may need, at
+the observed worst case of 808 bytes per staged record.
 
 A batch dry run shows the same row for every mailbox. After a mailbox passes
 its dry run, each account is probed again and counted the same way. The row
@@ -50,8 +54,32 @@ per mailbox.
 
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
-| Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
-| Body fingerprint proof | Durable SQLite-backed verification supports the general 1,000,000-message-per-endpoint limit; ephemeral in-memory verification retains a 100,000-message-per-endpoint ceiling. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. Durable reconciliation uses staged indexes and bounded Rust batches, but its disk amplification and large-scale latency have not yet been qualified. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The configured body-byte budget is independent of message count and does not establish a memory or disk-capacity guarantee. |
+| Metadata reconciliation | Up to 3,000,000 messages on each endpoint across all selectable folders on a durable stage, and 1,000,000 on an ephemeral one; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
+| Body fingerprint proof | Durable SQLite-backed verification supports the general 3,000,000-message-per-endpoint durable limit; ephemeral in-memory verification retains a 100,000-message-per-endpoint ceiling. Each body is bounded by 8 MiB by default (configurable up to 64 MiB); the entire tagged FETCH response is also capped at 64 MiB, including protocol overhead. The shared source-plus-destination hash-byte budget is 512 MiB by default and can be configured up to 8 GiB. Durable reconciliation uses staged indexes and bounded Rust batches, but its disk amplification and large-scale latency have not yet been qualified. | Bounded and fail-closed in code, but not production-scale or provider-qualified. The configured body-byte budget is independent of message count and does not establish a memory or disk-capacity guarantee. |
+
+**Above 1,000,000 messages (2026-10-30).** One verification pass covers the
+whole account, so wrong-folder detection and account-wide fingerprint
+uniqueness mean exactly what they do below the old limit. The durable limit
+is the largest size whose release benchmark (`scripts/benchmark-verification-scale.sh`,
+typical shape, one workstation, nothing else running) met the 64 MiB
+peak-RSS and 20,000 msg/s reconciliation budgets:
+
+| Messages per side | Peak RSS | Reconcile rate | Peak stage bytes | Budget |
+| ---: | ---: | ---: | ---: | --- |
+| 1,000,000 | 20 MiB | 43,318/s | 1,092,691,152 | met |
+| 2,000,000 | 21 MiB | 35,401/s | 2,222,212,072 | met |
+| 3,000,000 | 17 MiB | 22,888/s | 3,355,203,296 | met |
+| 5,000,000 | 17 MiB | 18,738/s | 5,631,878,752 | rate missed |
+| 10,000,000 | 17 MiB | 16,863/s | 11,398,457,040 | rate missed |
+
+Memory stays flat. The rate falls once the stage outgrows the page cache;
+the 10M run still produced exact results (9,800,000 matched, all 200,000
+seeded changes found). The opt-in test
+`a_durable_stage_verifies_an_account_above_the_ephemeral_limit` drives
+1,000,100 messages per side through the scripted IMAP server and the real
+fetch path into a durable stage, reconciles them with 100% exact coverage,
+and checks that an ephemeral stage still stops at 1,000,000. Real-provider
+fetch time at this scale is not measured.
 
 The free-space check runs before network scanning, each fetched-page commit,
 major SQLite materialization phases, and every 256 persisted mismatch rows.

@@ -49,6 +49,7 @@ pub(crate) fn capability_probe_result_matches(
 
 pub(crate) fn assess_plan(
     form: &Form,
+    durable_stage: bool,
     source_capabilities: Option<&core::ServerCapabilities>,
     destination_capabilities: Option<&core::ServerCapabilities>,
 ) -> Vec<(String, String, PreflightCheckStatus)> {
@@ -162,9 +163,12 @@ pub(crate) fn assess_plan(
     append_capability_check(&mut checks, "Source", source_capabilities, false);
     append_capability_check(&mut checks, "Destination", destination_capabilities, true);
     checks.push(destination_capacity_check(destination_capabilities));
-    if let Some(check) =
-        verification_capacity_check(form, source_capabilities, destination_capabilities)
-    {
+    if let Some(check) = verification_capacity_check(
+        form,
+        durable_stage,
+        source_capabilities,
+        destination_capabilities,
+    ) {
         checks.push(check);
     }
     if let (Some(source), Some(destination)) = (source_capabilities, destination_capabilities)
@@ -291,6 +295,7 @@ const DOVECOT_CAPACITY: &str =
 /// fails leaves that account's count unknown and never fails the dry run.
 pub(crate) fn batch_verification_capacity(
     form: &Form,
+    durable_stage: bool,
     probe: impl Fn(crate::imap_probe::MailSide) -> Result<core::ServerCapabilities, String>,
 ) -> (PreflightCheckStatus, String) {
     if form.engine() == core::Engine::Dovecot {
@@ -312,17 +317,20 @@ pub(crate) fn batch_verification_capacity(
     };
     let source = observe(crate::imap_probe::MailSide::Source);
     let destination = observe(crate::imap_probe::MailSide::Destination);
-    let (_, detail, status) = verification_capacity_check(form, Some(&source), Some(&destination))
-        .expect("both accounts were observed");
+    let (_, detail, status) =
+        verification_capacity_check(form, durable_stage, Some(&source), Some(&destination))
+            .expect("both accounts were observed");
     (status, detail)
 }
 
 /// Compare the probe's message census with message-level verification
 /// limits before anything transfers. Exceeding a limit does not stop a
 /// transfer, but the mailbox would end as "verification limit exceeded"
-/// rather than verified, so the operator must see that up front.
+/// rather than verified, so the operator must see that up front. A durable
+/// (ledger-backed) stage verifies more messages than an ephemeral one.
 fn verification_capacity_check(
     form: &Form,
+    durable_stage: bool,
     source: Option<&core::ServerCapabilities>,
     destination: Option<&core::ServerCapabilities>,
 ) -> Option<(String, String, PreflightCheckStatus)> {
@@ -337,7 +345,8 @@ fn verification_capacity_check(
             PreflightCheckStatus::Passed,
         ));
     }
-    let limit = crate::imap_probe::MAX_MESSAGE_FETCH_RECORDS as u64;
+    let limit = crate::imap_probe::message_fetch_limit(durable_stage) as u64;
+    let mut staged_records = 0_u64;
     let body_hash = form.profile.body_hash_verification;
     let mut parts = Vec::new();
     let mut over = Vec::new();
@@ -360,6 +369,7 @@ fn verification_capacity_check(
             total_bytes = None;
             continue;
         };
+        staged_records = staged_records.saturating_add(messages);
         parts.push(format!(
             "{side} {messages} message(s) in {} folder(s){}",
             census.folders_counted,
@@ -421,10 +431,20 @@ fn verification_capacity_check(
             PreflightCheckStatus::Unknown,
         ));
     }
+    // Above the ephemeral limit the stage file is the resource to plan for.
+    let stage_note = if staged_records > crate::imap_probe::MAX_MESSAGE_FETCH_RECORDS as u64 {
+        format!(
+            " The verification stage for {staged_records} records may need up to {} bytes of free disk.",
+            staged_records
+                .saturating_mul(core::pre_migration_report::OBSERVED_STAGE_BYTES_PER_RECORD_MAX)
+        )
+    } else {
+        String::new()
+    };
     Some((
         LABEL.into(),
         format!(
-            "{counted}Within the {limit}-message-per-account verification limit{}.",
+            "{counted}Within the {limit}-message-per-account verification limit{}.{stage_note}",
             if body_hash {
                 " and the body-content byte budget"
             } else {
@@ -518,7 +538,7 @@ mod tests {
     #[test]
     fn assessment_keeps_local_checks_separate_from_network_readiness() {
         let form = Form::default();
-        let checks = assess_plan(&form, None, None);
+        let checks = assess_plan(&form, false, None, None);
         assert_eq!(checks.len(), 10);
         assert_eq!(checks[0].0, "Source endpoint");
         assert_eq!(checks[1].0, "Destination endpoint");
@@ -535,7 +555,7 @@ mod tests {
         form.profile.source_tls = "plain".into();
         form.profile.source_host = "source.example".into();
         form.profile.destination_host = "destination.example".into();
-        let checks = assess_plan(&form, None, None);
+        let checks = assess_plan(&form, false, None, None);
         assert_eq!(
             checks.last().map(|check| check.0.as_str()),
             Some("Transport security")
@@ -564,11 +584,11 @@ mod tests {
     #[test]
     fn verification_capacity_is_shown_before_a_run() {
         let form = Form::default();
-        assert!(verification_capacity_check(&form, None, None).is_none());
+        assert!(verification_capacity_check(&form, false, None, None).is_none());
 
         let small = counted(Some(1_200), Some(50_000));
         let (name, detail, status) =
-            verification_capacity_check(&form, Some(&small), Some(&counted(Some(0), None)))
+            verification_capacity_check(&form, false, Some(&small), Some(&counted(Some(0), None)))
                 .unwrap();
         assert_eq!(name, "Verification capacity");
         assert_eq!(status, PreflightCheckStatus::Passed, "{detail}");
@@ -576,16 +596,17 @@ mod tests {
 
         let huge = counted(Some(1_000_001), None);
         let (_, detail, status) =
-            verification_capacity_check(&form, Some(&huge), Some(&small)).unwrap();
+            verification_capacity_check(&form, false, Some(&huge), Some(&small)).unwrap();
         assert_eq!(status, PreflightCheckStatus::Blocked);
         assert!(detail.contains("verification limit exceeded"), "{detail}");
 
         let refused = counted(None, None);
         let (_, detail, status) =
-            verification_capacity_check(&form, Some(&small), Some(&refused)).unwrap();
+            verification_capacity_check(&form, false, Some(&small), Some(&refused)).unwrap();
         assert_eq!(status, PreflightCheckStatus::Unknown);
         assert!(detail.contains("refused STATUS"), "{detail}");
-        let (_, detail, status) = verification_capacity_check(&form, Some(&small), None).unwrap();
+        let (_, detail, status) =
+            verification_capacity_check(&form, false, Some(&small), None).unwrap();
         assert_eq!(status, PreflightCheckStatus::Unknown);
         assert!(
             detail.contains("destination account not tested"),
@@ -596,11 +617,12 @@ mod tests {
     #[test]
     fn each_batch_mailbox_gets_the_single_plan_capacity_row() {
         let form = Form::default();
-        let (status, detail) = batch_verification_capacity(&form, |_| Ok(counted(Some(40), None)));
+        let (status, detail) =
+            batch_verification_capacity(&form, false, |_| Ok(counted(Some(40), None)));
         assert_eq!(status, PreflightCheckStatus::Passed, "{detail}");
         assert!(detail.contains("destination 40 message(s)"), "{detail}");
 
-        let (status, detail) = batch_verification_capacity(&form, |side| match side {
+        let (status, detail) = batch_verification_capacity(&form, false, |side| match side {
             MailSide::Source => Ok(counted(Some(1_000_001), None)),
             MailSide::Destination => Ok(counted(Some(0), None)),
         });
@@ -609,7 +631,7 @@ mod tests {
 
         // An account that cannot be probed is unknown, never within limits,
         // and the other account's count is still shown.
-        let (status, detail) = batch_verification_capacity(&form, |side| match side {
+        let (status, detail) = batch_verification_capacity(&form, false, |side| match side {
             MailSide::Source => Ok(counted(Some(12), None)),
             MailSide::Destination => Err("connection refused".into()),
         });
@@ -620,11 +642,43 @@ mod tests {
             "{detail}"
         );
         // An over-limit account still reports blocked beside an unknown one.
-        let (status, _) = batch_verification_capacity(&form, |side| match side {
+        let (status, _) = batch_verification_capacity(&form, false, |side| match side {
             MailSide::Source => Ok(counted(Some(2_000_000), None)),
             MailSide::Destination => Err("timeout".into()),
         });
         assert_eq!(status, PreflightCheckStatus::Blocked);
+    }
+
+    #[test]
+    fn a_durable_stage_verifies_above_the_ephemeral_limit() {
+        let form = Form::default();
+        let large = counted(Some(1_500_000), None);
+        let (_, detail, status) =
+            verification_capacity_check(&form, false, Some(&large), Some(&large)).unwrap();
+        assert_eq!(status, PreflightCheckStatus::Blocked, "{detail}");
+        assert!(detail.contains("1000000-message"), "{detail}");
+
+        let (_, detail, status) =
+            verification_capacity_check(&form, true, Some(&large), Some(&large)).unwrap();
+        assert_eq!(status, PreflightCheckStatus::Passed, "{detail}");
+        assert!(detail.contains("3000000-message"), "{detail}");
+        assert!(
+            detail.contains("stage for 3000000 records may need up to 2424000000 bytes"),
+            "{detail}"
+        );
+
+        let beyond = counted(Some(3_000_001), None);
+        let (_, detail, status) =
+            verification_capacity_check(&form, true, Some(&beyond), Some(&large)).unwrap();
+        assert_eq!(status, PreflightCheckStatus::Blocked, "{detail}");
+
+        // Below the ephemeral limit there is no disk note.
+        let small = counted(Some(10), None);
+        let (_, detail, _) =
+            verification_capacity_check(&form, true, Some(&small), Some(&small)).unwrap();
+        assert!(!detail.contains("free disk"), "{detail}");
+        let (status, _) = batch_verification_capacity(&form, true, |_| Ok(large.clone()));
+        assert_eq!(status, PreflightCheckStatus::Passed);
     }
 
     #[test]
@@ -634,13 +688,13 @@ mod tests {
         };
         let mut form = Form::default();
         form.profile.destination_tls = "plain".into();
-        let (status, detail) = batch_verification_capacity(&form, unreachable);
+        let (status, detail) = batch_verification_capacity(&form, false, unreachable);
         assert_eq!(status, PreflightCheckStatus::Unknown);
         assert!(detail.contains("encrypted IMAP"), "{detail}");
 
         let mut form = Form::default();
         form.profile.engine = core::Engine::Dovecot;
-        let (status, detail) = batch_verification_capacity(&form, unreachable);
+        let (status, detail) = batch_verification_capacity(&form, false, unreachable);
         assert_eq!(status, PreflightCheckStatus::Passed);
         assert!(detail.contains("Dovecot"), "{detail}");
         assert_eq!(PreflightCheckStatus::Blocked.as_str(), "blocked");
@@ -654,21 +708,26 @@ mod tests {
         form.profile.body_hash_max_total_bytes = 1_000;
         let sized = |bytes| counted(Some(10), Some(bytes));
         assert_eq!(
-            verification_capacity_check(&form, Some(&sized(400)), Some(&sized(400)))
+            verification_capacity_check(&form, false, Some(&sized(400)), Some(&sized(400)))
                 .unwrap()
                 .2,
             PreflightCheckStatus::Passed
         );
         let (_, detail, status) =
-            verification_capacity_check(&form, Some(&sized(800)), Some(&sized(400))).unwrap();
+            verification_capacity_check(&form, false, Some(&sized(800)), Some(&sized(400)))
+                .unwrap();
         assert_eq!(status, PreflightCheckStatus::Blocked);
         assert!(
             detail.contains("body-content verification budget"),
             "{detail}"
         );
-        let (_, detail, status) =
-            verification_capacity_check(&form, Some(&sized(10)), Some(&counted(Some(1), None)))
-                .unwrap();
+        let (_, detail, status) = verification_capacity_check(
+            &form,
+            false,
+            Some(&sized(10)),
+            Some(&counted(Some(1), None)),
+        )
+        .unwrap();
         assert_eq!(status, PreflightCheckStatus::Unknown);
         assert!(detail.contains("unchecked"), "{detail}");
     }

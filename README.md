@@ -296,8 +296,8 @@ stage and streamed into the ledger by the terminal commit, so mismatch volume
 is bounded by disk rather than memory and no finding is dropped; the
 opt-in body path deliberately loads only bounded metadata maps after hashing,
 and live large-provider qualification remains outstanding. The current
-implementation ceilings are 1,000,000 messages per endpoint for metadata
-reconciliation and 100,000 messages per endpoint plus 8 GiB of combined
+implementation ceilings are 3,000,000 messages per endpoint for metadata
+reconciliation on a durable (ledger-backed) stage, 1,000,000 without one, and 100,000 messages per endpoint plus 8 GiB of combined
 source/destination body bytes for body proof (512 MiB default). These are not
 provider-qualified capacity claims; benchmark scope and limitations are in the
 [verification envelope](docs/verification-envelope.md).
