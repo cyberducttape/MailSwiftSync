@@ -65,6 +65,19 @@ impl App {
             );
             return;
         }
+        // A dry preflight authenticates too, so the transport rule applies
+        // to it; the rest of the policy is checked for live runs below.
+        if self.form.dry_run {
+            let decision = crate::organization_policy::OrganizationPolicy::load()
+                .and_then(|policy| policy.check_transport(&self.form.profile));
+            if let Err(error) = decision {
+                self.set_status(
+                    format!("Preflight blocked by organization policy: {error}"),
+                    StatusSeverity::Error,
+                );
+                return;
+            }
+        }
         // Batch admission already refuses a plan the organization policy
         // prohibits; a single live run must not be the way around it. The
         // dry preflight still runs so its checklist can show the reason.

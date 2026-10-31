@@ -1554,12 +1554,9 @@ mod tests {
         let reverify = super::reverify_stage_path(state, job);
         assert_ne!(live, reverify);
         assert_eq!(live.parent(), reverify.parent());
-        assert!(
-            reverify
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with("-reverify.sqlite")
+        assert_eq!(
+            reverify,
+            crate::core::durable_stage_path(state, &format!("{job}-reverify"))
         );
     }
 

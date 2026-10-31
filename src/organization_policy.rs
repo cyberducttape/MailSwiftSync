@@ -86,8 +86,13 @@ pub(crate) struct OrganizationPolicy {
     /// Require encrypted source and destination transport.
     pub(crate) require_tls: bool,
     /// Defaults to false; enabling plaintext IMAP is an explicit compatibility
-    /// exception for legacy servers.
+    /// exception for legacy servers, valid only for `plain_imap_hosts` and
+    /// until `plain_imap_expires`.
     pub(crate) allow_plain_imap: bool,
+    /// The only hosts plaintext IMAP may reach under `allow_plain_imap`.
+    pub(crate) plain_imap_hosts: Vec<String>,
+    /// The last UTC day (`YYYY-MM-DD`) the plaintext exception applies.
+    pub(crate) plain_imap_expires: Option<String>,
     /// Whether plans that can remove destination-only state are permitted.
     pub(crate) allow_destination_deletion: bool,
     /// `aggregate`, `metadata`, or `body`.
@@ -110,6 +115,8 @@ impl Default for OrganizationPolicy {
             profile: default_policy_profile(),
             require_tls: true,
             allow_plain_imap: false,
+            plain_imap_hosts: Vec::new(),
+            plain_imap_expires: None,
             allow_destination_deletion: false,
             minimum_verification: "metadata".into(),
             max_concurrency: Some(8),
@@ -366,14 +373,7 @@ impl OrganizationPolicy {
                     .into(),
             );
         }
-        let source_plain = profile.source_tls.eq_ignore_ascii_case("plain");
-        let destination_plain = profile.destination_tls.eq_ignore_ascii_case("plain");
-        if (self.require_tls || !self.allow_plain_imap) && (source_plain || destination_plain) {
-            return Err(
-                "Organization policy requires TLS for both source and destination; plain IMAP is prohibited."
-                    .into(),
-            );
-        }
+        self.check_transport(profile)?;
         if !self.allow_destination_deletion
             && profile
                 .destination_mutation_policy()
@@ -507,6 +507,67 @@ impl OrganizationPolicy {
     pub(crate) fn check_form(&self, form: &Form) -> Result<(), String> {
         self.check(&form.profile)
     }
+
+    /// The transport rule alone. It applies to every authenticated
+    /// connection, dry preflight included, because a dry run logs in too.
+    pub(crate) fn check_transport(&self, profile: &Profile) -> Result<(), String> {
+        self.check_transport_on(profile, chrono::Utc::now().date_naive())
+    }
+
+    fn check_transport_on(
+        &self,
+        profile: &Profile,
+        today: chrono::NaiveDate,
+    ) -> Result<(), String> {
+        for (side, transport, host) in [
+            ("source", &profile.source_tls, &profile.source_host),
+            (
+                "destination",
+                &profile.destination_tls,
+                &profile.destination_host,
+            ),
+        ] {
+            if !transport.eq_ignore_ascii_case("plain") {
+                continue;
+            }
+            if self.require_tls || !self.allow_plain_imap {
+                return Err(
+                    "Organization policy requires TLS for both source and destination; plain IMAP is prohibited."
+                        .into(),
+                );
+            }
+            let Some(expires) = self.plain_imap_expires.as_deref() else {
+                return Err(
+                    "Organization policy allow_plain_imap needs plain_imap_expires (YYYY-MM-DD): a plaintext exception must have an end date."
+                        .into(),
+                );
+            };
+            let expires = expires.trim().parse::<chrono::NaiveDate>().map_err(|_| {
+                format!(
+                    "Organization policy plain_imap_expires {expires:?} is not a YYYY-MM-DD date."
+                )
+            })?;
+            if today > expires {
+                return Err(format!(
+                    "Organization policy's plaintext IMAP exception expired on {expires}; plain IMAP is prohibited."
+                ));
+            }
+            let host = crate::endpoint::parts(host, 143)
+                .map(|(host, _)| host.to_ascii_lowercase())
+                .unwrap_or_default();
+            if host.is_empty()
+                || !self
+                    .plain_imap_hosts
+                    .iter()
+                    .any(|allowed| allowed.trim().eq_ignore_ascii_case(&host))
+            {
+                return Err(format!(
+                    "Organization policy permits plain IMAP only to plain_imap_hosts; the {side} host is not listed."
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Resolve a policy provider key to the identity `canonical_provider` assigns
@@ -632,6 +693,87 @@ mod tests {
         assert!(error.contains("TLS"));
         form.profile.source_tls = "starttls".into();
         assert!(policy.check_form(&form).unwrap_err().contains("deletion"));
+    }
+
+    #[test]
+    fn a_plaintext_exception_is_scoped_to_listed_hosts_and_expires() {
+        let mut profile = Form::default().profile;
+        profile.source_tls = "plain".into();
+        profile.source_host = "Legacy.Example.Test:143".into();
+        profile.destination_tls = "imaps".into();
+        let day = |text: &str| text.parse::<chrono::NaiveDate>().unwrap();
+        let exception = OrganizationPolicy {
+            profile: "compatibility".into(),
+            require_tls: false,
+            allow_plain_imap: true,
+            plain_imap_hosts: vec!["legacy.example.test".into()],
+            plain_imap_expires: Some("2026-12-31".into()),
+            ..OrganizationPolicy::default()
+        };
+        assert!(
+            exception
+                .check_transport_on(&profile, day("2026-12-31"))
+                .is_ok()
+        );
+        let error = exception
+            .check_transport_on(&profile, day("2027-01-01"))
+            .unwrap_err();
+        assert!(error.contains("expired on 2026-12-31"), "{error}");
+
+        let mut other = profile.clone();
+        other.source_host = "elsewhere.example.test".into();
+        let error = exception
+            .check_transport_on(&other, day("2026-10-30"))
+            .unwrap_err();
+        assert!(error.contains("source host is not listed"), "{error}");
+        // The destination is checked on its own.
+        let mut both = profile.clone();
+        both.destination_tls = "plain".into();
+        both.destination_host = "new.example.test".into();
+        let error = exception
+            .check_transport_on(&both, day("2026-10-30"))
+            .unwrap_err();
+        assert!(error.contains("destination host is not listed"), "{error}");
+
+        let open_ended = OrganizationPolicy {
+            plain_imap_expires: None,
+            ..exception.clone()
+        };
+        let error = open_ended
+            .check_transport_on(&profile, day("2026-10-30"))
+            .unwrap_err();
+        assert!(error.contains("must have an end date"), "{error}");
+        let garbled = OrganizationPolicy {
+            plain_imap_expires: Some("soon".into()),
+            ..exception.clone()
+        };
+        assert!(
+            garbled
+                .check_transport_on(&profile, day("2026-10-30"))
+                .is_err()
+        );
+        let unlisted = OrganizationPolicy {
+            plain_imap_hosts: Vec::new(),
+            ..exception.clone()
+        };
+        assert!(
+            unlisted
+                .check_transport_on(&profile, day("2026-10-30"))
+                .is_err()
+        );
+        // TLS stays allowed whatever the exception says.
+        let mut encrypted = profile.clone();
+        encrypted.source_tls = "starttls".into();
+        assert!(
+            OrganizationPolicy::default()
+                .check_transport(&encrypted)
+                .is_ok()
+        );
+        assert!(
+            OrganizationPolicy::default()
+                .check_transport(&profile)
+                .is_err()
+        );
     }
 
     #[test]
