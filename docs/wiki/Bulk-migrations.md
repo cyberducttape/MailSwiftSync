@@ -6,7 +6,7 @@ MailSwiftSync can import a migration list from CSV or XLSX and process rows with
 
 XLSX files are limited to 100,000 data rows, 64 columns, and 1,000,000 occupied or expanded cells per selected worksheet. MailSwiftSync reads the required mailbox-list OOXML subset with a bounded parser; oversized declared or actual worksheet ranges are rejected before dense cell-grid construction. Legacy binary `.xls` files are unsupported.
 
-![Mailboxes page with a loaded batch queue — Retro 80s Neon theme](assets/batch-queue.png)
+![Mailboxes page with a loaded batch queue — Default dark theme](assets/batch-queue.png)
 
 *Mailboxes page of the current release with placeholder `.example` data: queue health, collapsed queue settings, selection controls, and the review drawer for two selected rows. Passwords are never shown in the queue.*
 

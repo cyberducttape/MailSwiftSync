@@ -34,7 +34,7 @@ MailSwiftSync looks for `imapsync` on your PATH. If it is installed elsewhere, e
 
 ## Fill in the two account cards
 
-![Migration plan page — Retro 80s Neon theme](assets/migration-plan.png)
+![Migration plan page — Default dark theme](assets/migration-plan.png)
 
 The left card is **Source account**. This is the mailbox you are copying from.
 

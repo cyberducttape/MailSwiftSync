@@ -41,15 +41,26 @@ fn secret_row(
             }
             password_reveal_allowed(editable, requested)
         });
+        // Reserve the toggle's measured width, so a longer translation never
+        // pushes the row (and every card below it) past the column edge.
+        let toggle = language.text(if visible { "Hide" } else { "Show" });
+        let toggle_width = egui::WidgetText::from(toggle)
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            )
+            .size()
+            .x
+            + 2.0 * ui.spacing().button_padding.x
+            + ui.spacing().item_spacing.x;
         let field = ui.add(
             egui::TextEdit::singleline(password.as_mut_string())
                 .password(!visible)
-                .desired_width((ui.available_width() - 64.0).max(80.0)),
+                .desired_width((ui.available_width() - toggle_width).max(80.0)),
         );
-        if ui
-            .button(language.text(if visible { "Hide" } else { "Show" }))
-            .clicked()
-        {
+        if ui.button(toggle).clicked() {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(visibility_id, !visible));
         }

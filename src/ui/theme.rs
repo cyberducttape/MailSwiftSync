@@ -156,6 +156,8 @@ impl ThemeColors {
         // Modern packs show disclosure sections as plain rows with a chevron;
         // retro packs keep the framed bar of their era.
         visuals.collapsing_header_frame = !self.modern;
+        // Data tables read better striped; short key/value summaries opt out
+        // with `striped(false)`, since a stripe there ends mid-card.
         visuals.striped = true;
         visuals
     }

@@ -604,6 +604,7 @@ crate::ui::name_modal(ui, &modal_heading);
             ui.heading(self.language.message("ui.migration-policy"));
             egui::Grid::new("migration_policy_summary")
                 .num_columns(2)
+                .striped(false)
                 .spacing([16.0, 5.0])
                 .show(ui, |ui| {
                     ui.label(self.language.message("ui.folder-handling"));

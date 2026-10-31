@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Polish the desktop UI and refresh the preview images in the Default dark
+  theme.
+  - Key/value summaries (command center, migration policy, readiness,
+    simulation facts, wave form) are no longer striped; their stripes ended
+    mid-card. Data tables keep stripes.
+  - The password row reserves its Show/Hide button's measured width, so the
+    account cards and every card below them share one right edge.
+  - The Mailboxes workflow separates its steps, marks finished ones with ✓,
+    and says "1 mailbox blocks" or "N mailboxes block" instead of
+    "mailbox(es)".
+  - `scripts/capture-ui-previews.py` takes `--theme` and `--light`, and
+    captures as user `operator`.
 - Clear CodeQL alert #96: the opt-in above-limit verification test prints
   only its generated message count and timings, not values from the
   reconcile summary.

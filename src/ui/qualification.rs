@@ -227,6 +227,7 @@ impl App {
             );
             egui::Grid::new("migration_simulation_facts")
                 .num_columns(2)
+                .striped(false)
                 .spacing([18.0, 7.0])
                 .show(ui, |ui| {
                     simulation_row(ui, self.language.message("ui.scope-f0350657"), &scope);

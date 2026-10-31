@@ -401,6 +401,7 @@ impl App {
             ui.add_space(8.0);
             egui::Grid::new("overview_operator_cockpit")
                 .num_columns(2)
+                .striped(false)
                 .spacing([18.0, 7.0])
                 .show(ui, |ui| {
                     ui.label(
@@ -728,6 +729,7 @@ impl App {
             ui.add_space(6.0);
             egui::Grid::new("overview_readiness_summary")
                 .num_columns(2)
+                .striped(false)
                 .spacing([24.0, 5.0])
                 .show(ui, |ui| {
                     for finding in findings.iter().filter(|finding| {
