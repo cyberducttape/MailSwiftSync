@@ -939,15 +939,25 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 for (index, (_, title_key, _)) in crate::ui::overview::LIFECYCLE.iter().enumerate()
                 {
-                    let label = format!("{} {}", index + 1, self.language.message(title_key));
-                    let active = index == workflow_index;
-                    ui.label(RichText::new(label).color(if active {
-                        colors.info
-                    } else if workflow_index != usize::MAX && index < workflow_index {
-                        colors.success
+                    if index > 0 {
+                        ui.label(RichText::new("›").color(colors.text_secondary));
+                    }
+                    let title = self.language.message(title_key);
+                    if workflow_index != usize::MAX && index < workflow_index {
+                        let size = egui::TextStyle::Body.resolve(ui.style()).size;
+                        ui.label(crate::ui::status_text(
+                            &format!("✓ {title}"),
+                            colors.success,
+                            size,
+                        ));
                     } else {
-                        colors.text_secondary
-                    }));
+                        let text = RichText::new(format!("{} {title}", index + 1));
+                        ui.label(if index == workflow_index {
+                            text.color(colors.info).family(crate::ui::fonts::medium())
+                        } else {
+                            text.color(colors.text_secondary)
+                        });
+                    }
                 }
             });
             // The workflow's recommended next step is the page's primary action.
@@ -958,14 +968,17 @@ impl App {
             }
             if summary.unresolved() > 0 {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(
-                            self.language
-                                .text("{} mailbox(es) block the next migration step.")
-                                .replace("{}", &summary.unresolved().to_string()),
-                        )
-                        .color(colors.warning),
-                    );
+                    let blockers = match summary.unresolved() {
+                        1 => self
+                            .language
+                            .message("ui.mailbox-blocks-next-step")
+                            .to_owned(),
+                        count => self
+                            .language
+                            .message("ui.mailboxes-block-next-step")
+                            .replace("{}", &count.to_string()),
+                    };
+                    ui.label(RichText::new(blockers).color(colors.warning));
                     if ui
                         .button(self.language.text("Open actionable blockers"))
                         .clicked()

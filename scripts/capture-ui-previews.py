@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture real Retro 80s desktop views using isolated, synthetic demo state.
+"""Capture real desktop views using isolated, synthetic demo state.
 
 Requires a debug build, an X11 display (XWayland works), xwininfo, xprop,
 and ImageMagick's import. Only this script's own application windows are
@@ -32,6 +32,8 @@ def main() -> None:
     parser.add_argument("--binary", type=Path, default=Path("target/debug/mailswiftsync"))
     parser.add_argument("--output", type=Path, default=Path("docs/wiki/assets"))
     parser.add_argument("--window", default="1440x1000", help="Preview size, e.g. 900x640")
+    parser.add_argument("--theme", default="Default", help="Theme name as stored in appearance.toml, e.g. HighContrast")
+    parser.add_argument("--light", action="store_true", help="Capture the light variant")
     args = parser.parse_args()
     for program in ("xwininfo", "xprop", "import"):
         if not shutil.which(program):
@@ -53,12 +55,19 @@ def main() -> None:
             for key in list(environment):
                 if key.startswith("MAILSWIFTSYNC_DEBUG_"):
                     environment.pop(key)
+            appearance = Path(temporary, "config", "mailswiftsync", "appearance.toml")
+            appearance.parent.mkdir(parents=True)
+            # dark_mode and ui_scale are required, or the file is ignored.
+            appearance.write_text(
+                f'theme = "{args.theme}"\ndark_mode = {str(not args.light).lower()}\nui_scale = 1.0\n'
+            )
             environment.update(
                 XDG_CONFIG_HOME=f"{temporary}/config",
                 XDG_DATA_HOME=f"{temporary}/data",
                 MAILSWIFTSYNC_STATE_PATH=f"{temporary}/state.db",
                 MAILSWIFTSYNC_DEBUG_DEMO="1",
-                MAILSWIFTSYNC_DEBUG_THEME="retro80s",
+                # Keep the wave approver placeholder free of the local username.
+                USER="operator",
                 MAILSWIFTSYNC_DEBUG_VIEW=view,
                 MAILSWIFTSYNC_DEBUG_WINDOW=args.window,
             )
@@ -93,6 +102,8 @@ def main() -> None:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=5)
+    # The wiki home page shows the same overview under its older name.
+    shutil.copyfile(args.output / "migration-overview.png", args.output / "overview.png")
 
 
 if __name__ == "__main__":

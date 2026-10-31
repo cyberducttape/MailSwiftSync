@@ -24,6 +24,7 @@ RAW_LITERAL_ALLOWLIST = {
     "MailSwiftSync",
     "doveadm",
     "→",
+    "›",
     "✓",
     "⏺",
     "!",

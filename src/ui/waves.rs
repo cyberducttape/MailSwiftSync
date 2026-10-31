@@ -322,6 +322,7 @@ impl App {
             );
             egui::Grid::new("wave_create_form")
                 .num_columns(2)
+                .striped(false)
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
                     for (label_key, hint_key, value) in [

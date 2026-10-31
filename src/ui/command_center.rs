@@ -171,6 +171,7 @@ impl App {
                     // A grid keeps every count on its label's baseline.
                     egui::Grid::new("command_center_buckets")
                         .num_columns(2)
+                        .striped(false)
                         .spacing([24.0, 8.0])
                         .show(ui, |ui| {
                             for (glyph, key, count, color, filter) in buckets {
@@ -244,6 +245,7 @@ impl App {
                 let column_cap = (right.available_width() * 0.6).max(120.0);
                 egui::Grid::new("command_center_figures")
                     .num_columns(2)
+                    .striped(false)
                     .spacing([24.0, 2.0])
                     .max_col_width(column_cap)
                     .show(right, |ui| {
@@ -269,6 +271,7 @@ impl App {
                     crate::ui::section_label(right, self.language.message("ui.provider-health"));
                     egui::Grid::new("command_center_providers")
                         .num_columns(2)
+                        .striped(false)
                         .spacing([24.0, 6.0])
                         .max_col_width(column_cap)
                         .show(right, |ui| {
