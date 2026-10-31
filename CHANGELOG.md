@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Verify accounts above 1,000,000 messages. Runs that stage verification in
+  the ledger's private SQLite file now verify up to 3,000,000 messages per
+  account in one pass. This is the largest size whose benchmark met the
+  memory and reconciliation-rate budgets. Runs without a ledger keep the
+  1,000,000 limit. Above 1,000,000 messages, the preflight capacity row
+  states the stage disk the run may need.
 - Show verification capacity for every mailbox in a batch dry run, not only
   for a single plan. Each mailbox that passes its dry run has both accounts
   counted again. Its result then ends with the same passed, blocked or unknown

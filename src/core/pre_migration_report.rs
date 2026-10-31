@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
-const BODY_VERIFICATION_MESSAGE_LIMIT: u64 = 1_000_000;
+// Pre-migration reports describe ledger-backed runs, which verify on a
+// durable stage.
+const METADATA_VERIFICATION_MESSAGE_LIMIT: u64 =
+    crate::imap_probe::MAX_DURABLE_MESSAGE_FETCH_RECORDS as u64;
+const BODY_VERIFICATION_MESSAGE_LIMIT: u64 =
+    crate::imap_probe::MAX_DURABLE_MESSAGE_FETCH_RECORDS as u64;
 const DEFAULT_BODY_HASH_BYTE_BUDGET: u64 = 512 * 1024 * 1024;
 pub(crate) const PRE_MIGRATION_RISK_FORMAT: &str = "mailswiftsync-pre-migration-risk";
 pub(crate) const PRE_MIGRATION_RISK_FORMAT_VERSION: u32 = 5;
@@ -11,7 +15,7 @@ const PROJECTED_ENDPOINTS: u64 = 2;
 /// total already includes its rollback journal. This workload range is not a
 /// capacity bound.
 const OBSERVED_STAGE_BYTES_PER_RECORD_MIN: u64 = 518;
-const OBSERVED_STAGE_BYTES_PER_RECORD_MAX: u64 = 808;
+pub(crate) const OBSERVED_STAGE_BYTES_PER_RECORD_MAX: u64 = 808;
 
 /// Pre-migration risk assessment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -367,7 +371,7 @@ mod tests {
         assert!(
             messages
                 .iter()
-                .any(|message| { message.contains("1000000-message-per-endpoint") })
+                .any(|message| { message.contains("3000000-message-per-endpoint") })
         );
         assert!(
             messages
@@ -397,7 +401,7 @@ mod tests {
             PreMigrationRisk::assess(BODY_VERIFICATION_MESSAGE_LIMIT + 1, 5, 1, "");
         assert!(above_durable_limit.warnings.iter().any(|warning| {
             warning.message.contains(
-                "Bounded body proof exceeds the durable SQLite-backed 1000000-message-per-endpoint envelope",
+                "Bounded body proof exceeds the durable SQLite-backed 3000000-message-per-endpoint envelope",
             )
         }));
     }

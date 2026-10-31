@@ -139,7 +139,13 @@ const MAX_UID_SET_BYTES: usize = 7_000;
 /// Sequence-number FETCH pages scale with the number of messages in a
 /// mailbox, not with its historical UIDNEXT after years of expunges.
 const MESSAGE_UID_ENUMERATION_PAGE_SIZE: u64 = 512;
+/// Messages per endpoint that an ephemeral stage verifies.
 pub(crate) const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
+/// Messages per endpoint that a durable SQLite stage verifies in one pass:
+/// the largest size whose benchmark met the reconciliation-rate budget
+/// (3M at 22,888 msg/s; 5M fell to 18,738). Memory stays flat; the stage
+/// file grows about linearly, so free space is checked as it grows.
+pub(crate) const MAX_DURABLE_MESSAGE_FETCH_RECORDS: usize = 3_000_000;
 pub(crate) const MAX_BODY_HASH_MESSAGES_PER_ENDPOINT: usize = 100_000;
 // This is a fail-closed bound for one fetched page's transient Rust state. Live
 // metadata is staged into SQLite immediately after parsing, so the bound is
@@ -151,10 +157,19 @@ fn body_hash_message_limit_exceeded(existing: usize, incoming: usize) -> bool {
     existing.saturating_add(incoming) > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
 }
 
-fn message_fetch_limit_exceeded(existing: usize, incoming: usize) -> bool {
+fn message_fetch_limit_exceeded(existing: usize, incoming: usize, limit: usize) -> bool {
     existing
         .checked_add(incoming)
-        .is_none_or(|total| total > MAX_MESSAGE_FETCH_RECORDS)
+        .is_none_or(|total| total > limit)
+}
+
+/// The per-endpoint message limit for a stage.
+pub(crate) fn message_fetch_limit(durable_stage: bool) -> usize {
+    if durable_stage {
+        MAX_DURABLE_MESSAGE_FETCH_RECORDS
+    } else {
+        MAX_MESSAGE_FETCH_RECORDS
+    }
 }
 
 pub(crate) struct MessageFetchBudget<'a> {
@@ -483,9 +498,10 @@ impl MessageSink for StageMessageSink<'_> {
         };
         let count = usize::try_from(count)
             .map_err(|_| "reused verification folder count exceeds this platform".to_owned())?;
-        if message_fetch_limit_exceeded(self.count, count) {
+        let limit = message_fetch_limit(self.has_durable_stage());
+        if message_fetch_limit_exceeded(self.count, count, limit) {
             return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
-                "account would exceed the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit while reusing a completed folder"
+                "account would exceed the {limit}-message verification limit while reusing a completed folder"
             )));
         }
         self.reset_mailbox_count(mailbox);
@@ -507,9 +523,10 @@ impl MessageSink for StageMessageSink<'_> {
         };
         let count = usize::try_from(count)
             .map_err(|_| "resumed verification prefix exceeds this platform".to_owned())?;
-        if message_fetch_limit_exceeded(self.count, count) {
+        let limit = message_fetch_limit(self.has_durable_stage());
+        if message_fetch_limit_exceeded(self.count, count, limit) {
             return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
-                "account would exceed the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit while resuming a folder"
+                "account would exceed the {limit}-message verification limit while resuming a folder"
             )));
         }
         self.reset_mailbox_count(mailbox);
@@ -1443,10 +1460,11 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             },
             |stream, buffer, uid_page, uid_set| {
                 budget.check()?;
-                if message_fetch_limit_exceeded(sink.len(), uid_page.len()) {
+                let limit = message_fetch_limit(sink.has_durable_stage());
+                if message_fetch_limit_exceeded(sink.len(), uid_page.len(), limit) {
                     return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
-                    "{host}: account would exceed the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
-                )));
+                        "{host}: account would exceed the {limit}-message verification limit"
+                    )));
                 }
                 if body_hash.is_some()
                     && !sink.has_durable_stage()
@@ -1996,10 +2014,11 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
             Ok(folder_exists) => {
                 consecutive_session_reconnects = 0;
                 total_exists = total_exists.saturating_add(folder_exists);
-                if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
+                let limit = message_fetch_limit(sink.has_durable_stage());
+                if sink.len() > limit {
                     let _ = stream.write_all(b"a999 LOGOUT\r\n");
                     return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
-                        "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
+                        "{host}: account exceeded the {limit}-message verification limit"
                     )));
                 }
             }
