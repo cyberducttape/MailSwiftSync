@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Name each verification stage file by a SHA-256 of its full job ID.
+  - The old name replaced unusual characters with `_` and kept 96
+    characters, so two different job IDs could share a stage file.
+  - An existing stage is moved to its new name, journal included, only when
+    its old name could not have belonged to another job.
+- Scope plaintext IMAP exceptions, and apply the transport rule to dry runs.
+  - `allow_plain_imap` now also needs `plain_imap_hosts` and
+    `plain_imap_expires` in the organization policy.
+  - A plan using plain IMAP to an unlisted host, or after the expiry date,
+    is refused.
+  - A single-mailbox dry preflight now checks the transport rule too, since
+    it logs in with the same credentials. Before, only live runs and batch
+    admission checked it.
+  - Upgrade note: a compatibility or lab policy that allows plain IMAP must
+    add both new fields.
+- Cap account tests at four running at once. Each test holds a thread,
+  sockets and credentials until its network deadline. A request beyond the
+  cap is refused at once with a retry message instead of starting another
+  thread.
+- Remove private temporary export files left by a crashed writer once they
+  are an hour old. Document what a successful artifact write guarantees.
 - Verify accounts above 1,000,000 messages. Runs that stage verification in
   the ledger's private SQLite file now verify up to 3,000,000 messages per
   account in one pass. This is the largest size whose benchmark met the

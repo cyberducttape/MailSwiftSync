@@ -32,6 +32,26 @@ allow_private_networks = false
 allowed_domains = ["accounts.google.com", "oauth2.googleapis.com", "login.microsoftonline.com"]
 ```
 
+**Plain IMAP.** The production profile never permits plain IMAP. A
+`compatibility` or `lab` policy can grant an exception for legacy servers,
+but only by listing the hosts it covers and the last UTC day it applies:
+
+```toml
+profile = "compatibility"
+require_tls = false
+allow_plain_imap = true
+plain_imap_hosts = ["legacy-imap.internal.example"]
+plain_imap_expires = "2026-12-31"
+```
+
+Without both fields, or after the expiry date, any plan that uses plain IMAP
+on either side is refused. A dry preflight is refused too, because it
+authenticates with the same credentials. The plan's own cleartext
+acknowledgement is still required on top of the policy. Each worker enforces
+its local policy when it admits a run. A plan approved in the control plane
+is identified only by its digest, so an altered plan cannot bring its own
+exception.
+
 The policy is read when preflight is assessed and is rechecked immediately
 before batch admission. A malformed, unreadable, group/world-accessible, or
 otherwise invalid policy blocks the operation. Missing policy uses the
