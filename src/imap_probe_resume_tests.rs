@@ -1325,12 +1325,12 @@ fn a_durable_stage_verifies_an_account_above_the_ephemeral_limit() {
     assert_eq!(summary.total_destination, messages);
     // Exact coverage: every source message has its exact metadata pair.
     assert_eq!(summary.metadata_matches, messages);
-    println!(
-        "above-limit messages_per_side={messages} staged_ms={} total_ms={} coverage_percent={}",
-        staged.as_millis(),
-        started.elapsed().as_millis(),
-        summary.metadata_matches * 100 / summary.total_source
-    );
+    // Print only the generated count and timings; the assertions above
+    // carry the coverage result, so nothing derived from the reconcile
+    // summary reaches the log.
+    let staged_ms = staged.as_millis();
+    let total_ms = started.elapsed().as_millis();
+    println!("above-limit messages_per_side={messages} staged_ms={staged_ms} total_ms={total_ms}");
     drop(stage);
     std::fs::remove_dir_all(&directory).unwrap();
 
