@@ -182,6 +182,14 @@ pub(crate) enum Event {
         delay: std::time::Duration,
         failure_class: &'static str,
     },
+    /// A batch dry run measured whether this mailbox fits message-level
+    /// verification limits. `detail` is already redacted and bounded.
+    VerificationCapacity {
+        job_id: String,
+        child_run_id: String,
+        status: &'static str,
+        detail: String,
+    },
     /// The rate-domain limiter is holding launches for one domain (a
     /// mailbox, credential, tenant, provider, or all providers).
     ProviderCooldown {

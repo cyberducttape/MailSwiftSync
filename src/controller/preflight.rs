@@ -19,6 +19,14 @@ impl PreflightCheckStatus {
     fn from_condition(passed: bool) -> Self {
         if passed { Self::Passed } else { Self::Blocked }
     }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Blocked => "blocked",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 pub(crate) fn capability_observation_matches(
@@ -274,6 +282,41 @@ fn destination_capacity_check(
     )
 }
 
+const VERIFICATION_CAPACITY: &str = "Verification capacity";
+const DOVECOT_CAPACITY: &str =
+    "Dovecot runs use engine evidence; no message-level verification limit applies";
+
+/// The verification capacity row for one batch mailbox, from a fresh probe
+/// of each account. The row is the one a single plan shows; a probe that
+/// fails leaves that account's count unknown and never fails the dry run.
+pub(crate) fn batch_verification_capacity(
+    form: &Form,
+    probe: impl Fn(crate::imap_probe::MailSide) -> Result<core::ServerCapabilities, String>,
+) -> (PreflightCheckStatus, String) {
+    if form.engine() == core::Engine::Dovecot {
+        return (PreflightCheckStatus::Passed, DOVECOT_CAPACITY.into());
+    }
+    if form.profile.source_tls == "plain" || form.profile.destination_tls == "plain" {
+        return (
+            PreflightCheckStatus::Unknown,
+            "Not established: messages are counted only over encrypted IMAP.".into(),
+        );
+    }
+    let observe = |side| {
+        probe(side).unwrap_or_else(|error| {
+            let mut unprobed = core::ServerCapabilities::from_inventory_summary("", 0, 0);
+            unprobed.message_census.incomplete_reason =
+                Some(format!("the account could not be probed: {error}"));
+            unprobed
+        })
+    };
+    let source = observe(crate::imap_probe::MailSide::Source);
+    let destination = observe(crate::imap_probe::MailSide::Destination);
+    let (_, detail, status) = verification_capacity_check(form, Some(&source), Some(&destination))
+        .expect("both accounts were observed");
+    (status, detail)
+}
+
 /// Compare the probe's message census with message-level verification
 /// limits before anything transfers. Exceeding a limit does not stop a
 /// transfer, but the mailbox would end as "verification limit exceeded"
@@ -283,14 +326,14 @@ fn verification_capacity_check(
     source: Option<&core::ServerCapabilities>,
     destination: Option<&core::ServerCapabilities>,
 ) -> Option<(String, String, PreflightCheckStatus)> {
-    const LABEL: &str = "Verification capacity";
+    const LABEL: &str = VERIFICATION_CAPACITY;
     if source.is_none() && destination.is_none() {
         return None;
     }
     if form.engine() == core::Engine::Dovecot {
         return Some((
             LABEL.into(),
-            "Dovecot runs use engine evidence; no message-level verification limit applies".into(),
+            DOVECOT_CAPACITY.into(),
             PreflightCheckStatus::Passed,
         ));
     }
@@ -435,9 +478,11 @@ fn namespace_entries(entries: &[core::NamespaceEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CapabilityProbeResult, PreflightCheckStatus, assess_plan, capability_observation_matches,
-        capability_probe_result_matches, destination_capacity_check, verification_capacity_check,
+        CapabilityProbeResult, PreflightCheckStatus, assess_plan, batch_verification_capacity,
+        capability_observation_matches, capability_probe_result_matches,
+        destination_capacity_check, verification_capacity_check,
     };
+    use crate::imap_probe::MailSide;
     use crate::{Form, core};
 
     #[test]
@@ -546,6 +591,60 @@ mod tests {
             detail.contains("destination account not tested"),
             "{detail}"
         );
+    }
+
+    #[test]
+    fn each_batch_mailbox_gets_the_single_plan_capacity_row() {
+        let form = Form::default();
+        let (status, detail) = batch_verification_capacity(&form, |_| Ok(counted(Some(40), None)));
+        assert_eq!(status, PreflightCheckStatus::Passed, "{detail}");
+        assert!(detail.contains("destination 40 message(s)"), "{detail}");
+
+        let (status, detail) = batch_verification_capacity(&form, |side| match side {
+            MailSide::Source => Ok(counted(Some(1_000_001), None)),
+            MailSide::Destination => Ok(counted(Some(0), None)),
+        });
+        assert_eq!(status, PreflightCheckStatus::Blocked);
+        assert!(detail.contains("verification limit exceeded"), "{detail}");
+
+        // An account that cannot be probed is unknown, never within limits,
+        // and the other account's count is still shown.
+        let (status, detail) = batch_verification_capacity(&form, |side| match side {
+            MailSide::Source => Ok(counted(Some(12), None)),
+            MailSide::Destination => Err("connection refused".into()),
+        });
+        assert_eq!(status, PreflightCheckStatus::Unknown);
+        assert!(detail.contains("source 12 message(s)"), "{detail}");
+        assert!(
+            detail.contains("could not be probed: connection refused"),
+            "{detail}"
+        );
+        // An over-limit account still reports blocked beside an unknown one.
+        let (status, _) = batch_verification_capacity(&form, |side| match side {
+            MailSide::Source => Ok(counted(Some(2_000_000), None)),
+            MailSide::Destination => Err("timeout".into()),
+        });
+        assert_eq!(status, PreflightCheckStatus::Blocked);
+    }
+
+    #[test]
+    fn batch_capacity_is_not_probed_where_it_cannot_apply() {
+        let unreachable = |_| -> Result<core::ServerCapabilities, String> {
+            panic!("this plan must not be probed")
+        };
+        let mut form = Form::default();
+        form.profile.destination_tls = "plain".into();
+        let (status, detail) = batch_verification_capacity(&form, unreachable);
+        assert_eq!(status, PreflightCheckStatus::Unknown);
+        assert!(detail.contains("encrypted IMAP"), "{detail}");
+
+        let mut form = Form::default();
+        form.profile.engine = core::Engine::Dovecot;
+        let (status, detail) = batch_verification_capacity(&form, unreachable);
+        assert_eq!(status, PreflightCheckStatus::Passed);
+        assert!(detail.contains("Dovecot"), "{detail}");
+        assert_eq!(PreflightCheckStatus::Blocked.as_str(), "blocked");
+        assert_eq!(PreflightCheckStatus::Unknown.as_str(), "unknown");
     }
 
     #[test]

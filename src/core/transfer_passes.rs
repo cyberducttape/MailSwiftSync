@@ -791,6 +791,9 @@ pub struct ProjectOperationMetrics {
     /// `running` while nothing is advancing it. Verification of a large
     /// mailbox writes no checkpoints, so alert thresholds should allow for it.
     pub oldest_running_heartbeat_age_seconds: u64,
+    /// Mailboxes by the status of their latest batch dry-run verification
+    /// capacity row (`passed`, `blocked`, or `unknown`).
+    pub verification_capacity: std::collections::BTreeMap<String, usize>,
 }
 
 impl StateStore {
@@ -871,6 +874,9 @@ impl StateStore {
         )?;
         metrics.oldest_running_heartbeat_age_seconds =
             oldest.map_or(0, |age| u64::try_from(age).unwrap_or(0));
+        for (status, _) in self.latest_verification_capacity(project_id)?.into_values() {
+            *metrics.verification_capacity.entry(status).or_default() += 1;
+        }
         let mut statement = self.connection.prepare(
             "SELECT e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1",
         )?;

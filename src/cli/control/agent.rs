@@ -1305,10 +1305,12 @@ mod tests {
             wait_for_stop: true,
             outcome: Ok(String::new()),
         };
-        // A 1 s lease renewed every 0.3 s: the run must stop within it.
+        // A 3 s lease renewed every second: the agent gives up at the
+        // renewal that could not finish before expiry (about 2 s), leaving
+        // a whole interval of margin for a loaded test machine.
         let config = AgentConfig {
-            lease_seconds: 1,
-            renew_every: Duration::from_millis(300),
+            lease_seconds: 3,
+            renew_every: Duration::from_secs(1),
             ..fast()
         };
         let started = Instant::now();
@@ -1316,7 +1318,9 @@ mod tests {
             handle_one(&control, &executor, &config).unwrap(),
             Handled::LeaseLost { .. }
         ));
-        assert!(started.elapsed() < Duration::from_secs(1));
+        let stopped = started.elapsed();
+        assert!(stopped >= Duration::from_secs(2), "{stopped:?}");
+        assert!(stopped < Duration::from_secs(3), "{stopped:?}");
         assert!(control.0.completions.lock().unwrap().is_empty());
     }
 

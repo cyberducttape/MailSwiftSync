@@ -37,6 +37,17 @@ verified; the transfer itself is not refused. Accounts with more than 5,000
 selectable folders, a refused `STATUS`, or a census that runs past 30 seconds
 show the capacity as not established, never as within limits.
 
+A batch dry run shows the same row for every mailbox. After a mailbox passes
+its dry run, each account is probed again and counted the same way. The row
+is appended to the mailbox's dry-run result and recorded as a
+`verification_capacity` event on its child run. A blocked row leaves the
+mailbox `ready`, because the transfer itself is still allowed. An account
+that cannot be probed, or a plan with plain IMAP on either side, gives an
+unknown row. Dovecot rows pass, because Dovecot runs use engine evidence. The
+`verification_capacity` counts in `status --summary` and the
+`mailswiftsync_verification_capacity_mailboxes` gauge report the latest row
+per mailbox.
+
 | Mode | Enforced implementation envelope | Evidence currently available |
 | --- | --- | --- |
 | Metadata reconciliation | Up to 1,000,000 messages on each endpoint across all selectable folders; up to 100,000 selectable folders and 32 MiB of folder inventory per endpoint. Fetch-page transient state has an estimated 256 MiB source/destination-pair budget. Durable runs stage mismatch rows and stream them into the ledger; ephemeral runs retain an estimated 64 MiB in-memory mismatch cap. Before scanning, every staged page, materialized reconciliation phase, and every 256 persisted mismatch rows, the stage filesystem must report at least 512 MiB free. | Release-mode durable SQLite reconciliation was measured at 100,000 messages per endpoint (200,000 staged records total) in 1.286 s on the synthetic benchmark, including about 2% changed-ID cases. This measures reconciliation, not IMAP fetching, report persistence, or provider qualification. No maximum aggregate metadata GiB value has been established; the 512 MiB floor is a last-resort high-watermark, not a full-workload disk estimate or reservation, and concurrent writers can race it. Operators still need target-host capacity planning and independent filesystem monitoring. |
