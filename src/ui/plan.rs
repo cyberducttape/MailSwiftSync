@@ -187,6 +187,7 @@ impl App {
         self.invalidate_stale_capability_observation();
         self.preflight = assess_plan(
             &self.form,
+            self.state_path.is_some(),
             self.source_capabilities.as_ref(),
             self.destination_capabilities.as_ref(),
         );

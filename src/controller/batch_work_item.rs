@@ -873,10 +873,11 @@ impl BatchAttemptRunner {
         if self.cancel.load(Ordering::Relaxed) {
             return String::new();
         }
-        let (status, explanation) =
-            crate::controller::preflight::batch_verification_capacity(&task.form, |side| {
-                (self.capacity_probe)(&task.form, side)
-            });
+        let (status, explanation) = crate::controller::preflight::batch_verification_capacity(
+            &task.form,
+            self.verification_state_path.is_some(),
+            |side| (self.capacity_probe)(&task.form, side),
+        );
         let explanation = redact_child_text(&task.form, &explanation);
         self.line(
             task,

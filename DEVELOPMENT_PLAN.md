@@ -84,13 +84,27 @@ Met on `feat/batch-verification-capacity`:
 - Tests cover passed, blocked, unknown (a failed probe, plain IMAP), Dovecot,
   secret redaction, cancellation, and ledger persistence.
 
-### M4. Segmented verification beyond 1,000,000 messages per account
+### M4. Verification beyond 1,000,000 messages per account: done (3M)
 
-Verification refuses exact evidence above the per-endpoint ceiling and
-records `verification_limit_exceeded`. Done when an account above the
-ceiling is verified in durable segments with an exact coverage percentage,
-proven by a synthetic scripted-server test above the ceiling and the 100k
-benchmark budgets staying within their limits.
+Verification refused exact evidence above 1,000,000 messages per endpoint
+and recorded `verification_limit_exceeded`.
+
+The maintainer chose one pass with a higher durable limit over segments,
+because reconciliation is account-wide: wrong-folder matches and
+fingerprint uniqueness would change meaning across segments.
+
+Met on `feat/durable-verification-above-1m`:
+
+- Durable stages verify up to 3,000,000 messages per account; ephemeral
+  stages keep 1,000,000.
+- The opt-in scripted-server test verifies 1,000,100 messages per side with
+  100% exact coverage.
+- The benchmark meets its budgets at 1M, 2M and 3M. It misses the
+  reconciliation-rate budget at 5M and 10M (see
+  docs/verification-envelope.md).
+
+Going past 3M needs faster reconciliation on large stages, or a decision
+to relax the 20,000 msg/s budget for them.
 
 ### M5. Durable per-message transfer journal (review finding 3)
 

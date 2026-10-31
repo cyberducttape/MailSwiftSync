@@ -281,7 +281,7 @@ reconciliation as successful.
   Microsoft 365 routes, a completed hypervisor power-cut campaign, and the
   real-engine 1/4/8/16-worker matrix. Synthetic reconciliation, generic IMAP
   fixtures, and controller-only scheduler stress are not substitutes for
-  those gates. The verification envelope's 1,000,000-message metadata,
+  those gates. The verification envelope's 3,000,000-message durable (1,000,000 ephemeral) metadata,
   100,000-body-proof, response-size, and shared-byte limits must be shown in
   capacity planning before admission where the observed inventory permits it;
   otherwise the run must remain explicitly subject to fail-closed verification
