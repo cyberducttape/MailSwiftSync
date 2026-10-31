@@ -7476,3 +7476,99 @@ fn ledger_write_workload_benchmark() {
     drop(db);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn the_latest_verification_capacity_row_per_mailbox_is_counted() {
+    let db = StateStore::in_memory().unwrap();
+    let (project, jobs) = db
+        .create_project_with_mailboxes(
+            "capacity",
+            "source",
+            "destination",
+            &[
+                ("one".into(), "one".into()),
+                ("two".into(), "two".into()),
+                ("three".into(), "three".into()),
+            ],
+        )
+        .unwrap();
+    assert!(
+        db.project_operation_metrics(&project.id)
+            .unwrap()
+            .verification_capacity
+            .is_empty()
+    );
+    let first = db
+        .begin_batch_run_with_children(
+            &project.id,
+            &jobs,
+            "first",
+            "batch validation",
+            &[],
+            "",
+            &[],
+        )
+        .unwrap();
+    let rows = [
+        (&first[0], "blocked", "source has 1000001 messages"),
+        (&first[1], "unknown", "destination message count unknown"),
+        (&first[2], "passed", "within limits"),
+    ];
+    let details = rows
+        .iter()
+        .map(|(run, status, text)| {
+            (
+                *run,
+                crate::core::verification_capacity_detail(status, text),
+            )
+        })
+        .collect::<Vec<_>>();
+    db.record_events_for_runs_batch(
+        &details
+            .iter()
+            .map(|(run, detail)| {
+                (
+                    run.as_str(),
+                    crate::core::VERIFICATION_CAPACITY_EVENT,
+                    detail.as_str(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    // A later row for the first mailbox replaces its earlier one.
+    let passed = crate::core::verification_capacity_detail("passed", "split and recounted");
+    db.record_events_for_runs_batch(&[(
+        first[0].as_str(),
+        crate::core::VERIFICATION_CAPACITY_EVENT,
+        passed.as_str(),
+    )])
+    .unwrap();
+
+    let latest = db.latest_verification_capacity(&project.id).unwrap();
+    assert_eq!(
+        latest[&jobs[0]],
+        ("passed".to_owned(), "split and recounted".to_owned())
+    );
+    assert_eq!(latest[&jobs[1]].0, "unknown");
+    let counts = db
+        .project_operation_metrics(&project.id)
+        .unwrap()
+        .verification_capacity;
+    assert_eq!(
+        counts,
+        [("passed".to_owned(), 2), ("unknown".to_owned(), 1)].into()
+    );
+}
+
+#[test]
+fn verification_capacity_details_are_bounded_on_a_character_boundary() {
+    let long = "é".repeat(800);
+    let detail = crate::core::verification_capacity_detail("unknown", &long);
+    assert!(detail.starts_with("unknown: é"));
+    assert!(
+        detail.len() <= "unknown: ".len() + 1_000,
+        "{}",
+        detail.len()
+    );
+}

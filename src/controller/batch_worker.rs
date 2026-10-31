@@ -238,6 +238,7 @@ pub(crate) fn spawn_batch_worker_with(
             diagnostic_logger,
             verification_gate: (verification_workers > 0)
                 .then(|| Arc::new(VerificationGate::new(verification_workers))),
+            capacity_probe: crate::imap_probe::probe_account_capabilities,
         });
         let resume_at = resume_instants(&retry_deadlines);
         if !resume_at.is_empty() {

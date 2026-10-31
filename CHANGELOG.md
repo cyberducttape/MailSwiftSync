@@ -23,6 +23,18 @@
   thread.
 - Remove private temporary export files left by a crashed writer once they
   are an hour old. Document what a successful artifact write guarantees.
+- Verify accounts above 1,000,000 messages. Runs that stage verification in
+  the ledger's private SQLite file now verify up to 3,000,000 messages per
+  account in one pass. This is the largest size whose benchmark met the
+  memory and reconciliation-rate budgets. Runs without a ledger keep the
+  1,000,000 limit. Above 1,000,000 messages, the preflight capacity row
+  states the stage disk the run may need.
+- Show verification capacity for every mailbox in a batch dry run, not only
+  for a single plan. Each mailbox that passes its dry run has both accounts
+  counted again. Its result then ends with the same passed, blocked or unknown
+  “Verification capacity” row, which is also recorded in the ledger. Status
+  summaries gain `verification_capacity` counts, and metrics gain
+  `mailswiftsync_verification_capacity_mailboxes{status}`.
 - Control plane: never hand an expired lease to another worker
   automatically. IMAP servers ignore fencing tokens, so the service cannot
   know whether the old worker's engine stopped. 60 seconds after expiry the

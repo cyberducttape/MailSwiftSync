@@ -153,6 +153,29 @@ pub(super) fn render_metrics_across(
         output,
         "mailswiftsync_oldest_running_heartbeat_age_seconds {oldest_running_heartbeat_age_seconds}"
     );
+    let mut verification_capacity = [("passed", 0_usize), ("blocked", 0), ("unknown", 0)];
+    for project in summaries.iter().flat_map(|summary| &summary.projects) {
+        for (status, total) in &mut verification_capacity {
+            let count = project
+                .operations
+                .verification_capacity
+                .get(*status)
+                .copied()
+                .unwrap_or(0);
+            *total = checked_metric_sum(*total, count)?;
+        }
+    }
+    gauge_header(
+        &mut output,
+        "mailswiftsync_verification_capacity_mailboxes",
+        "Mailboxes by their latest batch dry-run verification capacity row; blocked ones will finish as verification limit exceeded.",
+    );
+    for (status, count) in verification_capacity {
+        let _ = writeln!(
+            output,
+            "mailswiftsync_verification_capacity_mailboxes{{status=\"{status}\"}} {count}"
+        );
+    }
     let mut transfer_attempts = 0_usize;
     let mut transfer_retries = 0_usize;
     let mut unfinished_attempt_messages_copied = 0_u64;
@@ -335,6 +358,7 @@ mod tests {
                     unfinished_attempt_messages_copied: 4,
                     unfinished_attempt_bytes_copied: 4096,
                     oldest_running_heartbeat_age_seconds: 75,
+                    verification_capacity: [("blocked".into(), 2)].into(),
                     attempt_outcomes: [
                         ("completed".into(), 2),
                         ("failed:capacity".into(), 1),
@@ -362,6 +386,12 @@ mod tests {
         assert!(output.contains("mailswiftsync_transfer_retries_total 1"));
         assert!(output.contains("mailswiftsync_unfinished_attempt_messages_copied 4"));
         assert!(output.contains("mailswiftsync_oldest_running_heartbeat_age_seconds 75"));
+        assert!(
+            output.contains("mailswiftsync_verification_capacity_mailboxes{status=\"blocked\"} 2")
+        );
+        assert!(
+            output.contains("mailswiftsync_verification_capacity_mailboxes{status=\"unknown\"} 0")
+        );
         assert!(output.contains("mailswiftsync_unfinished_attempt_bytes_copied 4096"));
         assert!(output.contains("mailswiftsync_transfer_attempts_total 4"));
         assert!(output.contains("# TYPE mailswiftsync_transfer_attempt_outcomes gauge"));

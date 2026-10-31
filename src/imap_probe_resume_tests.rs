@@ -39,6 +39,9 @@ pub(super) struct FolderServer {
     pub(super) permanent_flags: Option<String>,
     input: Vec<u8>,
     output: Vec<u8>,
+    /// Bytes of `output` already read; dropped once all are consumed so a
+    /// large reply is not shifted on every read.
+    output_read: usize,
     commands: Vec<String>,
 }
 
@@ -61,6 +64,7 @@ impl FolderServer {
             permanent_flags: None,
             input: Vec::new(),
             output: Vec::new(),
+            output_read: 0,
             commands: Vec::new(),
         }
     }
@@ -135,7 +139,13 @@ impl FolderServer {
                 if !flags_only {
                     self.fetched.push(uid);
                 }
-                let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
+                let sequence = self
+                    .uids
+                    .binary_search(&uid)
+                    .ok()
+                    .or_else(|| self.uids.iter().position(|value| *value == uid))
+                    .unwrap()
+                    + 1;
                 let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
                 let body = if with_body {
                     let body = format!("body of {uid}");
@@ -288,9 +298,14 @@ impl Write for FolderServer {
 
 impl Read for FolderServer {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let count = buffer.len().min(self.output.len());
-        buffer[..count].copy_from_slice(&self.output[..count]);
-        self.output.drain(..count);
+        let unread = &self.output[self.output_read..];
+        let count = buffer.len().min(unread.len());
+        buffer[..count].copy_from_slice(&unread[..count]);
+        self.output_read += count;
+        if self.output_read == self.output.len() {
+            self.output.clear();
+            self.output_read = 0;
+        }
         Ok(count)
     }
 }
@@ -1238,4 +1253,94 @@ fn body_hash_rescan_refetches_checkpointed_pages_and_fingerprints() {
     scan_with(&mut stage, &mut server, true, false);
     assert_eq!(server.fetched, uids);
     assert_eq!(stage.content_fingerprints(SIDE), fingerprints);
+}
+
+/// Stages one account side from a scripted folder through the real fetch path.
+fn scan_side(
+    stage: &mut MessageMetadataStage,
+    side: StagedMessageSide,
+    server: &mut FolderServer,
+) -> Result<u64, String> {
+    let cancelled = AtomicBool::new(false);
+    let budget = MessageFetchBudget::new(Duration::from_secs(3_600), &cancelled);
+    let state_budget = MessageStateBudget::new();
+    let mut sink = StageMessageSink {
+        stage,
+        side,
+        count: 0,
+        mailbox_counts: HashMap::new(),
+        active_mailbox: None,
+    };
+    fetch_mailbox_with_stability_retry(
+        server,
+        "imap.example.test",
+        "INBOX",
+        &budget,
+        &state_budget,
+        None,
+        false,
+        &mut sink,
+    )
+    .map_err(|error| format!("{error:?}"))
+}
+
+/// Above the ephemeral 1,000,000-message limit, a durable stage fetches and
+/// reconciles every message of both accounts through the real IMAP fetch
+/// path, and an ephemeral stage still refuses. Opt-in because it stages two
+/// million-plus-row accounts; run it with
+/// `cargo test --release --bin mailswiftsync above_the_ephemeral_limit -- --ignored`.
+#[test]
+#[ignore = "opt-in above-limit verification proof (about 2 GB of temporary stage)"]
+fn a_durable_stage_verifies_an_account_above_the_ephemeral_limit() {
+    let messages = std::env::var("MAILSWIFTSYNC_ABOVE_LIMIT_MESSAGES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1_000_100);
+    assert!(messages > MAX_MESSAGE_FETCH_RECORDS as u64);
+    let directory = std::env::temp_dir().join(format!("mss-above-limit-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let started = std::time::Instant::now();
+    let mut stage =
+        MessageMetadataStage::open_durable(directory.join("stage.sqlite"), "above-limit").unwrap();
+    for side in [StagedMessageSide::Source, StagedMessageSide::Destination] {
+        let mut server = FolderServer::new(&folder(messages), 9, messages + 1);
+        assert_eq!(scan_side(&mut stage, side, &mut server), Ok(messages));
+        assert_eq!(stage.count(side).unwrap(), messages);
+    }
+    let staged = started.elapsed();
+    let (mismatches, summary) = crate::core::MessageVerification::reconcile_stage(
+        "job-above-limit",
+        "run-above-limit",
+        &stage,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(mismatches, 0);
+    assert_eq!(summary.total_source, messages);
+    assert_eq!(summary.total_destination, messages);
+    // Exact coverage: every source message has its exact metadata pair.
+    assert_eq!(summary.metadata_matches, messages);
+    println!(
+        "above-limit messages_per_side={messages} staged_ms={} total_ms={} coverage_percent={}",
+        staged.as_millis(),
+        started.elapsed().as_millis(),
+        summary.metadata_matches * 100 / summary.total_source
+    );
+    drop(stage);
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    // The same account on an ephemeral stage still stops at the old limit.
+    let mut ephemeral = MessageMetadataStage::open_in_memory().unwrap();
+    let mut server = FolderServer::new(&folder(messages), 9, messages + 1);
+    let error = scan_side(&mut ephemeral, StagedMessageSide::Source, &mut server).unwrap_err();
+    assert!(
+        error.contains("verification_limit=message_count"),
+        "{error}"
+    );
+    assert!(error.contains("1000000-message"), "{error}");
 }

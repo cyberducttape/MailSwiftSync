@@ -301,7 +301,12 @@ pub(crate) struct BatchAttemptRunner {
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
     /// Present when the batch runs verification in its own worker pool.
     pub(crate) verification_gate: Option<Arc<VerificationGate>>,
+    /// Counts one account's messages after a dry run; tests replace it.
+    pub(crate) capacity_probe: AccountProbe,
 }
+
+pub(crate) type AccountProbe =
+    fn(&crate::Form, crate::imap_probe::MailSide) -> Result<core::ServerCapabilities, String>;
 
 /// One mailbox job and the progress it carries between scheduled attempts.
 /// The scheduler owns it while it waits; a worker owns it only while an
@@ -861,6 +866,39 @@ impl BatchAttemptRunner {
         );
     }
 
+    /// Count both accounts of a mailbox that passed its dry run and record
+    /// the same verification capacity row a single plan shows. Returns the
+    /// text that completes the mailbox's dry-run detail.
+    fn record_verification_capacity(&self, task: &MailboxTask) -> String {
+        if self.cancel.load(Ordering::Relaxed) {
+            return String::new();
+        }
+        let (status, explanation) = crate::controller::preflight::batch_verification_capacity(
+            &task.form,
+            self.verification_state_path.is_some(),
+            |side| (self.capacity_probe)(&task.form, side),
+        );
+        let explanation = redact_child_text(&task.form, &explanation);
+        self.line(
+            task,
+            format!(
+                "[{}] Verification capacity {}: {explanation}",
+                task.index + 1,
+                status.as_str()
+            ),
+        );
+        let _ = send_reliable_event(
+            &self.tx,
+            Event::VerificationCapacity {
+                job_id: task.job_id.clone(),
+                child_run_id: task.child_run_id.clone(),
+                status: status.as_str(),
+                detail: explanation.clone(),
+            },
+        );
+        format!("; verification capacity {}: {explanation}", status.as_str())
+    }
+
     fn finish_transcript(&self, task: &MailboxTask) {
         if let Some(logger) = &self.diagnostic_logger
             && let Err(error) = logger.finish_run(&task.child_run_id)
@@ -1219,12 +1257,15 @@ impl BatchAttemptRunner {
                 } else {
                     "completed"
                 };
-                let detail = successful_batch_detail(
+                let mut detail = successful_batch_detail(
                     &task.form,
                     delta_required,
                     task.verification_failure.as_deref(),
                     verification_evidence_recorded,
                 );
+                if task.form.dry_run && !delta_required {
+                    detail.push_str(&self.record_verification_capacity(&task));
+                }
                 let fingerprint = task
                     .form
                     .dry_run
@@ -1377,7 +1418,62 @@ mod tests {
             verification_state_path: None,
             diagnostic_logger: None,
             verification_gate: None,
+            capacity_probe: |_, _| Err("no test server".into()),
         }
+    }
+
+    #[test]
+    fn a_dry_run_mailbox_records_its_capacity_row_without_secrets() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut runner = test_runner(tx);
+        runner.capacity_probe = |form, side| match side {
+            crate::imap_probe::MailSide::Source => {
+                let mut capabilities = core::ServerCapabilities::from_inventory_summary("", 2, 0);
+                capabilities.message_census.messages = Some(1_000_001);
+                capabilities.message_census.folders_counted = 2;
+                Ok(capabilities)
+            }
+            crate::imap_probe::MailSide::Destination => Err(format!(
+                "login rejected for {}",
+                form.destination_password.as_str()
+            )),
+        };
+        let form = crate::Form {
+            destination_password: "hunter2-secret".into(),
+            ..Default::default()
+        };
+        let job = BulkJob::from_form("capacity".into(), form, "queued".into());
+        let task = MailboxTask::new(0, "job-0".into(), "run-0".into(), None, &job);
+
+        let suffix = runner.record_verification_capacity(&task);
+
+        assert!(
+            suffix.starts_with("; verification capacity blocked: "),
+            "{suffix}"
+        );
+        assert!(!suffix.contains("hunter2-secret"), "{suffix}");
+        let mut recorded = None;
+        while let Ok(event) = rx.try_recv() {
+            if let Event::VerificationCapacity {
+                job_id,
+                child_run_id,
+                status,
+                detail,
+            } = event
+            {
+                recorded = Some((job_id, child_run_id, status, detail));
+            }
+        }
+        let (job_id, child_run_id, status, detail) = recorded.expect("a capacity event");
+        assert_eq!((job_id.as_str(), child_run_id.as_str()), ("job-0", "run-0"));
+        assert_eq!(status, "blocked");
+        assert!(detail.contains("1000001 messages"), "{detail}");
+        assert!(!detail.contains("hunter2-secret"), "{detail}");
+
+        // A cancelled batch does not open new connections.
+        runner.cancel.store(true, Ordering::Relaxed);
+        runner.capacity_probe = |_, _| panic!("cancelled batches are not probed");
+        assert_eq!(runner.record_verification_capacity(&task), "");
     }
 
     fn test_unpreparable_task(index: usize) -> MailboxTask {
