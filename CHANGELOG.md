@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Clear CodeQL alert #96: the opt-in above-limit verification test prints
+  only its generated message count and timings, not values from the
+  reconcile summary.
 - Export correctness metrics as well as throughput.
   - `mailswiftsync_attention_mailboxes{reason}` counts mailboxes needing an
     operator, by durable reason.
