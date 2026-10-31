@@ -1,7 +1,47 @@
 //! Private, crash-safe writes for exported artifacts.
+//!
+//! Durability boundary: a successful return means the new artifact and its
+//! directory entry were flushed to storage. A crash before the rename leaves
+//! the previous artifact; a crash after it leaves the new one; neither is
+//! ever partial. Nothing in the ledger records that an artifact was
+//! published: every caller writes an export, report, or setting it can
+//! regenerate, or (OAuth refresh state) keeps its own recovery file, so a
+//! lost publication is redone rather than reconciled. A crash can leave a
+//! private temporary file behind; the next write of a sibling artifact
+//! removes temporaries older than `STALE_TEMPORARY_AGE`. On network
+//! filesystems the rename and directory flush are only as durable as the
+//! server makes them.
 
 use crate::credentials::restrict_file_permissions;
 use std::path::Path;
+use std::time::Duration;
+
+/// A temporary this old belongs to a writer that died: live writes finish
+/// in seconds, and leaving it would keep a private copy of the content.
+const STALE_TEMPORARY_AGE: Duration = Duration::from_secs(60 * 60);
+const TEMPORARY_MARKER: &str = ".tmp-";
+
+/// Where a test simulates a crash; see `crash_points` in the tests.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CrashPoint {
+    AfterWrite,
+    BeforeReplace,
+    BeforeDirectorySync,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CRASH_AT: std::cell::Cell<Option<CrashPoint>> = const { std::cell::Cell::new(None) };
+}
+
+/// Stop as a killed process would: no cleanup runs.
+#[cfg(test)]
+fn crash_point(point: CrashPoint) {
+    if CRASH_AT.with(|slot| slot.get()) == Some(point) {
+        panic!("simulated crash at {point:?}");
+    }
+}
 
 /// Write an artifact through a private temporary file, flush it to storage,
 /// then atomically replace the destination. A failed write never leaves a
@@ -34,6 +74,7 @@ pub(crate) fn write_private_atomic_with(
             ),
         )
     })?;
+    remove_stale_temporaries(path);
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = std::fs::OpenOptions::new();
@@ -44,6 +85,8 @@ pub(crate) fn write_private_atomic_with(
         let mut buffered = std::io::BufWriter::new(file);
         write(&mut buffered)?;
         let file = buffered.into_inner().map_err(|error| error.into_error())?;
+        #[cfg(test)]
+        crash_point(CrashPoint::AfterWrite);
         file.sync_all()?;
         restrict_file_permissions(&temporary)?;
         // Windows ReplaceFileW/MoveFileExW can reject a source file that is
@@ -51,7 +94,11 @@ pub(crate) fn write_private_atomic_with(
         // the completed temporary artifact before handing it to the replace
         // operation.
         drop(file);
+        #[cfg(test)]
+        crash_point(CrashPoint::BeforeReplace);
         atomic_replace(&temporary, path)?;
+        #[cfg(test)]
+        crash_point(CrashPoint::BeforeDirectorySync);
         // ReplaceFileW preserves security attributes from the old destination.
         // Re-apply the private ACL/mode to the final path so an old permissive
         // destination cannot weaken the newly written artifact.
@@ -59,6 +106,37 @@ pub(crate) fn write_private_atomic_with(
         sync_directory(path.parent())
     })();
     cleanup_temporary_after_failure(result, &temporary, |path| std::fs::remove_file(path))
+}
+
+/// Remove temporaries a crashed writer left beside `path`'s artifact. They
+/// are named `<stem>.tmp-<uuid>`; only old ones are removed, so a writer
+/// still running is never disturbed. Best effort: a temporary that cannot
+/// be removed is retried on the next write.
+fn remove_stale_temporaries(path: &Path) {
+    let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) else {
+        return;
+    };
+    let prefix = format!("{}{TEMPORARY_MARKER}", stem.to_string_lossy());
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_temporary = name
+            .strip_prefix(&prefix)
+            .is_some_and(|rest| uuid::Uuid::parse_str(rest).is_ok());
+        let stale = entry
+            .metadata()
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= STALE_TEMPORARY_AGE);
+        if is_temporary && stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn cleanup_temporary_after_failure(
@@ -270,6 +348,94 @@ mod tests {
         })();
         let _ = fs::remove_dir_all(&temp_dir);
         result
+    }
+
+    fn private_test_directory(label: &str) -> std::io::Result<std::path::PathBuf> {
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-artifact-{label}-{}",
+                uuid::Uuid::new_v4()
+            ));
+        crate::credentials::ensure_private_directory(&directory)?;
+        Ok(directory)
+    }
+
+    fn temporaries(directory: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+        Ok(fs::read_dir(directory)?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.to_string_lossy().contains(TEMPORARY_MARKER))
+            .collect())
+    }
+
+    /// A crash at each handoff leaves either the complete old artifact or
+    /// the complete new one, and its leftover temporary is removed once it
+    /// is stale.
+    #[test]
+    fn a_crash_at_every_publication_step_leaves_a_whole_artifact() -> std::io::Result<()> {
+        for (point, survivor) in [
+            (CrashPoint::AfterWrite, "old report"),
+            (CrashPoint::BeforeReplace, "old report"),
+            (CrashPoint::BeforeDirectorySync, "new report"),
+        ] {
+            let directory = private_test_directory("crash")?;
+            let path = directory.join("report.json");
+            write_private_atomic(&path, "old report")?;
+
+            CRASH_AT.with(|slot| slot.set(Some(point)));
+            let crashed = std::panic::catch_unwind(|| write_private_atomic(&path, "new report"));
+            CRASH_AT.with(|slot| slot.set(None));
+            assert!(crashed.is_err(), "{point:?}: the crash was not reached");
+            assert_eq!(fs::read_to_string(&path)?, survivor, "{point:?}");
+
+            let leftovers = temporaries(&directory)?;
+            let expected = usize::from(point != CrashPoint::BeforeDirectorySync);
+            assert_eq!(leftovers.len(), expected, "{point:?}: {leftovers:?}");
+            // A fresh leftover may belong to a running writer and is kept.
+            write_private_atomic(&directory.join("other.json"), "x")?;
+            write_private_atomic(&path, "next report")?;
+            assert_eq!(temporaries(&directory)?.len(), expected, "{point:?}");
+            // Once stale, the next write removes it.
+            for leftover in &leftovers {
+                fs::File::options()
+                    .write(true)
+                    .open(leftover)?
+                    .set_modified(std::time::SystemTime::now() - STALE_TEMPORARY_AGE * 2)?;
+            }
+            write_private_atomic(&path, "final report")?;
+            assert!(temporaries(&directory)?.is_empty(), "{point:?}");
+            assert_eq!(fs::read_to_string(&path)?, "final report");
+            fs::remove_dir_all(&directory)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn only_this_artifacts_stale_temporaries_are_removed() -> std::io::Result<()> {
+        let directory = private_test_directory("sweep")?;
+        let old = std::time::SystemTime::now() - STALE_TEMPORARY_AGE * 2;
+        let make = |name: &str| -> std::io::Result<std::path::PathBuf> {
+            let path = directory.join(name);
+            fs::write(&path, "x")?;
+            fs::File::options()
+                .write(true)
+                .open(&path)?
+                .set_modified(old)?;
+            Ok(path)
+        };
+        let unrelated = make(&format!("other{TEMPORARY_MARKER}{}", uuid::Uuid::new_v4()))?;
+        let not_ours = make("report.tmp-not-a-uuid")?;
+        let user_file = make("report.json.bak")?;
+        let stale = make(&format!("report{TEMPORARY_MARKER}{}", uuid::Uuid::new_v4()))?;
+
+        write_private_atomic(&directory.join("report.json"), "content")?;
+
+        assert!(!stale.exists());
+        assert!(unrelated.exists() && not_ours.exists() && user_file.exists());
+        fs::remove_dir_all(&directory)?;
+        Ok(())
     }
 
     #[test]

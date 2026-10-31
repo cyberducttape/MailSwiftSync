@@ -26,23 +26,76 @@ fn validate_stage_free_space(available: u64) -> Result<(), String> {
     Ok(())
 }
 
+const STAGE_PATH_DOMAIN: &[u8] = b"mss-verification-stage-v1\0";
+const STAGE_SIDECARS: [&str; 3] = ["-journal", "-wal", "-shm"];
+/// The old file-name mapping kept at most this many characters.
+const LEGACY_STAGE_NAME_CHARACTERS: usize = 96;
+
+/// The private stage file for one job. The name is a domain-separated
+/// SHA-256 of the whole job ID, so two different jobs never share a stage.
+///
+/// Stages written before this mapping were named by replacing every
+/// character but ASCII letters, digits, and `-` with `_` and keeping 96
+/// characters, which let distinct IDs collide. Such a stage is moved to the
+/// new name only when that old name could belong to this job alone; a
+/// failed move leaves a fresh stage, whose identity check keeps evidence
+/// sound either way. An ambiguous old file is left in place.
 pub(crate) fn durable_stage_path(state_path: &std::path::Path, job_id: &str) -> PathBuf {
-    let safe_id = job_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .take(96)
-        .collect::<String>();
-    state_path
+    let directory = state_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
-        .join("verification-stages")
-        .join(format!("{safe_id}.sqlite"))
+        .join("verification-stages");
+    let mut digest = <sha2::Sha256 as sha2::Digest>::new();
+    sha2::Digest::update(&mut digest, STAGE_PATH_DOMAIN);
+    sha2::Digest::update(&mut digest, job_id.as_bytes());
+    let name = sha2::Digest::finalize(digest)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let path = directory.join(format!("{name}.sqlite"));
+    if let Some(legacy) = unambiguous_legacy_stage_name(job_id) {
+        adopt_legacy_stage(&directory.join(format!("{legacy}.sqlite")), &path);
+    }
+    path
+}
+
+/// The old stage name for `job_id`, when no other ID could have produced it.
+fn unambiguous_legacy_stage_name(job_id: &str) -> Option<&str> {
+    (!job_id.is_empty()
+        && job_id.len() <= LEGACY_STAGE_NAME_CHARACTERS
+        && job_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+    .then_some(job_id)
+}
+
+/// Move a legacy stage and its SQLite sidecars to `path`, sidecars first so
+/// a hot rollback journal is never separated from its database. Nothing is
+/// moved when a stage already exists at `path`.
+fn adopt_legacy_stage(legacy: &Path, path: &Path) {
+    if fs::symlink_metadata(path).is_ok() {
+        return;
+    }
+    let Ok(metadata) = fs::symlink_metadata(legacy) else {
+        return;
+    };
+    if !metadata.is_file() {
+        return;
+    }
+    let with_suffix = |base: &Path, suffix: &str| {
+        let mut name = base.as_os_str().to_os_string();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    for suffix in STAGE_SIDECARS {
+        let sidecar = with_suffix(legacy, suffix);
+        if fs::symlink_metadata(&sidecar).is_ok()
+            && fs::rename(&sidecar, with_suffix(path, suffix)).is_err()
+        {
+            return;
+        }
+    }
+    let _ = fs::rename(legacy, path);
 }
 
 #[cfg(unix)]
@@ -1523,7 +1576,7 @@ impl Drop for MessageMetadataStage {
 fn cleanup_stage_files(path: &Path, remove_parent: bool) -> Vec<String> {
     let mut errors = Vec::new();
     let mut artifacts = vec![(path.to_path_buf(), "verification stage")];
-    for suffix in ["-journal", "-wal", "-shm"] {
+    for suffix in STAGE_SIDECARS {
         let mut sidecar = path.as_os_str().to_os_string();
         sidecar.push(suffix);
         artifacts.push((PathBuf::from(sidecar), "verification stage sidecar"));
@@ -1554,6 +1607,98 @@ fn cleanup_stage_files(path: &Path, remove_parent: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stage_test_directory() -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("mss-stage-path-{}", Uuid::new_v4()));
+        fs::create_dir_all(directory.join("verification-stages")).unwrap();
+        directory
+    }
+
+    #[test]
+    fn distinct_job_ids_never_share_a_stage_path() {
+        let state = Path::new("/var/lib/mailswiftsync/state.db");
+        let long = "j".repeat(96);
+        let ids = [
+            "job-a/b".to_owned(),
+            "job-a_b".to_owned(),
+            "job-a:b".to_owned(),
+            "jöb-a".to_owned(),
+            "job-ä".to_owned(),
+            String::new(),
+            format!("{long}X"),
+            format!("{long}Y"),
+            "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0".to_owned(),
+        ];
+        let paths = ids
+            .iter()
+            .map(|id| durable_stage_path(state, id))
+            .collect::<HashSet<_>>();
+        assert_eq!(paths.len(), ids.len(), "{paths:?}");
+        for path in &paths {
+            assert_eq!(
+                path.parent(),
+                Some(Path::new("/var/lib/mailswiftsync/verification-stages"))
+            );
+            let name = path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(name.len(), 64 + ".sqlite".len(), "{name}");
+        }
+        assert_eq!(
+            durable_stage_path(state, "job-a/b"),
+            durable_stage_path(state, "job-a/b"),
+            "the mapping is stable"
+        );
+    }
+
+    #[test]
+    fn an_unambiguous_legacy_stage_moves_with_its_sidecars() {
+        let directory = stage_test_directory();
+        let state = directory.join("state.db");
+        let job = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
+        let legacy = directory
+            .join("verification-stages")
+            .join(format!("{job}.sqlite"));
+        fs::write(&legacy, b"stage").unwrap();
+        fs::write(format!("{}-journal", legacy.display()), b"hot journal").unwrap();
+
+        let path = durable_stage_path(&state, job);
+
+        assert_eq!(fs::read(&path).unwrap(), b"stage");
+        assert_eq!(
+            fs::read(format!("{}-journal", path.display())).unwrap(),
+            b"hot journal"
+        );
+        assert!(!legacy.exists());
+        assert!(!Path::new(&format!("{}-journal", legacy.display())).exists());
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn an_ambiguous_or_superseded_legacy_stage_is_left_in_place() {
+        let directory = stage_test_directory();
+        let state = directory.join("state.db");
+        let stages = directory.join("verification-stages");
+        // "job-a/b" and "job-a_b" both had the old name "job-a_b": neither
+        // may claim it, because it may be the other job's stage.
+        let shared = stages.join("job-a_b.sqlite");
+        fs::write(&shared, b"someone's stage").unwrap();
+        let path = durable_stage_path(&state, "job-a/b");
+        assert!(!path.exists());
+        assert!(shared.exists());
+        // "job-a_b" contains `_`, which the old mapping also produced.
+        assert!(!durable_stage_path(&state, "job-a_b").exists());
+        assert!(shared.exists());
+
+        // A stage already at the new name is never overwritten.
+        let job = "job-1";
+        let current = durable_stage_path(&state, job);
+        fs::write(&current, b"current").unwrap();
+        let legacy = stages.join("job-1.sqlite");
+        fs::write(&legacy, b"old").unwrap();
+        assert_eq!(durable_stage_path(&state, job), current);
+        assert_eq!(fs::read(&current).unwrap(), b"current");
+        assert!(legacy.exists());
+        fs::remove_dir_all(&directory).unwrap();
+    }
 
     #[test]
     fn stage_free_space_guard_preserves_the_configured_floor() {

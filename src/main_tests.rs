@@ -3866,3 +3866,36 @@ fn a_single_live_run_is_refused_when_organization_policy_prohibits_the_plan() {
     let _ = std::fs::remove_file(&state_path);
     let _ = std::fs::remove_file(state_path.with_extension("lock"));
 }
+
+#[test]
+fn a_dry_preflight_over_plain_imap_is_refused_by_the_transport_policy() {
+    // A dry run still logs in, so the production transport rule must stop
+    // it before any credential is sent in cleartext.
+    let mut form = dovecot_form();
+    form.profile.source_tls = "plain".into();
+    form.profile.allow_insecure_source_transport = true;
+    form.dry_run = true;
+    if crate::organization_policy::OrganizationPolicy::load()
+        .is_ok_and(|policy| policy.check_transport(&form.profile).is_ok())
+    {
+        return;
+    }
+    let state_path = std::env::temp_dir().join(format!(
+        "mailswiftsync-dry-plain-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let mut app = App::from_state_path(Some(&state_path));
+    app.form = form;
+    app.start();
+    assert!(
+        app.status
+            .text
+            .contains("Preflight blocked by organization policy"),
+        "{}",
+        app.status.text
+    );
+    assert!(app.active_run.is_none());
+    drop(app);
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(state_path.with_extension("lock"));
+}

@@ -32,7 +32,14 @@ trap cleanup EXIT
 
 mkdir -p "$workspace/config/mailswiftsync"
 chmod 0700 "$workspace" "$workspace/config" "$workspace/config/mailswiftsync"
-printf 'profile = "lab"\n' > "$workspace/config/mailswiftsync/organization-policy.toml"
+# The fake source speaks plain IMAP: a lab policy must scope that exception.
+cat > "$workspace/config/mailswiftsync/organization-policy.toml" <<'POLICY'
+profile = "lab"
+require_tls = false
+allow_plain_imap = true
+plain_imap_hosts = ["chaos-source.invalid"]
+plain_imap_expires = "2099-12-31"
+POLICY
 chmod 0600 "$workspace/config/mailswiftsync/organization-policy.toml"
 cat > "$workspace/fake-engine" <<EOF
 #!/usr/bin/env bash
