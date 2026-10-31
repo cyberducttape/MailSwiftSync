@@ -6976,6 +6976,9 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
     let mut aggregate_evidence = flag_evidence(VerificationOutcome::ExactMetadataMatch, None);
     aggregate_evidence.verification_method = VerificationMethod::NativeDovecot;
     aggregate_evidence.authoritative = true;
+    // Native Dovecot evidence compares no individual messages, so its counts
+    // must stay out of exact coverage.
+    aggregate_evidence.rfc_message_id_matches = 6;
     db.record_evidence_for_run(&aggregate_job, "metrics-aggregate", &aggregate_evidence)
         .unwrap();
 
@@ -6993,6 +6996,7 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
         }),
     );
     content_evidence.verification_method = VerificationMethod::BodyHash;
+    content_evidence.rfc_message_id_matches = 5;
     db.record_evidence_for_run(&content_job, "metrics-content", &content_evidence)
         .unwrap();
 
@@ -7024,6 +7028,9 @@ fn project_operation_metrics_count_attempts_retries_outcomes_and_verification() 
             ("native_dovecot:exact_metadata_match".to_owned(), 1),
         ])
     );
+    // Metadata and body evidence: 6 + 6 source messages, 0 + 5 exact pairs.
+    assert_eq!(metrics.verification_compared_source_messages, 12);
+    assert_eq!(metrics.verification_exact_message_matches, 5);
 }
 
 #[test]

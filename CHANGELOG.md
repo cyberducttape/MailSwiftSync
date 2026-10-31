@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Export correctness metrics as well as throughput.
+  - `mailswiftsync_attention_mailboxes{reason}` counts mailboxes needing an
+    operator, by durable reason.
+  - `mailswiftsync_verification_compared_source_messages` and
+    `mailswiftsync_verification_exact_message_matches` give exact coverage
+    from per-message evidence.
+  - Status summaries gain the two message counts.
 - Name each verification stage file by a SHA-256 of its full job ID.
   - The old name replaced unusual characters with `_` and kept 96
     characters, so two different job IDs could share a stage file.

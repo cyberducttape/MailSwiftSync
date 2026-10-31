@@ -785,6 +785,13 @@ pub struct ProjectOperationMetrics {
     /// evidence row. `probable` denotes lower-confidence matches, not a
     /// confirmed difference.
     pub verification_message_findings: std::collections::BTreeMap<String, usize>,
+    /// Source messages in each mailbox's latest per-message evidence
+    /// (metadata reconciliation or body hash). Aggregate and native Dovecot
+    /// evidence compare no individual messages and are not counted.
+    pub verification_compared_source_messages: u64,
+    /// Exact metadata pairs in that same evidence. Divided by
+    /// `verification_compared_source_messages` it is the exact coverage.
+    pub verification_exact_message_matches: u64,
     /// Seconds since the stalest running mailbox last showed durable signs
     /// of life: its claim, a progress checkpoint, or a scheduled retry. Zero
     /// when nothing is running. A large value means a mailbox is still
@@ -904,6 +911,15 @@ impl StateStore {
                     .ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
             }
         }
+        let (compared, exact): (i64, i64) = self.connection.query_row(
+            "SELECT COALESCE(SUM(e.source_messages),0),COALESCE(SUM(e.rfc_message_id_matches),0) FROM evidence e JOIN mailbox_jobs m ON m.id=e.job_id WHERE m.project_id=?1 AND e.verification_method IN ('metadata_reconciliation','body_hash')",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        metrics.verification_compared_source_messages = u64::try_from(compared)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, compared))?;
+        metrics.verification_exact_message_matches =
+            u64::try_from(exact).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, exact))?;
         Ok(metrics)
     }
 }
