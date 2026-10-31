@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Export correctness metrics as well as throughput.
+  - `mailswiftsync_attention_mailboxes{reason}` counts mailboxes needing an
+    operator, by durable reason.
+  - `mailswiftsync_verification_compared_source_messages` and
+    `mailswiftsync_verification_exact_message_matches` give exact coverage
+    from per-message evidence.
+  - Status summaries gain the two message counts.
 - Verify accounts above 1,000,000 messages. Runs that stage verification in
   the ledger's private SQLite file now verify up to 3,000,000 messages per
   account in one pass. This is the largest size whose benchmark met the

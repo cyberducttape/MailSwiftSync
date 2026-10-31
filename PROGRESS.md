@@ -4,6 +4,19 @@ Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
 ## 2026-10-30
 
+### Review L-02: correctness metrics
+
+Branch `feat/integrity-metrics` (from `main`).
+
+- Added `mailswiftsync_attention_mailboxes{reason}`, with labels limited to
+  the durable attention reasons and anything else exported as `other`.
+- Added `mailswiftsync_verification_compared_source_messages` and
+  `mailswiftsync_verification_exact_message_matches`, for exact coverage
+  from metadata or body evidence only. Native Dovecot and aggregate
+  evidence are excluded and tested as excluded.
+- Status summaries carry the two counts, declared in both automation
+  fixtures.
+
 ### M4. Verification beyond 1,000,000 messages: done at 3M
 
 Branch `feat/durable-verification-above-1m`, stacked on

@@ -38,6 +38,21 @@ const VERIFICATION_METHODS: &[&str] = &[
     "native_dovecot",
 ];
 const VERIFICATION_FINDING_KINDS: &[&str] = &["missing", "extra", "modified", "probable"];
+/// Every durable attention reason; anything else is exported as `other`.
+const ATTENTION_REASONS: &[&str] = &[
+    "interrupted",
+    "verification_incomplete",
+    "verification_limit_exceeded",
+    "verification_difference",
+    "process_identity_unverified",
+    "authentication_failed",
+    "transport_failed",
+    "policy_blocked",
+    "configuration_invalid",
+    "capacity_limited",
+    "message_rejected",
+    "unknown",
+];
 
 pub(super) fn metrics_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let Some(state) = arguments.next() else {
@@ -186,6 +201,12 @@ pub(super) fn render_metrics_across(
         .iter()
         .map(|kind| (*kind, 0_usize))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let mut attention = ATTENTION_REASONS
+        .iter()
+        .map(|reason| (*reason, 0_usize))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut compared_source_messages = 0_u64;
+    let mut exact_message_matches = 0_u64;
 
     for project in summaries.iter().flat_map(|summary| &summary.projects) {
         transfer_attempts =
@@ -212,6 +233,18 @@ pub(super) fn render_metrics_across(
             let total = verification_outcomes.entry((method, outcome)).or_default();
             *total = checked_metric_sum(*total, *count)?;
         }
+        for (reason, count) in &project.attention_reason_counts {
+            let total = attention
+                .entry(allowlisted_label(reason, ATTENTION_REASONS))
+                .or_default();
+            *total = checked_metric_sum(*total, *count)?;
+        }
+        compared_source_messages = compared_source_messages
+            .checked_add(project.operations.verification_compared_source_messages)
+            .ok_or_else(|| "compared verification messages overflowed".to_owned())?;
+        exact_message_matches = exact_message_matches
+            .checked_add(project.operations.verification_exact_message_matches)
+            .ok_or_else(|| "exact verification matches overflowed".to_owned())?;
         for (kind, count) in &project.operations.verification_message_findings {
             let kind = allowlisted_label(kind, VERIFICATION_FINDING_KINDS);
             let total = verification_findings.entry(kind).or_default();
@@ -290,6 +323,35 @@ pub(super) fn render_metrics_across(
             "mailswiftsync_verification_message_findings{{kind=\"{kind}\"}} {count}"
         );
     }
+    gauge_header(
+        &mut output,
+        "mailswiftsync_verification_compared_source_messages",
+        "Source messages in latest per-message evidence (metadata or body); aggregate and native Dovecot evidence are excluded.",
+    );
+    let _ = writeln!(
+        output,
+        "mailswiftsync_verification_compared_source_messages {compared_source_messages}"
+    );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_verification_exact_message_matches",
+        "Exact metadata pairs in that evidence; divided by compared source messages it is exact coverage.",
+    );
+    let _ = writeln!(
+        output,
+        "mailswiftsync_verification_exact_message_matches {exact_message_matches}"
+    );
+    gauge_header(
+        &mut output,
+        "mailswiftsync_attention_mailboxes",
+        "Mailboxes needing operator attention, by durable reason.",
+    );
+    for (reason, count) in attention {
+        let _ = writeln!(
+            output,
+            "mailswiftsync_attention_mailboxes{{reason=\"{reason}\"}} {count}"
+        );
+    }
     Ok(output)
 }
 
@@ -351,7 +413,11 @@ mod tests {
                 destination_endpoint: "private-destination.example.test".into(),
                 phase: "seed".into(),
                 mailbox_state_counts: MailboxStateCounts::default(),
-                attention_reason_counts: Default::default(),
+                attention_reason_counts: [
+                    ("interrupted".into(), 2),
+                    ("customer-private-reason".into(), 1),
+                ]
+                .into(),
                 operations: ProjectOperationMetrics {
                     transfer_attempts: 4,
                     retried_attempts: 1,
@@ -359,6 +425,8 @@ mod tests {
                     unfinished_attempt_bytes_copied: 4096,
                     oldest_running_heartbeat_age_seconds: 75,
                     verification_capacity: [("blocked".into(), 2)].into(),
+                    verification_compared_source_messages: 1_000,
+                    verification_exact_message_matches: 990,
                     attempt_outcomes: [
                         ("completed".into(), 2),
                         ("failed:capacity".into(), 1),
@@ -386,6 +454,13 @@ mod tests {
         assert!(output.contains("mailswiftsync_transfer_retries_total 1"));
         assert!(output.contains("mailswiftsync_unfinished_attempt_messages_copied 4"));
         assert!(output.contains("mailswiftsync_oldest_running_heartbeat_age_seconds 75"));
+        assert!(output.contains("mailswiftsync_verification_compared_source_messages 1000"));
+        assert!(output.contains("mailswiftsync_verification_exact_message_matches 990"));
+        assert!(output.contains("mailswiftsync_attention_mailboxes{reason=\"interrupted\"} 2"));
+        // A reason outside the closed set never becomes a label value.
+        assert!(output.contains("mailswiftsync_attention_mailboxes{reason=\"other\"} 1"));
+        assert!(!output.contains("customer-private-reason"));
+        assert!(output.contains("mailswiftsync_attention_mailboxes{reason=\"unknown\"} 0"));
         assert!(
             output.contains("mailswiftsync_verification_capacity_mailboxes{status=\"blocked\"} 2")
         );
@@ -461,5 +536,14 @@ mod tests {
         let output = render_metrics(&value).unwrap();
         assert!(output.contains("outcome=\"other\""));
         assert!(!output.contains("unexpected sensitive value"));
+    }
+
+    #[test]
+    fn attention_labels_are_exactly_the_durable_reasons() {
+        for reason in super::ATTENTION_REASONS {
+            let parsed = crate::core::AttentionReason::parse(reason)
+                .unwrap_or_else(|| panic!("{reason} is not a durable attention reason"));
+            assert_eq!(parsed.as_str(), *reason);
+        }
     }
 }

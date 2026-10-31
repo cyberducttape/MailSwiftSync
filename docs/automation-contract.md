@@ -114,7 +114,7 @@ budget, so the mailbox will finish as "verification limit exceeded"), or
 current evidence counts as `method:outcome` keys (for example,
 `metadata_reconciliation:exact_metadata_match` versus
 `native_dovecot:exact_metadata_match`) so aggregate totals are not mistaken for
-per-message reconciliation. `verification_message_findings` carries current
+per-message reconciliation. `verification_compared_source_messages` and `verification_exact_message_matches` count source messages and exact pairs in latest per-message evidence (aggregate and native Dovecot evidence are excluded). `verification_message_findings` carries current
 missing, extra, modified, and probable-match counts from each mailbox's latest
 evidence. Mailbox state counts and `attention_reason_counts` give the recovery
 backlog. Alert on rates between successive polls rather than on absolute
@@ -162,6 +162,9 @@ mailbox, run, customer, or endpoint labels. The metric contract is:
 | `mailswiftsync_transfer_attempt_outcomes{outcome}` | Gauge | Current durable counts by terminal or unfinished outcome. An attempt can move from `unfinished` to a terminal label, so this is not monotonic and must not be modeled as a counter. Unknown values collapse to `other`; `failed:capacity` is a capacity category, not a provider-throttle event counter. |
 | `mailswiftsync_verification_mailboxes{method,outcome}` | Gauge | Current persisted mailbox evidence counts, not message counts. Labels use fixed allowlists; unknown values collapse to `other`. |
 | `mailswiftsync_verification_message_findings{kind}` | Gauge | Current latest-evidence counts by `missing`, `extra`, `modified`, or `probable`; probable matches are not confirmed differences. |
+| `mailswiftsync_verification_compared_source_messages` | Gauge | Source messages in each mailbox's latest per-message evidence (metadata reconciliation or body hash). Aggregate and native Dovecot evidence compare no individual messages and are excluded. |
+| `mailswiftsync_verification_exact_message_matches` | Gauge | Exact metadata pairs in that evidence. `exact_message_matches / compared_source_messages` is exact coverage; a ratio below 1 means some messages are missing, changed, or only probably matched. |
+| `mailswiftsync_attention_mailboxes{reason}` | Gauge | Mailboxes needing operator attention, by durable reason (`interrupted`, `verification_limit_exceeded`, `authentication_failed`, and the rest of the closed set). An unrecognized reason is counted as `other`; reasons are never free text. |
 
 Progress gauges reflect the last committed checkpoint for attempts still
 lacking a terminal outcome; they can be stale after a crash and do not prove
