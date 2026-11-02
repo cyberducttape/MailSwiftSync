@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Move the container's Debian snapshot to 20261102T000000Z and pin Dovecot
+  `1:2.3.19.1+dfsg1-2.1+deb12u7`, which fixes 7 HIGH CVEs in `dovecot-core`
+  and `dovecot-imapd` (14 findings), among them CVE-2026-42007 and
+  CVE-2026-73208, that failed the runtime image scan.
 - Polish the desktop UI and refresh the preview images in the Default dark
   theme.
   - Key/value summaries (command center, migration policy, readiness,
