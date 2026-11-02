@@ -13,7 +13,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-python@v7.1.0'
         - 'dtolnay/rust-toolchain@master'
-        - 'github/codeql-action@v4.31.9'
+        - 'github/codeql-action@v4.39.1'
     '.github/workflows/dependency-audit.yml':
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-python@v7.1.0'
@@ -90,9 +90,9 @@ dependencies:
         commit: 'sha1-683b588c487a69d01f6c6ddf40f036ff682cc2c8'
         owner_id: 1940490
         repo_id: 260749683
-    'github/codeql-action@v4.31.9':
-        ref: 'v4.31.9'
-        commit: 'sha1-5d4e8d1aca955e8d8589aabd499c5cae939e33c7'
+    'github/codeql-action@v4.39.1':
+        ref: 'v4.39.1'
+        commit: 'sha1-9b3254085494b55a0f7c4c2b3d2d52cc712ce370'
         owner_id: 9919
         repo_id: 259445878
     'ilammy/msvc-dev-cmd@v1.13.0':
