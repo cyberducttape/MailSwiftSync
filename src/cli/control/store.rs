@@ -10,6 +10,7 @@ use super::audit::{AuditEntry, chain_hash};
 use super::authn::{self, TokenKind};
 use super::authz::{Credential, Grant, Permission, Principal, Role};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Mutex;
@@ -1313,39 +1314,63 @@ fn validate_email(value: &str) -> StoreResult<String> {
     Ok(value)
 }
 
-/// Plans are non-secret migration settings. Refuse any field whose name
-/// suggests a credential, so the central service never becomes a store of
-/// mailbox secrets by accident; workers keep those locally.
+/// A project plan is the `control worker plan` document, and nothing else:
+/// only its known fields, each with its expected type. An allowlist, not a
+/// scan for credential-sounding names, so a secret cannot reach central
+/// storage under a key nobody anticipated; workers keep credentials locally.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerPlan {
+    format: String,
+    format_version: u64,
+    ledger_project_id: String,
+    ledger_project_name: String,
+    mailboxes: std::collections::BTreeMap<String, WorkerPlanMailbox>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerPlanMailbox {
+    label: String,
+    plan_sha256: String,
+}
+
 pub(super) fn validate_plan(plan: &serde_json::Value) -> StoreResult<String> {
-    fn credential_field(value: &serde_json::Value) -> Option<String> {
-        const MARKERS: [&str; 6] = [
-            "password",
-            "passwd",
-            "secret",
-            "token",
-            "credential",
-            "private_key",
-        ];
-        match value {
-            serde_json::Value::Object(map) => map.iter().find_map(|(key, value)| {
-                let lower = key.to_ascii_lowercase();
-                if MARKERS.iter().any(|marker| lower.contains(marker)) {
-                    Some(key.clone())
-                } else {
-                    credential_field(value)
-                }
-            }),
-            serde_json::Value::Array(items) => items.iter().find_map(credential_field),
-            _ => None,
-        }
-    }
-    if !plan.is_object() {
-        return Err(StoreError::Invalid("the plan must be a JSON object".into()));
-    }
-    if let Some(field) = credential_field(plan) {
-        return Err(StoreError::Invalid(format!(
-            "the plan field {field:?} looks like a credential; mailbox credentials stay on the worker and are never sent to the control plane"
+    let invalid = |message: String| StoreError::Invalid(message);
+    let document = WorkerPlan::deserialize(plan).map_err(|error| {
+        invalid(format!(
+            "the plan must be a {} v{} document exported by `control worker plan` ({error})",
+            super::agent::PLAN_FORMAT,
+            super::agent::PLAN_FORMAT_VERSION
+        ))
+    })?;
+    if document.format != super::agent::PLAN_FORMAT
+        || document.format_version != super::agent::PLAN_FORMAT_VERSION
+    {
+        return Err(invalid(format!(
+            "the plan must be a {} v{} document exported by `control worker plan`",
+            super::agent::PLAN_FORMAT,
+            super::agent::PLAN_FORMAT_VERSION
         )));
+    }
+    validate_name(&document.ledger_project_id, "ledger project ID")?;
+    validate_name(&document.ledger_project_name, "ledger project name")?;
+    if document.mailboxes.is_empty() {
+        return Err(invalid("the plan lists no mailboxes".into()));
+    }
+    for (job_id, mailbox) in &document.mailboxes {
+        validate_name(job_id, "mailbox job ID")?;
+        validate_name(&mailbox.label, "mailbox label")?;
+        let digest = &mailbox.plan_sha256;
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(invalid(format!(
+                "the plan digest for mailbox {job_id:?} must be 64 lowercase hex characters"
+            )));
+        }
     }
     let text =
         serde_json::to_string(plan).map_err(|error| StoreError::Invalid(error.to_string()))?;
@@ -1355,6 +1380,59 @@ pub(super) fn validate_plan(plan: &serde_json::Value) -> StoreResult<String> {
         )));
     }
     Ok(text)
+}
+
+/// The fields a worker reports for an assignment, and nothing else.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerResult {
+    job_id: String,
+    plan_revision: i64,
+    /// Free text, bounded by the whole result's size.
+    #[allow(dead_code)]
+    detail: String,
+}
+
+pub(super) fn validate_result(result: &serde_json::Value, max_bytes: usize) -> StoreResult<String> {
+    let document = WorkerResult::deserialize(result).map_err(|error| {
+        StoreError::Invalid(format!(
+            "the result must hold only job_id, plan_revision, and detail ({error})"
+        ))
+    })?;
+    validate_name(&document.job_id, "result job ID")?;
+    if document.plan_revision < 1 {
+        return Err(StoreError::Invalid(
+            "the result plan revision must be positive".into(),
+        ));
+    }
+    let text =
+        serde_json::to_string(result).map_err(|error| StoreError::Invalid(error.to_string()))?;
+    if text.len() > max_bytes {
+        return Err(StoreError::Invalid(format!(
+            "the result exceeds {max_bytes} bytes"
+        )));
+    }
+    Ok(text)
+}
+
+/// A minimal valid worker result for tests.
+#[cfg(test)]
+pub(super) fn test_result() -> serde_json::Value {
+    serde_json::json!({ "job_id": "job-1", "plan_revision": 1, "detail": "done" })
+}
+
+/// A minimal valid plan document for tests.
+#[cfg(test)]
+pub(super) fn test_plan(project: &str) -> serde_json::Value {
+    serde_json::json!({
+        "format": super::agent::PLAN_FORMAT,
+        "format_version": super::agent::PLAN_FORMAT_VERSION,
+        "ledger_project_id": project,
+        "ledger_project_name": "Move",
+        "mailboxes": {
+            "job-1": { "label": "Mailbox 1", "plan_sha256": "0".repeat(64) },
+        },
+    })
 }
 
 #[cfg(test)]
@@ -1510,12 +1588,7 @@ mod tests {
         let globex = store.create_tenant("Globex", &admin_actor).unwrap();
         let editor_actor = actor("user:usr_editor");
         let project = store
-            .create_project(
-                &acme.id,
-                "Mail move",
-                &serde_json::json!({"source_host": "imap.a"}),
-                &editor_actor,
-            )
+            .create_project(&acme.id, "Mail move", &test_plan("ledger-a"), &editor_actor)
             .unwrap();
         assert_eq!(
             store.project(&globex.id, &project.id),
@@ -1536,7 +1609,7 @@ mod tests {
             .update_plan(
                 &acme.id,
                 &project.id,
-                &serde_json::json!({"source_host": "imap.b"}),
+                &test_plan("ledger-b"),
                 1,
                 &editor_actor,
             )
@@ -1546,7 +1619,7 @@ mod tests {
             store.update_plan(
                 &acme.id,
                 &project.id,
-                &serde_json::json!({}),
+                &test_plan("ledger-c"),
                 1,
                 &editor_actor
             ),
@@ -1559,13 +1632,33 @@ mod tests {
     }
 
     #[test]
-    fn plans_with_credential_fields_are_refused() {
+    fn only_worker_plan_documents_are_accepted() {
         let (store, admin, _) = bootstrapped();
         let admin_actor = actor(&format!("user:{admin}"));
         let acme = store.create_tenant("Acme", &admin_actor).unwrap();
+        store
+            .create_project(&acme.id, "ok", &test_plan("ledger"), &admin_actor)
+            .unwrap();
+        // A secret is refused whatever its key is called: the plan is an
+        // allowlist, not a scan for credential-sounding names.
+        let mut top_level = test_plan("ledger");
+        top_level["pw"] = "hunter2".into();
+        let mut in_mailbox = test_plan("ledger");
+        in_mailbox["mailboxes"]["job-1"]["auth"] = "Bearer abc".into();
+        let mut bad_digest = test_plan("ledger");
+        bad_digest["mailboxes"]["job-1"]["plan_sha256"] = "hunter2".into();
+        let mut wrong_format = test_plan("ledger");
+        wrong_format["format_version"] = 2.into();
+        let mut no_mailboxes = test_plan("ledger");
+        no_mailboxes["mailboxes"] = serde_json::json!({});
         for plan in [
+            top_level,
+            in_mailbox,
+            bad_digest,
+            wrong_format,
+            no_mailboxes,
+            serde_json::json!({"source_host": "imap.acme.example"}),
             serde_json::json!({"source_password": "x"}),
-            serde_json::json!({"mailboxes": [{"oauth": {"refresh_token": "x"}}]}),
             serde_json::json!(["not", "an", "object"]),
         ] {
             assert!(matches!(

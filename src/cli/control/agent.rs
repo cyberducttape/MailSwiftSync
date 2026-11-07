@@ -1150,7 +1150,8 @@ mod tests {
             "format": PLAN_FORMAT,
             "format_version": PLAN_FORMAT_VERSION,
             "ledger_project_id": "local-project",
-            "mailboxes": { "job-1": { "plan_sha256": digest } },
+            "ledger_project_name": "Move",
+            "mailboxes": { "job-1": { "label": "Mailbox 1", "plan_sha256": digest } },
         })
     }
 
@@ -1340,8 +1341,10 @@ mod tests {
             label: "user:usr_editor".into(),
         };
         let tenant = store.create_tenant("Acme", &admin).unwrap().id;
+        // The service only stores plans with a well-formed SHA-256 digest.
+        let digest = "d1".repeat(32);
         let project = store
-            .create_project(&tenant, "Move", &approved_plan("d1"), &editor)
+            .create_project(&tenant, "Move", &approved_plan(&digest), &editor)
             .unwrap();
         store
             .approve_project(
@@ -1372,7 +1375,7 @@ mod tests {
             .unwrap();
         let control = HttpControl::new(base.clone(), &credential, None).unwrap();
         let executor = FakeExecutor {
-            digest: Some("d1".into()),
+            digest: Some(digest),
             runs: AtomicUsize::new(0),
             wait_for_stop: false,
             outcome: Ok("verified".into()),

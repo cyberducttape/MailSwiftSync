@@ -8,9 +8,11 @@ worker keeps its own SQLite execution ledger.
 
 **Mailbox credentials never reach the control plane.** Passwords, OAuth
 refresh tokens, and app passwords stay on the worker that runs the
-migration. Project plans sent to the service are non-secret settings, and
-the service refuses any plan field whose name looks like a credential
-(`password`, `secret`, `token`, `credential`, `private_key`).
+migration. A project plan must be a `mailswiftsync.worker-plan` v1 document
+(see [Running a worker agent](#running-a-worker-agent)) holding only its known fields: the
+ledger project ID and name, and per mailbox a label and a 64-hex plan
+digest. Any other field is refused whatever it is called, so a secret
+cannot slip in under a name nobody anticipated.
 
 This implements the authentication, authorization, tenant-isolation, worker
 fencing, and audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
@@ -168,7 +170,9 @@ the same answer and cost the same hashing time.
 Every mutation writes its audit entry in the same SQLite transaction as the
 change itself, so a committed change can never be missing from the log.
 Refusals (wrong role, other tenant, conflict, invalid input) and reads of
-tenant data are audited too. Each entry records:
+tenant data are audited too. A read is audited before its data is returned:
+if the entry cannot be written, the request fails with 500 and returns
+nothing. Each entry records:
 
 - time, request ID, and actor (user, plus the API key if one was used)
 - tenant, action, and resource
@@ -227,8 +231,8 @@ Fencing rules:
   other expired lease. The response's `leases_awaiting_expiry` counts them.
 - A plan change withdraws approval. Its queued assignments stop leasing,
   and renewals of running leases are refused so workers stop.
-- Results are non-secret JSON and refused if they carry credential-like
-  fields.
+- Results hold only `job_id`, `plan_revision`, and a bounded `detail`
+  text; any other field is refused.
 - Every lease, renewal, completion, and refusal is audited with the worker
   as actor.
 

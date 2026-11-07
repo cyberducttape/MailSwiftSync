@@ -234,6 +234,9 @@ impl Call<'_> {
         }
     }
 
+    /// Record one decision. Callers about to return data propagate a failure
+    /// (`?`), so no read is served without its audit entry; a refusal is
+    /// returned either way.
     fn audit(
         &self,
         actor: &str,
@@ -241,17 +244,21 @@ impl Call<'_> {
         action: &str,
         resource: &str,
         allowed: bool,
-    ) {
-        let _ = self.store().audit(&AuditEntry {
-            at: store::now(),
-            request_id: &self.request_id,
-            actor,
-            tenant,
-            action,
-            resource,
-            allowed,
-            detail: "",
-        });
+    ) -> store::StoreResult<()> {
+        self.store()
+            .audit(&AuditEntry {
+                at: store::now(),
+                request_id: &self.request_id,
+                actor,
+                tenant,
+                action,
+                resource,
+                allowed,
+                detail: "",
+            })
+            .map_err(|error| {
+                store::StoreError::Internal(format!("could not write an audit entry: {error:?}"))
+            })
     }
 
     /// Require `permission` in `tenant`, auditing a refusal. A caller who
@@ -267,7 +274,8 @@ impl Call<'_> {
         if principal.allows(permission, tenant) {
             return Ok(());
         }
-        self.audit(&principal.actor(), tenant, action, resource, false);
+        // Refused either way; a failed audit write cannot widen access.
+        let _ = self.audit(&principal.actor(), tenant, action, resource, false);
         if let Some(tenant) = tenant
             && !principal.sees_tenant(tenant)
         {
@@ -497,7 +505,7 @@ fn list_users(call: &Call<'_>) -> Handled {
         "user.list",
         "user",
     )?;
-    call.audit(&principal.actor(), None, "user.list", "user", true);
+    call.audit(&principal.actor(), None, "user.list", "user", true)?;
     Ok(Response::ok(&json!({ "users": call.store().users()? })))
 }
 
@@ -607,7 +615,7 @@ struct CreateKeyBody {
 fn create_api_key(call: &Call<'_>, tenant: &str) -> Handled {
     let principal = call.principal()?;
     if principal.via != super::authz::Credential::Session {
-        call.audit(
+        let _ = call.audit(
             &principal.actor(),
             Some(tenant),
             "api_key.create",
@@ -680,7 +688,7 @@ fn list_projects(call: &Call<'_>, tenant: &str) -> Handled {
         "project.list",
         "project",
         true,
-    );
+    )?;
     Ok(Response::ok(
         &json!({ "projects": call.store().projects(tenant)? }),
     ))
@@ -731,7 +739,7 @@ fn get_project(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
         "project.read",
         &resource,
         true,
-    );
+    )?;
     Ok(Response::ok(&json!(found)))
 }
 
@@ -874,7 +882,7 @@ fn list_assignments(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
         "assignment.list",
         &resource,
         true,
-    );
+    )?;
     Ok(Response::ok(&json!({ "assignments": assignments })))
 }
 
@@ -1056,7 +1064,7 @@ fn audit_log(call: &Call<'_>, tenant: Option<&str>, query: &str) -> Handled {
         parameter("before"),
         parameter("limit").unwrap_or(100),
     )?;
-    call.audit(&principal.actor(), tenant, "audit.read", "audit", true);
+    call.audit(&principal.actor(), tenant, "audit.read", "audit", true)?;
     Ok(Response::ok(&json!({ "entries": entries })))
 }
 
@@ -1229,6 +1237,41 @@ mod tests {
     }
 
     #[test]
+    fn reads_fail_closed_when_their_audit_entry_cannot_be_written() {
+        let harness = Harness::new();
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
+        let acme = harness.tenant(&admin, "Acme");
+        let (status, project) = harness.call(
+            "POST",
+            &format!("/v1/tenants/{acme}/projects"),
+            Some(&admin),
+            Some(json!({ "name": "Move", "plan": store::test_plan("ledger") })),
+        );
+        assert_eq!(status, 201, "{project}");
+        let project = project["id"].as_str().unwrap();
+        harness
+            .context
+            .store
+            .lock()
+            .execute_batch(
+                "CREATE TRIGGER audit_unavailable BEFORE INSERT ON audit_log
+                 BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END;",
+            )
+            .unwrap();
+        for target in [
+            "/v1/users".to_owned(),
+            "/v1/audit".to_owned(),
+            format!("/v1/tenants/{acme}/projects"),
+            format!("/v1/tenants/{acme}/projects/{project}"),
+            format!("/v1/tenants/{acme}/projects/{project}/assignments"),
+        ] {
+            let (status, body) = harness.call("GET", &target, Some(&admin), None);
+            assert_eq!(status, 500, "{target}: {body}");
+            assert_eq!(body["error"], "internal error", "{target}: {body}");
+        }
+    }
+
+    #[test]
     fn cross_tenant_identifiers_are_not_found_and_audited() {
         let harness = Harness::new();
         let admin = harness.login("admin@msp.example", &harness.admin_password);
@@ -1241,7 +1284,7 @@ mod tests {
             "POST",
             &format!("/v1/tenants/{acme}/projects"),
             Some(&acme_manager),
-            Some(json!({ "name": "Move", "plan": { "source_host": "imap.acme.example" } })),
+            Some(json!({ "name": "Move", "plan": store::test_plan("ledger") })),
         );
         assert_eq!(status, 201, "{project}");
         let project = project["id"].as_str().unwrap();
@@ -1435,7 +1478,7 @@ mod tests {
             "POST",
             &format!("/v1/tenants/{acme}/projects"),
             Some(&first),
-            Some(json!({ "name": "Move", "plan": {} })),
+            Some(json!({ "name": "Move", "plan": store::test_plan("ledger") })),
         );
         let approve = format!(
             "/v1/tenants/{acme}/projects/{}/approve",
@@ -1542,7 +1585,7 @@ mod tests {
             "POST",
             &format!("/v1/tenants/{acme}/projects"),
             Some(&manager),
-            Some(json!({ "name": "Move", "plan": { "source_host": "imap.acme.example" } })),
+            Some(json!({ "name": "Move", "plan": store::test_plan("ledger") })),
         );
         let project = project["id"].as_str().unwrap().to_owned();
         let assignments = format!("/v1/tenants/{acme}/projects/{project}/assignments");
