@@ -286,8 +286,9 @@ Network failures are retried with capped backoff.
 
 ## API
 
-Request bodies are JSON (`Content-Type: application/json`, at most 64 KiB,
-`Content-Length` framing only). Every response carries `X-Request-Id`, which
+Request bodies are JSON (`Content-Type: application/json`, at most 512 KiB,
+`Content-Length` framing only). A stored plan may be up to 256 KiB in compact
+form; the body limit leaves room to send it pretty-printed. Every response carries `X-Request-Id`, which
 matches the audit entry.
 
 | Method and path | Permission |

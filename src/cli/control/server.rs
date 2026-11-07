@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 const MAX_HEAD_BYTES: usize = 16 * 1024;
-pub(super) const MAX_BODY_BYTES: usize = 64 * 1024;
+/// Room for the largest plan the store accepts (measured compact), sent
+/// pretty-printed inside its `{plan, revision}` envelope.
+pub(super) const MAX_BODY_BYTES: usize = 2 * super::store::MAX_PLAN_BYTES;
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CONCURRENT_CONNECTIONS: usize = 32;
@@ -297,5 +299,34 @@ mod tests {
             read(b"GET / HTTP/1.1\r\nAuthorization: Bearer a\r\nAuthorization: Bearer b\r\n\r\n"),
             Err(400)
         );
+    }
+
+    #[test]
+    fn the_largest_storable_plan_fits_in_a_request() {
+        use super::super::store::{MAX_PLAN_BYTES, test_plan, validate_plan};
+        let mut plan = test_plan("ledger");
+        let mut length = serde_json::to_string(&plan).unwrap().len();
+        let mailboxes = plan["mailboxes"].as_object_mut().unwrap();
+        for index in 0.. {
+            let key = format!("job-{index:06}");
+            let value = serde_json::json!({ "label": format!("Mailbox {index}"), "plan_sha256": "a".repeat(64) });
+            // `"key":value,` in compact form.
+            let added = key.len() + serde_json::to_string(&value).unwrap().len() + 4;
+            if length + added > MAX_PLAN_BYTES {
+                break;
+            }
+            length += added;
+            mailboxes.insert(key, value);
+        }
+        let compact = validate_plan(&plan).unwrap();
+        assert!(compact.len() > MAX_PLAN_BYTES - 200, "{}", compact.len());
+        let body =
+            serde_json::to_string_pretty(&serde_json::json!({ "plan": plan, "revision": 1 }))
+                .unwrap();
+        let raw = format!(
+            "PUT /v1/tenants/t/projects/p/plan HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        assert_eq!(read(raw.as_bytes()).map(|body| body.len()), Ok(body.len()));
     }
 }
