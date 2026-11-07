@@ -339,6 +339,35 @@ impl Store {
 
     /// Recompute the hash chain. Returns the number of entries verified, or
     /// the sequence number of the first entry that does not match.
+    /// Whether the service can do its work now: the database answers at
+    /// the expected schema, its write lock can be taken, and the audit
+    /// chain head is readable, so a request would not fail on storage or on
+    /// its audit entry. Nothing is written.
+    pub(super) fn readiness(&self) -> StoreResult<()> {
+        let mut connection = self.lock();
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            return Err(StoreError::Internal(format!(
+                "schema version {version}, expected {SCHEMA_VERSION}"
+            )));
+        }
+        let head: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if head.is_some_and(|hash| hash.len() != 32) {
+            return Err(StoreError::Internal(
+                "the audit log hash chain is corrupt".into(),
+            ));
+        }
+        tx.rollback()?;
+        Ok(())
+    }
+
     pub(super) fn verify_audit_chain(&self) -> Result<u64, String> {
         let connection = self.lock();
         let mut statement = connection

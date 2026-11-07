@@ -304,7 +304,8 @@ matches the audit entry.
 
 | Method and path | Permission |
 |---|---|
-| `GET /healthz` | none |
+| `GET /healthz` (liveness: the process answers) | none |
+| `GET /readyz` (readiness: storage is writable at the expected schema and the audit chain head is readable; `503` otherwise) | none |
 | `POST /v1/auth/login` `{email, password}` | none |
 | `POST /v1/auth/logout` | session |
 | `GET /v1/auth/oidc/{provider}/start`, `GET …/callback?code=&state=` | none (OIDC configured) |
