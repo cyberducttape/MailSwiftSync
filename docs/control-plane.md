@@ -72,7 +72,11 @@ redirect URI at the provider.
    code and returns `{token, expires_at}`: the same 12-hour session as a
    password sign-in.
 3. Each pending sign-in is stored by the digest of its `state`, expires in
-   10 minutes, and can be completed once.
+   10 minutes, and can be completed once. At most 10,000 may be pending, and
+   at most 20 per client: an IPv4 address, or an IPv6 /64. Beyond either,
+   `start` answers `429` with `Retry-After`. Loopback requests are not
+   counted per client, because behind a TLS-terminating reverse proxy every
+   user arrives from it; such a proxy must rate-limit `…/start` itself.
 
 **ID-token checks.** The ID token must:
 - be signed with RS256 or ES256 by a key in the provider's JWKS (`none` and

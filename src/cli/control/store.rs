@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
 pub(super) const LOCKOUT_FAILURES: i64 = 5;
@@ -251,7 +251,7 @@ impl Store {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
         match version {
-            0..=3 => {
+            0..=4 => {
                 let base = if version == 0 { SCHEMA } else { "" };
                 let workers = if version <= 1 {
                     super::workers::SCHEMA_V2
@@ -263,10 +263,15 @@ impl Store {
                 } else {
                     ""
                 };
+                let assignments = if version <= 3 {
+                    super::workers::SCHEMA_V4
+                } else {
+                    ""
+                };
                 connection
                     .execute_batch(&format!(
-                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
-                        super::workers::SCHEMA_V4
+                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {assignments} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
+                        super::oidc::SCHEMA_V5
                     ))
                     .map_err(|error| format!("could not create or upgrade the schema: {error}"))?;
             }

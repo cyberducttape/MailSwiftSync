@@ -359,6 +359,11 @@ fn oidc_failure(error: super::oidc::OidcError) -> Response {
     match error {
         OidcError::UnknownProvider => Response::not_found(),
         OidcError::Rejected(message) => Response::error(401, "Unauthorized", &message),
+        OidcError::Busy(message) => {
+            let mut response = Response::error(429, "Too Many Requests", &message);
+            response.headers.push(("Retry-After", "60".into()));
+            response
+        }
         OidcError::Upstream(message) => {
             eprintln!("Control plane OIDC provider error: {message}");
             Response::error(
@@ -378,7 +383,11 @@ fn oidc_failure(error: super::oidc::OidcError) -> Response {
 /// for clients that open it themselves.
 fn oidc_start(call: &Call<'_>, provider: &str) -> Handled {
     let url = oidc(call)?
-        .start(call.store(), provider)
+        .start(
+            call.store(),
+            provider,
+            super::oidc::client_key(call.request.peer).as_deref(),
+        )
         .map_err(oidc_failure)?;
     let mut response = Response::json(302, "Found", &json!({ "authorization_url": url }));
     response.headers.push(("Location", url));
