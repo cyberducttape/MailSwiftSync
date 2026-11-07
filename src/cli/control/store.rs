@@ -388,6 +388,13 @@ impl Store {
     }
 
     pub(super) fn verify_audit_chain(&self) -> Result<u64, String> {
+        self.verify_audit_chain_head().map(|(count, _)| count)
+    }
+
+    /// Verify the whole chain and return the entry count and the last
+    /// entry's sequence number and hash, read in one statement so they
+    /// describe the chain that was verified.
+    pub(super) fn verify_audit_chain_head(&self) -> Result<(u64, Option<(i64, [u8; 32])>), String> {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
@@ -397,6 +404,7 @@ impl Store {
         let mut rows = statement.query([]).map_err(|error| error.to_string())?;
         let mut previous = [0_u8; 32];
         let mut count = 0_u64;
+        let mut head = None;
         while let Some(row) = rows.next().map_err(|error| error.to_string())? {
             let read = |index| {
                 row.get::<_, String>(index)
@@ -425,8 +433,19 @@ impl Store {
             }
             previous.copy_from_slice(&hash);
             count += 1;
+            head = Some((seq, previous));
         }
-        Ok(count)
+        Ok((count, head))
+    }
+
+    /// The stored hash of one audit entry, if it exists.
+    pub(super) fn audit_hash_at(&self, seq: i64) -> Result<Option<Vec<u8>>, String> {
+        self.lock()
+            .query_row("SELECT hash FROM audit_log WHERE seq=?1", [seq], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|error| error.to_string())
     }
 
     // ----- users, sessions, and login ------------------------------------

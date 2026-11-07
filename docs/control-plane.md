@@ -29,6 +29,10 @@ mailswiftsync control init /srv/mailswiftsync/control.db \
 mailswiftsync control serve /srv/mailswiftsync/control.db \
   --listen 0.0.0.0:9470 --tls-cert server.pem --tls-key server-key.pem
 mailswiftsync control audit-verify /srv/mailswiftsync/control.db
+mailswiftsync control audit-checkpoint /srv/mailswiftsync/control.db \
+  --output checkpoint.json --signing-key audit-key.pk8
+mailswiftsync control audit-verify /srv/mailswiftsync/control.db \
+  --checkpoint checkpoint.json --public-key <hex>
 ```
 
 - `init` creates the database (owner-only, `0600`) and the first
@@ -198,6 +202,17 @@ Entries are hash-chained: each hash covers the previous entry's hash and
 every field of the entry. Triggers make the table append-only, and
 `audit-verify` (or `GET /v1/audit/verify`) detects any edit, deletion, or
 reordering made to the file directly.
+
+The chain cannot, on its own, catch someone with write access to the file
+who rebuilds every hash after an edit. **Checkpoints** close that gap:
+`audit-checkpoint` verifies the chain and writes its head (entry count,
+sequence number, and hash), signed with an Ed25519 PKCS#8 key when
+`--signing-key` is given. Publish each checkpoint somewhere the service
+cannot write, such as a ticket, WORM storage, or a transparency log, on a
+schedule (for example daily, from cron). `audit-verify --checkpoint` then
+checks the signature (pinned with `--public-key`) and that the entry the
+checkpoint names still has its recorded hash; a rebuilt chain does not.
+`mailswiftsync verify` also accepts a checkpoint's signature.
 
 ## Workers and fenced leases
 
