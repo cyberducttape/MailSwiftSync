@@ -4,6 +4,9 @@
 
 - Update `async-executor` 1.14.0 → 1.14.1; 1.14.0 was yanked, which failed
   the `cargo deny` dependency policy in CI and the scheduled audit.
+- Move the container's Debian snapshot to 20261107T000000Z for `apt` and
+  `libapt-pkg6.0` 2.6.2 (CVE-2026-109518, HIGH), which failed the runtime
+  image scan. Dovecot stays at `deb12u7`.
 - Move the container's Debian snapshot to 20261102T000000Z and pin Dovecot
   `1:2.3.19.1+dfsg1-2.1+deb12u7`, which fixes 7 HIGH CVEs in `dovecot-core`
   and `dovecot-imapd` (14 findings), among them CVE-2026-42007 and
