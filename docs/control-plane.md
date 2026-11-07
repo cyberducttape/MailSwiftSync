@@ -264,7 +264,12 @@ batch must already be imported and validated there, the same as for
 4. **Run.** `mailswiftsync control worker run <state.db> --server <url>
    --credential-file <file> [--ca-cert <pem>] [--lease-seconds 300]
    [--poll-seconds 30] [--once] [--acknowledge-destination-loss]` leases one
-   assignment at a time.
+   assignment at a time. Run one agent per ledger: the run takes the
+   ledger's exclusive controller lock, so while another agent, the desktop
+   app, or a headless batch holds it, the agent leases nothing and waits a
+   poll interval, leaving the work queued for other workers. To run
+   mailboxes in parallel, give each agent its own host or state directory
+   with its own ledger.
 
 For each lease, the agent:
 - Recomputes the local row's plan digest. If the approved document names

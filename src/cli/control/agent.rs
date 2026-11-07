@@ -420,6 +420,12 @@ pub(super) trait Executor: Sync {
     fn plan_sha256(&self, project: &str, job_id: &str) -> Result<Option<String>, String>;
     /// Run one row to a verified terminal state. Raising `stop` cancels it.
     fn execute(&self, project: &str, job_id: &str, stop: &AtomicBool) -> Result<String, String>;
+    /// Why the ledger cannot run a mailbox right now, if it cannot. Checked
+    /// before leasing, so work this worker cannot start stays queued for
+    /// another worker instead of being leased and reported as failed.
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
 }
 
 struct LedgerExecutor {
@@ -437,6 +443,18 @@ impl Executor for LedgerExecutor {
         Ok(rows
             .first()
             .map(|row| row_plan_sha256(row.config.as_deref(), row.row_overrides.as_deref())))
+    }
+
+    fn unavailable(&self) -> Option<String> {
+        // Probe and release at once; the run takes the lock for itself.
+        match crate::process::acquire_instance_lock_classified(&self.state) {
+            Ok(_lock) => None,
+            Err(crate::process::InstanceLockError::Busy(_)) => Some(
+                "another MailSwiftSync controller owns this ledger; run one worker agent per ledger"
+                    .into(),
+            ),
+            Err(error) => Some(error.to_string()),
+        }
     }
 
     fn execute(&self, project: &str, job_id: &str, stop: &AtomicBool) -> Result<String, String> {
@@ -473,6 +491,10 @@ impl AgentConfig {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Handled {
     Idle,
+    /// The local ledger could not run work, so nothing was leased.
+    Unavailable {
+        reason: String,
+    },
     Completed {
         assignment: String,
     },
@@ -496,6 +518,9 @@ pub(super) fn handle_one(
     // The service starts the lease when it handles the request, so the
     // local clock starts before sending it. The local deadline can then only
     // fall before the service's, never after.
+    if let Some(reason) = executor.unavailable() {
+        return Ok(Handled::Unavailable { reason });
+    }
     let requested = Instant::now();
     let Some(lease) = control.lease(config.lease_seconds)? else {
         return Ok(Handled::Idle);
@@ -677,6 +702,9 @@ fn run_loop(
                 failures = 0;
                 match &handled {
                     Handled::Idle => {}
+                    Handled::Unavailable { reason } => {
+                        eprintln!("Worker: not leasing: {reason}");
+                    }
                     Handled::Completed { assignment } => {
                         eprintln!("Worker: assignment {assignment} completed");
                     }
@@ -693,7 +721,7 @@ fn run_loop(
                     return Ok(());
                 }
                 match handled {
-                    Handled::Idle => poll,
+                    Handled::Idle | Handled::Unavailable { .. } => poll,
                     _ => Duration::ZERO,
                 }
             }
@@ -1177,6 +1205,53 @@ mod tests {
             completion_retries: 3,
             completion_backoff: Duration::from_millis(1),
         }
+    }
+
+    #[test]
+    fn a_worker_whose_ledger_is_owned_elsewhere_leases_nothing() {
+        struct Busy;
+        impl Executor for Busy {
+            fn plan_sha256(&self, _: &str, _: &str) -> Result<Option<String>, String> {
+                panic!("nothing is leased, so no plan is checked")
+            }
+            fn execute(&self, _: &str, _: &str, _: &AtomicBool) -> Result<String, String> {
+                panic!("nothing is leased, so nothing runs")
+            }
+            fn unavailable(&self) -> Option<String> {
+                Some("owned elsewhere".into())
+            }
+        }
+        let control = FakeControl::default();
+        *control.lease.lock().unwrap() = Some(leased("d1"));
+        assert_eq!(
+            handle_one(&control, &Busy, &fast()).unwrap(),
+            Handled::Unavailable {
+                reason: "owned elsewhere".into()
+            }
+        );
+        assert!(
+            control.lease.lock().unwrap().is_some(),
+            "the assignment stays queued for another worker"
+        );
+        assert!(control.completions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_ledger_executor_reports_a_ledger_another_controller_holds() {
+        let directory =
+            std::env::temp_dir().join(format!("mss-agent-lock-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let executor = LedgerExecutor {
+            state: directory.join("state.db"),
+            acknowledge_destination_loss: false,
+        };
+        assert_eq!(executor.unavailable(), None);
+        let held = crate::process::acquire_instance_lock(&executor.state).unwrap();
+        let reason = executor.unavailable().unwrap();
+        assert!(reason.contains("one worker agent per ledger"), "{reason}");
+        drop(held);
+        assert_eq!(executor.unavailable(), None, "the probe released its lock");
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

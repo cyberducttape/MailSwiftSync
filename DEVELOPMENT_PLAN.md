@@ -150,6 +150,17 @@ Each finding was checked against the code before any change.
 | §6 Attack-surface follow-ups | No new defect | Plaintext exceptions: H-02. Probe budget: H-03. Still to run: disk-full, corruption and concurrent-restart drills; hostile cross-tenant authorization tests against the control server; fuzzing engine argument construction; Maildir durability through doveadm on real filesystems. |
 | §7 Evidence-based terminal transitions | Already met | A batch child's evidence and its terminal mailbox state commit in one ledger transaction, after its diagnostics. The child-run claim updates only from the expected state and checks row counts (R1 S1). Control-plane completion is fenced by lease token and worker. Interruptions become `interrupted`/`attention`, never `verified`. Maildir rules depend on doveadm and need engine-version and filesystem qualification. |
 
+### R3. Control-plane review findings (2026-11-07)
+
+| Finding | Verdict | What changed |
+|---|---|---|
+| P1 HTTP body limit below the plan limit | Confirmed; fixed | The server refused bodies over 64 KiB while the store accepts 256 KiB plans. The body limit is now twice the plan limit, enough for the largest plan pretty-printed; a test sends exactly that through the request reader. |
+| P1 Serial agents; agents sharing a ledger contend for its lock | Confirmed; contention fixed, concurrency staged in M6 | A run takes the ledger's exclusive controller lock, so a second agent (or the desktop app) on the same ledger leased work it could not run and reported it `failed`. The agent now probes the lock before leasing and, if it is held, leases nothing and waits, so the work stays queued for other workers. One agent per ledger is documented; parallel mailboxes come from separate ledgers. Running several leases inside one agent, through the batch worker pool under one lock, is an M6 design item. |
+| P1 OIDC pending-login quota without a per-client throttle | Confirmed; fixed | Pending sign-ins record a client key (IPv4 address or IPv6 /64; control-plane database version 5), at most 20 per client within the global 10,000. Both quotas answer 429 with `Retry-After` (the global one used to be a 500). Loopback is exempt because a TLS-terminating proxy makes every user loopback; the docs require that proxy to rate-limit `start`. |
+| P1 Reads served when their audit write fails | Confirmed; fixed | The read audit result was discarded. Reads now propagate it and return 500 with no data; a test blocks audit inserts and checks every audited read. Mutations already audited inside their own transaction. |
+| P2 Plan secrets detected by field name | Confirmed; fixed | A plan must be the `mailswiftsync.worker-plan` v1 document, with only its known fields and typed values (64-hex digests, bounded names). Results are limited to `job_id`, `plan_revision`, and `detail`. Unknown keys are refused whatever they are called. |
+| P2 Lease renewal stops before completion is acknowledged | Confirmed; fixed | Reporting now runs inside the renewal scope, so the lease is renewed through completion retries. A test shows renewals during refused reports; with the old ordering it saw none. |
+
 ### M7. Typed errors through the producers (review L-01)
 
 Retry decisions are already typed at the boundary. The producers still
@@ -173,7 +184,10 @@ provider quotas needs:
 - a central quota authority that grants bounded capacity and pauses work
   when it is unreachable;
 - trace correlation from tenant to worker;
-- possibly the PostgreSQL scheduler the review proposes.
+- possibly the PostgreSQL scheduler the review proposes;
+- several leases running inside one worker agent, through the batch
+  worker pool under one ledger lock (review R3 P1). Today an agent runs one
+  assignment at a time and parallelism comes from one agent per ledger.
 
 This is an architectural change, so it waits for a maintainer decision.
 

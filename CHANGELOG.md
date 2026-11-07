@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Fix control-plane review findings (R3):
+  - Project plans must be `mailswiftsync.worker-plan` v1 documents and
+    results hold only `job_id`, `plan_revision`, and `detail`; any other
+    field is refused, whatever it is called.
+  - Audited reads return 500 and no data when the audit entry cannot be
+    written.
+  - Request bodies may be up to 512 KiB, enough for the largest storable
+    plan.
+  - Worker agents renew their lease until the completion is acknowledged.
+  - OIDC sign-in initiation allows 20 pending sign-ins per client (IPv4
+    address or IPv6 /64); quota refusals are 429 with `Retry-After`.
+    The control-plane database moves to version 5.
+  - A worker agent leases nothing while another controller owns its
+    ledger, so the work stays queued for other workers.
 - Move the container's Debian snapshot to 20261102T000000Z and pin Dovecot
   `1:2.3.19.1+dfsg1-2.1+deb12u7`, which fixes 7 HIGH CVEs in `dovecot-core`
   and `dovecot-imapd` (14 findings), among them CVE-2026-42007 and

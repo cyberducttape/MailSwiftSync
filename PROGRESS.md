@@ -2,6 +2,28 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-07
+
+### R3. Control-plane review findings
+
+Branch `fix/control-plane-review` (from `main`). One commit per finding:
+
+- Plans and results are allowlisted documents; unknown keys are refused.
+- Audited reads return 500 and no data if the audit write fails.
+- The HTTP body limit is twice the 256 KiB plan limit.
+- The agent keeps renewing its lease until the completion is
+  acknowledged.
+- OIDC sign-in initiation is limited to 20 pending sign-ins per client
+  (control-plane database version 5); quota refusals are 429.
+- The agent leases nothing while another controller owns its ledger.
+
+Verdicts are in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md#r3-control-plane-review-findings-2026-11-07).
+
+### CI: yanked async-executor
+
+PR #166 updates `async-executor` 1.14.0 → 1.14.1. The yanked version
+failed `cargo deny` in CI and in the scheduled audit.
+
 ## 2026-10-30
 
 ### Review L-02: correctness metrics
