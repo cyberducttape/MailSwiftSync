@@ -139,10 +139,20 @@ impl Fetch for HttpsFetch {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
     public_url: String,
+    /// `false` makes the identity provider the only way in for linked
+    /// accounts: their passwords stop working, so password guessing cannot
+    /// lock them out. Unlinked accounts (break-glass administrators) keep
+    /// password sign-in.
+    #[serde(default = "default_true")]
+    password_sign_in_for_linked_accounts: bool,
     #[serde(rename = "provider")]
     providers: Vec<ProviderFile>,
 }
@@ -188,6 +198,8 @@ struct Metadata {
 pub(super) struct Oidc {
     public_url: String,
     pub(super) providers: Vec<Provider>,
+    /// Linked accounts may sign in only through their identity provider.
+    pub(super) idp_first: bool,
     fetch: Box<dyn Fetch>,
 }
 
@@ -274,6 +286,7 @@ impl Oidc {
         Ok(Self {
             public_url,
             providers,
+            idp_first: !file.password_sign_in_for_linked_accounts,
             fetch: Box::new(HttpsFetch::new()?),
         })
     }
@@ -711,6 +724,7 @@ pub(super) mod tests {
     pub(in crate::cli::control) fn oidc(idp: &Arc<FakeIdp>, link_verified_email: bool) -> Oidc {
         Oidc {
             public_url: "https://control.msp.example".into(),
+            idp_first: false,
             providers: vec![Provider {
                 name: "idp".into(),
                 issuer: ISSUER.into(),

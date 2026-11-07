@@ -342,10 +342,16 @@ struct LoginBody {
 
 fn login(call: &Call<'_>) -> Handled {
     let body: LoginBody = call.body()?;
-    match call
-        .store()
-        .login(&body.email, body.password.as_str(), &call.request_id)
-    {
+    match call.store().login(
+        &body.email,
+        body.password.as_str(),
+        &call.request_id,
+        super::oidc::client_key(call.request.peer).as_deref(),
+        call.context
+            .oidc
+            .as_ref()
+            .is_some_and(|oidc| oidc.idp_first),
+    ) {
         Ok((token, expires_at)) => Ok(Response::created(&json!({
             "token": token.as_str(),
             "expires_at": expires_at,

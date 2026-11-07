@@ -19,8 +19,27 @@ use zeroize::Zeroizing;
 const SCHEMA_VERSION: i64 = 5;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
+/// Wrong passwords from one client (address or IPv6 /64) before that
+/// client is locked out of the account.
 pub(super) const LOCKOUT_FAILURES: i64 = 5;
+/// Wrong passwords from all clients together before the account itself is
+/// locked: a guard against guessing spread over many networks, set high so
+/// that one attacker cannot lock a known account out from a single place.
+pub(super) const ACCOUNT_LOCKOUT_FAILURES: i64 = 50;
+/// How long a lock lasts, and how long a failure is remembered.
 const LOCKOUT_SECONDS: i64 = 15 * 60;
+
+/// Control-plane database version 5: per-client login failures.
+const SCHEMA_V5_LOGIN: &str = "
+CREATE TABLE login_failures(
+    user_id TEXT NOT NULL REFERENCES users(id),
+    client TEXT NOT NULL,
+    failures INTEGER NOT NULL CHECK(failures >= 0),
+    last_failure_at INTEGER NOT NULL,
+    locked_until INTEGER,
+    PRIMARY KEY(user_id, client)
+) STRICT;
+";
 pub(super) const MAX_PLAN_BYTES: usize = 256 * 1024;
 const MAX_NAME_CHARS: usize = 200;
 
@@ -270,7 +289,7 @@ impl Store {
                 };
                 connection
                     .execute_batch(&format!(
-                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {assignments} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
+                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {assignments} {} {SCHEMA_V5_LOGIN} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
                         super::oidc::SCHEMA_V5
                     ))
                     .map_err(|error| format!("could not create or upgrade the schema: {error}"))?;
@@ -458,47 +477,75 @@ impl Store {
         Ok(id)
     }
 
-    /// Verify a password and open a session. Repeated failures lock the
-    /// account for a while; every failure costs the same hashing work.
+    /// Verify a password and open a session; every attempt costs the same
+    /// hashing work.
+    ///
+    /// Failures lock out the client that made them (`client`, from
+    /// [`super::oidc::client_key`]; `None` for proxied or loopback requests)
+    /// after [`LOCKOUT_FAILURES`], and the whole account only after
+    /// [`ACCOUNT_LOCKOUT_FAILURES`], so a stranger cannot lock someone out
+    /// from one place. With `idp_first`, accounts linked to an identity
+    /// provider cannot sign in with a password at all, and so cannot be
+    /// locked out by password guessing either.
     pub(super) fn login(
         &self,
         email: &str,
         password: &str,
         request_id: &str,
+        client: Option<&str>,
+        idp_first: bool,
     ) -> Result<(Zeroizing<String>, i64), LoginError> {
         let internal = |error: rusqlite::Error| LoginError::Internal(error.to_string());
         let at = now();
-        let account: Option<(String, Option<String>, Option<i64>, bool)> = self
+        let client = client.unwrap_or("");
+        type Account = (String, Option<String>, Option<i64>, bool, bool, Option<i64>);
+        let account: Option<Account> = self
             .lock()
             .query_row(
-                "SELECT id,password_hash,locked_until,disabled_at IS NOT NULL FROM users WHERE email=?1",
-                [email.trim()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                "SELECT u.id,u.password_hash,u.locked_until,u.disabled_at IS NOT NULL,
+                        EXISTS(SELECT 1 FROM oidc_identities i WHERE i.user_id=u.id),
+                        (SELECT f.locked_until FROM login_failures f WHERE f.user_id=u.id AND f.client=?2)
+                 FROM users u WHERE u.email=?1",
+                params![email.trim(), client],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
             )
             .optional()
             .map_err(internal)?;
-        let Some((user_id, Some(stored), locked_until, disabled)) = account else {
+        let Some((user_id, Some(stored), account_locked, disabled, linked, client_locked)) =
+            account
+        else {
             authn::equalize_password_timing(password).map_err(LoginError::Internal)?;
             return Err(LoginError::Rejected);
         };
-        if locked_until.is_some_and(|until| until > at) {
+        if account_locked.is_some_and(|until| until > at)
+            || client_locked.is_some_and(|until| until > at)
+        {
             authn::equalize_password_timing(password).map_err(LoginError::Internal)?;
             return Err(LoginError::Locked);
         }
-        let verified = authn::verify_password(password, &stored);
+        let password_refused = idp_first && linked;
+        let verified = if password_refused {
+            authn::equalize_password_timing(password).map_err(LoginError::Internal)?;
+            false
+        } else {
+            authn::verify_password(password, &stored)
+        };
         let mut connection = self.lock();
         let tx = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(internal)?;
         if !verified || disabled {
-            if !disabled {
-                tx.execute(
-                    "UPDATE users SET locked_until=CASE WHEN failed_logins+1>=?2 THEN ?3 ELSE locked_until END,
-                        failed_logins=CASE WHEN failed_logins+1>=?2 THEN 0 ELSE failed_logins+1 END
-                     WHERE id=?1",
-                    params![user_id, LOCKOUT_FAILURES, at + LOCKOUT_SECONDS],
-                )
-                .map_err(internal)?;
+            if !disabled && !password_refused {
+                record_login_failure(&tx, &user_id, client, at).map_err(internal)?;
             }
             append_audit(
                 &tx,
@@ -512,6 +559,8 @@ impl Store {
                     allowed: false,
                     detail: if disabled {
                         "account disabled"
+                    } else if password_refused {
+                        "password sign-in is disabled for accounts linked to an identity provider"
                     } else {
                         "wrong password"
                     },
@@ -524,6 +573,11 @@ impl Store {
         tx.execute(
             "UPDATE users SET failed_logins=0,locked_until=NULL WHERE id=?1",
             [&user_id],
+        )
+        .map_err(internal)?;
+        tx.execute(
+            "DELETE FROM login_failures WHERE user_id=?1 AND client=?2",
+            params![user_id, client],
         )
         .map_err(internal)?;
         let session = insert_session(&tx, &user_id, "password", at)
@@ -1280,6 +1334,42 @@ fn insert_session(
     Ok((token, expires_at))
 }
 
+/// Count one wrong password against the client and the account, locking
+/// either at its threshold. Failures older than the lock period are
+/// forgotten, and stale rows are pruned so the table stays small.
+fn record_login_failure(
+    tx: &Transaction<'_>,
+    user_id: &str,
+    client: &str,
+    at: i64,
+) -> rusqlite::Result<()> {
+    let forget_before = at - LOCKOUT_SECONDS;
+    tx.execute(
+        "DELETE FROM login_failures WHERE last_failure_at<?1 AND (locked_until IS NULL OR locked_until<=?2)",
+        params![forget_before, at],
+    )?;
+    tx.execute(
+        "INSERT INTO login_failures(user_id,client,failures,last_failure_at) VALUES(?1,?2,1,?3)
+         ON CONFLICT(user_id,client) DO UPDATE SET
+            failures=CASE WHEN locked_until IS NOT NULL AND locked_until<=?3 THEN 1 ELSE failures+1 END,
+            locked_until=CASE WHEN locked_until IS NOT NULL AND locked_until<=?3 THEN NULL ELSE locked_until END,
+            last_failure_at=?3",
+        params![user_id, client, at],
+    )?;
+    tx.execute(
+        "UPDATE login_failures SET locked_until=?4,failures=0
+         WHERE user_id=?1 AND client=?2 AND failures>=?3",
+        params![user_id, client, LOCKOUT_FAILURES, at + LOCKOUT_SECONDS],
+    )?;
+    tx.execute(
+        "UPDATE users SET locked_until=CASE WHEN failed_logins+1>=?2 THEN ?3 ELSE locked_until END,
+            failed_logins=CASE WHEN failed_logins+1>=?2 THEN 0 ELSE failed_logins+1 END
+         WHERE id=?1",
+        params![user_id, ACCOUNT_LOCKOUT_FAILURES, at + LOCKOUT_SECONDS],
+    )?;
+    Ok(())
+}
+
 pub(super) fn append_audit(tx: &Transaction<'_>, entry: &AuditEntry<'_>) -> StoreResult<()> {
     let previous: Option<Vec<u8>> = tx
         .query_row(
@@ -1497,7 +1587,9 @@ mod tests {
             store.bootstrap_administrator("second@msp.example", "Second", &second_password),
             Err(StoreError::Conflict(_))
         ));
-        let (token, expires) = store.login("ADMIN@msp.example", &password, "r1").unwrap();
+        let (token, expires) = store
+            .login("ADMIN@msp.example", &password, "r1", None, false)
+            .unwrap();
         assert!(expires > now());
         let principal = store.principal(&token).unwrap().unwrap();
         assert_eq!(principal.user_id, admin);
@@ -1508,23 +1600,92 @@ mod tests {
     }
 
     #[test]
-    fn failed_logins_lock_the_account_without_revealing_which_accounts_exist() {
+    fn failed_logins_lock_out_the_client_without_revealing_which_accounts_exist() {
         let (store, _, password) = bootstrapped();
         let wrong_password = authn::test_secret();
+        let attacker = Some("203.0.113.7");
         assert_eq!(
-            store.login("nobody@msp.example", &wrong_password, "r"),
+            store.login("nobody@msp.example", &wrong_password, "r", attacker, false),
             Err(LoginError::Rejected)
         );
         for _ in 0..LOCKOUT_FAILURES {
             assert_eq!(
-                store.login("admin@msp.example", &wrong_password, "r"),
+                store.login("admin@msp.example", &wrong_password, "r", attacker, false),
                 Err(LoginError::Rejected)
             );
         }
         assert_eq!(
-            store.login("admin@msp.example", &password, "r"),
+            store.login("admin@msp.example", &password, "r", attacker, false),
+            Err(LoginError::Locked),
+            "the guessing client is locked out, even with the right password"
+        );
+        // The account's owner, elsewhere, is not.
+        store
+            .login(
+                "admin@msp.example",
+                &password,
+                "r",
+                Some("198.51.100.4"),
+                false,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn guessing_spread_over_many_clients_locks_the_account() {
+        let (store, _, password) = bootstrapped();
+        let wrong_password = authn::test_secret();
+        for index in 0..ACCOUNT_LOCKOUT_FAILURES {
+            let client = format!("203.0.113.{}", index % 250);
+            assert_eq!(
+                store.login(
+                    "admin@msp.example",
+                    &wrong_password,
+                    "r",
+                    Some(&client),
+                    false
+                ),
+                Err(LoginError::Rejected)
+            );
+        }
+        assert_eq!(
+            store.login(
+                "admin@msp.example",
+                &password,
+                "r",
+                Some("198.51.100.4"),
+                false
+            ),
             Err(LoginError::Locked)
         );
+    }
+
+    #[test]
+    fn idp_first_refuses_passwords_for_linked_accounts_without_counting_them() {
+        let (store, admin, password) = bootstrapped();
+        store
+            .lock()
+            .execute(
+                "INSERT INTO oidc_identities(issuer,subject,user_id,linked_at) VALUES('https://idp.example','sub-1',?1,0)",
+                [&admin],
+            )
+            .unwrap();
+        let wrong_password = authn::test_secret();
+        for _ in 0..LOCKOUT_FAILURES + 1 {
+            assert_eq!(
+                store.login("admin@msp.example", &wrong_password, "r", None, true),
+                Err(LoginError::Rejected)
+            );
+        }
+        assert_eq!(
+            store.login("admin@msp.example", &password, "r", None, true),
+            Err(LoginError::Rejected),
+            "the right password does not work either"
+        );
+        // Nothing was counted, so turning IdP-first off finds no lock.
+        store
+            .login("admin@msp.example", &password, "r", None, false)
+            .unwrap();
     }
 
     #[test]
@@ -1545,7 +1706,7 @@ mod tests {
             .add_grant(&user, Role::Engineer, Some(&tenant.id), &admin_actor)
             .unwrap();
         let (session, _) = store
-            .login("eng@msp.example", &engineer_password, "r")
+            .login("eng@msp.example", &engineer_password, "r", None, false)
             .unwrap();
         let principal = store.principal(&session).unwrap().unwrap();
         let (_, key) = store
@@ -1564,7 +1725,7 @@ mod tests {
         assert!(store.principal(&session).unwrap().is_none());
         assert!(store.principal(&key).unwrap().is_none());
         assert_eq!(
-            store.login("eng@msp.example", &engineer_password, "r"),
+            store.login("eng@msp.example", &engineer_password, "r", None, false),
             Err(LoginError::Rejected)
         );
     }
@@ -1587,7 +1748,7 @@ mod tests {
             .add_grant(&user, Role::Technician, Some(&tenant.id), &admin_actor)
             .unwrap();
         let (session, _) = store
-            .login("tech@msp.example", &technician_password, "r")
+            .login("tech@msp.example", &technician_password, "r", None, false)
             .unwrap();
         let principal = store.principal(&session).unwrap().unwrap();
         assert!(matches!(

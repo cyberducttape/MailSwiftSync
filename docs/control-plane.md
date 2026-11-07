@@ -51,6 +51,7 @@ well as, a password. Pass an owner-only (`0600`) TOML file to `serve`:
 ```toml
 # --oidc-config /srv/mailswiftsync/oidc.toml
 public_url = "https://control.msp.example"   # how browsers reach this service
+password_sign_in_for_linked_accounts = false  # optional; IdP-first, see below
 
 [[provider]]
 name = "entra"                                # used in the URL: /v1/auth/oidc/entra/…
@@ -102,6 +103,12 @@ provider identity (issuer + subject) to that user only if all of these hold:
 Later sign-ins match on the subject alone, so a changed email address does
 not move the account, and a second provider account cannot take over a
 linked user. Linking is audited.
+
+**IdP-first.** With `password_sign_in_for_linked_accounts = false`, a user
+linked to a provider can sign in only through it: their password is refused
+(with the usual answer and hashing cost), and those attempts are not counted
+toward any lockout, so password guessing cannot lock them out. Keep at
+least one unlinked administrator with a password for break-glass access.
 
 > **Providers without `email_verified`:** some providers, Microsoft Entra ID
 > among them, do not put an `email_verified: true` claim in ID tokens by
@@ -157,8 +164,13 @@ Only SHA-256 digests of tokens are stored. Present tokens as
 `Authorization: Bearer <token>`.
 
 **Passwords** are hashed with Argon2id at the RFC 9106 / OWASP defaults and
-need at least 12 characters. Five consecutive failures lock the account for
-15 minutes. Unknown accounts, wrong passwords, and disabled accounts all get
+need at least 12 characters. Five wrong passwords from one client (an IPv4
+address or IPv6 /64) within 15 minutes lock that client out of the account
+for 15 minutes; the owner signing in from elsewhere is unaffected. Fifty
+wrong passwords from all clients together lock the account itself for 15
+minutes, against guessing spread over many networks. Behind a
+TLS-terminating proxy every request arrives from loopback and counts as one
+client, so rate-limit sign-in at the proxy, or use IdP-first. Unknown accounts, wrong passwords, and disabled accounts all get
 the same answer and cost the same hashing time.
 
 **API keys:**
