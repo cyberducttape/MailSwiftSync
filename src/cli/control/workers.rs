@@ -749,15 +749,7 @@ impl Store {
         result: &serde_json::Value,
         request_id: &str,
     ) -> StoreResult<()> {
-        let text = store::validate_plan(result).map_err(|error| match error {
-            StoreError::Invalid(message) => StoreError::Invalid(message.replace("plan", "result")),
-            other => other,
-        })?;
-        if text.len() > MAX_RESULT_BYTES {
-            return Err(StoreError::Invalid(format!(
-                "the result exceeds {MAX_RESULT_BYTES} bytes"
-            )));
-        }
+        let text = store::validate_result(result, MAX_RESULT_BYTES)?;
         let at = now();
         self.fenced(worker, assignment, fencing_token, "assignment.complete", request_id, |tx| {
             let changed = tx.execute(
@@ -839,12 +831,7 @@ mod tests {
             label: "user:usr_editor".into(),
         };
         let project = store
-            .create_project(
-                &tenant,
-                "Move",
-                &serde_json::json!({"source_host": "imap.acme.example"}),
-                &editor,
-            )
+            .create_project(&tenant, "Move", &store::test_plan("ledger"), &editor)
             .unwrap()
             .id;
         Fixture {
@@ -965,7 +952,7 @@ mod tests {
             (lease.assignment_id.as_str(), lease.fencing_token),
             (assignment.id.as_str(), 1)
         );
-        assert_eq!(lease.plan["source_host"], "imap.acme.example");
+        assert_eq!(lease.plan["ledger_project_id"], "ledger");
         assert_eq!(
             fixture.store.lease(&second, 300, "r").unwrap(),
             None,
@@ -988,7 +975,7 @@ mod tests {
         assert_eq!(taken_over.fencing_token, 2);
 
         // The first worker comes back: every write with its old token fails.
-        let result = serde_json::json!({"messages": 10});
+        let result = store::test_result();
         assert!(matches!(
             fixture
                 .store
@@ -1072,7 +1059,7 @@ mod tests {
                     &lease.assignment_id,
                     lease.fencing_token,
                     Outcome::Completed,
-                    &serde_json::json!({}),
+                    &store::test_result(),
                     "r"
                 )
                 .is_err()
@@ -1203,7 +1190,7 @@ mod tests {
             .update_plan(
                 &fixture.tenant,
                 &fixture.project,
-                &serde_json::json!({"source_host": "imap.new"}),
+                &store::test_plan("ledger-new"),
                 1,
                 &fixture.admin,
             )
@@ -1267,7 +1254,7 @@ mod tests {
                     &lease.assignment_id,
                     lease.fencing_token,
                     Outcome::Completed,
-                    &serde_json::json!({}),
+                    &store::test_result(),
                     "r"
                 )
                 .is_err(),
@@ -1336,17 +1323,21 @@ mod tests {
             .unwrap();
         let worker = fixture.worker(&fixture.tenant, "w1");
         let lease = fixture.store.lease(&worker, 300, "r").unwrap().unwrap();
-        assert!(matches!(
-            fixture.store.complete(
-                &worker,
-                &lease.assignment_id,
-                lease.fencing_token,
-                Outcome::Failed,
-                &serde_json::json!({"oauth_token": "x"}),
-                "r"
-            ),
-            Err(StoreError::Invalid(_))
-        ));
+        let mut extra_field = store::test_result();
+        extra_field["pw"] = "hunter2".into();
+        for result in [serde_json::json!({"oauth_token": "x"}), extra_field] {
+            assert!(matches!(
+                fixture.store.complete(
+                    &worker,
+                    &lease.assignment_id,
+                    lease.fencing_token,
+                    Outcome::Failed,
+                    &result,
+                    "r"
+                ),
+                Err(StoreError::Invalid(_))
+            ));
+        }
     }
 
     #[test]

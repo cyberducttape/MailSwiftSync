@@ -37,8 +37,40 @@ CREATE TABLE oidc_pending(
 ) STRICT;
 ";
 
+/// Schema 5: remember which client started each pending sign-in, so one
+/// client cannot exhaust the shared quota.
+pub(super) const SCHEMA_V5: &str = "
+ALTER TABLE oidc_pending ADD COLUMN client TEXT;
+CREATE INDEX oidc_pending_client ON oidc_pending(client, expires_at);
+";
+
 const PENDING_SECONDS: i64 = 10 * 60;
 const MAX_PENDING: i64 = 10_000;
+/// Sign-ins one client may have in progress at once. Several browser tabs
+/// or retries fit; filling the global quota takes hundreds of networks.
+const MAX_PENDING_PER_CLIENT: i64 = 20;
+
+/// The key a pending sign-in is counted under: the IPv4 address, or the
+/// IPv6 /64 a single host or subscriber is usually given. Loopback has no
+/// key, because behind a TLS-terminating proxy every user arrives from it;
+/// that proxy must throttle sign-in initiation itself.
+pub(super) fn client_key(peer: Option<std::net::IpAddr>) -> Option<String> {
+    match peer? {
+        address if address.is_loopback() => None,
+        std::net::IpAddr::V4(address) => Some(address.to_string()),
+        std::net::IpAddr::V6(address) => match address.to_ipv4_mapped() {
+            Some(mapped) if mapped.is_loopback() => None,
+            Some(mapped) => Some(mapped.to_string()),
+            None => {
+                let segments = address.segments();
+                Some(format!(
+                    "{:x}:{:x}:{:x}:{:x}::/64",
+                    segments[0], segments[1], segments[2], segments[3]
+                ))
+            }
+        },
+    }
+}
 const JWKS_TTL: Duration = Duration::from_secs(60 * 60);
 const JWKS_REFRESH_FLOOR: Duration = Duration::from_secs(60);
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
@@ -162,6 +194,8 @@ pub(super) enum OidcError {
     Rejected(String),
     /// The identity provider could not be reached or misbehaved.
     Upstream(String),
+    /// Too many sign-ins are in progress (overall or from this client).
+    Busy(String),
     Internal(String),
 }
 
@@ -309,14 +343,24 @@ impl Oidc {
 
     /// Begin a sign-in: remember the state, nonce, and PKCE verifier, and
     /// return the provider URL to send the browser to.
-    pub(super) fn start(&self, store: &Store, provider: &str) -> Result<String, OidcError> {
+    pub(super) fn start(
+        &self,
+        store: &Store,
+        provider: &str,
+        client: Option<&str>,
+    ) -> Result<String, OidcError> {
         let provider = self.provider(provider)?;
         let metadata = self.metadata(provider, false)?;
         let state = random_text()?;
         let nonce = random_text()?;
         let verifier = random_text()?;
         let challenge = URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()));
-        store.save_pending(&state, &provider.name, &nonce, &verifier)?;
+        store
+            .save_pending(&state, &provider.name, &nonce, &verifier, client)
+            .map_err(|error| match error {
+                StoreError::Conflict(message) => OidcError::Busy(message),
+                other => other.into(),
+            })?;
         let mut url = url::Url::parse(&metadata.authorization_endpoint)
             .map_err(|_| OidcError::Upstream("the authorization endpoint is not a URL".into()))?;
         url.query_pairs_mut()
@@ -422,10 +466,23 @@ impl Store {
         provider: &str,
         nonce: &str,
         verifier: &str,
+        client: Option<&str>,
     ) -> StoreResult<()> {
         let connection = self.lock();
         let at = now();
         connection.execute("DELETE FROM oidc_pending WHERE expires_at<=?1", [at])?;
+        if let Some(client) = client {
+            let pending: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM oidc_pending WHERE client=?1",
+                [client],
+                |row| row.get(0),
+            )?;
+            if pending >= MAX_PENDING_PER_CLIENT {
+                return Err(StoreError::Conflict(
+                    "too many sign-ins are in progress from this network; finish or wait for one to expire".into(),
+                ));
+            }
+        }
         let pending: i64 =
             connection.query_row("SELECT COUNT(*) FROM oidc_pending", [], |row| row.get(0))?;
         if pending >= MAX_PENDING {
@@ -434,8 +491,8 @@ impl Store {
             ));
         }
         connection.execute(
-            "INSERT INTO oidc_pending(state_hash,provider,nonce,verifier,expires_at) VALUES(?1,?2,?3,?4,?5)",
-            params![state_hash(state).as_slice(), provider, nonce, verifier, at + PENDING_SECONDS],
+            "INSERT INTO oidc_pending(state_hash,provider,nonce,verifier,expires_at,client) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![state_hash(state).as_slice(), provider, nonce, verifier, at + PENDING_SECONDS, client],
         )?;
         Ok(())
     }
@@ -635,7 +692,7 @@ pub(super) mod tests {
 
     /// Start a sign-in and return its state and nonce from the redirect URL.
     pub(in crate::cli::control) fn begin(oidc: &Oidc, store: &Store) -> (String, String, String) {
-        let url = url::Url::parse(&oidc.start(store, "idp").unwrap()).unwrap();
+        let url = url::Url::parse(&oidc.start(store, "idp", None).unwrap()).unwrap();
         let query = |name: &str| {
             url.query_pairs()
                 .find(|(key, _)| key == name)
@@ -762,6 +819,49 @@ pub(super) mod tests {
             oidc.callback(&store, "missing", "c", "s", "r"),
             Err(OidcError::UnknownProvider)
         );
+    }
+
+    #[test]
+    fn one_client_cannot_take_the_shared_pending_sign_in_quota() {
+        let idp = fake_idp();
+        let oidc = oidc(&idp, true);
+        let (store, _) = store_with_user("eng@msp.example");
+        for _ in 0..MAX_PENDING_PER_CLIENT {
+            oidc.start(&store, "idp", Some("203.0.113.7")).unwrap();
+        }
+        assert!(matches!(
+            oidc.start(&store, "idp", Some("203.0.113.7")),
+            Err(OidcError::Busy(_))
+        ));
+        // Other clients, and unkeyed (proxied) requests, still start.
+        oidc.start(&store, "idp", Some("203.0.113.8")).unwrap();
+        oidc.start(&store, "idp", None).unwrap();
+        // An expired sign-in frees its slot.
+        store
+            .lock()
+            .execute(
+                "UPDATE oidc_pending SET expires_at=0 WHERE rowid=(SELECT MIN(rowid) FROM oidc_pending WHERE client='203.0.113.7')",
+                [],
+            )
+            .unwrap();
+        oidc.start(&store, "idp", Some("203.0.113.7")).unwrap();
+    }
+
+    #[test]
+    fn clients_are_keyed_by_address_or_ipv6_network() {
+        let key = |text: &str| client_key(Some(text.parse().unwrap()));
+        assert_eq!(key("203.0.113.7").as_deref(), Some("203.0.113.7"));
+        assert_eq!(key("::ffff:203.0.113.7").as_deref(), Some("203.0.113.7"));
+        assert_eq!(
+            key("2001:db8:1:2:aaaa::1"),
+            key("2001:db8:1:2:bbbb::2"),
+            "one /64 is one client"
+        );
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:1:3::1"));
+        for loopback in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+            assert_eq!(key(loopback), None, "{loopback}");
+        }
+        assert_eq!(client_key(None), None);
     }
 
     #[test]

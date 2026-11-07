@@ -8,9 +8,11 @@ worker keeps its own SQLite execution ledger.
 
 **Mailbox credentials never reach the control plane.** Passwords, OAuth
 refresh tokens, and app passwords stay on the worker that runs the
-migration. Project plans sent to the service are non-secret settings, and
-the service refuses any plan field whose name looks like a credential
-(`password`, `secret`, `token`, `credential`, `private_key`).
+migration. A project plan must be a `mailswiftsync.worker-plan` v1 document
+(see [Running a worker agent](#running-a-worker-agent)) holding only its known fields: the
+ledger project ID and name, and per mailbox a label and a 64-hex plan
+digest. Any other field is refused whatever it is called, so a secret
+cannot slip in under a name nobody anticipated.
 
 This implements the authentication, authorization, tenant-isolation, worker
 fencing, and audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
@@ -70,7 +72,11 @@ redirect URI at the provider.
    code and returns `{token, expires_at}`: the same 12-hour session as a
    password sign-in.
 3. Each pending sign-in is stored by the digest of its `state`, expires in
-   10 minutes, and can be completed once.
+   10 minutes, and can be completed once. At most 10,000 may be pending, and
+   at most 20 per client: an IPv4 address, or an IPv6 /64. Beyond either,
+   `start` answers `429` with `Retry-After`. Loopback requests are not
+   counted per client, because behind a TLS-terminating reverse proxy every
+   user arrives from it; such a proxy must rate-limit `…/start` itself.
 
 **ID-token checks.** The ID token must:
 - be signed with RS256 or ES256 by a key in the provider's JWKS (`none` and
@@ -168,7 +174,9 @@ the same answer and cost the same hashing time.
 Every mutation writes its audit entry in the same SQLite transaction as the
 change itself, so a committed change can never be missing from the log.
 Refusals (wrong role, other tenant, conflict, invalid input) and reads of
-tenant data are audited too. Each entry records:
+tenant data are audited too. A read is audited before its data is returned:
+if the entry cannot be written, the request fails with 500 and returns
+nothing. Each entry records:
 
 - time, request ID, and actor (user, plus the API key if one was used)
 - tenant, action, and resource
@@ -227,8 +235,8 @@ Fencing rules:
   other expired lease. The response's `leases_awaiting_expiry` counts them.
 - A plan change withdraws approval. Its queued assignments stop leasing,
   and renewals of running leases are refused so workers stop.
-- Results are non-secret JSON and refused if they carry credential-like
-  fields.
+- Results hold only `job_id`, `plan_revision`, and a bounded `detail`
+  text; any other field is refused.
 - Every lease, renewal, completion, and refusal is audited with the worker
   as actor.
 
@@ -256,7 +264,12 @@ batch must already be imported and validated there, the same as for
 4. **Run.** `mailswiftsync control worker run <state.db> --server <url>
    --credential-file <file> [--ca-cert <pem>] [--lease-seconds 300]
    [--poll-seconds 30] [--once] [--acknowledge-destination-loss]` leases one
-   assignment at a time.
+   assignment at a time. Run one agent per ledger: the run takes the
+   ledger's exclusive controller lock, so while another agent, the desktop
+   app, or a headless batch holds it, the agent leases nothing and waits a
+   poll interval, leaving the work queued for other workers. To run
+   mailboxes in parallel, give each agent its own host or state directory
+   with its own ledger.
 
 For each lease, the agent:
 - Recomputes the local row's plan digest. If the approved document names
@@ -272,7 +285,9 @@ For each lease, the agent:
   before it asked for it. If a renewal is refused (`409` or `401`), or the
   service stays unreachable until the lease would expire, it cancels the
   local run, waits for the engine to stop, and reports nothing, because the
-  service would refuse that result.
+  service would refuse that result. Renewal continues while the result is
+  being reported, until the service acknowledges it, so retried reports
+  cannot outlast the lease.
 
 `--server` must be `https`, except for a loopback address. The agent
 ignores proxy settings, does not follow redirects, and sends its credential
@@ -282,8 +297,9 @@ Network failures are retried with capped backoff.
 
 ## API
 
-Request bodies are JSON (`Content-Type: application/json`, at most 64 KiB,
-`Content-Length` framing only). Every response carries `X-Request-Id`, which
+Request bodies are JSON (`Content-Type: application/json`, at most 512 KiB,
+`Content-Length` framing only). A stored plan may be up to 256 KiB in compact
+form; the body limit leaves room to send it pretty-printed. Every response carries `X-Request-Id`, which
 matches the audit entry.
 
 | Method and path | Permission |
