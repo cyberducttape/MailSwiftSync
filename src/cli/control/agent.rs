@@ -547,7 +547,7 @@ pub(super) fn handle_one(
     let stop = AtomicBool::new(false);
     let lease_lost = AtomicBool::new(false);
     let (done, finished) = crossbeam_channel::bounded::<()>(0);
-    let outcome = std::thread::scope(|scope| {
+    let (outcome, reported) = std::thread::scope(|scope| {
         scope.spawn(|| {
             keep_renewing(
                 control,
@@ -560,15 +560,20 @@ pub(super) fn handle_one(
             )
         });
         let outcome = executor.execute(&project, &lease.mailbox, &stop);
+        // Keep the lease alive until the service acknowledges the result:
+        // completion retries must not outlast a lease that stopped renewing
+        // when the run ended, or a finished run becomes an expired lease.
+        let reported = (!lease_lost.load(Ordering::SeqCst)).then(|| match &outcome {
+            Ok(detail) => finish("completed", detail),
+            Err(detail) => finish("failed", detail),
+        });
         drop(done);
-        outcome
+        (outcome, reported)
     });
-    if lease_lost.load(Ordering::SeqCst) {
+    // An acknowledged completion settles the assignment even if a renewal
+    // raced it and was refused because the lease had just ended.
+    let Some(reported) = reported else {
         return Ok(lost());
-    }
-    let reported = match &outcome {
-        Ok(detail) => finish("completed", detail),
-        Err(detail) => finish("failed", detail),
     };
     match reported {
         Ok(()) => Ok(match outcome {
@@ -1172,6 +1177,34 @@ mod tests {
             completion_retries: 3,
             completion_backoff: Duration::from_millis(1),
         }
+    }
+
+    #[test]
+    fn the_lease_is_renewed_until_the_completion_is_acknowledged() {
+        let control = FakeControl::default();
+        *control.lease.lock().unwrap() = Some(leased("d1"));
+        // Two refused reports with 40 ms and 80 ms backoffs: 120 ms of
+        // retrying after the run ends, many renewal periods.
+        control.failing_completions.store(2, Ordering::SeqCst);
+        let executor = FakeExecutor {
+            digest: Some("d1".into()),
+            runs: AtomicUsize::new(0),
+            wait_for_stop: false,
+            outcome: Ok("verified".into()),
+        };
+        let config = AgentConfig {
+            completion_backoff: Duration::from_millis(40),
+            ..fast()
+        };
+        assert!(matches!(
+            handle_one(&control, &executor, &config).unwrap(),
+            Handled::Completed { .. }
+        ));
+        assert_eq!(control.completions.lock().unwrap().len(), 1);
+        // The run itself returns at once, so these renewals all happened
+        // while the agent was still reporting.
+        let renewals = control.renewals.load(Ordering::SeqCst);
+        assert!(renewals >= 3, "only {renewals} renewals while reporting");
     }
 
     #[test]

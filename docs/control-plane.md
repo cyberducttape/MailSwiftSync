@@ -276,7 +276,9 @@ For each lease, the agent:
   before it asked for it. If a renewal is refused (`409` or `401`), or the
   service stays unreachable until the lease would expire, it cancels the
   local run, waits for the engine to stop, and reports nothing, because the
-  service would refuse that result.
+  service would refuse that result. Renewal continues while the result is
+  being reported, until the service acknowledges it, so retried reports
+  cannot outlast the lease.
 
 `--server` must be `https`, except for a loopback address. The agent
 ignores proxy settings, does not follow redirects, and sends its credential
