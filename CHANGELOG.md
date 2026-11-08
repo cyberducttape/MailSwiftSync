@@ -18,7 +18,6 @@
   and a lease carries only the leased mailbox's entry. Project responses
   now carry the plan header and a `plan_mailboxes` count instead of every
   mailbox. Queuing a job ID the approved plan does not list is refused.
-
 - With body-content verification requested, testing the accounts now
   counts messages larger than the per-message body-hash bound, and
   preflight blocks with that count before the transfer instead of the
