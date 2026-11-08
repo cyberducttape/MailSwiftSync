@@ -301,10 +301,15 @@ batch must already be imported and validated there, the same as for
    each durable batch mailbox, its label and a SHA-256 of that row's
    effective plan, keyed by the local job ID. It contains no credentials or
    plan settings.
-2. **Approve it.** Store the document as the project's plan
-   (`PUT /v1/tenants/{t}/projects/{p}/plan`) and have a second person approve
-   it. Queue assignments using the job IDs from the document as mailbox
-   labels.
+2. **Approve it.** Store the document as the project's plan and have a
+   second person approve it. A plan up to 256 KiB (about 2,000 mailboxes)
+   can go in one `PUT /v1/tenants/{t}/projects/{p}/plan`; any plan, up to
+   1,000,000 mailboxes, can go through `mailswiftsync control plan upload
+   <plan.json> --server <url> --credential-file <file> --tenant <t>
+   --project <p> --revision <current>`, which sends it in pages of 2,000
+   and commits it as one new revision (see [Large plans](#large-plans)).
+   Queue assignments using the job IDs from the document as mailbox
+   labels; a job ID the approved plan does not list is refused.
 3. **Enroll.** `mailswiftsync control worker enroll --server <url>
    --enrollment-token-file <file> --credential-out <file>` exchanges the
    single-use token and writes the worker credential to a new owner-only
@@ -343,6 +348,31 @@ only to that URL. `--ca-cert` adds a private CA for the service
 certificate. A refused worker credential ends the agent with an error.
 Network failures are retried with capped backoff.
 
+## Large plans
+
+A plan is stored as its header (the ledger project ID and name) plus one
+row per mailbox, so its size is limited by mailbox count (1,000,000), not
+by one request. Project responses carry the header and `plan_mailboxes`,
+the count; reviewers page through the entries with
+`GET …/plan/mailboxes`. A worker's lease carries only the leased mailbox's
+entry.
+
+A paged upload:
+
+1. **Start** with the revision it replaces, the header, and the number of
+   mailboxes. Any unfinished upload for the project is discarded; an
+   upload expires after an hour.
+2. **Send pages** numbered from 1, each up to 2,000 entries, validated like
+   a whole plan. Sending a page again with the same entries succeeds, so a
+   client can retry after a network failure; different entries under the
+   same number, or a job ID already on another page, are refused.
+3. **Commit.** The service checks that every announced mailbox arrived
+   and that the plan is still at the starting revision, then replaces it
+   as one new revision in one transaction, withdrawing any approval. A
+   plan changed in the meantime makes the commit fail with `409`.
+
+Every start, page, and commit is audited.
+
 ## API
 
 Request bodies are JSON (`Content-Type: application/json`, at most 512 KiB,
@@ -366,7 +396,11 @@ matches the audit entry.
 | `GET /v1/api-keys`, `POST /v1/api-keys/{id}/revoke` | own keys (all for administrators) |
 | `GET`/`POST /v1/tenants/{t}/projects` `{name, plan}` | `project:read` / `project:write` |
 | `GET /v1/tenants/{t}/projects/{p}` | `project:read` |
-| `PUT /v1/tenants/{t}/projects/{p}/plan` `{plan, revision}` | `project:write` |
+| `PUT /v1/tenants/{t}/projects/{p}/plan` `{plan, revision}` (up to 256 KiB) | `project:write` |
+| `GET /v1/tenants/{t}/projects/{p}/plan/mailboxes?after=&limit=` (up to 2,000 per page, `next_after` to continue) | `project:read` |
+| `POST /v1/tenants/{t}/projects/{p}/plan/uploads` `{revision, header, mailbox_count}` | `project:write` |
+| `PUT /v1/tenants/{t}/projects/{p}/plan/uploads/{u}/pages/{n}` `{mailboxes}` | `project:write` |
+| `POST /v1/tenants/{t}/projects/{p}/plan/uploads/{u}/commit` | `project:write` |
 | `POST /v1/tenants/{t}/projects/{p}/approve` `{revision}` | `project:approve`, not the last editor |
 | `GET /v1/tenants/{t}/workers`, `POST …/workers/enrollments`, `POST …/workers/{w}/revoke` | `worker:manage` |
 | `GET`/`POST /v1/tenants/{t}/projects/{p}/assignments` `{mailboxes}` | `assignment:read` / `assignment:create` |

@@ -20,6 +20,20 @@ Branch `feat/partial-fetch-body-hash` (from `main`):
 
 ## 2026-11-07
 
+### Paged plan upload (M8 item 5, decided: paged upload)
+
+Branch `feat/paged-plan-upload` (from `main`):
+
+- Plan mailboxes are rows (`plan_mailboxes`); version 6 migrates existing
+  plans in SQL with `json_each`, keeping their approval.
+- Paged upload: start against a revision, idempotent numbered pages of up
+  to 2,000 entries, and a commit that checks count and revision and swaps
+  the plan in one transaction. Limit: 1,000,000 mailboxes.
+- `control plan upload` drives it, retrying failed pages; tested over HTTP
+  with 4,500 mailboxes.
+- Leases carry only the leased mailbox's entry; queuing an unlisted job ID
+  is refused.
+
 ### R4. Scale and usability review
 
 Branch `fix/scale-review` (from `main`):
