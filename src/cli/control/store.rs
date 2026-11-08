@@ -394,7 +394,9 @@ impl Store {
     /// Verify the whole chain and return the entry count and the last
     /// entry's sequence number and hash, read in one statement so they
     /// describe the chain that was verified.
-    pub(super) fn verify_audit_chain_head(&self) -> Result<(u64, Option<(i64, [u8; 32])>), String> {
+    pub(super) fn verify_audit_chain_head(
+        &self,
+    ) -> Result<(u64, Option<super::audit::ChainHead>), String> {
         let connection = self.lock();
         let mut statement = connection
             .prepare(

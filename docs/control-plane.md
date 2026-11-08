@@ -46,6 +46,26 @@ mailswiftsync control audit-verify /srv/mailswiftsync/control.db \
 The service is single-node: one process owns the SQLite file. Do not put the
 file on a network filesystem or share it between processes.
 
+**Capacity.** Requests share one SQLite connection, and every audited
+request commits its audit entry, so throughput is bounded by serialized
+commits. Measured with the opt-in benchmark (`MAILSWIFTSYNC_BENCH_DIR=target
+cargo test --release control_plane_concurrency_benchmark -- --ignored
+--nocapture`: audited project reads over loopback HTTP, 20 tenants, WAL on
+NVMe/ext4, AMD Ryzen 7 7735U under load average 11):
+
+| Concurrent clients | Requests/s | p50 | p99 |
+|---|---|---|---|
+| 1 | 863 | 1.1 ms | 1.8 ms |
+| 8 | 1,513 | 4.7 ms | 14.3 ms |
+| 32 | 1,375 | 19.7 ms | 74.0 ms |
+
+At 32 clients a few requests (3 of about 6,900) were refused by the
+32-connection cap. Worker agents poll every 30 seconds and renew every
+third of their lease, so this leaves wide headroom for hundreds of
+workers; rerun the benchmark on the target host before a large
+multi-tenant deployment, and treat sustained load near the plateau as the
+signal for a connection pool or another database (milestone M6).
+
 ## Signing in with OIDC
 
 Users can sign in through the MSP's identity provider (Microsoft Entra ID,

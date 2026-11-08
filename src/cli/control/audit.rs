@@ -47,6 +47,9 @@ pub(super) fn chain_hash(previous: &[u8; 32], entry: &AuditEntry<'_>) -> [u8; 32
     hasher.finalize().into()
 }
 
+/// The last audit entry's sequence number and hash.
+pub(super) type ChainHead = (i64, [u8; 32]);
+
 /// An audit checkpoint: the chain head at a moment, to be signed and kept
 /// outside the service (a ticket, WORM storage, a transparency log). The
 /// hash chain alone cannot catch someone with write access to the database
@@ -54,7 +57,7 @@ pub(super) fn chain_hash(previous: &[u8; 32], entry: &AuditEntry<'_>) -> [u8; 32
 /// rebuilt chain no longer has the published hash at that sequence number.
 pub(super) fn checkpoint(
     entries: u64,
-    head: Option<(i64, [u8; 32])>,
+    head: Option<ChainHead>,
 ) -> Result<serde_json::Value, String> {
     let (seq, hash) = head.ok_or("the audit log is empty; there is nothing to checkpoint")?;
     Ok(serde_json::json!({
