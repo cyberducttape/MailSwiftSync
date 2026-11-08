@@ -383,6 +383,21 @@ fn verification_capacity_check(
                 "{side} has {messages} messages, above the {limit}-message-per-account verification limit"
             ));
         }
+        if body_hash {
+            let bound = form.profile.body_hash_max_bytes;
+            match &census.oversized {
+                core::OversizedCount::Counted(0) => {}
+                core::OversizedCount::Counted(count) => over.push(format!(
+                    "{side} has {count} message(s) larger than the {bound}-byte body-content verification bound, which cannot be content-hashed"
+                )),
+                core::OversizedCount::Unknown(reason) => unknown.push(format!(
+                    "{side} messages above the {bound}-byte body-content bound not established ({reason})"
+                )),
+                core::OversizedCount::NotChecked => unknown.push(format!(
+                    "{side} not searched for messages above the {bound}-byte body-content bound; test the accounts again"
+                )),
+            }
+        }
         total_bytes = total_bytes
             .zip(census.bytes)
             .map(|(sum, bytes)| sum.saturating_add(bytes));
@@ -577,6 +592,7 @@ mod tests {
             incomplete_reason: messages
                 .is_none()
                 .then(|| "the server refused STATUS".to_owned()),
+            oversized: core::OversizedCount::Counted(0),
         };
         capabilities
     }
@@ -699,6 +715,55 @@ mod tests {
         assert!(detail.contains("Dovecot"), "{detail}");
         assert_eq!(PreflightCheckStatus::Blocked.as_str(), "blocked");
         assert_eq!(PreflightCheckStatus::Unknown.as_str(), "unknown");
+    }
+
+    #[test]
+    fn messages_too_large_to_content_hash_are_reported_before_the_transfer() {
+        let mut form = Form::default();
+        form.profile.body_hash_verification = true;
+        form.profile.body_hash_max_bytes = 64 * 1024 * 1024;
+        let with = |oversized| {
+            let mut capabilities = counted(Some(10), Some(100));
+            capabilities.message_census.oversized = oversized;
+            capabilities
+        };
+        let clear = with(core::OversizedCount::Counted(0));
+        let (_, detail, status) = verification_capacity_check(
+            &form,
+            false,
+            Some(&with(core::OversizedCount::Counted(2))),
+            Some(&clear),
+        )
+        .unwrap();
+        assert_eq!(status, PreflightCheckStatus::Blocked);
+        assert!(
+            detail.contains("source has 2 message(s) larger than the 67108864-byte"),
+            "{detail}"
+        );
+        assert!(detail.contains("verification limit exceeded"), "{detail}");
+        for unknown in [
+            core::OversizedCount::Unknown("searched 1 of 3 folders".into()),
+            core::OversizedCount::NotChecked,
+        ] {
+            let (_, detail, status) =
+                verification_capacity_check(&form, false, Some(&clear), Some(&with(unknown)))
+                    .unwrap();
+            assert_eq!(status, PreflightCheckStatus::Unknown, "{detail}");
+            assert!(detail.contains("destination"), "{detail}");
+        }
+        // Without body verification, size is irrelevant.
+        form.profile.body_hash_verification = false;
+        assert_eq!(
+            verification_capacity_check(
+                &form,
+                false,
+                Some(&with(core::OversizedCount::Counted(2))),
+                Some(&clear)
+            )
+            .unwrap()
+            .2,
+            PreflightCheckStatus::Passed
+        );
     }
 
     #[test]
