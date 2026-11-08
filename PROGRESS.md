@@ -2,6 +2,22 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-08
+
+### M8.1 Partial-fetch body hashing
+
+Branch `feat/partial-fetch-body-hash` (from `main`):
+
+- Pages request `BODY.PEEK[]<0.262144>`; bodies that fill the prefix
+  continue in 4 MiB ranges, hashed incrementally (`BodyProgress`).
+- Range responses must name the requested UID and origin; `""`/`NIL` past
+  the end is an empty range; a whole `BODY[]` in reply to a range is
+  refused, but a whole body in reply to the page prefix is accepted.
+- The per-message bound rose to 2 GiB. Tests cover bodies at and around
+  both boundaries, `NIL` endings, servers that ignore ranges, the bound
+  tripping mid-body, and the parser edge cases; the fuzz target gained the
+  prefix-plus-range digest invariant.
+
 ## 2026-11-07
 
 ### Paged plan upload (M8 item 5, decided: paged upload)

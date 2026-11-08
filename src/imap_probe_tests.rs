@@ -1,4 +1,7 @@
-use super::fetch_parser::{canonical_flag_set, parse_message_fetch_body_hashes_response_bytes};
+use super::fetch_parser::{
+    canonical_flag_set, parse_body_chunk_response, parse_message_fetch_body_hashes_response_bytes,
+    parse_message_fetch_body_prefixes_response_bytes,
+};
 use super::{
     DestinationQuotaObservation, ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES,
     MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageSink,
@@ -1741,5 +1744,61 @@ f001 OK LIST completed\r\n"
             ("[Gmail]/Sent Mail", vec!["sent".to_owned()]),
             ("[Gmail]/All Mail", vec!["all".to_owned()]),
         ]
+    );
+}
+
+#[test]
+fn body_ranges_continue_only_the_requested_body_at_the_requested_origin() {
+    let range = |response: &[u8]| parse_body_chunk_response(response, "INBOX", 7, 5, 4);
+    // Unsolicited updates for other messages, and a FLAGS-only update for
+    // this one, are skipped.
+    assert_eq!(
+        range(
+            b"* 1 FETCH (UID 3 FLAGS (\\Seen))\r\n* 2 FETCH (UID 7 FLAGS ())\r\n* 2 FETCH (UID 7 BODY[]<5> {3}\r\nabc)\r\nt OK\r\n"
+        )
+        .unwrap(),
+        b"abc"
+    );
+    for empty in [
+        &b"* 2 FETCH (UID 7 BODY[]<5> \"\")\r\nt OK\r\n"[..],
+        b"* 2 FETCH (UID 7 BODY[]<5> NIL)\r\nt OK\r\n",
+        b"* 2 FETCH (UID 7 BODY[]<5> {0}\r\n)\r\nt OK\r\n",
+    ] {
+        assert_eq!(range(empty).unwrap(), b"");
+    }
+    let whole = range(b"* 2 FETCH (UID 7 BODY[] {9}\r\nabcdefghi)\r\nt OK\r\n").unwrap_err();
+    assert!(
+        whole.contains("whole body"),
+        "expected parser error to mention whole body response"
+    );
+    assert!(range(b"* 2 FETCH (UID 7 BODY[]<0> {3}\r\nabc)\r\nt OK\r\n").is_err());
+    assert!(range(b"* 2 FETCH (UID 7 BODY[]<5> {5}\r\nabcde)\r\nt OK\r\n").is_err());
+    assert!(range(b"t OK\r\n").is_err());
+}
+
+#[test]
+fn a_full_inline_prefix_is_unfinished_and_a_short_or_whole_one_is_complete() {
+    let response = b"* 1 FETCH (UID 1 BODY[]<0> {4}\r\nabcd)\r\n* 2 FETCH (UID 2 BODY[]<0> {2}\r\nab)\r\n* 3 FETCH (UID 3 BODY[] {6}\r\nabcdef)\r\nt OK\r\n";
+    let page =
+        parse_message_fetch_body_prefixes_response_bytes(response, "INBOX", Some(7), 64, Some(4))
+            .unwrap();
+    let complete = |uid: u64| {
+        page.bodies
+            .values()
+            .find(|progress| progress.uid == uid)
+            .unwrap()
+            .complete
+    };
+    assert!(!complete(1));
+    assert!(complete(2));
+    assert!(
+        complete(3),
+        "a server that ignores the range returned it all"
+    );
+    assert_eq!(page.total_bytes, 12);
+    let overlong = b"* 1 FETCH (UID 1 BODY[]<0> {5}\r\nabcde)\r\nt OK\r\n";
+    assert!(
+        parse_message_fetch_body_prefixes_response_bytes(overlong, "INBOX", Some(7), 64, Some(4))
+            .is_err()
     );
 }

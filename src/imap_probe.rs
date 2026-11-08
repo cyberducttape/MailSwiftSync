@@ -29,8 +29,11 @@ use fetch_pages::{
     FetchPagePlanner, encode_uid_page, parse_uid_fetch_response, validate_fetch_page_coverage,
 };
 use fetch_parser::canonical_flag_set;
-use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
 use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
+use fetch_parser::{
+    BodyProgress, extend_body, parse_body_chunk_response,
+    parse_message_fetch_body_prefixes_response_bytes,
+};
 #[cfg(test)]
 use fetch_parser::{parse_message_fetch_metadata_response_bytes, parse_message_id_header};
 pub(crate) use folders::MailboxDescriptor;
@@ -133,6 +136,13 @@ const MAX_IMAP_COMMAND_DURATION: Duration = Duration::from_secs(15);
 const TLS_CAPABILITY_PROBE_BUDGET: Duration = Duration::from_secs(90);
 const TLS_READINESS_PROBE_BUDGET: Duration = Duration::from_secs(45);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+/// Body bytes fetched inline with each message's metadata. Most messages
+/// are smaller and finish in the page; a body page of at most 64 messages
+/// stays near 16 MiB however large its messages are.
+const INLINE_BODY_BYTES: usize = 256 * 1024;
+/// Bytes per `BODY.PEEK[]<offset.length>` range for the rest of a larger
+/// body, so memory is one range regardless of message size.
+const BODY_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 /// Initial metadata FETCH page; `FetchPagePlanner` adapts it per folder.
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 128;
 const MAX_UID_SET_BYTES: usize = 7_000;
@@ -1492,7 +1502,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 }
                 let tag = format!("v{:03}", page_number + 3);
                 page_number = page_number.saturating_add(1);
-                let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
+                let body_field = body_hash.map_or(String::new(), |_| {
+                    format!(" BODY.PEEK[]<0.{INLINE_BODY_BYTES}>")
+                });
                 // A flag observation is suitable for fidelity evidence only when
                 // the selected mailbox supplies a tracked MODSEQ that can detect
                 // concurrent flag changes through the end-of-scan snapshot.
@@ -1546,28 +1558,44 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                         .values_mut()
                         .for_each(|message| message.flags = None);
                 }
-                let body_page = body_hash
-                    .map(|options| {
-                        parse_message_fetch_body_hashes_response_bytes(
+                let body_page = match body_hash {
+                    None => None,
+                    Some(options) => {
+                        let mut prefixes = parse_message_fetch_body_prefixes_response_bytes(
                             &raw_response,
                             mailbox,
                             Some(start_uidvalidity),
                             options.max_body_bytes,
-                        )
-                    })
-                    .transpose()?;
-                if let (Some(options), Some(body_page)) = (body_hash, body_page.as_ref()) {
-                    options.budget.reserve(body_page.total_bytes)?;
-                    if body_page.fingerprints.len() != page_messages.len()
-                        || body_page.fingerprints.keys().collect::<HashSet<_>>()
-                            != page_messages.keys().collect::<HashSet<_>>()
-                    {
-                        return Err(format!(
-                            "{host}: folder {mailbox}: body FETCH coverage mismatch (metadata {}, body {})",
-                            page_messages.len(),
-                            body_page.fingerprints.len()
-                        ));
+                            Some(INLINE_BODY_BYTES),
+                        )?;
+                        options.budget.reserve(prefixes.total_bytes)?;
+                        // Continue larger bodies in ranges, in UID order.
+                        let mut unfinished = prefixes
+                            .bodies
+                            .values_mut()
+                            .filter(|progress| !progress.complete)
+                            .collect::<Vec<_>>();
+                        unfinished.sort_by_key(|progress| progress.uid);
+                        let mut ranges = 0_usize;
+                        for progress in unfinished {
+                            ranges = fetch_body_remainder(
+                                stream, host, mailbox, &tag, ranges, progress, options, buffer,
+                                budget,
+                            )?;
+                        }
+                        Some(prefixes.finish())
                     }
+                };
+                if let Some(body_page) = body_page.as_ref()
+                    && (body_page.fingerprints.len() != page_messages.len()
+                        || body_page.fingerprints.keys().collect::<HashSet<_>>()
+                            != page_messages.keys().collect::<HashSet<_>>())
+                {
+                    return Err(format!(
+                        "{host}: folder {mailbox}: body FETCH coverage mismatch (metadata {}, body {})",
+                        page_messages.len(),
+                        body_page.fingerprints.len()
+                    ));
                 }
                 for (key, message) in &page_messages {
                     let fingerprint = body_page
@@ -1691,6 +1719,59 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.
     Ok(start_exists)
+}
+
+/// Read the rest of one body in `BODY_CHUNK_BYTES` ranges after its inline
+/// prefix, feeding each range into its running hash. Only one range is held
+/// at a time. Returns the number of range commands sent for this page so
+/// far, which keeps their tags unique.
+#[allow(clippy::too_many_arguments)]
+fn fetch_body_remainder<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    mailbox: &str,
+    page_tag: &str,
+    mut ranges: usize,
+    progress: &mut BodyProgress,
+    options: &BodyHashOptions<'_>,
+    buffer: &mut [u8; 4096],
+    budget: &MessageFetchBudget<'_>,
+) -> Result<usize, String> {
+    while !progress.complete {
+        budget.check()?;
+        ranges += 1;
+        let tag = format!("{page_tag}b{ranges}");
+        let origin = progress.bytes;
+        let uid = progress.uid;
+        write_imap_command(
+            stream,
+            format!("{tag} UID FETCH {uid} (UID BODY.PEEK[]<{origin}.{BODY_CHUNK_BYTES}>)\r\n")
+                .as_bytes(),
+            Some(budget),
+            &format!("{host}: could not fetch a message body range"),
+        )?;
+        let response = read_imap_tagged_bytes_with_budget(
+            stream,
+            &tag,
+            buffer,
+            BODY_CHUNK_BYTES + 64 * 1024,
+            budget,
+        )?;
+        if !imap_command_succeeded(&response, &tag) {
+            return Err(imap_command_failure(
+                &response,
+                &tag,
+                "FETCH message body range",
+                host,
+            ));
+        }
+        let chunk = parse_body_chunk_response(&response, mailbox, uid, origin, BODY_CHUNK_BYTES)
+            .map_err(|error| format!("{host}: folder {mailbox}: {error}"))?;
+        drop(response);
+        extend_body(progress, &chunk, BODY_CHUNK_BYTES, options.max_body_bytes)?;
+        options.budget.reserve(chunk.len())?;
+    }
+    Ok(ranges)
 }
 
 #[allow(clippy::too_many_arguments)]

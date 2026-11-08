@@ -192,10 +192,12 @@ Goal: an operator who asks for a proof level learns before the transfer
 whether it can be produced, and the verifier is not limited by one
 response buffer.
 
-1. **Partial-fetch body hashing.** Hash bodies above a threshold with
-   `BODY.PEEK[]<offset.length>` chunks fed into SHA-256, so memory is one
-   chunk regardless of message size; keep the paged path for small
-   messages. Then raise the per-message bound well above 64 MiB.
+1. **Partial-fetch body hashing: done.** Each metadata page fetches the
+   first 256 KiB of every body; a body that fills it continues in 4 MiB
+   `BODY.PEEK[]<offset.length>` ranges into the same SHA-256, so memory is
+   one range regardless of message size. The per-message bound rose from
+   64 MiB to 2 GiB (still within the total budget). Not yet run against a
+   live provider.
 2. **Resumable verification segments.** Persist per-folder hashing
    progress in the durable stage, as metadata pages already are, so an
    interrupted body pass resumes instead of refetching.
