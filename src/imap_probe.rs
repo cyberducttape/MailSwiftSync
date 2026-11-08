@@ -943,6 +943,7 @@ fn live_readiness_on_authenticated_stream<S: Read + Write>(
     Ok(quota_observation)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn complete_authenticated_imap_probe<S: Read + Write>(
     stream: S,
     host: &str,

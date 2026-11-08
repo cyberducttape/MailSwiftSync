@@ -161,6 +161,45 @@ Each finding was checked against the code before any change.
 | P2 Plan secrets detected by field name | Confirmed; fixed | A plan must be the `mailswiftsync.worker-plan` v1 document, with only its known fields and typed values (64-hex digests, bounded names). Results are limited to `job_id`, `plan_revision`, and `detail`. Unknown keys are refused whatever they are called. |
 | P2 Lease renewal stops before completion is acknowledged | Confirmed; fixed | Reporting now runs inside the renewal scope, so the lease is renewed through completion retries. A test shows renewals during refused reports; with the old ordering it saw none. |
 
+### R4. Scale and usability review (2026-11-07)
+
+| Finding | Verdict | What changed or is planned |
+|---|---|---|
+| Control HTTP server: thread per connection, fixed 32 | Confirmed | Throughput is bounded by serialized SQLite commits (about 1,500 audited requests/s, #168), not by the thread count, so more threads alone would not raise it. A `--max-connections` option waits for #168 to merge (both touch the CLI option list). An async server or pool belongs with M6. |
+| Central SQLite store behind one mutex | Confirmed; measured in #168 | Every API request commits an audit entry, so a read pool would not remove the bottleneck. A pool or another database is an M6 item. |
+| Agent runs one assignment per loop | Confirmed; staged in M6 | Recorded with R3. |
+| Plan export is one JSON object listing every mailbox | Confirmed; design decision needed | The 256 KiB plan limit holds about 2,000 mailboxes. Options in M8. |
+| Body verification buffers whole FETCH pages, 64 MiB ceiling | Confirmed; detection fixed, streaming planned | Preflight now counts messages larger than the per-message bound (`EXAMINE` + `UID SEARCH LARGER`) and blocks before the transfer. Streaming or partial-fetch hashing and resumable segments are M8. |
+| Desktop queue materializes IDs for explicit selections | Confirmed; within budget | Paged browsing holds only the viewport; explicit selection keeps one integer row ID per match, inside the enforced 100,000-row UI budgets. Revisit if larger single-project queues are supported. |
+| Supervisor linear search inside `retain()` | Confirmed; fixed | Pruning uses a set. |
+| `docs/control-plane.md` says the worker agent is still to come | Confirmed; fixed | The agent shipped in #152; the intro now describes it. |
+| Installer: no native Windows/macOS installers or signed repositories | Agreed; blocked on people | Needs signing identities and repository hosting; see "Blocked on people". |
+| A `doctor` that reports readiness with remediation | Mostly met | `mailswiftsync doctor [--strict]` already reports the OS, engine version and qualification (with an install hint), TLS/auth modes, keyring references, database state, owner-only directories, and free space, with exit codes for automation. Missing: OAuth token readiness, live TLS reachability, and a remediation line for every check. Staged in M8. |
+
+### M8. Verification at any message size, and planning it up front
+
+Goal: an operator who asks for a proof level learns before the transfer
+whether it can be produced, and the verifier is not limited by one
+response buffer.
+
+1. **Partial-fetch body hashing.** Hash bodies above a threshold with
+   `BODY.PEEK[]<offset.length>` chunks fed into SHA-256, so memory is one
+   chunk regardless of message size; keep the paged path for small
+   messages. Then raise the per-message bound well above 64 MiB.
+2. **Resumable verification segments.** Persist per-folder hashing
+   progress in the durable stage, as metadata pages already are, so an
+   interrupted body pass resumes instead of refetching.
+3. **Time and disk estimate in preflight.** From the census (messages,
+   bytes, oversized count) and measured rates, show the expected stage
+   disk and verification time beside the capacity check.
+4. **`doctor` gaps.** Optional `--connect` checks for OAuth refresh and
+   TLS reachability of configured accounts, and a remediation line for
+   every failing check.
+5. **Plan export at MSP scale (needs a decision).** Either raise the plan
+   limit with paged plan upload, or bind approval to a Merkle root over
+   the (job ID, plan digest) pairs, with workers proving membership. The
+   second keeps plans small but changes the approval document format.
+
 ### M7. Typed errors through the producers (review L-01)
 
 Retry decisions are already typed at the boundary. The producers still
