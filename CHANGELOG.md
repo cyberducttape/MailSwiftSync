@@ -16,6 +16,20 @@
     The control-plane database moves to version 5.
   - A worker agent leases nothing while another controller owns its
     ledger, so the work stays queued for other workers.
+  - Wrong passwords lock out the client that sent them (an IPv4 address
+    or IPv6 /64) after 5, and the account only after 50 from all clients.
+    `password_sign_in_for_linked_accounts = false` in the OIDC
+    configuration makes linked accounts sign in only through their
+    identity provider.
+  - `GET /readyz` reports whether storage and the audit log can serve
+    requests; `/healthz` remains a liveness check.
+  - OIDC discovery and JWKS fetches no longer hold the provider cache
+    lock, so a slow identity provider cannot stall cached sign-ins.
+  - `control audit-checkpoint` writes a signed audit chain head to publish
+    outside the service; `control audit-verify --checkpoint` detects a
+    chain rebuilt after an edit.
+  - An opt-in control-plane concurrency benchmark, with results in
+    `docs/control-plane.md`.
 - Update `async-executor` 1.14.0 → 1.14.1; 1.14.0 was yanked, which failed
   the `cargo deny` dependency policy in CI and the scheduled audit.
 - Move the container's Debian snapshot to 20261107T000000Z for `apt` and
