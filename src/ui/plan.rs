@@ -507,7 +507,7 @@ impl App {
                                     egui::DragValue::new(
                                         &mut self.form.profile.body_hash_max_bytes,
                                     )
-                                    .range(1..=64 * 1024 * 1024),
+                                    .range(1..=2 * 1024 * 1024 * 1024_u64),
                                 ), &field_label);
                             });
                             ui.horizontal(|ui| {

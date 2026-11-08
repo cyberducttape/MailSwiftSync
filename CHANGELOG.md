@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Body-content verification no longer buffers whole messages. Each page
+  fetches the first 256 KiB of every body, and larger bodies continue in
+  4 MiB `BODY.PEEK[]<offset.length>` ranges into the same SHA-256, so
+  memory is one range per message whatever its size. The per-message
+  body-hash bound can now be set up to 2 GiB (was 64 MiB), within the
+  total budget. A range is accepted only for the requested message and
+  offset; a server that ignores ranges is hashed from the whole body it
+  returns.
 - With body-content verification requested, testing the accounts now
   counts messages larger than the per-message body-hash bound, and
   preflight blocks with that count before the transfer instead of the

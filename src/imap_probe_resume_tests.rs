@@ -43,6 +43,13 @@ pub(super) struct FolderServer {
     /// large reply is not shifted on every read.
     output_read: usize,
     commands: Vec<String>,
+    /// Message bodies by UID; others are `body of <uid>`.
+    pub(super) bodies: std::collections::HashMap<u64, String>,
+    /// Answer every body request with the whole `BODY[]`, ignoring ranges.
+    pub(super) ignore_partial: bool,
+    /// Answer an empty range past the end with `NIL` instead of `{0}`.
+    pub(super) nil_past_end: bool,
+    pub(super) range_commands: usize,
 }
 
 impl FolderServer {
@@ -66,6 +73,33 @@ impl FolderServer {
             output: Vec::new(),
             output_read: 0,
             commands: Vec::new(),
+            bodies: std::collections::HashMap::new(),
+            ignore_partial: false,
+            nil_past_end: false,
+            range_commands: 0,
+        }
+    }
+
+    /// The reply item for a body request: `BODY[]` whole, or the range
+    /// `origin..origin+length` as `BODY[]<origin>`.
+    fn body_item(&self, uid: u64, range: Option<(usize, usize)>) -> String {
+        let body = self
+            .bodies
+            .get(&uid)
+            .cloned()
+            .unwrap_or_else(|| format!("body of {uid}"));
+        match range {
+            Some((origin, length)) if !self.ignore_partial => {
+                let part = body
+                    .get(origin.min(body.len())..(origin + length).min(body.len()))
+                    .unwrap_or("");
+                if part.is_empty() && origin > 0 && self.nil_past_end {
+                    format!("BODY[]<{origin}> NIL")
+                } else {
+                    format!("BODY[]<{origin}> {{{}}}\r\n{part}", part.len())
+                }
+            }
+            _ => format!("BODY[] {{{}}}\r\n{body}", body.len()),
         }
     }
 
@@ -122,6 +156,25 @@ impl FolderServer {
         } else if let Some(rest) = command.strip_prefix("UID FETCH ") {
             let set = rest.split_whitespace().next().unwrap();
             let with_body = rest.contains("BODY.PEEK[]");
+            let range = rest.split_once("BODY.PEEK[]<").map(|(_, range)| {
+                let (origin, length) = range.split_once('>').unwrap().0.split_once('.').unwrap();
+                (
+                    origin.parse::<usize>().unwrap(),
+                    length.parse::<usize>().unwrap(),
+                )
+            });
+            if !rest.contains("RFC822.SIZE") && with_body {
+                // A range continuation: just the UID and the range.
+                self.range_commands += 1;
+                let uid = set.parse::<u64>().unwrap();
+                let sequence = self.uids.binary_search(&uid).unwrap() + 1;
+                let item = self.body_item(uid, range);
+                let reply = format!(
+                    "* {sequence} FETCH (UID {uid} {item})\r\n{tag} OK FETCH completed\r\n"
+                );
+                self.output.extend_from_slice(reply.as_bytes());
+                return;
+            }
             let flags_only = rest.ends_with("(UID FLAGS)");
             let requests_flags = rest.contains("FLAGS");
             if flags_only {
@@ -148,8 +201,7 @@ impl FolderServer {
                     + 1;
                 let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
                 let body = if with_body {
-                    let body = format!("body of {uid}");
-                    format!(" BODY[] {{{}}}\r\n{body}", body.len())
+                    format!(" {}", self.body_item(uid, range))
                 } else {
                     String::new()
                 };
@@ -367,12 +419,23 @@ fn scan_with(
     body_hash: bool,
     condstore_enabled: bool,
 ) -> u64 {
+    scan_with_body_bound(stage, server, body_hash, condstore_enabled, 1 << 20)
+        .unwrap_or_else(|error| panic!("scan failed: {error:?}"))
+}
+
+fn scan_with_body_bound(
+    stage: &mut MessageMetadataStage,
+    server: &mut FolderServer,
+    body_hash: bool,
+    condstore_enabled: bool,
+    max_body_bytes: usize,
+) -> Result<u64, MailboxFetchError> {
     let cancelled = AtomicBool::new(false);
     let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
     let state_budget = MessageStateBudget::new();
     let body_budget = BodyHashBudget::new(1 << 30);
     let body_options = BodyHashOptions {
-        max_body_bytes: 1 << 20,
+        max_body_bytes,
         budget: &body_budget,
     };
     let mut sink = StageMessageSink {
@@ -392,7 +455,6 @@ fn scan_with(
         condstore_enabled,
         &mut sink,
     )
-    .unwrap_or_else(|error| panic!("scan failed: {error:?}"))
 }
 
 fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer) -> u64 {
@@ -1225,6 +1287,106 @@ fn resume_after_expunge_and_delivery_with_equal_exists_rescans_the_folder() {
         32
     );
     assert_eq!(staged_uids(&stage), current);
+}
+
+/// Bodies around the inline-prefix and range boundaries, each a distinct
+/// pattern so a misplaced range changes its digest.
+fn large_bodies() -> Vec<(u64, String)> {
+    use super::{BODY_CHUNK_BYTES, INLINE_BODY_BYTES};
+    let body = |uid: u64, length: usize| {
+        (0..length)
+            .map(|index| char::from(b'a' + ((index / 7 + uid as usize) % 26) as u8))
+            .collect::<String>()
+    };
+    [
+        (1, 40),
+        (2, INLINE_BODY_BYTES),
+        (3, INLINE_BODY_BYTES + 1),
+        (4, INLINE_BODY_BYTES + 2 * BODY_CHUNK_BYTES),
+        (5, INLINE_BODY_BYTES + BODY_CHUNK_BYTES + 17),
+    ]
+    .into_iter()
+    .map(|(uid, length)| (uid, body(uid, length)))
+    .collect()
+}
+
+fn expected_fingerprints(bodies: &[(u64, String)]) -> HashMap<MailboxMessageKey, String> {
+    use sha2::Digest as _;
+    bodies
+        .iter()
+        .map(|(uid, body)| {
+            (
+                MailboxMessageKey::with_shared_mailbox(
+                    std::sync::Arc::from("INBOX"),
+                    Some(9),
+                    uid.to_string(),
+                ),
+                sha2::Sha256::digest(body.as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn bodies_beyond_the_inline_prefix_are_hashed_in_ranges() {
+    let bodies = large_bodies();
+    let uids = bodies.iter().map(|(uid, _)| *uid).collect::<Vec<_>>();
+    for nil_past_end in [false, true] {
+        let mut server = FolderServer::new(&uids, 9, 6);
+        server.bodies = bodies.iter().cloned().collect();
+        server.nil_past_end = nil_past_end;
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        scan_with_body_bound(&mut stage, &mut server, true, false, 64 << 20).unwrap();
+        assert_eq!(
+            stage.content_fingerprints(SIDE),
+            expected_fingerprints(&bodies)
+        );
+        // One range for UID 2 (empty: the prefix was exactly full), one for
+        // UID 3, three for UID 4 (two full and an empty one), two for UID 5.
+        assert_eq!(server.range_commands, 7, "nil_past_end={nil_past_end}");
+        assert!(
+            server
+                .commands
+                .iter()
+                .any(|command| command.contains("UID FETCH 4 (UID BODY.PEEK[]<8650752.4194304>)")),
+            "{:?}",
+            server.commands
+        );
+    }
+}
+
+#[test]
+fn a_server_that_ignores_ranges_still_yields_the_whole_body_digest() {
+    let bodies = large_bodies();
+    let uids = bodies.iter().map(|(uid, _)| *uid).collect::<Vec<_>>();
+    let mut server = FolderServer::new(&uids, 9, 6);
+    server.bodies = bodies.iter().cloned().collect();
+    server.ignore_partial = true;
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    scan_with_body_bound(&mut stage, &mut server, true, false, 64 << 20).unwrap();
+    assert_eq!(
+        stage.content_fingerprints(SIDE),
+        expected_fingerprints(&bodies)
+    );
+    assert_eq!(server.range_commands, 0);
+}
+
+#[test]
+fn a_body_above_the_bound_stops_while_its_ranges_arrive() {
+    let bodies = large_bodies();
+    let uids = bodies.iter().map(|(uid, _)| *uid).collect::<Vec<_>>();
+    let mut server = FolderServer::new(&uids, 9, 6);
+    server.bodies = bodies.iter().cloned().collect();
+    let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+    let error = scan_with_body_bound(&mut stage, &mut server, true, false, 2 << 20).unwrap_err();
+    let error = format!("{error:?}");
+    assert!(
+        error.contains("verification_limit=body_hash_message_size"),
+        "{error}"
+    );
 }
 
 #[test]

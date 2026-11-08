@@ -102,7 +102,7 @@ impl VerificationLimit {
                 "The account's folder list exceeds the verifier's inventory bound (32 MiB or 100,000 folders). Exclude folders from the plan or split the account, then rerun to obtain evidence."
             }
             Self::ResponseSize => {
-                "A server response exceeded the verifier's 64 MiB bound, usually a very large message during body-hash verification. Lower the body-hash per-message bound or use metadata verification, then rerun."
+                "A server response exceeded the verifier's 64 MiB bound. Message bodies are fetched in ranges, so this points to unusually large headers or a misbehaving server; use metadata verification for this mailbox, then rerun."
             }
             Self::FetchedState => {
                 "Verification exceeded its transient memory budget. Rerun to perform a fresh folder scan; if it recurs, use metadata verification."
@@ -114,7 +114,7 @@ impl VerificationLimit {
                 "Ephemeral body-hash verification is limited to 100,000 messages per endpoint; use a durable SQLite-backed run for body proof up to the general 1,000,000-message limit, or use metadata-only verification."
             }
             Self::BodyHashMessageSize => {
-                "A message exceeded the body-hash per-message bound. Raise the bound (up to 64 MiB) or disable body-hash verification, then rerun."
+                "A message exceeded the body-hash per-message bound. Raise the bound (up to 2 GiB, within the total bound) or disable body-hash verification, then rerun."
             }
             Self::BodyHashTotalSize => {
                 "Hashed bodies exceeded the body-hash total bound. Raise the total bound (up to 8 GiB) or disable body-hash verification, then rerun."

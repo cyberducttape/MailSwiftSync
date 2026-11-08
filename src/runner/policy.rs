@@ -61,7 +61,9 @@ pub(crate) fn plan_assurance(form: &crate::Form) -> crate::core::AssuranceLevel 
     }
 }
 
-pub(super) const MAX_BODY_HASH_BYTES_PER_MESSAGE: u64 = 64 * 1024 * 1024;
+/// Bodies are hashed in ranges, so this bounds download time and the shared
+/// byte budget, not memory.
+pub(super) const MAX_BODY_HASH_BYTES_PER_MESSAGE: u64 = 2 * 1024 * 1024 * 1024;
 
 pub(super) const MAX_BODY_HASH_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 

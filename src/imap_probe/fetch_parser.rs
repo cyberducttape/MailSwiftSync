@@ -77,46 +77,203 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
 /// `BODY[]` literals. This is deliberately separate from the default metadata
 /// parser: callers must explicitly opt into downloading message bodies and
 /// provide a per-message bound before content evidence can be produced.
+/// The live verifier reads prefixes and ranges instead; tests and the fuzz
+/// harness use this whole-body form.
+#[allow(dead_code)]
 pub(super) fn parse_message_fetch_body_hashes_response_bytes(
     response: &[u8],
     mailbox: &str,
     uidvalidity: Option<u64>,
     max_body_bytes: usize,
 ) -> Result<BodyHashPage, String> {
+    let page = parse_message_fetch_body_prefixes_response_bytes(
+        response,
+        mailbox,
+        uidvalidity,
+        max_body_bytes,
+        None,
+    )?;
+    Ok(page.finish())
+}
+
+/// A message body read so far: its running SHA-256 and length. Hashing a
+/// body in ranges gives the same digest as hashing it whole.
+pub(super) struct BodyProgress {
+    pub(super) uid: u64,
+    pub(super) hasher: Sha256,
+    pub(super) bytes: usize,
+    /// Whether the whole body has been read.
+    pub(super) complete: bool,
+}
+
+pub(super) struct BodyPrefixPage {
+    pub(super) bodies: HashMap<crate::core::MailboxMessageKey, BodyProgress>,
+    /// Body bytes this response carried.
+    pub(super) total_bytes: usize,
+}
+
+impl BodyPrefixPage {
+    /// Fingerprints of a page whose bodies are all complete.
+    pub(super) fn finish(self) -> BodyHashPage {
+        BodyHashPage {
+            fingerprints: self
+                .bodies
+                .into_iter()
+                .map(|(key, progress)| {
+                    debug_assert!(progress.complete);
+                    (key, hex_encode(&progress.hasher.finalize()))
+                })
+                .collect(),
+            total_bytes: self.total_bytes,
+        }
+    }
+}
+
+fn body_size_limit(uid: u64, max_body_bytes: usize) -> String {
+    // `VerificationLimit::BodyHashMessageSize`, spelled out because the
+    // fuzz harness compiles this parser without `core`.
+    format!(
+        "[verification_limit=body_hash_message_size] IMAP body FETCH UID {uid} exceeded the {max_body_bytes}-byte body-hash bound"
+    )
+}
+
+/// Start hashing the bodies in a FETCH response. With `requested`, the
+/// command asked for `BODY.PEEK[]<0.requested>`: a body is complete when the
+/// server returned fewer bytes, or returned the whole `BODY[]` instead of the
+/// range. Without it, every `BODY[]` literal is a whole body.
+pub(super) fn parse_message_fetch_body_prefixes_response_bytes(
+    response: &[u8],
+    mailbox: &str,
+    uidvalidity: Option<u64>,
+    max_body_bytes: usize,
+    requested: Option<usize>,
+) -> Result<BodyPrefixPage, String> {
     let mailbox: Arc<str> = Arc::from(mailbox);
-    let mut fingerprints = HashMap::new();
+    let mut bodies = HashMap::new();
     let mut total_bytes = 0usize;
     for record in fetch_records(response) {
         let record = record?;
         let uid = parsed_fetch_uid(&record.protocol_text, &mailbox, "IMAP body FETCH")?;
-        let body = record
-            .frame
-            .literal_after(b"BODY[]")
-            .or_else(|| record.frame.literal_after(b"BODY.PEEK[]"))
-            .ok_or_else(|| format!("IMAP body FETCH UID {uid} omitted BODY[] literal"))?;
+        let (body, complete) = match record.frame.literal_after(b"BODY[]<0>") {
+            Some(prefix) if requested.is_some() => {
+                let requested = requested.unwrap_or_default();
+                if prefix.len() > requested {
+                    return Err(format!(
+                        "IMAP body FETCH UID {uid} returned {} bytes for a {requested}-byte range",
+                        prefix.len()
+                    ));
+                }
+                (prefix, prefix.len() < requested)
+            }
+            _ => (
+                record
+                    .frame
+                    .literal_after(b"BODY[]")
+                    .or_else(|| record.frame.literal_after(b"BODY.PEEK[]"))
+                    .ok_or_else(|| format!("IMAP body FETCH UID {uid} omitted BODY[] literal"))?,
+                true,
+            ),
+        };
         if body.len() > max_body_bytes {
-            // `VerificationLimit::BodyHashMessageSize`, spelled out because
-            // the fuzz harness compiles this parser without `core`.
-            return Err(format!(
-                "[verification_limit=body_hash_message_size] IMAP body FETCH UID {uid} exceeded the {max_body_bytes}-byte body-hash bound"
-            ));
+            return Err(body_size_limit(uid, max_body_bytes));
         }
         total_bytes = total_bytes.saturating_add(body.len());
-        let digest = Sha256::digest(body);
         let key = crate::core::MailboxMessageKey::with_shared_mailbox(
             Arc::clone(&mailbox),
             uidvalidity,
             uid.to_string(),
         );
-        let fingerprint = hex_encode(&digest);
-        if fingerprints.insert(key, fingerprint).is_some() {
+        let mut hasher = Sha256::new();
+        hasher.update(body);
+        let progress = BodyProgress {
+            uid,
+            hasher,
+            bytes: body.len(),
+            complete,
+        };
+        if bodies.insert(key, progress).is_some() {
             return Err(format!("duplicate body FETCH UID {uid}"));
         }
     }
-    Ok(BodyHashPage {
-        fingerprints,
+    Ok(BodyPrefixPage {
+        bodies,
         total_bytes,
     })
+}
+
+/// The bytes of one `BODY.PEEK[]<origin.length>` continuation for `uid`.
+/// A range past the end of the body may come back empty (`""` or `NIL`). A
+/// whole `BODY[]` or a range at another origin is refused: hashing it would
+/// not continue the same body.
+pub(super) fn parse_body_chunk_response(
+    response: &[u8],
+    mailbox: &str,
+    uid: u64,
+    origin: usize,
+    requested: usize,
+) -> Result<Vec<u8>, String> {
+    let item = format!("BODY[]<{origin}>");
+    for record in fetch_records(response) {
+        let record = record?;
+        let record_uid = parsed_fetch_uid(&record.protocol_text, mailbox, "IMAP body range FETCH")?;
+        if record_uid != uid {
+            // Unsolicited updates for other messages may share the response.
+            continue;
+        }
+        let chunk = match record.frame.literal_after(item.as_bytes()) {
+            Some(chunk) => chunk,
+            None => {
+                let Some(position) = find_item(&record.protocol_text, &item) else {
+                    if find_item(&record.protocol_text, "BODY[]").is_some() {
+                        return Err(format!(
+                            "IMAP body range FETCH UID {uid} returned the whole body instead of the range at {origin}"
+                        ));
+                    }
+                    // A FLAGS-only update for this message; keep looking.
+                    continue;
+                };
+                let value = record.protocol_text[position..].trim_start();
+                if value.starts_with("\"\"")
+                    || value
+                        .get(..3)
+                        .is_some_and(|nil| nil.eq_ignore_ascii_case("NIL"))
+                {
+                    &[][..]
+                } else {
+                    return Err(format!(
+                        "IMAP body range FETCH UID {uid} returned an unreadable range at {origin}"
+                    ));
+                }
+            }
+        };
+        if chunk.len() > requested {
+            return Err(format!(
+                "IMAP body range FETCH UID {uid} returned {} bytes for a {requested}-byte range",
+                chunk.len()
+            ));
+        }
+        return Ok(chunk.to_vec());
+    }
+    Err(format!(
+        "IMAP body range FETCH UID {uid} omitted the range at {origin}"
+    ))
+}
+
+/// Add a continuation range to a body, enforcing the per-message bound.
+pub(super) fn extend_body(
+    progress: &mut BodyProgress,
+    chunk: &[u8],
+    requested: usize,
+    max_body_bytes: usize,
+) -> Result<(), String> {
+    let bytes = progress.bytes.saturating_add(chunk.len());
+    if bytes > max_body_bytes {
+        return Err(body_size_limit(progress.uid, max_body_bytes));
+    }
+    progress.hasher.update(chunk);
+    progress.bytes = bytes;
+    progress.complete = chunk.len() < requested;
+    Ok(())
 }
 
 fn parsed_fetch_uid(protocol_text: &str, mailbox: &str, context: &str) -> Result<u64, String> {
@@ -128,6 +285,9 @@ fn parsed_fetch_uid(protocol_text: &str, mailbox: &str, context: &str) -> Result
 #[derive(Debug)]
 pub(super) struct BodyHashPage {
     pub(super) fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
+    /// Read by tests and the fuzz harness; the live path reserves budget
+    /// from the prefix and range sizes as it reads them.
+    #[allow(dead_code)]
     pub(super) total_bytes: usize,
 }
 
