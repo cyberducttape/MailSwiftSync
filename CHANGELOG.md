@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Control-plane plans scale to 1,000,000 mailboxes. Mailboxes are stored
+  as rows (control-plane database version 6 migrates existing plans), large
+  plans upload in pages of 2,000 that commit as one revision
+  (`mailswiftsync control plan upload`, or the new `…/plan/uploads`
+  endpoints), reviewers page through entries with `GET …/plan/mailboxes`,
+  and a lease carries only the leased mailbox's entry. Project responses
+  now carry the plan header and a `plan_mailboxes` count instead of every
+  mailbox. Queuing a job ID the approved plan does not list is refused.
 - Fix control-plane review findings (R3):
   - Project plans must be `mailswiftsync.worker-plan` v1 documents and
     results hold only `job_id`, `plan_revision`, and `detail`; any other

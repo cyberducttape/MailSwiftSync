@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
 /// Wrong passwords from one client (address or IPv6 /64) before that
@@ -209,7 +209,10 @@ pub(super) struct Project {
     pub(super) id: String,
     pub(super) tenant_id: String,
     pub(super) name: String,
+    /// The plan header; its mailboxes are paged from
+    /// `GET …/plan/mailboxes`.
     pub(super) plan: serde_json::Value,
+    pub(super) plan_mailboxes: i64,
     pub(super) plan_revision: i64,
     pub(super) plan_changed_by: String,
     pub(super) approved: bool,
@@ -270,7 +273,7 @@ impl Store {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
         match version {
-            0..=4 => {
+            0..=5 => {
                 let base = if version == 0 { SCHEMA } else { "" };
                 let workers = if version <= 1 {
                     super::workers::SCHEMA_V2
@@ -287,10 +290,15 @@ impl Store {
                 } else {
                     ""
                 };
+                let (oidc_v5, login_v5) = if version <= 4 {
+                    (super::oidc::SCHEMA_V5, SCHEMA_V5_LOGIN)
+                } else {
+                    ("", "")
+                };
                 connection
                     .execute_batch(&format!(
-                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {assignments} {} {SCHEMA_V5_LOGIN} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
-                        super::oidc::SCHEMA_V5
+                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {assignments} {oidc_v5} {login_v5} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
+                        super::plans::SCHEMA_V6
                     ))
                     .map_err(|error| format!("could not create or upgrade the schema: {error}"))?;
             }
@@ -1115,14 +1123,14 @@ impl Store {
         actor: &Actor<'_>,
     ) -> StoreResult<Project> {
         let name = validate_name(name, "project name")?;
-        let plan_text = validate_plan(plan)?;
+        let plan = validate_plan(plan)?;
         let id = new_id("prj")?;
         self.mutate(actor, Some(tenant), "project.create", &format!("project:{id}"), &name, |tx| {
             tx.execute(
                 "INSERT INTO projects(id,tenant_id,name,plan,plan_revision,plan_changed_by,created_at) VALUES(?1,?2,?3,?4,1,?5,?6)",
-                params![id, tenant, name, plan_text, actor.label, now()],
+                params![id, tenant, name, plan.header, actor.label, now()],
             )?;
-            Ok(())
+            super::plans::replace_mailboxes(tx, &id, &plan.mailboxes)
         })?;
         self.project(tenant, &id)
     }
@@ -1158,17 +1166,17 @@ impl Store {
         expected_revision: i64,
         actor: &Actor<'_>,
     ) -> StoreResult<Project> {
-        let plan_text = validate_plan(plan)?;
+        let plan = validate_plan(plan)?;
         self.mutate(actor, Some(tenant), "project.update_plan", &format!("project:{id}"), "", |tx| {
             let changed = tx.execute(
                 "UPDATE projects SET plan=?3,plan_revision=plan_revision+1,plan_changed_by=?4,approved_revision=NULL,approved_by=NULL
                  WHERE tenant_id=?1 AND id=?2 AND plan_revision=?5",
-                params![tenant, id, plan_text, actor.label, expected_revision],
+                params![tenant, id, plan.header, actor.label, expected_revision],
             )?;
             if changed == 0 {
                 return Err(revision_conflict_or_missing(tx, tenant, id)?);
             }
-            Ok(())
+            super::plans::replace_mailboxes(tx, id, &plan.mailboxes)
         })?;
         self.project(tenant, id)
     }
@@ -1281,7 +1289,8 @@ impl Store {
 }
 
 const PROJECT_COLUMNS: &str =
-    "id,tenant_id,name,plan,plan_revision,plan_changed_by,approved_revision,approved_by,created_at";
+    "id,tenant_id,name,plan,plan_revision,plan_changed_by,approved_revision,approved_by,created_at,
+    (SELECT COUNT(*) FROM plan_mailboxes m WHERE m.project_id=projects.id)";
 
 fn project_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     let plan_revision: i64 = row.get(4)?;
@@ -1295,6 +1304,7 @@ fn project_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         tenant_id: row.get(1)?,
         name: row.get(2)?,
         plan,
+        plan_mailboxes: row.get(9)?,
         plan_revision,
         plan_changed_by: row.get(5)?,
         approved: approved_revision == Some(plan_revision),
@@ -1304,7 +1314,7 @@ fn project_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     })
 }
 
-fn revision_conflict_or_missing(
+pub(super) fn revision_conflict_or_missing(
     tx: &Transaction<'_>,
     tenant: &str,
     id: &str,
@@ -1463,68 +1473,10 @@ fn validate_email(value: &str) -> StoreResult<String> {
 /// only its known fields, each with its expected type. An allowlist, not a
 /// scan for credential-sounding names, so a secret cannot reach central
 /// storage under a key nobody anticipated; workers keep credentials locally.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorkerPlan {
-    format: String,
-    format_version: u64,
-    ledger_project_id: String,
-    ledger_project_name: String,
-    mailboxes: std::collections::BTreeMap<String, WorkerPlanMailbox>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorkerPlanMailbox {
-    label: String,
-    plan_sha256: String,
-}
-
-pub(super) fn validate_plan(plan: &serde_json::Value) -> StoreResult<String> {
-    let invalid = |message: String| StoreError::Invalid(message);
-    let document = WorkerPlan::deserialize(plan).map_err(|error| {
-        invalid(format!(
-            "the plan must be a {} v{} document exported by `control worker plan` ({error})",
-            super::agent::PLAN_FORMAT,
-            super::agent::PLAN_FORMAT_VERSION
-        ))
-    })?;
-    if document.format != super::agent::PLAN_FORMAT
-        || document.format_version != super::agent::PLAN_FORMAT_VERSION
-    {
-        return Err(invalid(format!(
-            "the plan must be a {} v{} document exported by `control worker plan`",
-            super::agent::PLAN_FORMAT,
-            super::agent::PLAN_FORMAT_VERSION
-        )));
-    }
-    validate_name(&document.ledger_project_id, "ledger project ID")?;
-    validate_name(&document.ledger_project_name, "ledger project name")?;
-    if document.mailboxes.is_empty() {
-        return Err(invalid("the plan lists no mailboxes".into()));
-    }
-    for (job_id, mailbox) in &document.mailboxes {
-        validate_name(job_id, "mailbox job ID")?;
-        validate_name(&mailbox.label, "mailbox label")?;
-        let digest = &mailbox.plan_sha256;
-        if digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(invalid(format!(
-                "the plan digest for mailbox {job_id:?} must be 64 lowercase hex characters"
-            )));
-        }
-    }
-    let text =
-        serde_json::to_string(plan).map_err(|error| StoreError::Invalid(error.to_string()))?;
-    if text.len() > MAX_PLAN_BYTES {
-        return Err(StoreError::Invalid(format!(
-            "the plan exceeds {MAX_PLAN_BYTES} bytes"
-        )));
-    }
-    Ok(text)
+/// One request carries at most [`MAX_PLAN_BYTES`]; larger plans are
+/// uploaded in pages (see `plans`).
+pub(super) fn validate_plan(plan: &serde_json::Value) -> StoreResult<super::plans::ValidPlan> {
+    super::plans::validate_plan_document(plan, MAX_PLAN_BYTES)
 }
 
 /// The fields a worker reports for an assignment, and nothing else.
@@ -1576,6 +1528,8 @@ pub(super) fn test_plan(project: &str) -> serde_json::Value {
         "ledger_project_name": "Move",
         "mailboxes": {
             "job-1": { "label": "Mailbox 1", "plan_sha256": "0".repeat(64) },
+            "a@acme.example": { "label": "A", "plan_sha256": "a".repeat(64) },
+            "b@acme.example": { "label": "B", "plan_sha256": "b".repeat(64) },
         },
     })
 }
@@ -1938,6 +1892,50 @@ mod tests {
         let newer = Connection::open_in_memory().unwrap();
         newer.execute_batch("PRAGMA user_version=99;").unwrap();
         assert!(Store::from_connection(newer).is_err());
+    }
+
+    #[test]
+    fn a_version_five_database_moves_plan_mailboxes_into_rows() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(&format!(
+                "{SCHEMA} {} {} {} {} {SCHEMA_V5_LOGIN} PRAGMA user_version=5;",
+                super::super::workers::SCHEMA_V2,
+                super::super::oidc::SCHEMA_V3,
+                super::super::workers::SCHEMA_V4,
+                super::super::oidc::SCHEMA_V5,
+            ))
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO tenants(id,name,created_at) VALUES('ten_old','Old',1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO projects(id,tenant_id,name,plan,plan_revision,plan_changed_by,approved_revision,approved_by,created_at)
+                 VALUES('prj_old','ten_old','Move',?1,3,'user:a',3,'user:b',1)",
+                [test_plan("ledger").to_string()],
+            )
+            .unwrap();
+        let store = Store::from_connection(connection).unwrap();
+        let project = store.project("ten_old", "prj_old").unwrap();
+        assert_eq!(project.plan_mailboxes, 3);
+        assert!(project.plan.get("mailboxes").is_none(), "{}", project.plan);
+        assert_eq!(project.plan["ledger_project_id"], "ledger");
+        assert!(project.approved, "the migration keeps the approval");
+        let rows = store
+            .plan_mailboxes("ten_old", "prj_old", None, 10)
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.job_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a@acme.example", "b@acme.example", "job-1"]
+        );
+        assert_eq!(rows[2].label, "Mailbox 1");
+        assert_eq!(rows[2].plan_sha256, "0".repeat(64));
     }
 
     #[test]

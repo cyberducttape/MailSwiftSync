@@ -160,6 +160,59 @@ fn route(call: &Call<'_>) -> Handled {
         ("PUT", ["v1", "tenants", tenant, "projects", project, "plan"]) => {
             update_plan(call, tenant, project)
         }
+        (
+            "GET",
+            [
+                "v1",
+                "tenants",
+                tenant,
+                "projects",
+                project,
+                "plan",
+                "mailboxes",
+            ],
+        ) => plan_mailboxes(call, tenant, project, query),
+        (
+            "POST",
+            [
+                "v1",
+                "tenants",
+                tenant,
+                "projects",
+                project,
+                "plan",
+                "uploads",
+            ],
+        ) => start_plan_upload(call, tenant, project),
+        (
+            "PUT",
+            [
+                "v1",
+                "tenants",
+                tenant,
+                "projects",
+                project,
+                "plan",
+                "uploads",
+                upload,
+                "pages",
+                page,
+            ],
+        ) => put_plan_upload_page(call, tenant, project, upload, page),
+        (
+            "POST",
+            [
+                "v1",
+                "tenants",
+                tenant,
+                "projects",
+                project,
+                "plan",
+                "uploads",
+                upload,
+                "commit",
+            ],
+        ) => commit_plan_upload(call, tenant, project, upload),
         ("POST", ["v1", "tenants", tenant, "projects", project, "approve"]) => {
             approve_project(call, tenant, project)
         }
@@ -793,6 +846,140 @@ fn update_plan(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
         &call.actor(&principal),
     )?;
     Ok(Response::ok(&json!(updated)))
+}
+
+/// A page of the plan's mailboxes, for review before approval.
+fn plan_mailboxes(call: &Call<'_>, tenant: &str, project: &str, query: &str) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("project:{project}");
+    call.require_in_tenant(
+        &principal,
+        Permission::ProjectRead,
+        tenant,
+        "project.read_plan",
+        &resource,
+    )?;
+    let mut after = None;
+    let mut limit = super::plans::MAX_PAGE_MAILBOXES;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        match &*key {
+            "after" => after = Some(value.into_owned()),
+            "limit" => {
+                limit = value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|limit| (1..=super::plans::MAX_PAGE_MAILBOXES).contains(limit))
+                    .ok_or_else(|| {
+                        Response::error(
+                            400,
+                            "Bad Request",
+                            &format!("limit must be 1 to {}", super::plans::MAX_PAGE_MAILBOXES),
+                        )
+                    })?;
+            }
+            _ => {}
+        }
+    }
+    let mailboxes = call
+        .store()
+        .plan_mailboxes(tenant, project, after.as_deref(), limit)?;
+    call.audit(
+        &principal.actor(),
+        Some(tenant),
+        "project.read_plan",
+        &resource,
+        true,
+    )?;
+    let next_after = (mailboxes.len() == limit)
+        .then(|| mailboxes.last().map(|mailbox| mailbox.job_id.clone()))
+        .flatten();
+    Ok(Response::ok(
+        &json!({ "mailboxes": mailboxes, "next_after": next_after }),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartUploadBody {
+    revision: i64,
+    /// The plan document without its `mailboxes`.
+    header: Value,
+    mailbox_count: usize,
+}
+
+fn start_plan_upload(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("project:{project}");
+    call.require_in_tenant(
+        &principal,
+        Permission::ProjectWrite,
+        tenant,
+        "project.plan_upload.start",
+        &resource,
+    )?;
+    let body: StartUploadBody = call.body()?;
+    let upload = call.store().start_plan_upload(
+        tenant,
+        project,
+        body.revision,
+        &body.header,
+        body.mailbox_count,
+        &call.actor(&principal),
+    )?;
+    Ok(Response::created(&json!(upload)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UploadPageBody {
+    mailboxes: Value,
+}
+
+fn put_plan_upload_page(
+    call: &Call<'_>,
+    tenant: &str,
+    project: &str,
+    upload: &str,
+    page: &str,
+) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("project:{project}");
+    call.require_in_tenant(
+        &principal,
+        Permission::ProjectWrite,
+        tenant,
+        "project.plan_upload.page",
+        &resource,
+    )?;
+    let page = page
+        .parse::<i64>()
+        .map_err(|_| Response::error(400, "Bad Request", "the page must be a number"))?;
+    let body: UploadPageBody = call.body()?;
+    let received = call.store().put_plan_upload_page(
+        tenant,
+        project,
+        upload,
+        page,
+        &body.mailboxes,
+        &call.actor(&principal),
+    )?;
+    Ok(Response::ok(&json!({ "received_mailboxes": received })))
+}
+
+fn commit_plan_upload(call: &Call<'_>, tenant: &str, project: &str, upload: &str) -> Handled {
+    let principal = call.principal()?;
+    let resource = format!("project:{project}");
+    call.require_in_tenant(
+        &principal,
+        Permission::ProjectWrite,
+        tenant,
+        "project.plan_upload.commit",
+        &resource,
+    )?;
+    let committed =
+        call.store()
+            .commit_plan_upload(tenant, project, upload, &call.actor(&principal))?;
+    Ok(Response::ok(&json!(committed)))
 }
 
 #[derive(Deserialize)]
