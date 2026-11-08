@@ -205,10 +205,11 @@ response buffer.
 4. **`doctor` gaps.** Optional `--connect` checks for OAuth refresh and
    TLS reachability of configured accounts, and a remediation line for
    every failing check.
-5. **Plan export at MSP scale: paged plan upload (decided 2026-11-07).**
-   Keep the approval document format; store plan mailboxes as rows and
-   upload large plans in pages that commit as one new revision. Leases
-   carry only the leased mailbox's entry.
+5. **Plan export at MSP scale: done (#170, paged plan upload).** Plan
+   mailboxes are rows (up to 1,000,000), large plans upload in pages of
+   2,000 that commit as one revision (`control plan upload`), and leases
+   carry only the leased mailbox's entry. The approval document format is
+   unchanged.
 
 ### M7. Typed errors through the producers (review L-01)
 

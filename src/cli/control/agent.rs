@@ -189,7 +189,7 @@ pub(super) fn parse(arguments: impl Iterator<Item = String>) -> Result<Command, 
 
 /// The control-plane base URL. Bearer credentials cross it, so plain HTTP
 /// is accepted only to a loopback address.
-fn server_url(value: &str) -> Result<url::Url, String> {
+pub(super) fn server_url(value: &str) -> Result<url::Url, String> {
     let mut url =
         url::Url::parse(value).map_err(|_| format!("--server is not a valid URL: {value}"))?;
     let loopback = match url.host() {
@@ -754,28 +754,32 @@ struct HttpControl {
     bearer: Zeroizing<String>,
 }
 
+/// An HTTP client for the control plane. The bearer credential goes only
+/// to the configured service: no ambient proxy and no redirects.
+pub(super) fn http_client(ca_cert: Option<&Path>) -> Result<reqwest::blocking::Client, String> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .use_rustls_tls()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(HTTP_TIMEOUT)
+        .timeout(HTTP_TIMEOUT)
+        .user_agent(concat!("MailSwiftSync-worker/", env!("CARGO_PKG_VERSION")));
+    if let Some(path) = ca_cert {
+        let pem = std::fs::read(path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+        let certificate = reqwest::Certificate::from_pem(&pem)
+            .map_err(|error| format!("{} is not a PEM certificate: {error}", path.display()))?;
+        builder = builder.add_root_certificate(certificate);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("could not prepare the HTTP client: {error}"))
+}
+
 impl HttpControl {
     fn new(base: url::Url, bearer: &str, ca_cert: Option<&Path>) -> Result<Self, String> {
-        let mut builder = reqwest::blocking::Client::builder()
-            .use_rustls_tls()
-            // The bearer credential goes only to the configured service:
-            // no ambient proxy and no redirects.
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(HTTP_TIMEOUT)
-            .timeout(HTTP_TIMEOUT)
-            .user_agent(concat!("MailSwiftSync-worker/", env!("CARGO_PKG_VERSION")));
-        if let Some(path) = ca_cert {
-            let pem = std::fs::read(path)
-                .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-            let certificate = reqwest::Certificate::from_pem(&pem)
-                .map_err(|error| format!("{} is not a PEM certificate: {error}", path.display()))?;
-            builder = builder.add_root_certificate(certificate);
-        }
         Ok(Self {
-            client: builder
-                .build()
-                .map_err(|error| format!("could not prepare the HTTP client: {error}"))?,
+            client: http_client(ca_cert)?,
             base,
             bearer: Zeroizing::new(bearer.to_owned()),
         })

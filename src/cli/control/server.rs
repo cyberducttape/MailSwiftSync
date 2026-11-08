@@ -318,8 +318,9 @@ mod tests {
             length += added;
             mailboxes.insert(key, value);
         }
-        let compact = validate_plan(&plan).unwrap();
-        assert!(compact.len() > MAX_PLAN_BYTES - 200, "{}", compact.len());
+        validate_plan(&plan).unwrap();
+        let compact = serde_json::to_string(&plan).unwrap().len();
+        assert!(compact > MAX_PLAN_BYTES - 200, "{compact}");
         let body =
             serde_json::to_string_pretty(&serde_json::json!({ "plan": plan, "revision": 1 }))
                 .unwrap();

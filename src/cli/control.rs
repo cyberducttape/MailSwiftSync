@@ -13,6 +13,8 @@ mod authn;
 mod authz;
 mod jwt;
 mod oidc;
+mod plan_upload;
+mod plans;
 mod server;
 mod store;
 mod workers;
@@ -27,7 +29,8 @@ const USAGE: &str = "Usage:
   mailswiftsync control serve <state.db> [--listen 127.0.0.1:9470] [--tls-cert <pem> --tls-key <pem>] [--oidc-config <toml>] [--allow-non-loopback]
   mailswiftsync control audit-verify <state.db> [--checkpoint <file> [--public-key <hex>]]
   mailswiftsync control audit-checkpoint <state.db> --output <file> [--signing-key <ed25519-pkcs8> [--key-id <id>]]
-  mailswiftsync control worker plan|enroll|run ...  (see `control worker`)";
+  mailswiftsync control worker plan|enroll|run ...  (see `control worker`)
+  mailswiftsync control plan upload <plan.json> ...  (see `control plan`)";
 const DEFAULT_LISTEN: &str = "127.0.0.1:9470";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,6 +59,7 @@ enum Command {
         key_id: String,
     },
     Worker(agent::Command),
+    Plan(plan_upload::Command),
 }
 
 fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, String> {
@@ -68,6 +72,10 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
     if subcommand == "worker" {
         let rest = arguments.collect::<Result<Vec<_>, _>>()?;
         return agent::parse(rest.into_iter()).map(Command::Worker);
+    }
+    if subcommand == "plan" {
+        let rest = arguments.collect::<Result<Vec<_>, _>>()?;
+        return plan_upload::parse(rest.into_iter()).map(Command::Plan);
     }
     let mut state = None;
     let mut options = std::collections::BTreeMap::<String, String>::new();
@@ -240,6 +248,7 @@ fn run(command: Command) -> Result<(), String> {
             server::serve(listener, Arc::new(api::Context { store, oidc }), tls)
         }
         Command::Worker(command) => agent::run(command),
+        Command::Plan(command) => plan_upload::run(command),
         Command::AuditVerify {
             state,
             checkpoint,

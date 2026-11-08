@@ -459,8 +459,8 @@ impl Store {
         })
     }
 
-    /// Queue one assignment per mailbox label. The project's plan must be
-    /// approved at its current revision.
+    /// Queue one assignment per mailbox job ID. The project's plan must be
+    /// approved at its current revision and list every one of them.
     pub(super) fn create_assignments(
         &self,
         tenant: &str,
@@ -503,6 +503,17 @@ impl Store {
                         "the project's current plan is not approved; approve it before queuing work".into(),
                     ));
                 }
+                let mut listed = tx.prepare(
+                    "SELECT 1 FROM plan_mailboxes WHERE project_id=?1 AND job_id=?2",
+                )?;
+                for mailbox in &labels {
+                    if !listed.exists(params![project, mailbox])? {
+                        return Err(StoreError::Invalid(format!(
+                            "the approved plan does not list mailbox {mailbox:?}"
+                        )));
+                    }
+                }
+                drop(listed);
                 let at = now();
                 for (id, mailbox) in ids.iter().zip(&labels) {
                     tx.execute(
@@ -666,29 +677,28 @@ impl Store {
              WHERE tenant_id=?1 AND id=?2",
             params![worker.tenant, id, worker.id, expires_at, at],
         )?;
-        let lease = tx.query_row(
+        let (fencing_token, project_id, plan_revision, header, mailbox): (
+            i64,
+            String,
+            i64,
+            String,
+            String,
+        ) = tx.query_row(
             "SELECT a.fencing_token,a.project_id,a.plan_revision,p.plan,a.mailbox FROM assignments a JOIN projects p ON p.id=a.project_id AND p.tenant_id=a.tenant_id WHERE a.tenant_id=?1 AND a.id=?2",
             params![worker.tenant, id],
-            |row| {
-                let plan_json: String = row.get(3)?;
-                let plan = serde_json::from_str(&plan_json).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
-                Ok(Lease {
-                    assignment_id: id.clone(),
-                    fencing_token: row.get(0)?,
-                    lease_expires_at: expires_at,
-                    project_id: row.get(1)?,
-                    plan_revision: row.get(2)?,
-                    plan,
-                    mailbox: row.get(4)?,
-                })
-            },
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )?;
+        // Only the leased mailbox's entry: a plan may list a million.
+        let plan = super::plans::leased_plan(&tx, &project_id, &header, &mailbox)?;
+        let lease = Lease {
+            assignment_id: id.clone(),
+            fencing_token,
+            lease_expires_at: expires_at,
+            project_id,
+            plan_revision,
+            plan,
+            mailbox,
+        };
         append_audit(
             &tx,
             &AuditEntry {
@@ -953,6 +963,12 @@ mod tests {
             (assignment.id.as_str(), 1)
         );
         assert_eq!(lease.plan["ledger_project_id"], "ledger");
+        let listed = lease.plan["mailboxes"].as_object().unwrap();
+        assert_eq!(
+            listed.keys().collect::<Vec<_>>(),
+            ["a@acme.example"],
+            "a lease carries only its own mailbox's entry"
+        );
         assert_eq!(
             fixture.store.lease(&second, 300, "r").unwrap(),
             None,
