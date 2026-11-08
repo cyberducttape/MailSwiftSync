@@ -1767,7 +1767,10 @@ fn body_ranges_continue_only_the_requested_body_at_the_requested_origin() {
         assert_eq!(range(empty).unwrap(), b"");
     }
     let whole = range(b"* 2 FETCH (UID 7 BODY[] {9}\r\nabcdefghi)\r\nt OK\r\n").unwrap_err();
-    assert!(whole.contains("whole body"), "{whole}");
+    assert!(
+        whole.contains("whole body"),
+        "expected parser error to mention whole body response"
+    );
     assert!(range(b"* 2 FETCH (UID 7 BODY[]<0> {3}\r\nabc)\r\nt OK\r\n").is_err());
     assert!(range(b"* 2 FETCH (UID 7 BODY[]<5> {5}\r\nabcde)\r\nt OK\r\n").is_err());
     assert!(range(b"t OK\r\n").is_err());
