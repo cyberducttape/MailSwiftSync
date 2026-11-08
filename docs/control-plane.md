@@ -15,9 +15,10 @@ digest. Any other field is refused whatever it is called, so a secret
 cannot slip in under a name nobody anticipated.
 
 This implements the authentication, authorization, tenant-isolation, worker
-fencing, and audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md).
-Still to come: a worker agent that runs leased assignments through the local
-engine (today the worker protocol is server-side only).
+fencing, and audit parts of [the RBAC and tenant-isolation contract](msp-rbac-and-tenant-isolation.md),
+and the worker agent (`mailswiftsync control worker`) that enrolls, leases
+assignments, runs them through the local engine, renews its lease, and
+reports the outcome; see [Running a worker agent](#running-a-worker-agent).
 
 ## Running it
 
