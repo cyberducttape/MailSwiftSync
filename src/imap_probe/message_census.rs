@@ -10,7 +10,7 @@ use super::{
     literal_framing::{split_responses, tagged_completion},
     protocol::{read_imap_tagged_bytes_with_budget, write_imap_command},
 };
-use crate::core::MessageCensus;
+use crate::core::{MessageCensus, OversizedCount};
 use std::{
     io::{Read, Write},
     time::{Duration, Instant},
@@ -23,8 +23,14 @@ pub(super) const MAX_CENSUS_FOLDERS: usize = 5_000;
 pub(super) const CENSUS_TIME_BUDGET: Duration = Duration::from_secs(30);
 /// One STATUS response is one short line; anything larger is not one.
 const MAX_STATUS_RESPONSE_BYTES: usize = 64 * 1024;
+/// An EXAMINE reply is a handful of untagged lines.
+const MAX_EXAMINE_RESPONSE_BYTES: usize = 1024 * 1024;
+/// A SEARCH reply lists one UID per oversized message; this allows hundreds
+/// of thousands, far more than any real folder holds above the bound.
+const MAX_SEARCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
-/// Count messages (and bytes, when `with_size`) across `folders`. Protocol
+/// Count messages (and bytes, when `with_size`) across `folders`, and,
+/// when `oversized_bound` is given, the messages larger than it. Protocol
 /// rejections and unparseable replies leave the census incomplete; I/O and
 /// probe-budget failures are returned as errors because the session can no
 /// longer be trusted for further commands.
@@ -33,6 +39,7 @@ pub(super) fn count_account_messages<S: Read + Write>(
     host: &str,
     folders: &[&str],
     with_size: bool,
+    oversized_bound: Option<u64>,
     budget: &MessageFetchBudget<'_>,
     deadline: Instant,
 ) -> Result<MessageCensus, String> {
@@ -41,6 +48,7 @@ pub(super) fn count_account_messages<S: Read + Write>(
         bytes: None,
         folders_counted,
         incomplete_reason: Some(reason),
+        oversized: OversizedCount::NotChecked,
     };
     if folders.len() > MAX_CENSUS_FOLDERS {
         return Ok(incomplete(
@@ -59,6 +67,7 @@ pub(super) fn count_account_messages<S: Read + Write>(
     let mut buffer = [0; 4096];
     let mut messages = 0_u64;
     let mut bytes = with_size.then_some(0_u64);
+    let mut nonempty = Vec::new();
     for (index, folder) in folders.iter().enumerate() {
         budget.check()?;
         if Instant::now() >= deadline {
@@ -97,17 +106,133 @@ pub(super) fn count_account_messages<S: Read + Write>(
             Err(reason) => return Ok(incomplete(index, reason)),
         };
         messages = messages.saturating_add(folder_messages);
+        if folder_messages > 0 {
+            nonempty.push(*folder);
+        }
         bytes = match (bytes, folder_bytes) {
             (Some(total), Some(size)) => Some(total.saturating_add(size)),
             _ => None,
         };
     }
+    let oversized = match oversized_bound {
+        None => OversizedCount::NotChecked,
+        Some(bound) => count_oversized(stream, host, &nonempty, bound, budget, deadline)?,
+    };
     Ok(MessageCensus {
         messages: Some(messages),
         bytes,
         folders_counted: folders.len(),
         incomplete_reason: None,
+        oversized,
     })
+}
+
+/// Count messages larger than `bound` with a read-only `EXAMINE` and
+/// `UID SEARCH LARGER` per folder. Only the count is kept.
+fn count_oversized<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    folders: &[&str],
+    bound: u64,
+    budget: &MessageFetchBudget<'_>,
+    deadline: Instant,
+) -> Result<OversizedCount, String> {
+    let mut buffer = [0; 4096];
+    let mut oversized = 0_u64;
+    for (index, folder) in folders.iter().enumerate() {
+        budget.check()?;
+        if Instant::now() >= deadline {
+            return Ok(OversizedCount::Unknown(format!(
+                "searched {index} of {} folders before the census time limit",
+                folders.len()
+            )));
+        }
+        let Ok(quoted) = imap_quote(folder) else {
+            return Ok(OversizedCount::Unknown(
+                "a folder name cannot be sent as a quoted argument".into(),
+            ));
+        };
+        let examine = format!("o{:05}", 2 * index + 1);
+        write_imap_command(
+            stream,
+            format!("{examine} EXAMINE {quoted}\r\n").as_bytes(),
+            Some(budget),
+            &format!("{host}: could not write EXAMINE"),
+        )?;
+        let response = read_imap_tagged_bytes_with_budget(
+            stream,
+            &examine,
+            &mut buffer,
+            MAX_EXAMINE_RESPONSE_BYTES,
+            budget,
+        )
+        .map_err(|error| format!("{host}: oversized-message search failed: {error}"))?;
+        if !command_ok(&response, &examine) {
+            return Ok(OversizedCount::Unknown("the server refused EXAMINE".into()));
+        }
+        let search = format!("o{:05}", 2 * index + 2);
+        write_imap_command(
+            stream,
+            format!("{search} UID SEARCH LARGER {bound}\r\n").as_bytes(),
+            Some(budget),
+            &format!("{host}: could not write SEARCH"),
+        )?;
+        let response = read_imap_tagged_bytes_with_budget(
+            stream,
+            &search,
+            &mut buffer,
+            MAX_SEARCH_RESPONSE_BYTES,
+            budget,
+        )
+        .map_err(|error| format!("{host}: oversized-message search failed: {error}"))?;
+        match parse_search_count(&response, &search) {
+            Ok(count) => oversized = oversized.saturating_add(count),
+            Err(reason) => return Ok(OversizedCount::Unknown(reason)),
+        }
+    }
+    Ok(OversizedCount::Counted(oversized))
+}
+
+fn command_ok(response: &[u8], tag: &str) -> bool {
+    tagged_completion(response, tag).is_some_and(|completion| {
+        completion
+            .split(|byte| *byte == b' ')
+            .nth(1)
+            .is_some_and(|status| status.eq_ignore_ascii_case(b"OK"))
+    })
+}
+
+/// The number of UIDs in the untagged `SEARCH` responses of one exchange.
+pub(super) fn parse_search_count(response: &[u8], tag: &str) -> Result<u64, String> {
+    if !command_ok(response, tag) {
+        return Err("the server refused SEARCH LARGER".into());
+    }
+    let mut count = 0_u64;
+    let mut answered = false;
+    for line in response.split(|byte| *byte == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Some(rest) = line
+            .get(..9)
+            .filter(|prefix| prefix.eq_ignore_ascii_case(b"* SEARCH "))
+            .map(|_| &line[9..])
+            .or_else(|| line.eq_ignore_ascii_case(b"* SEARCH").then_some(&b""[..]))
+        else {
+            continue;
+        };
+        answered = true;
+        for token in rest
+            .split(|byte| *byte == b' ')
+            .filter(|token| !token.is_empty())
+        {
+            if !token.iter().all(u8::is_ascii_digit) {
+                return Err("SEARCH reply carried a non-numeric UID".into());
+            }
+            count += 1;
+        }
+    }
+    answered
+        .then_some(count)
+        .ok_or_else(|| "SEARCH reply carried no SEARCH response".into())
 }
 
 /// Parse one tagged STATUS exchange into (MESSAGES, SIZE). The status
@@ -264,6 +389,16 @@ mod tests {
         with_size: bool,
         deadline: Instant,
     ) -> (Result<crate::core::MessageCensus, String>, String) {
+        census_with_bound(replies, folders, with_size, None, deadline)
+    }
+
+    fn census_with_bound(
+        replies: Vec<&[u8]>,
+        folders: &[&str],
+        with_size: bool,
+        oversized_bound: Option<u64>,
+        deadline: Instant,
+    ) -> (Result<crate::core::MessageCensus, String>, String) {
         let cancel = AtomicBool::new(false);
         let budget = super::super::MessageFetchBudget::for_probe(Duration::from_secs(30), &cancel);
         let mut server = ScriptedServer {
@@ -271,8 +406,15 @@ mod tests {
             pending: Cursor::new(Vec::new()),
             sent: Vec::new(),
         };
-        let result =
-            count_account_messages(&mut server, "host", folders, with_size, &budget, deadline);
+        let result = count_account_messages(
+            &mut server,
+            "host",
+            folders,
+            with_size,
+            oversized_bound,
+            &budget,
+            deadline,
+        );
         (result, String::from_utf8(server.sent).unwrap())
     }
 
@@ -296,6 +438,67 @@ mod tests {
             sent,
             "c00001 STATUS \"INBOX\" (MESSAGES SIZE)\r\nc00002 STATUS \"Sent Items\" (MESSAGES SIZE)\r\n"
         );
+    }
+
+    #[test]
+    fn body_verification_counts_messages_above_its_bound_before_the_transfer() {
+        use crate::core::OversizedCount;
+        let (result, sent) = census_with_bound(
+            vec![
+                b"* STATUS INBOX (MESSAGES 10)\r\nc00001 OK\r\n",
+                b"* STATUS Empty (MESSAGES 0)\r\nc00002 OK\r\n",
+                b"* STATUS Archive (MESSAGES 4)\r\nc00003 OK\r\n",
+                b"* 10 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\no00001 OK [READ-ONLY] done\r\n",
+                b"* SEARCH 3 9\r\no00002 OK SEARCH done\r\n",
+                b"* 4 EXISTS\r\no00003 OK [READ-ONLY] done\r\n",
+                b"* SEARCH\r\no00004 OK SEARCH done\r\n",
+            ],
+            &["INBOX", "Empty", "Archive"],
+            false,
+            Some(1_048_576),
+            Instant::now() + Duration::from_secs(30),
+        );
+        let census = result.unwrap();
+        assert_eq!(census.messages, Some(14));
+        assert_eq!(census.oversized, OversizedCount::Counted(2));
+        assert!(
+            sent.ends_with(
+                "o00001 EXAMINE \"INBOX\"\r\no00002 UID SEARCH LARGER 1048576\r\no00003 EXAMINE \"Archive\"\r\no00004 UID SEARCH LARGER 1048576\r\n"
+            ),
+            "empty folders are not searched, and nothing is selected for writing: {sent}"
+        );
+
+        // A refused search leaves the count unknown, never zero.
+        let (result, _) = census_with_bound(
+            vec![
+                b"* STATUS INBOX (MESSAGES 1)\r\nc00001 OK\r\n",
+                b"o00001 OK [READ-ONLY] done\r\n",
+                b"o00002 BAD unsupported\r\n",
+            ],
+            &["INBOX"],
+            false,
+            Some(10),
+            Instant::now() + Duration::from_secs(30),
+        );
+        assert!(matches!(
+            result.unwrap().oversized,
+            OversizedCount::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn search_counts_come_from_untagged_search_lines() {
+        assert_eq!(
+            super::parse_search_count(b"* SEARCH 1 2 3\r\n* SEARCH 9\r\nt1 OK\r\n", "t1"),
+            Ok(4)
+        );
+        assert_eq!(
+            super::parse_search_count(b"* SEARCH\r\nt1 OK\r\n", "t1"),
+            Ok(0)
+        );
+        assert!(super::parse_search_count(b"t1 OK\r\n", "t1").is_err());
+        assert!(super::parse_search_count(b"* SEARCH x\r\nt1 OK\r\n", "t1").is_err());
+        assert!(super::parse_search_count(b"t1 NO nope\r\n", "t1").is_err());
     }
 
     #[test]

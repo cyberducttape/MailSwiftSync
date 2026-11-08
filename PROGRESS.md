@@ -4,6 +4,20 @@ Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
 ## 2026-11-07
 
+### R4. Scale and usability review
+
+Branch `fix/scale-review` (from `main`):
+
+- Fixed the stale "worker agent still to come" text in
+  `docs/control-plane.md`.
+- The supervisor prunes backoff with a set instead of `Vec::contains`.
+- With body verification requested, the account test counts messages
+  larger than the per-message bound, and preflight blocks before the
+  transfer.
+
+Verdicts for every finding, and the M8 plan for streaming verification,
+are in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md#r4-scale-and-usability-review-2026-11-07).
+
 ### R3. Control-plane review findings
 
 Branch `fix/control-plane-review` (from `main`). One commit per finding:

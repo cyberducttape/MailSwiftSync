@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- With body-content verification requested, testing the accounts now
+  counts messages larger than the per-message body-hash bound, and
+  preflight blocks with that count before the transfer instead of the
+  mailbox finishing as "verification limit exceeded" afterwards.
+- `docs/control-plane.md` no longer says the worker agent is still to
+  come.
+- The supervisor prunes its per-project backoff in linear time.
 - Fix control-plane review findings (R3):
   - Project plans must be `mailswiftsync.worker-plan` v1 documents and
     results hold only `job_id`, `plan_revision`, and `detail`; any other
