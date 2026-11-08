@@ -56,7 +56,9 @@ mod transfer_passes;
 mod verification_limit;
 mod waves;
 mod webhook_outbox;
-pub use capabilities::{MessageCensus, NamespaceEntry, NamespaceInfo, ServerCapabilities};
+pub use capabilities::{
+    MessageCensus, NamespaceEntry, NamespaceInfo, OversizedCount, ServerCapabilities,
+};
 pub(crate) use cutover::{CutoverStage, CutoverWorkflow, validate_cutover_run_stage};
 pub use engine::Engine;
 #[allow(unused_imports)]

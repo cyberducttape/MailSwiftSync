@@ -50,6 +50,22 @@ pub struct MessageCensus {
     pub folders_counted: usize,
     /// Why the count is missing; `None` with no count means not attempted.
     pub incomplete_reason: Option<String>,
+    /// Messages larger than the body-content verification bound, when body
+    /// verification was requested: they cannot be content-hashed, so the
+    /// operator learns it before the transfer rather than after.
+    pub oversized: OversizedCount,
+}
+
+/// Messages above the per-message body-hash bound, as the census found them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum OversizedCount {
+    /// Body verification was not requested, so nothing was searched.
+    #[default]
+    NotChecked,
+    /// Every folder was searched.
+    Counted(u64),
+    /// The search did not finish; the reason says why.
+    Unknown(String),
 }
 
 impl ServerCapabilities {

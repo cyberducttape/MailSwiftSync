@@ -1396,7 +1396,12 @@ pub(crate) fn headless_supervise(
         };
         drop(store);
         // Forget backoff for projects that no longer have actionable work.
-        backoff.retain(|project, _| candidates.contains(project));
+        // A set keeps this linear in the number of projects.
+        let actionable = candidates
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        backoff.retain(|project, _| actionable.contains(project.as_str()));
         let now = std::time::Instant::now();
         let Some(project_id) =
             next_supervised_project(&candidates, &backoff, now, last_served_project.as_deref())

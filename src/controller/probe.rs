@@ -62,6 +62,8 @@ pub(crate) struct CapabilityProbeSpec {
     pub(crate) plan_fingerprint: String,
     pub(crate) source: ImapProbeEndpoint,
     pub(crate) destination: ImapProbeEndpoint,
+    /// See `imap_probe::body_hash_bound`.
+    pub(crate) body_hash_bound: Option<u64>,
 }
 
 pub(crate) fn spawn_capability_probe(spec: CapabilityProbeSpec) -> Receiver<CapabilityProbeResult> {
@@ -83,8 +85,9 @@ fn spawn_capability_probe_in(
     };
     std::thread::spawn(move || {
         let _slot = slot;
-        let result = probe_endpoint(&spec.source).and_then(|source| {
-            probe_endpoint(&spec.destination).map(|destination| (source, destination))
+        let result = probe_endpoint(&spec.source, spec.body_hash_bound).and_then(|source| {
+            probe_endpoint(&spec.destination, spec.body_hash_bound)
+                .map(|destination| (source, destination))
         });
         let _ = tx.send(CapabilityProbeResult {
             request_id: spec.request_id,
@@ -141,7 +144,10 @@ fn spawn_live_auth_probe_in(
     rx
 }
 
-fn probe_endpoint(endpoint: &ImapProbeEndpoint) -> Result<core::ServerCapabilities, String> {
+fn probe_endpoint(
+    endpoint: &ImapProbeEndpoint,
+    body_hash_bound: Option<u64>,
+) -> Result<core::ServerCapabilities, String> {
     probe_tls_capabilities_with_transport(
         &endpoint.endpoint,
         &endpoint.user,
@@ -150,6 +156,7 @@ fn probe_endpoint(endpoint: &ImapProbeEndpoint) -> Result<core::ServerCapabiliti
         &endpoint.tls,
         &endpoint.ca_bundle,
         &endpoint.certificate_pin_sha256,
+        body_hash_bound,
     )
 }
 
@@ -198,6 +205,7 @@ mod tests {
                 plan_fingerprint: "plan".into(),
                 source: unreachable_endpoint(),
                 destination: unreachable_endpoint(),
+                body_hash_bound: None,
             },
         )
         .recv()

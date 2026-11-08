@@ -742,6 +742,9 @@ fn imap_command_failure(
     }
 }
 
+/// `body_hash_bound`, when body-content verification is planned, also
+/// counts the messages too large for it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn probe_tls_capabilities_with_transport(
     host: &str,
     user: &str,
@@ -750,6 +753,7 @@ pub(crate) fn probe_tls_capabilities_with_transport(
     transport: &str,
     ca_bundle: &str,
     certificate_pin_sha256: &str,
+    body_hash_bound: Option<u64>,
 ) -> Result<crate::core::ServerCapabilities, String> {
     let cancel = AtomicBool::new(false);
     let budget = MessageFetchBudget::for_probe(TLS_CAPABILITY_PROBE_BUDGET, &cancel);
@@ -768,6 +772,7 @@ pub(crate) fn probe_tls_capabilities_with_transport(
         auth_method,
         greeting,
         &budget,
+        body_hash_bound,
     )
 }
 
@@ -938,6 +943,7 @@ fn live_readiness_on_authenticated_stream<S: Read + Write>(
     Ok(quota_observation)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn complete_authenticated_imap_probe<S: Read + Write>(
     stream: S,
     host: &str,
@@ -946,6 +952,7 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     auth_method: &str,
     greeting: String,
     budget: &MessageFetchBudget<'_>,
+    body_hash_bound: Option<u64>,
 ) -> Result<crate::core::ServerCapabilities, String> {
     let (mut stream, post_auth_response) = authenticate_imap_stream(
         stream,
@@ -1013,6 +1020,7 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
         host,
         &selectable,
         advertises_capability(&post_auth_response, "STATUS=SIZE"),
+        body_hash_bound,
         budget,
         census_deadline,
     )?;
@@ -1219,6 +1227,13 @@ pub(crate) fn list_both_account_folders(
 }
 
 /// Probe one account of a plan for its capabilities and message census.
+/// The per-message body-hash bound, when the plan asks for body-content
+/// verification through imapsync.
+pub(crate) fn body_hash_bound(form: &crate::Form) -> Option<u64> {
+    (form.profile.body_hash_verification && form.engine() == crate::core::Engine::ImapSync)
+        .then_some(form.profile.body_hash_max_bytes)
+}
+
 pub(crate) fn probe_account_capabilities(
     form: &crate::Form,
     side: MailSide,
@@ -1254,6 +1269,7 @@ pub(crate) fn probe_account_capabilities(
         tls,
         ca_bundle,
         pin,
+        body_hash_bound(form),
     )
 }
 

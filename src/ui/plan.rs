@@ -325,6 +325,7 @@ impl App {
                     .destination_certificate_pin_sha256
                     .clone(),
             },
+            body_hash_bound: crate::imap_probe::body_hash_bound(&self.form),
         }));
     }
 
