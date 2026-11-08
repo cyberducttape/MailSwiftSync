@@ -31,6 +31,16 @@ Branch `fix/control-plane-review` (from `main`). One commit per finding:
   (control-plane database version 5); quota refusals are 429.
 - The agent leases nothing while another controller owns its ledger.
 
+Then the review's §8 follow-ups, on the same branch:
+
+- Login failures lock out the guessing client, not the account (50 across
+  all clients lock the account); optional IdP-first sign-in.
+- `/readyz` readiness check beside `/healthz`.
+- OIDC fetches no longer hold the metadata cache lock.
+- Signed audit checkpoints to publish outside the service, checked by
+  `audit-verify --checkpoint`.
+- A concurrency benchmark: about 1,400–1,500 audited requests/s on NVMe.
+
 Verdicts are in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md#r3-control-plane-review-findings-2026-11-07).
 
 ### CI: yanked async-executor

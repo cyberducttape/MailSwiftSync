@@ -139,10 +139,20 @@ impl Fetch for HttpsFetch {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
     public_url: String,
+    /// `false` makes the identity provider the only way in for linked
+    /// accounts: their passwords stop working, so password guessing cannot
+    /// lock them out. Unlinked accounts (break-glass administrators) keep
+    /// password sign-in.
+    #[serde(default = "default_true")]
+    password_sign_in_for_linked_accounts: bool,
     #[serde(rename = "provider")]
     providers: Vec<ProviderFile>,
 }
@@ -168,7 +178,12 @@ pub(super) struct Provider {
     client_secret: Option<crate::credentials::SecretString>,
     link_verified_email: bool,
     allowed_email_domains: Vec<String>,
+    /// The cache. Held only to read or replace it, never across a fetch,
+    /// so a slow provider cannot stall sign-ins that can use the cache.
     metadata: Mutex<Option<Metadata>>,
+    /// Serializes fetches, so concurrent sign-ins share one refresh and
+    /// the JWKS refresh floor holds.
+    refresh: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -183,6 +198,8 @@ struct Metadata {
 pub(super) struct Oidc {
     public_url: String,
     pub(super) providers: Vec<Provider>,
+    /// Linked accounts may sign in only through their identity provider.
+    pub(super) idp_first: bool,
     fetch: Box<dyn Fetch>,
 }
 
@@ -263,11 +280,13 @@ impl Oidc {
                     .map(|domain| domain.trim().trim_start_matches('@').to_ascii_lowercase())
                     .collect(),
                 metadata: Mutex::new(None),
+                refresh: Mutex::new(()),
             });
         }
         Ok(Self {
             public_url,
             providers,
+            idp_first: !file.password_sign_in_for_linked_accounts,
             fetch: Box::new(HttpsFetch::new()?),
         })
     }
@@ -289,56 +308,79 @@ impl Oidc {
     /// Discovery metadata, fetched once and kept; the JWKS is refreshed
     /// hourly, or sooner (at most once a minute) when `force_jwks` asks.
     fn metadata(&self, provider: &Provider, force_jwks: bool) -> Result<Metadata, OidcError> {
-        let mut cached = provider
-            .metadata
+        let cached = || {
+            provider
+                .metadata
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone()
+        };
+        let stale = |metadata: &Metadata| {
+            metadata.jwks_fetched.is_none_or(|fetched| {
+                let age = fetched.elapsed();
+                age >= JWKS_TTL || (force_jwks && age >= JWKS_REFRESH_FLOOR)
+            })
+        };
+        if let Some(metadata) = cached()
+            && !stale(&metadata)
+        {
+            return Ok(metadata);
+        }
+        let _refreshing = provider
+            .refresh
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if cached.is_none() {
-            let document = self
-                .fetch
-                .get_json(&format!(
-                    "{}/.well-known/openid-configuration",
-                    provider.issuer
-                ))
-                .map_err(OidcError::Upstream)?;
-            let field = |name: &str| {
-                document[name]
-                    .as_str()
-                    .ok_or_else(|| OidcError::Upstream(format!("discovery document has no {name}")))
-                    .and_then(|value| https_url(value, name).map_err(OidcError::Upstream))
-            };
-            if document["issuer"]
+        // Another sign-in may have refreshed while this one waited.
+        let mut metadata = match cached() {
+            Some(metadata) if !stale(&metadata) => return Ok(metadata),
+            Some(metadata) => metadata,
+            None => self.discover(provider)?,
+        };
+        let jwks = self
+            .fetch
+            .get_json(&metadata.jwks_uri)
+            .map_err(OidcError::Upstream)?;
+        metadata.jwks = serde_json::from_value(jwks)
+            .map_err(|_| OidcError::Upstream("the provider's JWKS is not valid".into()))?;
+        metadata.jwks_fetched = Some(Instant::now());
+        *provider
+            .metadata
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(metadata.clone());
+        Ok(metadata)
+    }
+
+    /// The provider's discovery document, without its JWKS.
+    fn discover(&self, provider: &Provider) -> Result<Metadata, OidcError> {
+        let document = self
+            .fetch
+            .get_json(&format!(
+                "{}/.well-known/openid-configuration",
+                provider.issuer
+            ))
+            .map_err(OidcError::Upstream)?;
+        let field = |name: &str| {
+            document[name]
                 .as_str()
-                .map(|issuer| issuer.trim_end_matches('/'))
-                != Some(provider.issuer.as_str())
-            {
-                return Err(OidcError::Upstream(
-                    "the discovery document names a different issuer".into(),
-                ));
-            }
-            *cached = Some(Metadata {
-                authorization_endpoint: field("authorization_endpoint")?,
-                token_endpoint: field("token_endpoint")?,
-                jwks_uri: field("jwks_uri")?,
-                jwks: Jwks::default(),
-                jwks_fetched: None,
-            });
+                .ok_or_else(|| OidcError::Upstream(format!("discovery document has no {name}")))
+                .and_then(|value| https_url(value, name).map_err(OidcError::Upstream))
+        };
+        if document["issuer"]
+            .as_str()
+            .map(|issuer| issuer.trim_end_matches('/'))
+            != Some(provider.issuer.as_str())
+        {
+            return Err(OidcError::Upstream(
+                "the discovery document names a different issuer".into(),
+            ));
         }
-        let metadata = cached.as_mut().expect("metadata was just filled");
-        let stale = metadata.jwks_fetched.is_none_or(|fetched| {
-            let age = fetched.elapsed();
-            age >= JWKS_TTL || (force_jwks && age >= JWKS_REFRESH_FLOOR)
-        });
-        if stale {
-            let jwks = self
-                .fetch
-                .get_json(&metadata.jwks_uri)
-                .map_err(OidcError::Upstream)?;
-            metadata.jwks = serde_json::from_value(jwks)
-                .map_err(|_| OidcError::Upstream("the provider's JWKS is not valid".into()))?;
-            metadata.jwks_fetched = Some(Instant::now());
-        }
-        Ok(metadata.clone())
+        Ok(Metadata {
+            authorization_endpoint: field("authorization_endpoint")?,
+            token_endpoint: field("token_endpoint")?,
+            jwks_uri: field("jwks_uri")?,
+            jwks: Jwks::default(),
+            jwks_fetched: None,
+        })
     }
 
     /// Begin a sign-in: remember the state, nonce, and PKCE verifier, and
@@ -615,6 +657,9 @@ pub(super) mod tests {
         pub(in crate::cli::control) signer: Signer,
         pub(in crate::cli::control) next_claims: Mutex<serde_json::Value>,
         pub(in crate::cli::control) token_requests: Mutex<Vec<Vec<(String, String)>>>,
+        /// While set, JWKS fetches wait: a provider that has stopped answering.
+        pub(in crate::cli::control) hold_jwks: std::sync::atomic::AtomicBool,
+        pub(in crate::cli::control) jwks_fetches: std::sync::atomic::AtomicUsize,
     }
 
     impl Fetch for Arc<FakeIdp> {
@@ -627,6 +672,16 @@ pub(super) mod tests {
                     "jwks_uri": "https://idp.example/jwks",
                 })),
                 "https://idp.example/jwks" => {
+                    use std::sync::atomic::Ordering;
+                    self.jwks_fetches.fetch_add(1, Ordering::SeqCst);
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while self.hold_jwks.load(Ordering::SeqCst) {
+                        assert!(
+                            Instant::now() < deadline,
+                            "the held JWKS fetch was never released"
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                     Ok(serde_json::to_value(KeysOut(&self.signer.jwks())).unwrap())
                 }
                 _ => Err(format!("unexpected GET {url}")),
@@ -669,6 +724,7 @@ pub(super) mod tests {
     pub(in crate::cli::control) fn oidc(idp: &Arc<FakeIdp>, link_verified_email: bool) -> Oidc {
         Oidc {
             public_url: "https://control.msp.example".into(),
+            idp_first: false,
             providers: vec![Provider {
                 name: "idp".into(),
                 issuer: ISSUER.into(),
@@ -677,6 +733,7 @@ pub(super) mod tests {
                 link_verified_email,
                 allowed_email_domains: vec!["msp.example".into()],
                 metadata: Mutex::new(None),
+                refresh: Mutex::new(()),
             }],
             fetch: Box::new(Arc::clone(idp)),
         }
@@ -687,6 +744,8 @@ pub(super) mod tests {
             signer: Signer::new(),
             next_claims: Mutex::new(json!({})),
             token_requests: Mutex::new(Vec::new()),
+            hold_jwks: std::sync::atomic::AtomicBool::new(false),
+            jwks_fetches: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -819,6 +878,45 @@ pub(super) mod tests {
             oidc.callback(&store, "missing", "c", "s", "r"),
             Err(OidcError::UnknownProvider)
         );
+    }
+
+    #[test]
+    fn a_stalled_provider_refresh_does_not_block_sign_ins_served_from_cache() {
+        use std::sync::atomic::Ordering;
+        let idp = fake_idp();
+        let oidc = Arc::new(oidc(&idp, true));
+        let (store, _) = store_with_user("eng@msp.example");
+        oidc.start(&store, "idp", None).unwrap();
+        assert_eq!(idp.jwks_fetches.load(Ordering::SeqCst), 1);
+        // Old enough for a forced refresh (an unknown key ID), not for TTL.
+        let provider = oidc.provider("idp").unwrap();
+        provider
+            .metadata
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .jwks_fetched = Some(Instant::now() - JWKS_REFRESH_FLOOR - Duration::from_secs(1));
+
+        idp.hold_jwks.store(true, Ordering::SeqCst);
+        let refreshing = {
+            let oidc = Arc::clone(&oidc);
+            std::thread::spawn(move || {
+                oidc.metadata(oidc.provider("idp").unwrap(), true)
+                    .map(|_| ())
+            })
+        };
+        while idp.jwks_fetches.load(Ordering::SeqCst) < 2 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The refresh is stuck upstream; a sign-in that can use the cache
+        // still starts at once.
+        let started = Instant::now();
+        oidc.start(&store, "idp", None).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        idp.hold_jwks.store(false, Ordering::SeqCst);
+        assert!(refreshing.join().unwrap().is_ok());
+        assert_eq!(idp.jwks_fetches.load(Ordering::SeqCst), 2);
     }
 
     #[test]

@@ -25,7 +25,8 @@ use std::sync::Arc;
 const USAGE: &str = "Usage:
   mailswiftsync control init <state.db> --admin-email <email> --admin-password-file <file> [--admin-name <name>]
   mailswiftsync control serve <state.db> [--listen 127.0.0.1:9470] [--tls-cert <pem> --tls-key <pem>] [--oidc-config <toml>] [--allow-non-loopback]
-  mailswiftsync control audit-verify <state.db>
+  mailswiftsync control audit-verify <state.db> [--checkpoint <file> [--public-key <hex>]]
+  mailswiftsync control audit-checkpoint <state.db> --output <file> [--signing-key <ed25519-pkcs8> [--key-id <id>]]
   mailswiftsync control worker plan|enroll|run ...  (see `control worker`)";
 const DEFAULT_LISTEN: &str = "127.0.0.1:9470";
 
@@ -45,6 +46,14 @@ enum Command {
     },
     AuditVerify {
         state: PathBuf,
+        checkpoint: Option<PathBuf>,
+        public_key: Option<String>,
+    },
+    AuditCheckpoint {
+        state: PathBuf,
+        output: PathBuf,
+        signing_key: Option<PathBuf>,
+        key_id: String,
     },
     Worker(agent::Command),
 }
@@ -72,7 +81,12 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             | "--listen"
             | "--tls-cert"
             | "--tls-key"
-            | "--oidc-config") => {
+            | "--oidc-config"
+            | "--checkpoint"
+            | "--public-key"
+            | "--output"
+            | "--signing-key"
+            | "--key-id") => {
                 let value = arguments.next().transpose()?.ok_or(USAGE)?;
                 if options.insert(flag.to_owned(), value).is_some() {
                     return Err(format!("{flag} was given more than once"));
@@ -129,8 +143,31 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             })
         }
         "audit-verify" => {
-            allowed(&[])?;
-            Ok(Command::AuditVerify { state })
+            allowed(&["--checkpoint", "--public-key"])?;
+            let checkpoint = options.remove("--checkpoint").map(PathBuf::from);
+            let public_key = options.remove("--public-key");
+            if public_key.is_some() && checkpoint.is_none() {
+                return Err("--public-key verifies a --checkpoint".into());
+            }
+            Ok(Command::AuditVerify {
+                state,
+                checkpoint,
+                public_key,
+            })
+        }
+        "audit-checkpoint" => {
+            allowed(&["--output", "--signing-key", "--key-id"])?;
+            let signing_key = options.remove("--signing-key").map(PathBuf::from);
+            let key_id = options.remove("--key-id");
+            if key_id.is_some() && signing_key.is_none() {
+                return Err("--key-id names a --signing-key".into());
+            }
+            Ok(Command::AuditCheckpoint {
+                state,
+                output: options.remove("--output").ok_or(USAGE)?.into(),
+                signing_key,
+                key_id: key_id.unwrap_or_else(|| "control-audit".into()),
+            })
         }
         _ => Err(USAGE.into()),
     }
@@ -203,10 +240,43 @@ fn run(command: Command) -> Result<(), String> {
             server::serve(listener, Arc::new(api::Context { store, oidc }), tls)
         }
         Command::Worker(command) => agent::run(command),
-        Command::AuditVerify { state } => {
+        Command::AuditVerify {
+            state,
+            checkpoint,
+            public_key,
+        } => {
             let store = store::Store::open(&state)?;
             let count = store.verify_audit_chain()?;
             println!("Audit log intact: {count} entries verified");
+            if let Some(checkpoint) = checkpoint {
+                let verdict = audit::check_checkpoint(&checkpoint, public_key.as_deref(), |seq| {
+                    store.audit_hash_at(seq)
+                })?;
+                println!("Audit checkpoint: {verdict}");
+            }
+            Ok(())
+        }
+        Command::AuditCheckpoint {
+            state,
+            output,
+            signing_key,
+            key_id,
+        } => {
+            let store = store::Store::open(&state)?;
+            let (entries, head) = store.verify_audit_chain_head()?;
+            let document = audit::checkpoint(entries, head)?;
+            let text =
+                serde_json::to_string_pretty(&document).map_err(|error| error.to_string())?;
+            crate::atomic_artifact::write_private_atomic(&output, &text)
+                .map_err(|error| format!("could not write {}: {error}", output.display()))?;
+            if let Some(signing_key) = signing_key {
+                crate::reports::signing::sign_file(&output, &signing_key, &key_id)?;
+            }
+            println!(
+                "Audit checkpoint written to {} at entry {}; publish it outside this service",
+                output.display(),
+                document["seq"]
+            );
             Ok(())
         }
     }
@@ -262,5 +332,147 @@ mod tests {
             .is_err()
         );
         assert!(parse(arguments(&["bogus", "s.db"])).is_err());
+        assert_eq!(
+            parse(arguments(&[
+                "audit-checkpoint",
+                "s.db",
+                "--output",
+                "c.json"
+            ]))
+            .unwrap(),
+            Command::AuditCheckpoint {
+                state: "s.db".into(),
+                output: "c.json".into(),
+                signing_key: None,
+                key_id: "control-audit".into(),
+            }
+        );
+        assert!(parse(arguments(&["audit-checkpoint", "s.db"])).is_err());
+        assert!(
+            parse(arguments(&[
+                "audit-checkpoint",
+                "s.db",
+                "--output",
+                "c",
+                "--key-id",
+                "k"
+            ]))
+            .is_err()
+        );
+        assert!(parse(arguments(&["audit-verify", "s.db", "--public-key", "00"])).is_err());
+        assert!(parse(arguments(&["serve", "s.db", "--checkpoint", "c"])).is_err());
+    }
+
+    #[test]
+    fn a_published_checkpoint_catches_a_rebuilt_audit_chain() {
+        let directory =
+            std::env::temp_dir().join(format!("mss-audit-checkpoint-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let state = directory.join("control.db");
+        let password = authn::test_secret();
+        let store = store::Store::open(&state).unwrap();
+        store
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
+            .unwrap();
+        store
+            .login("admin@msp.example", &password, "r", None, false)
+            .unwrap();
+        drop(store);
+
+        let key = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .unwrap();
+        let key_path = directory.join("audit-key.pk8");
+        let mut key_file = crate::credentials::open_secret_file(&key_path).unwrap();
+        std::io::Write::write_all(&mut key_file, key.as_ref()).unwrap();
+        drop(key_file);
+        let public_key = crate::reports::integrity::hex_encode(
+            ring::signature::KeyPair::public_key(
+                &ring::signature::Ed25519KeyPair::from_pkcs8(key.as_ref()).unwrap(),
+            )
+            .as_ref(),
+        );
+        let checkpoint = directory.join("checkpoint.json");
+        run(Command::AuditCheckpoint {
+            state: state.clone(),
+            output: checkpoint.clone(),
+            signing_key: Some(key_path),
+            key_id: "audit".into(),
+        })
+        .unwrap();
+        let verify = |key: &str| {
+            run(Command::AuditVerify {
+                state: state.clone(),
+                checkpoint: Some(checkpoint.clone()),
+                public_key: Some(key.into()),
+            })
+        };
+        verify(&public_key).unwrap();
+        assert!(verify(&"00".repeat(32)).is_err(), "the signer is pinned");
+
+        // Someone with write access to the file rebuilds the whole chain
+        // around an edited entry. The chain verifies again on its own...
+        let raw = rusqlite::Connection::open(&state).unwrap();
+        raw.execute_batch(
+            "DROP TRIGGER audit_log_no_update;
+             UPDATE audit_log SET detail='rewritten' WHERE seq=(SELECT MIN(seq) FROM audit_log);",
+        )
+        .unwrap();
+        let rows = raw
+            .prepare("SELECT seq,at,request_id,actor,tenant_id,action,resource,decision,detail FROM audit_log ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut previous = [0_u8; 32];
+        for (seq, at, request_id, actor, tenant, action, resource, decision, detail) in rows {
+            let hash = audit::chain_hash(
+                &previous,
+                &audit::AuditEntry {
+                    at,
+                    request_id: &request_id,
+                    actor: &actor,
+                    tenant: tenant.as_deref(),
+                    action: &action,
+                    resource: &resource,
+                    allowed: decision == "allow",
+                    detail: &detail,
+                },
+            );
+            raw.execute(
+                "UPDATE audit_log SET prev_hash=?2,hash=?3 WHERE seq=?1",
+                rusqlite::params![seq, previous.as_slice(), hash.as_slice()],
+            )
+            .unwrap();
+            previous = hash;
+        }
+        drop(raw);
+        assert!(
+            store::Store::open(&state)
+                .unwrap()
+                .verify_audit_chain()
+                .is_ok()
+        );
+        // ...but no longer matches what was published.
+        let error = verify(&public_key).unwrap_err();
+        assert!(error.contains("rewritten after the checkpoint"), "{error}");
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

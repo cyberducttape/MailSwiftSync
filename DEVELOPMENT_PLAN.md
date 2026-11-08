@@ -161,6 +161,16 @@ Each finding was checked against the code before any change.
 | P2 Plan secrets detected by field name | Confirmed; fixed | A plan must be the `mailswiftsync.worker-plan` v1 document, with only its known fields and typed values (64-hex digests, bounded names). Results are limited to `job_id`, `plan_revision`, and `detail`. Unknown keys are refused whatever they are called. |
 | P2 Lease renewal stops before completion is acknowledged | Confirmed; fixed | Reporting now runs inside the renewal scope, so the lease is renewed through completion retries. A test shows renewals during refused reports; with the old ordering it saw none. |
 
+**§8 enterprise-readiness follow-ups (2026-11-07):**
+
+| Finding | Verdict | What changed |
+|---|---|---|
+| Five bad passwords lock a known account | Confirmed; fixed | Failures count per (account, client), keyed like the OIDC quota, and lock only that client; the account itself locks after 50 failures from all clients. `password_sign_in_for_linked_accounts = false` (IdP-first) refuses passwords for linked accounts without counting them, so they cannot be locked out by guessing. |
+| `/healthz` has no readiness check | Confirmed; fixed | `/readyz` takes the write lock in a rolled-back transaction, checks the schema version, and reads the audit chain head; `503` otherwise. `/healthz` stays liveness. |
+| One SQLite connection behind a mutex | Confirmed; measured | An opt-in benchmark drives audited reads over loopback HTTP: about 1,400–1,500 requests/s on NVMe with p99 74 ms at 32 clients, bounded by serialized commits. Documented with guidance; a pool or another database is part of M6. |
+| OIDC fetches under the metadata mutex | Confirmed; fixed | Fetches run outside the cache lock, under a refresh lock only refreshers take; a test shows a stalled refresh no longer blocks sign-ins served from the cache. |
+| No external audit anchor | Confirmed; fixed | `control audit-checkpoint` writes a signed chain head to publish outside the service; `audit-verify --checkpoint` catches a chain rebuilt after an edit, which the chain alone cannot. |
+
 ### R4. Scale and usability review (2026-11-07)
 
 | Finding | Verdict | What changed or is planned |
@@ -195,10 +205,10 @@ response buffer.
 4. **`doctor` gaps.** Optional `--connect` checks for OAuth refresh and
    TLS reachability of configured accounts, and a remediation line for
    every failing check.
-5. **Plan export at MSP scale (needs a decision).** Either raise the plan
-   limit with paged plan upload, or bind approval to a Merkle root over
-   the (job ID, plan digest) pairs, with workers proving membership. The
-   second keeps plans small but changes the approval document format.
+5. **Plan export at MSP scale: paged plan upload (decided 2026-11-07).**
+   Keep the approval document format; store plan mailboxes as rows and
+   upload large plans in pages that commit as one new revision. Leases
+   carry only the leased mailbox's entry.
 
 ### M7. Typed errors through the producers (review L-01)
 
@@ -224,6 +234,8 @@ provider quotas needs:
   when it is unreachable;
 - trace correlation from tenant to worker;
 - possibly the PostgreSQL scheduler the review proposes;
+- a connection pool or another database for the control plane, once load
+  approaches the measured plateau of about 1,500 audited requests/s;
 - several leases running inside one worker agent, through the batch
   worker pool under one ledger lock (review R3 P1). Today an agent runs one
   assignment at a time and parallelism comes from one agent per ledger.

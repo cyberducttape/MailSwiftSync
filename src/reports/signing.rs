@@ -425,6 +425,7 @@ fn verify_document(
         "mailswiftsync-project-report"
             | "mailswiftsync-customer-proof"
             | "mailswiftsync-migration-assurance"
+            | crate::cli::CONTROL_AUDIT_CHECKPOINT_FORMAT
     ) {
         return Err("Unsupported migration proof format.".into());
     }

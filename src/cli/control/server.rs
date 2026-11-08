@@ -329,4 +329,120 @@ mod tests {
         );
         assert_eq!(read(raw.as_bytes()).map(|body| body.len()), Ok(body.len()));
     }
+
+    /// Opt-in: `MAILSWIFTSYNC_BENCH_DIR=target cargo test --release
+    /// control_plane_concurrency_benchmark -- --ignored --nocapture`. Audited reads over loopback HTTP against an
+    /// on-disk WAL database; every request also commits an audit entry, so
+    /// this measures the single serialized connection under write load.
+    #[test]
+    #[ignore = "benchmark"]
+    fn control_plane_concurrency_benchmark() {
+        use super::super::store::{Actor, Store, test_plan};
+        // Point MAILSWIFTSYNC_BENCH_DIR at real disk: on tmpfs, fsync is free.
+        let directory = std::env::var_os("MAILSWIFTSYNC_BENCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("mss-control-bench-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let store = Store::open(&directory.join("control.db")).unwrap();
+        let password = super::super::authn::test_secret();
+        let admin = store
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
+            .unwrap();
+        let actor = Actor {
+            request_id: "bench",
+            label: format!("user:{admin}"),
+        };
+        let mut tenants = Vec::new();
+        for index in 0..20 {
+            let tenant = store
+                .create_tenant(&format!("Tenant {index}"), &actor)
+                .unwrap();
+            for project in 0..5 {
+                store
+                    .create_project(
+                        &tenant.id,
+                        &format!("Move {project}"),
+                        &test_plan("ledger"),
+                        &actor,
+                    )
+                    .unwrap();
+            }
+            tenants.push(tenant.id);
+        }
+        let (token, _) = store
+            .login("admin@msp.example", &password, "bench", None, false)
+            .unwrap();
+        let token = token.to_string();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let context = Arc::new(api::Context { store, oidc: None });
+        std::thread::spawn(move || serve(listener, context, None));
+
+        for clients in [1_usize, 8, 32] {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let latencies = std::thread::scope(|scope| {
+                let workers = (0..clients)
+                    .map(|client| {
+                        let token = &token;
+                        let tenants = &tenants;
+                        scope.spawn(move || {
+                            let http = reqwest::blocking::Client::new();
+                            let mut latencies = Vec::new();
+                            let mut refused = Vec::new();
+                            let mut index = client;
+                            while Instant::now() < deadline {
+                                let tenant = &tenants[index % tenants.len()];
+                                index += 1;
+                                let started = Instant::now();
+                                match http
+                                    .get(format!("http://{address}/v1/tenants/{tenant}/projects"))
+                                    .bearer_auth(token)
+                                    .send()
+                                {
+                                    Ok(response) if response.status() == 200 => {
+                                        latencies.push(started.elapsed());
+                                    }
+                                    Ok(response) => refused.push(response.status().to_string()),
+                                    Err(error) => refused.push(error.to_string()),
+                                }
+                            }
+                            (latencies, refused)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let mut latencies = Vec::new();
+                let mut refused = Vec::new();
+                for worker in workers {
+                    let (mut ok, mut failed) = worker.join().unwrap();
+                    latencies.append(&mut ok);
+                    refused.append(&mut failed);
+                }
+                (latencies, refused)
+            });
+            let (latencies, refused) = latencies;
+            if let Some(first) = refused.first() {
+                println!(
+                    "control-plane clients={clients} refused={} first={first}",
+                    refused.len()
+                );
+            }
+            let mut sorted = latencies;
+            sorted.sort();
+            let percentile = |p: usize| sorted[(sorted.len() * p / 100).min(sorted.len() - 1)];
+            println!(
+                "control-plane clients={clients} requests={} per_second={:.0} p50_ms={:.1} p99_ms={:.1}",
+                sorted.len(),
+                sorted.len() as f64 / 5.0,
+                percentile(50).as_secs_f64() * 1000.0,
+                percentile(99).as_secs_f64() * 1000.0,
+            );
+        }
+        let _ = std::fs::remove_dir_all(directory);
+    }
 }

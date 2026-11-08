@@ -125,7 +125,16 @@ fn route(call: &Call<'_>) -> Handled {
         .collect::<Vec<_>>();
     let method = call.request.method.as_str();
     match (method, segments.as_slice()) {
+        // Liveness: the process answers. Readiness: storage and the audit
+        // log can serve a request.
         ("GET", ["healthz"]) => Ok(Response::ok(&json!({ "status": "ok" }))),
+        ("GET", ["readyz"]) => Ok(match call.store().readiness() {
+            Ok(()) => Response::ok(&json!({ "status": "ready" })),
+            Err(error) => {
+                eprintln!("Control plane is not ready: {error:?}");
+                Response::error(503, "Service Unavailable", "not ready")
+            }
+        }),
         ("POST", ["v1", "auth", "login"]) => login(call),
         ("POST", ["v1", "auth", "logout"]) => logout(call),
         ("GET", ["v1", "auth", "oidc", provider, "start"]) => oidc_start(call, provider),
@@ -333,10 +342,16 @@ struct LoginBody {
 
 fn login(call: &Call<'_>) -> Handled {
     let body: LoginBody = call.body()?;
-    match call
-        .store()
-        .login(&body.email, body.password.as_str(), &call.request_id)
-    {
+    match call.store().login(
+        &body.email,
+        body.password.as_str(),
+        &call.request_id,
+        super::oidc::client_key(call.request.peer).as_deref(),
+        call.context
+            .oidc
+            .as_ref()
+            .is_some_and(|oidc| oidc.idp_first),
+    ) {
         Ok((token, expires_at)) => Ok(Response::created(&json!({
             "token": token.as_str(),
             "expires_at": expires_at,
@@ -1195,6 +1210,7 @@ mod tests {
             401
         );
         assert_eq!(harness.call("GET", "/healthz", None, None).0, 200);
+        assert_eq!(harness.call("GET", "/readyz", None, None).0, 200);
         let (status, _) = harness.call(
             "POST",
             "/v1/auth/login",
@@ -1243,6 +1259,22 @@ mod tests {
             })),
         );
         assert_eq!(locked, unknown);
+    }
+
+    #[test]
+    fn readiness_reports_unusable_storage_while_liveness_stays_up() {
+        let harness = Harness::new();
+        assert_eq!(harness.call("GET", "/readyz", None, None).0, 200);
+        harness
+            .context
+            .store
+            .lock()
+            .execute_batch("PRAGMA user_version=99;")
+            .unwrap();
+        let (status, body) = harness.call("GET", "/readyz", None, None);
+        assert_eq!(status, 503, "{body}");
+        assert_eq!(body["error"], "not ready", "no storage detail is exposed");
+        assert_eq!(harness.call("GET", "/healthz", None, None).0, 200);
     }
 
     #[test]

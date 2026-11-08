@@ -64,6 +64,9 @@ const WEBHOOK_USAGE: &str = "Usage: mailswiftsync notify-webhook <state.db> <htt
 /// Required for unattended live runs whose plan may remove destination-only
 /// state (Dovecot backup mirror or imapsync --delete2).
 const ACKNOWLEDGE_DESTINATION_LOSS: &str = "--acknowledge-destination-loss";
+/// Format of a control-plane audit checkpoint; `verify` accepts its
+/// signature like a proof's.
+pub(crate) const CONTROL_AUDIT_CHECKPOINT_FORMAT: &str = "mailswiftsync-control-audit-checkpoint";
 
 pub(crate) fn run() -> eframe::Result<()> {
     let mut arguments = std::env::args_os();
