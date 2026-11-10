@@ -1,0 +1,42 @@
+[Unit]
+Description=MailSwiftSync central control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mailswiftsync
+Group=mailswiftsync
+ExecStart=/usr/bin/mailswiftsync control serve /var/lib/mailswiftsync/control.db --listen 127.0.0.1:9470
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectKernelLogs=true
+ProtectHostname=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+ReadWritePaths=/var/lib/mailswiftsync
+StateDirectory=mailswiftsync
+StateDirectoryMode=0700
+RuntimeDirectory=mailswiftsync
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=/run/mailswiftsync
+
+[Install]
+WantedBy=multi-user.target

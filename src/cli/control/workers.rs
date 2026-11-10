@@ -91,6 +91,16 @@ CREATE INDEX assignments_lease ON assignments(tenant_id, state, created_at);
 CREATE INDEX assignments_project ON assignments(tenant_id, project_id);
 ";
 
+/// Control-plane database version 7: find a mailbox's assignments and page
+/// a project's assignments without scanning or sorting them all.
+pub(super) const SCHEMA_V7: &str = "
+CREATE INDEX assignments_project_mailbox ON assignments(project_id, mailbox, state);
+CREATE INDEX assignments_project_order ON assignments(tenant_id, project_id, created_at, id);
+";
+
+/// Assignments in one listing page.
+pub(super) const MAX_ASSIGNMENT_PAGE: usize = 1_000;
+
 pub(super) const MAX_ENROLLMENT_MINUTES: i64 = 60;
 pub(super) const DEFAULT_LEASE_SECONDS: i64 = 300;
 pub(super) const MAX_LEASE_SECONDS: i64 = 900;
@@ -286,6 +296,10 @@ impl Store {
         let created_at = now();
         let expires_at = created_at + minutes * 60;
         self.mutate(actor, Some(tenant), "worker.enrollment_create", &format!("worker_name:{name}"), "", |tx| {
+            tx.execute(
+                "DELETE FROM worker_enrollments WHERE expires_at<=?1",
+                [created_at - store::EXPIRED_CREDENTIAL_KEEP_SECONDS],
+            )?;
             let taken: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM workers WHERE tenant_id=?1 AND name=?2)",
                 params![tenant, name],
@@ -460,7 +474,10 @@ impl Store {
     }
 
     /// Queue one assignment per mailbox job ID. The project's plan must be
-    /// approved at its current revision and list every one of them.
+    /// approved at its current revision and list every one of them. A
+    /// mailbox with unfinished work is refused: two workers running the same
+    /// mailbox could copy a message twice, and a client retrying a request
+    /// whose answer it lost must not queue the work again.
     pub(super) fn create_assignments(
         &self,
         tenant: &str,
@@ -514,6 +531,18 @@ impl Store {
                     }
                 }
                 drop(listed);
+                let mut seen = std::collections::BTreeSet::new();
+                let mut unfinished = tx.prepare(
+                    "SELECT 1 FROM assignments WHERE project_id=?1 AND mailbox=?2 AND state IN ('queued','leased','needs_reconciliation')",
+                )?;
+                for mailbox in &labels {
+                    if !seen.insert(mailbox) || unfinished.exists(params![project, mailbox])? {
+                        return Err(StoreError::Conflict(format!(
+                            "mailbox {mailbox:?} already has unfinished work in this project"
+                        )));
+                    }
+                }
+                drop(unfinished);
                 let at = now();
                 for (id, mailbox) in ids.iter().zip(&labels) {
                     tx.execute(
@@ -538,10 +567,14 @@ impl Store {
             .collect()
     }
 
+    /// A page of a project's assignments in creation order, after the
+    /// assignment `after`.
     pub(super) fn assignments(
         &self,
         tenant: &str,
         project: &str,
+        after: Option<&str>,
+        limit: usize,
     ) -> StoreResult<Vec<AssignmentView>> {
         let connection = self.lock();
         let exists: bool = connection.query_row(
@@ -552,11 +585,34 @@ impl Store {
         if !exists {
             return Err(StoreError::NotFound);
         }
+        let position = after
+            .map(|id| {
+                connection
+                    .query_row(
+                        "SELECT created_at FROM assignments WHERE tenant_id=?1 AND project_id=?2 AND id=?3",
+                        params![tenant, project, id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .ok_or_else(|| StoreError::Invalid("after names no assignment here".into()))
+            })
+            .transpose()?;
         let mut statement = connection.prepare(&format!(
-            "SELECT {ASSIGNMENT_COLUMNS} FROM assignments WHERE tenant_id=?1 AND project_id=?2 ORDER BY created_at,id"
+            "SELECT {ASSIGNMENT_COLUMNS} FROM assignments
+             WHERE tenant_id=?1 AND project_id=?2 AND (?3 IS NULL OR (created_at,id)>(?3,?4))
+             ORDER BY created_at,id LIMIT ?5"
         ))?;
         let assignments = statement
-            .query_map(params![tenant, project], assignment_from_row)?
+            .query_map(
+                params![
+                    tenant,
+                    project,
+                    position,
+                    after,
+                    limit.clamp(1, MAX_ASSIGNMENT_PAGE) as i64
+                ],
+                assignment_from_row,
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(assignments)
     }
@@ -853,6 +909,100 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_mailbox_with_unfinished_work_cannot_be_queued_again() {
+        let fixture = fixture();
+        fixture.approve();
+        let mailbox = "a@acme.example".to_owned();
+        let queue = |mailboxes: &[String]| {
+            fixture.store.create_assignments(
+                &fixture.tenant,
+                &fixture.project,
+                mailboxes,
+                &fixture.admin,
+            )
+        };
+        let [assignment] = &queue(std::slice::from_ref(&mailbox)).unwrap()[..] else {
+            panic!("one assignment");
+        };
+        // A retried request, while queued.
+        assert!(matches!(
+            queue(std::slice::from_ref(&mailbox)),
+            Err(StoreError::Conflict(_))
+        ));
+        let worker = fixture.worker(&fixture.tenant, "agent");
+        let lease = fixture.store.lease(&worker, 60, "test").unwrap().unwrap();
+        assert_eq!(lease.assignment_id, assignment.id);
+        // While a worker is running it.
+        assert!(matches!(
+            queue(std::slice::from_ref(&mailbox)),
+            Err(StoreError::Conflict(_))
+        ));
+        fixture
+            .store
+            .complete(
+                &worker,
+                &lease.assignment_id,
+                lease.fencing_token,
+                Outcome::Failed,
+                &serde_json::json!({"job_id": "a@acme.example", "plan_revision": lease.plan_revision, "detail": "retry"}),
+                "test",
+            )
+            .unwrap();
+        // Finished work may be run again.
+        queue(std::slice::from_ref(&mailbox)).unwrap();
+        // The same mailbox twice in one request.
+        assert!(matches!(
+            queue(&["b@acme.example".to_owned(), "b@acme.example".to_owned()]),
+            Err(StoreError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn assignments_are_listed_in_stable_pages() {
+        let fixture = fixture();
+        fixture.approve();
+        let created = fixture
+            .store
+            .create_assignments(
+                &fixture.tenant,
+                &fixture.project,
+                &[
+                    "a@acme.example".to_owned(),
+                    "b@acme.example".to_owned(),
+                    "job-1".to_owned(),
+                ],
+                &fixture.admin,
+            )
+            .unwrap();
+        let mut seen = Vec::new();
+        let mut after = None;
+        loop {
+            let page = fixture
+                .store
+                .assignments(&fixture.tenant, &fixture.project, after.as_deref(), 2)
+                .unwrap();
+            let Some(last) = page.last() else { break };
+            after = Some(last.id.clone());
+            seen.extend(page.iter().map(|assignment| assignment.id.clone()));
+        }
+        let mut expected = created
+            .iter()
+            .map(|assignment| assignment.id.clone())
+            .collect::<Vec<_>>();
+        expected.sort();
+        let mut sorted = seen.clone();
+        sorted.sort();
+        assert_eq!(sorted, expected);
+        assert_eq!(seen.len(), 3);
+        assert!(matches!(
+            fixture
+                .store
+                .assignments(&fixture.tenant, &fixture.project, Some("asg_none"), 2),
+            Err(StoreError::Invalid(_))
+        ));
+    }
+
     impl Fixture {
         fn approve(&self) {
             let revision = self
@@ -929,9 +1079,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            fixture
-                .store
-                .assignments(&fixture.other_tenant, &fixture.project),
+            fixture.store.assignments(
+                &fixture.other_tenant,
+                &fixture.project,
+                None,
+                MAX_ASSIGNMENT_PAGE
+            ),
             Err(StoreError::NotFound)
         );
         let outsider = fixture.worker(&fixture.other_tenant, "globex-1");
@@ -1017,7 +1170,7 @@ mod tests {
             .unwrap();
         let stored = &fixture
             .store
-            .assignments(&fixture.tenant, &fixture.project)
+            .assignments(&fixture.tenant, &fixture.project, None, MAX_ASSIGNMENT_PAGE)
             .unwrap()[0];
         assert_eq!(stored.state, "completed");
         assert_eq!(stored.result, Some(result));
@@ -1181,7 +1334,7 @@ mod tests {
         assert!(
             second
                 .store
-                .assignments(&second.tenant, &second.project)
+                .assignments(&second.tenant, &second.project, None, MAX_ASSIGNMENT_PAGE)
                 .is_err()
         );
     }
@@ -1239,7 +1392,7 @@ mod tests {
         let state = |fixture: &Fixture| {
             fixture
                 .store
-                .assignments(&fixture.tenant, &fixture.project)
+                .assignments(&fixture.tenant, &fixture.project, None, MAX_ASSIGNMENT_PAGE)
                 .unwrap()[0]
                 .state
                 .clone()

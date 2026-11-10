@@ -224,7 +224,7 @@ fn route(call: &Call<'_>) -> Handled {
             revoke_worker(call, tenant, worker)
         }
         ("GET", ["v1", "tenants", tenant, "projects", project, "assignments"]) => {
-            list_assignments(call, tenant, project)
+            list_assignments(call, tenant, project, query)
         }
         ("POST", ["v1", "tenants", tenant, "projects", project, "assignments"]) => {
             create_assignments(call, tenant, project)
@@ -1076,7 +1076,7 @@ fn revoke_worker(call: &Call<'_>, tenant: &str, worker: &str) -> Handled {
     ))
 }
 
-fn list_assignments(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
+fn list_assignments(call: &Call<'_>, tenant: &str, project: &str, query: &str) -> Handled {
     let principal = call.principal()?;
     let resource = format!("project:{project}");
     call.require_in_tenant(
@@ -1086,7 +1086,30 @@ fn list_assignments(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
         "assignment.list",
         &resource,
     )?;
-    let assignments = call.store().assignments(tenant, project)?;
+    let mut after = None;
+    let mut limit = workers::MAX_ASSIGNMENT_PAGE;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        match &*key {
+            "after" => after = Some(value.into_owned()),
+            "limit" => {
+                limit = value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|limit| (1..=workers::MAX_ASSIGNMENT_PAGE).contains(limit))
+                    .ok_or_else(|| {
+                        Response::error(
+                            400,
+                            "Bad Request",
+                            &format!("limit must be 1 to {}", workers::MAX_ASSIGNMENT_PAGE),
+                        )
+                    })?;
+            }
+            _ => {}
+        }
+    }
+    let assignments = call
+        .store()
+        .assignments(tenant, project, after.as_deref(), limit)?;
     call.audit(
         &principal.actor(),
         Some(tenant),
@@ -1094,7 +1117,12 @@ fn list_assignments(call: &Call<'_>, tenant: &str, project: &str) -> Handled {
         &resource,
         true,
     )?;
-    Ok(Response::ok(&json!({ "assignments": assignments })))
+    let next_after = (assignments.len() == limit)
+        .then(|| assignments.last().map(|assignment| assignment.id.clone()))
+        .flatten();
+    Ok(Response::ok(
+        &json!({ "assignments": assignments, "next_after": next_after }),
+    ))
 }
 
 #[derive(Deserialize)]

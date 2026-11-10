@@ -175,7 +175,7 @@ Each finding was checked against the code before any change.
 
 | Finding | Verdict | What changed or is planned |
 |---|---|---|
-| Control HTTP server: thread per connection, fixed 32 | Confirmed | Throughput is bounded by serialized SQLite commits (about 1,500 audited requests/s, #168), not by the thread count, so more threads alone would not raise it. A `--max-connections` option waits for #168 to merge (both touch the CLI option list). An async server or pool belongs with M6. |
+| Control HTTP server: thread per connection, fixed 32 | Confirmed | Throughput is bounded by serialized SQLite commits (about 1,500 audited requests/s, #168), not by the thread count, so more threads alone would not raise it. `--max-connections` shipped with R5. An async server or pool belongs with M6. |
 | Central SQLite store behind one mutex | Confirmed; measured in #168 | Every API request commits an audit entry, so a read pool would not remove the bottleneck. A pool or another database is an M6 item. |
 | Agent runs one assignment per loop | Confirmed; staged in M6 | Recorded with R3. |
 | Plan export is one JSON object listing every mailbox | Confirmed; design decision needed | The 256 KiB plan limit holds about 2,000 mailboxes. Options in M8. |
@@ -185,6 +185,26 @@ Each finding was checked against the code before any change.
 | `docs/control-plane.md` says the worker agent is still to come | Confirmed; fixed | The agent shipped in #152; the intro now describes it. |
 | Installer: no native Windows/macOS installers or signed repositories | Agreed; blocked on people | Needs signing identities and repository hosting; see "Blocked on people". |
 | A `doctor` that reports readiness with remediation | Mostly met | `mailswiftsync doctor [--strict]` already reports the OS, engine version and qualification (with an install hint), TLS/auth modes, keyring references, database state, owner-only directories, and free space, with exit codes for automation. Missing: OAuth token readiness, live TLS reachability, and a remediation line for every check. Staged in M8. |
+
+### R5. Production-readiness audit (2026-11-09)
+
+Run against `main` at `9bd15639`. Every finding below was reproduced or read in the code.
+
+| Finding | Verdict | What changed |
+|---|---|---|
+| Weekly dependency audit failing on `fuzz/Cargo.lock` (RUSTSEC-2026-0459) | Confirmed; fixed | `rusqlite` 0.41 in the fuzz workspace. PR CI and releases audited only the main lockfile, so nothing caught it before the weekly run; both now audit it. |
+| Request deadlines were per socket call, so a trickled TLS handshake or record held a slot indefinitely | Confirmed; fixed | `DeadlineStream` enforces absolute read and write deadlines beneath TLS, in both HTTP listeners. |
+| Connection slots leaked when a request thread panicked | Confirmed; fixed | RAII `ConnectionSlot`. |
+| `control serve` dropped connections over its ceiling, which was fixed at 32 | Confirmed; fixed | `503` with `Retry-After`; `--max-connections` (R4's deferred item). |
+| The same mailbox could be queued twice, so two workers could copy it at once | Confirmed; fixed | Refused while queued, leased, or awaiting reconciliation. |
+| `GET …/assignments` returned every row of a plan that can hold 1,000,000 | Confirmed; fixed | Keyset pages of up to 1,000. |
+| A paged upload could be committed by someone other than its author, who could then approve it | Confirmed; fixed | Only the uploader may add pages or commit. |
+| No backup for the control-plane database, which holds the audit log and identities | Confirmed; fixed | `control backup`, with a restore procedure in docs/control-plane.md. |
+| Expired sessions and enrollment tokens were never removed | Confirmed; fixed | Pruned a week after expiry. |
+| Docs said the control plane did not exist | Confirmed; fixed | PRODUCTION_STATUS.md updated. |
+| Panic sites in production code | Checked; no defect | Clippy's restriction lints find 23 in non-test code, all on invariants established just above them. |
+| Workflow action pinning | Checked; no defect | Pinned through `.github/workflows/actions.lock`, verified by CI. |
+| Open code-scanning alerts | Checked; none | |
 
 ### M8. Verification at any message size, and planning it up front
 

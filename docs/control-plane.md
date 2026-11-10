@@ -29,6 +29,8 @@ mailswiftsync control init /srv/mailswiftsync/control.db \
   --admin-email admin@msp.example --admin-password-file admin-password
 mailswiftsync control serve /srv/mailswiftsync/control.db \
   --listen 0.0.0.0:9470 --tls-cert server.pem --tls-key server-key.pem
+mailswiftsync control backup /srv/mailswiftsync/control.db \
+  --output /srv/backups/control-$(date +%F).db
 mailswiftsync control audit-verify /srv/mailswiftsync/control.db
 mailswiftsync control audit-checkpoint /srv/mailswiftsync/control.db \
   --output checkpoint.json --signing-key audit-key.pk8
@@ -42,7 +44,24 @@ mailswiftsync control audit-verify /srv/mailswiftsync/control.db \
 - `serve` listens on `127.0.0.1:9470` by default. A non-loopback address
   needs `--tls-cert`/`--tls-key`, or `--allow-non-loopback` to acknowledge a
   TLS-terminating reverse proxy in front.
+- `--max-connections` (default 32, up to 4,096) sets how many requests are
+  handled at once. Beyond it, plain HTTP connections, including those from
+  a reverse proxy, get `503` with `Retry-After: 1`, and TLS connections are
+  closed. Each request must arrive whole within 10 seconds and its response
+  must be read within 30, so a slow client cannot hold a connection longer.
 - `audit-verify` recomputes the audit hash chain offline.
+- `backup` copies the database while the service runs. It refuses to
+  overwrite a file, and keeps the copy only if SQLite's integrity check and
+  the full audit hash chain pass. Schedule it, and store copies off the host.
+  To restore: stop the service, copy a backup to the database path (mode
+  `0600`, no leftover `-wal` or `-shm` files beside it), run `audit-verify`
+  against it and any recent checkpoint, then start the service. A restore
+  rewinds the audit log, so `audit-verify --checkpoint` fails on a
+  checkpoint taken after the backup, reporting its entry as missing; that
+  is expected, and it is why a restore should be recorded outside the
+  service. Assignments leased after the
+  backup are unknown to the restored service; check those workers and
+  mailboxes before queuing them again.
 
 The service is single-node: one process owns the SQLite file. Do not put the
 file on a network filesystem or share it between processes.
@@ -61,7 +80,7 @@ NVMe/ext4, AMD Ryzen 7 7735U under load average 11):
 | 32 | 1,375 | 19.7 ms | 74.0 ms |
 
 At 32 clients a few requests (3 of about 6,900) were refused by the
-32-connection cap. Worker agents poll every 30 seconds and renew every
+default 32-connection cap. Worker agents poll every 30 seconds and renew every
 third of their lease, so this leaves wide headroom for hundreds of
 workers; rerun the benchmark on the target host before a large
 multi-tenant deployment, and treat sustained load near the plateau as the
@@ -252,7 +271,9 @@ customer's work.
 3. **Queue work.** A user with `assignment:create` queues one assignment per
    mailbox label: `POST /v1/tenants/{t}/projects/{p}/assignments`
    `{mailboxes: [...]}`. The project's plan must be approved at its current
-   revision.
+   revision. A mailbox with unfinished work (queued, leased, or needing
+   reconciliation) in the project is refused with `409`, so a retried
+   request cannot queue it twice.
 4. **Lease.** The worker calls `POST /v1/worker/lease` `{lease_seconds}`
    (30–900, default 300) and receives one assignment: the non-secret plan,
    the mailbox label, and a **fencing token**. The mailbox's credentials are
@@ -361,7 +382,9 @@ A paged upload:
 
 1. **Start** with the revision it replaces, the header, and the number of
    mailboxes. Any unfinished upload for the project is discarded; an
-   upload expires after an hour.
+   upload expires after an hour. Only the user who started an upload can
+   add pages or commit it, so the plan's author is always the recorded
+   last editor and cannot be its approver.
 2. **Send pages** numbered from 1, each up to 2,000 entries, validated like
    a whole plan. Sending a page again with the same entries succeeds, so a
    client can retry after a network failure; different entries under the
@@ -403,7 +426,8 @@ matches the audit entry.
 | `POST /v1/tenants/{t}/projects/{p}/plan/uploads/{u}/commit` | `project:write` |
 | `POST /v1/tenants/{t}/projects/{p}/approve` `{revision}` | `project:approve`, not the last editor |
 | `GET /v1/tenants/{t}/workers`, `POST …/workers/enrollments`, `POST …/workers/{w}/revoke` | `worker:manage` |
-| `GET`/`POST /v1/tenants/{t}/projects/{p}/assignments` `{mailboxes}` | `assignment:read` / `assignment:create` |
+| `GET /v1/tenants/{t}/projects/{p}/assignments?after=&limit=` (up to 1,000 per page, `next_after` to continue) | `assignment:read` |
+| `POST /v1/tenants/{t}/projects/{p}/assignments` `{mailboxes}` | `assignment:create` |
 | `POST /v1/tenants/{t}/projects/{p}/assignments/{a}/requeue` `{reason}` | `assignment:create` |
 | `POST /v1/worker/enroll` `{capabilities}` | enrollment token |
 | `POST /v1/worker/lease`, `POST /v1/worker/assignments/{a}/renew` and `/complete` | worker credential |
