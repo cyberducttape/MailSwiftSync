@@ -6,7 +6,9 @@
 //! are capped, and the whole request must arrive within one deadline.
 
 use super::api::{self, Request, Response};
-use crate::cli::serve::http::{BeginResponse, ConnectionSlot, DeadlineStream, refuse_and_linger};
+use crate::cli::serve::connection::{
+    BeginResponse, ConnectionSlot, DeadlineStream, refuse_and_linger,
+};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;

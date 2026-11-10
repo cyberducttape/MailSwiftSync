@@ -1574,6 +1574,122 @@ mod tests {
         assert_eq!((status, verified["intact"].clone()), (200, json!(true)));
     }
 
+    /// Every tenant-scoped route, called by a manager of another tenant,
+    /// both on the victim's tenant and with the caller's own tenant
+    /// substituted for it. Nothing may answer other than not-found, so a
+    /// new route has to be added here to be considered reviewed.
+    #[test]
+    fn no_tenant_route_reaches_another_tenants_data() {
+        let harness = Harness::new();
+        let admin = harness.login("admin@msp.example", &harness.admin_password);
+        let acme = harness.tenant(&admin, "Acme");
+        let globex = harness.tenant(&admin, "Globex");
+        let acme_manager = harness.user(&admin, "m@acme.example", "manager", &acme);
+        let attacker = harness.user(&admin, "m@globex.example", "manager", &globex);
+        let (_, project) = harness.call(
+            "POST",
+            &format!("/v1/tenants/{acme}/projects"),
+            Some(&acme_manager),
+            Some(json!({ "name": "Move", "plan": store::test_plan("ledger") })),
+        );
+        let project = project["id"].as_str().unwrap().to_owned();
+        let plan = store::test_plan("ledger");
+        let mut header = plan.clone();
+        header.as_object_mut().unwrap().remove("mailboxes");
+        let (status, upload) = harness.call(
+            "POST",
+            &format!("/v1/tenants/{acme}/projects/{project}/plan/uploads"),
+            Some(&acme_manager),
+            Some(json!({ "revision": 1, "header": header, "mailbox_count": 1 })),
+        );
+        assert_eq!(status, 201, "{upload}");
+        let upload = upload["upload_id"].as_str().unwrap().to_owned();
+        let page =
+            json!({ "mailboxes": { "job-9": { "label": "L", "plan_sha256": "e".repeat(64) } } });
+        let empty = json!({});
+
+        let routes: Vec<(&str, String, Option<Value>)> = vec![
+            ("GET", "projects".into(), None),
+            ("GET", format!("projects/{project}"), None),
+            (
+                "PUT",
+                format!("projects/{project}/plan"),
+                Some(json!({ "plan": plan, "revision": 1 })),
+            ),
+            ("GET", format!("projects/{project}/plan/mailboxes"), None),
+            (
+                "POST",
+                format!("projects/{project}/plan/uploads"),
+                Some(json!({ "revision": 1, "header": header, "mailbox_count": 1 })),
+            ),
+            (
+                "PUT",
+                format!("projects/{project}/plan/uploads/{upload}/pages/1"),
+                Some(page),
+            ),
+            (
+                "POST",
+                format!("projects/{project}/plan/uploads/{upload}/commit"),
+                Some(empty.clone()),
+            ),
+            (
+                "POST",
+                format!("projects/{project}/approve"),
+                Some(json!({ "revision": 1 })),
+            ),
+            ("GET", format!("projects/{project}/assignments"), None),
+            (
+                "POST",
+                format!("projects/{project}/assignments"),
+                Some(json!({ "mailboxes": ["a@acme.example"] })),
+            ),
+            (
+                "POST",
+                format!("projects/{project}/assignments/asg_x/requeue"),
+                Some(json!({ "reason": "because" })),
+            ),
+        ];
+        for (method, path, body) in &routes {
+            for tenant in [&acme, &globex] {
+                let target = format!("/v1/tenants/{tenant}/{path}");
+                // Listing the attacker's own (empty) tenant is legitimate.
+                if tenant == &globex && *method == "GET" && path == "projects" {
+                    continue;
+                }
+                let (status, answer) = harness.call(method, &target, Some(&attacker), body.clone());
+                assert_eq!(status, 404, "{method} {target}: {answer}");
+            }
+        }
+        for (method, path, body) in [
+            ("GET", "workers", None),
+            (
+                "POST",
+                "workers/enrollments",
+                Some(json!({ "name": "w", "expires_in_minutes": 5 })),
+            ),
+            ("POST", "workers/wrk_x/revoke", Some(empty.clone())),
+            ("GET", "audit", None),
+            (
+                "POST",
+                "api-keys",
+                Some(json!({ "name": "k", "scopes": ["project:read"], "expires_in_days": 1 })),
+            ),
+        ] {
+            let target = format!("/v1/tenants/{acme}/{path}");
+            let (status, answer) = harness.call(method, &target, Some(&attacker), body);
+            assert_eq!(status, 404, "{method} {target}: {answer}");
+        }
+        // The victim's plan was not touched by any of it.
+        let (_, stored) = harness.call(
+            "GET",
+            &format!("/v1/tenants/{acme}/projects/{project}"),
+            Some(&acme_manager),
+            None,
+        );
+        assert_eq!(stored["plan_revision"], 1, "{stored}");
+        assert_eq!(stored["approved_revision"], Value::Null, "{stored}");
+    }
+
     #[test]
     fn roles_limit_actions_within_a_tenant() {
         let harness = Harness::new();

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `mailswiftsync doctor` adds a `remediation` line to every check that is
+  not ready, and `--connect` tests TLS and the greeting for the saved
+  plan's accounts without signing in. OAuth refresh settings are loaded but
+  not exchanged, since an exchange can rotate the token.
+- The preflight capacity row now always says what to plan for: stage disk,
+  matching time, and, for body-content verification, the bytes to read.
+- A systemd unit for the control plane ships in the packages
+  (`mailswiftsync-control.service`).
 - Both HTTP listeners now enforce their request deadlines beneath TLS. A
   client sending a handshake one byte at a time could previously hold a
   connection slot indefinitely, and enough of them could stop the service.

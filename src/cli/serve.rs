@@ -4,6 +4,7 @@
 //! approval. Reads never take an instance lock; `supervise` remains the
 //! per-ledger worker.
 
+pub(super) mod connection;
 mod controls;
 pub(super) mod http;
 pub(super) mod tls;
@@ -337,7 +338,8 @@ fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result
                 continue;
             }
         };
-        let Some(slot) = http::ConnectionSlot::acquire(&active, MAX_CONCURRENT_CONNECTIONS) else {
+        let Some(slot) = connection::ConnectionSlot::acquire(&active, MAX_CONCURRENT_CONNECTIONS)
+        else {
             // A plaintext 503 is meaningless to a TLS client; just close.
             if context.tls.is_none()
                 && let Some(refusals) = &refusals
@@ -361,7 +363,7 @@ fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result
 fn handle_connection(stream: TcpStream, context: &ApiContext) {
     // The deadline also bounds the TLS handshake, which happens inside the
     // first read.
-    let mut stream = http::DeadlineStream::new(stream, REQUEST_READ_TIMEOUT);
+    let mut stream = connection::DeadlineStream::new(stream, REQUEST_READ_TIMEOUT);
     match &context.tls {
         None => {
             serve_request(&mut stream, context);
@@ -386,7 +388,7 @@ fn handle_connection(stream: TcpStream, context: &ApiContext) {
 /// Answer one request on a plain or TLS stream; false when nothing could be
 /// exchanged at all (for example a failed TLS handshake).
 fn serve_request(
-    stream: &mut (impl Read + Write + http::BeginResponse),
+    stream: &mut (impl Read + Write + connection::BeginResponse),
     context: &ApiContext,
 ) -> bool {
     // After a failed handshake the write below fails too, so no plaintext
@@ -547,7 +549,7 @@ impl Response {
 
 /// Answer a connection over the ceiling with a 503.
 fn refuse_busy(stream: TcpStream) {
-    http::refuse_and_linger(stream, BUSY_LINGER, MAX_REQUEST_HEAD_BYTES, |stream| {
+    connection::refuse_and_linger(stream, BUSY_LINGER, MAX_REQUEST_HEAD_BYTES, |stream| {
         write_response(stream, &busy_response(), false)
     });
 }
@@ -1124,7 +1126,7 @@ mod tests {
         let connection = rustls::ServerConnection::new(config).unwrap();
         let mut stream = rustls::StreamOwned::new(
             connection,
-            http::DeadlineStream::new(accepted, Duration::from_millis(250)),
+            connection::DeadlineStream::new(accepted, Duration::from_millis(250)),
         );
         let started = std::time::Instant::now();
         let mut buffer = [0_u8; 16];

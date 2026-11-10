@@ -63,6 +63,11 @@ mailswiftsync control audit-verify /srv/mailswiftsync/control.db \
   backup are unknown to the restored service; check those workers and
   mailboxes before queuing them again.
 
+A hardened systemd unit is installed with the packages as
+`docs/distribution/mailswiftsync-control.service`. Its example listens on
+loopback for a TLS-terminating proxy; add `--tls-cert`/`--tls-key` to terminate
+TLS in the service.
+
 The service is single-node: one process owns the SQLite file. Do not put the
 file on a network filesystem or share it between processes.
 

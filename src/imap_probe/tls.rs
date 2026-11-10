@@ -24,7 +24,7 @@ pub(super) fn connect_tls_stream_with_budget(
     )
 }
 
-fn connect_tls_stream_inner(
+pub(super) fn connect_tls_stream_inner(
     host: &str,
     transport: &str,
     ca_bundle: &str,

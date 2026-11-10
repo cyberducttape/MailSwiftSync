@@ -7,13 +7,13 @@ inventory in [capabilities.toml](capabilities.toml); this file orders the work
 and states how each milestone is judged done. Progress and evidence are logged
 in [PROGRESS.md](PROGRESS.md).
 
-## Where the release stands (2026-10-30)
+## Where the release stands (2026-11-09)
 
 - Code-side gates are green: `make check`, the full test suite, the
   cross-platform CI matrix, the IMAP integration lab, fuzzing, and the
   dependency audit.
-- No open GitHub issues and no open code-scanning alerts. PRs #147, #148,
-  #151 and #153 are merged.
+- No open code-scanning alerts. The production-readiness audit (R5 below) is
+  the latest full review.
 - Most remaining 1.0 blockers are **external**: they need signing
   credentials, live provider tenants, or a person with a screen reader. They
   are listed under "Blocked on people" so they are not mistaken for code work.
@@ -205,6 +205,8 @@ Run against `main` at `9bd15639`. Every finding below was reproduced or read in 
 | Panic sites in production code | Checked; no defect | Clippy's restriction lints find 23 in non-test code, all on invariants established just above them. |
 | Workflow action pinning | Checked; no defect | Pinned through `.github/workflows/actions.lock`, verified by CI. |
 | Open code-scanning alerts | Checked; none | |
+| Hostile cross-tenant authorization (R2 §6, still to run) | Checked; no defect | A new test calls every tenant-scoped route as another tenant's manager, on the victim's tenant and with the caller's own tenant substituted. All answer not-found and change nothing. |
+| TLS deadline when the IMAP server itself trickles | Open, low | The same per-call limit applies to the outbound IMAP client. It needs a server the operator configured to misbehave, and it stalls one verification rather than a shared service. |
 
 ### M8. Verification at any message size, and planning it up front
 
@@ -218,15 +220,20 @@ response buffer.
    one range regardless of message size. The per-message bound rose from
    64 MiB to 2 GiB (still within the total budget). Not yet run against a
    live provider.
-2. **Resumable verification segments.** Persist per-folder hashing
-   progress in the durable stage, as metadata pages already are, so an
-   interrupted body pass resumes instead of refetching.
-3. **Time and disk estimate in preflight.** From the census (messages,
-   bytes, oversized count) and measured rates, show the expected stage
-   disk and verification time beside the capacity check.
-4. **`doctor` gaps.** Optional `--connect` checks for OAuth refresh and
-   TLS reachability of configured accounts, and a remediation line for
-   every failing check.
+2. **Resumable verification segments (not started).** Persist
+   per-folder hashing progress in the durable stage, as metadata pages
+   already are, so an interrupted body pass resumes instead of refetching.
+   Today an interrupted body pass refetches, which costs time but cannot
+   produce wrong evidence. Reusing hashes changes what a `body_hash` claim
+   rests on, so it needs its own review and a provider run.
+3. **Time and disk estimate in preflight: done.** Passing capacity rows
+   give stage disk, matching time at the release-gated rate, and body
+   bytes with their time at a stated 100 Mbit/s. Metadata fetch time is
+   server-dependent and deliberately not estimated.
+4. **`doctor` gaps: done.** `--connect` tests TLS and the greeting for
+   the saved plan's accounts without signing in and loads OAuth refresh
+   settings without exchanging them, since an exchange can rotate the
+   token. Every check that is not ready carries a `remediation` line.
 5. **Plan export at MSP scale: done (#170, paged plan upload).** Plan
    mailboxes are rows (up to 1,000,000), large plans upload in pages of
    2,000 that commit as one revision (`control plan upload`), and leases
