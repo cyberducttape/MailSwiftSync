@@ -14,6 +14,7 @@ for required in \
   "/usr/share/doc/mailswiftsync/docs/distribution/SERVICE.md" \
   "/usr/share/doc/mailswiftsync/docs/distribution/CREDENTIAL-LIFECYCLE.md" \
   "/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service" \
+  "/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-control.service" \
   "/usr/share/doc/mailswiftsync/LICENSE" \
   "/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt" \
   "/usr/share/man/man1/mailswiftsync.1.gz" \

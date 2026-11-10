@@ -446,16 +446,7 @@ fn verification_capacity_check(
             PreflightCheckStatus::Unknown,
         ));
     }
-    // Above the ephemeral limit the stage file is the resource to plan for.
-    let stage_note = if staged_records > crate::imap_probe::MAX_MESSAGE_FETCH_RECORDS as u64 {
-        format!(
-            " The verification stage for {staged_records} records may need up to {} bytes of free disk.",
-            staged_records
-                .saturating_mul(core::pre_migration_report::OBSERVED_STAGE_BYTES_PER_RECORD_MAX)
-        )
-    } else {
-        String::new()
-    };
+    let stage_note = verification_estimate(staged_records, total_bytes.filter(|_| body_hash));
     Some((
         LABEL.into(),
         format!(
@@ -468,6 +459,30 @@ fn verification_capacity_check(
         ),
         PreflightCheckStatus::Passed,
     ))
+}
+
+/// The release-gated minimum reconciliation rate, in messages per second.
+const RECONCILE_MESSAGES_PER_SECOND: u64 = 20_000;
+/// The link speed body-hashing time is quoted at: 100 Mbit/s.
+const ESTIMATED_BODY_BYTES_PER_SECOND: u64 = 12_500_000;
+
+/// What to plan for: stage disk at the worst observed size per record, and
+/// the parts of the run's time that can be predicted. Fetch time depends on
+/// the servers, so it is left out rather than guessed.
+fn verification_estimate(staged_records: u64, body_bytes: Option<u64>) -> String {
+    let disk = staged_records
+        .saturating_mul(core::pre_migration_report::OBSERVED_STAGE_BYTES_PER_RECORD_MAX);
+    let reconcile = staged_records.div_ceil(RECONCILE_MESSAGES_PER_SECOND);
+    let mut estimate = format!(
+        " Plan for: the verification stage for {staged_records} records may need up to {disk} bytes of free disk, and matching them takes about {reconcile} s or less after they are fetched; fetching depends on the servers."
+    );
+    if let Some(bytes) = body_bytes {
+        estimate.push_str(&format!(
+            " Body-content verification reads {bytes} bytes, about {} s at 100 Mbit/s.",
+            bytes.div_ceil(ESTIMATED_BODY_BYTES_PER_SECOND)
+        ));
+    }
+    estimate
 }
 
 fn quota_summary(capabilities: &core::ServerCapabilities, quota_is_blocking: bool) -> String {
@@ -598,6 +613,19 @@ mod tests {
     }
 
     #[test]
+    fn the_estimate_states_disk_and_only_predictable_time() {
+        let estimate = super::verification_estimate(40_001, Some(25_000_001));
+        assert!(estimate.contains("up to 32320808 bytes"), "{estimate}");
+        assert!(estimate.contains("about 3 s or less"), "{estimate}");
+        assert!(
+            estimate.contains("fetching depends on the servers"),
+            "{estimate}"
+        );
+        assert!(estimate.contains("about 3 s at 100 Mbit/s"), "{estimate}");
+        assert!(!super::verification_estimate(1, None).contains("Body-content"));
+    }
+
+    #[test]
     fn verification_capacity_is_shown_before_a_run() {
         let form = Form::default();
         assert!(verification_capacity_check(&form, false, None, None).is_none());
@@ -688,11 +716,14 @@ mod tests {
             verification_capacity_check(&form, true, Some(&beyond), Some(&large)).unwrap();
         assert_eq!(status, PreflightCheckStatus::Blocked, "{detail}");
 
-        // Below the ephemeral limit there is no disk note.
+        // Every passing row says what to plan for.
         let small = counted(Some(10), None);
         let (_, detail, _) =
             verification_capacity_check(&form, true, Some(&small), Some(&small)).unwrap();
-        assert!(!detail.contains("free disk"), "{detail}");
+        assert!(
+            detail.contains("stage for 20 records may need up to 16160 bytes"),
+            "{detail}"
+        );
         let (status, _) = batch_verification_capacity(&form, true, |_| Ok(large.clone()));
         assert_eq!(status, PreflightCheckStatus::Passed);
     }

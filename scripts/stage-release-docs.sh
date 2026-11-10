@@ -64,6 +64,7 @@ distribution_documents=(
   docs/distribution/SERVICE.md
   docs/distribution/CREDENTIAL-LIFECYCLE.md
   docs/distribution/mailswiftsync-supervise.service
+  docs/distribution/mailswiftsync-control.service
   docs/automation-contract.md
   docs/crash-recovery-validation.md
   docs/msp-operations-runbook.md

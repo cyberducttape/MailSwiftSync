@@ -2,6 +2,20 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-09: Production-readiness audit (R5)
+
+Audited `main` at `9bd15639`. Findings and verdicts are in DEVELOPMENT_PLAN.md
+under R5. M8.3 and M8.4 are done in the same change; M8.2 is not started.
+
+Evidence: see the gate results on the pull request. New regression tests
+cover the TLS and plain deadlines, slot release after a panic, 503 refusals,
+duplicate assignments, assignment paging, upload ownership, backup and its
+refusal of a tampered chain, the v6 to v7 migration, and credential pruning.
+
+Not testable here: a live IdP or multi-host control-plane drill,
+`doctor --connect` against real provider servers, and the live-provider
+qualification listed under "Blocked on people".
+
 ## 2026-11-08
 
 ### M8.1 Partial-fetch body hashing

@@ -389,7 +389,7 @@ impl Store {
         let resource = format!("project:{project}");
         let detail = format!("{upload} page {page}");
         self.mutate(actor, Some(tenant), "project.plan_upload.page", &resource, &detail, |tx| {
-            let expected = open_upload(tx, tenant, project, upload)?;
+            let expected = open_upload(tx, tenant, project, upload, actor)?;
             let stored: Option<Vec<u8>> = tx
                 .query_row(
                     "SELECT digest FROM plan_upload_pages WHERE upload_id=?1 AND page=?2",
@@ -444,7 +444,7 @@ impl Store {
     ) -> StoreResult<super::store::Project> {
         let resource = format!("project:{project}");
         self.mutate(actor, Some(tenant), "project.plan_upload.commit", &resource, upload, |tx| {
-            let expected = open_upload(tx, tenant, project, upload)?;
+            let expected = open_upload(tx, tenant, project, upload, actor)?;
             let count = received(tx, upload)?;
             if count != expected {
                 return Err(invalid(format!(
@@ -500,21 +500,37 @@ fn require_revision(
     }
 }
 
+/// The user part of an actor label (`user:X` or `user:X key:Y`).
+fn actor_user(label: &str) -> &str {
+    label.split(' ').next().unwrap_or(label)
+}
+
 /// An unexpired upload of this project, and the mailbox count it announced.
+/// Only the user who started it may add to it or commit it. The committer is
+/// recorded as the person who changed the plan and cannot approve it, so
+/// letting someone else commit would let the plan's real author approve it.
 fn open_upload(
     tx: &Transaction<'_>,
     tenant: &str,
     project: &str,
     upload: &str,
+    actor: &Actor<'_>,
 ) -> StoreResult<i64> {
-    tx.query_row(
-        "SELECT expected_mailboxes FROM plan_uploads
-         WHERE id=?1 AND tenant_id=?2 AND project_id=?3 AND expires_at>?4",
-        params![upload, tenant, project, now()],
-        |row| row.get(0),
-    )
-    .optional()?
-    .ok_or(StoreError::NotFound)
+    let (expected, created_by): (i64, String) = tx
+        .query_row(
+            "SELECT expected_mailboxes,created_by FROM plan_uploads
+             WHERE id=?1 AND tenant_id=?2 AND project_id=?3 AND expires_at>?4",
+            params![upload, tenant, project, now()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or(StoreError::NotFound)?;
+    if actor_user(&created_by) != actor_user(&actor.label) {
+        return Err(StoreError::Conflict(
+            "only the person who started this upload can add to it or commit it".into(),
+        ));
+    }
+    Ok(expected)
 }
 
 fn received(tx: &Transaction<'_>, upload: &str) -> StoreResult<i64> {
@@ -552,6 +568,49 @@ mod tests {
         let mut header = super::super::store::test_plan("ledger");
         header.as_object_mut().unwrap().remove("mailboxes");
         header
+    }
+
+    #[test]
+    fn only_the_person_who_started_an_upload_can_finish_it() {
+        let store = Store::in_memory();
+        let admin_id = store
+            .bootstrap_administrator("admin@msp.example", "Admin", &authn::test_secret())
+            .unwrap();
+        let admin = actor(&format!("user:{admin_id}"));
+        let tenant = store.create_tenant("Acme", &admin).unwrap().id;
+        let project = store
+            .create_project(
+                &tenant,
+                "Move",
+                &super::super::store::test_plan("ledger"),
+                &admin,
+            )
+            .unwrap()
+            .id;
+        let author = actor("user:usr_author");
+        let upload = store
+            .start_plan_upload(&tenant, &project, 1, &header(), 1, &author)
+            .unwrap()
+            .upload_id;
+        let other = actor("user:usr_other");
+        let page = entries(0..1);
+        assert!(matches!(
+            store.put_plan_upload_page(&tenant, &project, &upload, 1, &page, &other),
+            Err(StoreError::Conflict(_))
+        ));
+        // The same user holding an API key is the same person.
+        let same_user_key = actor("user:usr_author key:key_1");
+        store
+            .put_plan_upload_page(&tenant, &project, &upload, 1, &page, &same_user_key)
+            .unwrap();
+        assert!(matches!(
+            store.commit_plan_upload(&tenant, &project, &upload, &other),
+            Err(StoreError::Conflict(_))
+        ));
+        let committed = store
+            .commit_plan_upload(&tenant, &project, &upload, &author)
+            .unwrap();
+        assert_eq!(committed.plan_revision, 2);
     }
 
     #[test]

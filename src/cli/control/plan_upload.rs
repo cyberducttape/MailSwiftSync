@@ -377,7 +377,14 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let context = std::sync::Arc::new(super::super::api::Context { store, oidc: None });
         let server_context = std::sync::Arc::clone(&context);
-        std::thread::spawn(move || super::super::server::serve(listener, server_context, None));
+        std::thread::spawn(move || {
+            super::super::server::serve(
+                listener,
+                server_context,
+                None,
+                super::super::server::DEFAULT_MAX_CONNECTIONS,
+            )
+        });
 
         let command = |revision| Command {
             file: plan_file.clone(),
