@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The IMAP client enforces its session deadline beneath TLS, so a server
+  sending a record one byte at a time cannot stall verification past it.
 - `mailswiftsync doctor` adds a `remediation` line to every check that is
   not ready, and `--connect` tests TLS and the greeting for the saved
   plan's accounts without signing in. OAuth refresh settings are loaded but
