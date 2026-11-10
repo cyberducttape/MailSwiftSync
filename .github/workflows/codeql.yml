@@ -29,12 +29,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
         with:
           toolchain: 1.92.0
-      - uses: github/codeql-action/init@v4.39.1
+      - uses: github/codeql-action/init@v4.39.3
         with:
           languages: actions,python,rust
           build-mode: none
           config-file: ./.github/codeql/codeql-config.yml
-      - uses: github/codeql-action/analyze@v4.39.1
+      - uses: github/codeql-action/analyze@v4.39.3
         with:
           category: "/language:all"
           upload: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
