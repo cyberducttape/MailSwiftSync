@@ -206,7 +206,7 @@ Run against `main` at `9bd15639`. Every finding below was reproduced or read in 
 | Workflow action pinning | Checked; no defect | Pinned through `.github/workflows/actions.lock`, verified by CI. |
 | Open code-scanning alerts | Checked; none | |
 | Hostile cross-tenant authorization (R2 §6, still to run) | Checked; no defect | A new test calls every tenant-scoped route as another tenant's manager, on the victim's tenant and with the caller's own tenant substituted. All answer not-found and change nothing. |
-| TLS deadline when the IMAP server itself trickles | Open, low | The same per-call limit applies to the outbound IMAP client. It needs a server the operator configured to misbehave, and it stalls one verification rather than a shared service. |
+| TLS deadline when the IMAP server itself trickles | Confirmed; fixed | The outbound IMAP client had the same per-call limit. The socket beneath TLS now refuses I/O past the session's deadline. |
 
 ### M8. Verification at any message size, and planning it up front
 
@@ -224,8 +224,10 @@ response buffer.
    per-folder hashing progress in the durable stage, as metadata pages
    already are, so an interrupted body pass resumes instead of refetching.
    Today an interrupted body pass refetches, which costs time but cannot
-   produce wrong evidence. Reusing hashes changes what a `body_hash` claim
-   rests on, so it needs its own review and a provider run.
+   produce wrong evidence. Discarding prior body fingerprints on restart is
+   a documented safety invariant (docs/release-readiness.md, enforced by
+   `durable_stage_reopen_invalidates_rows_and_content_fingerprints`), so
+   reversing it needs a maintainer decision and a live provider run.
 3. **Time and disk estimate in preflight: done.** Passing capacity rows
    give stage disk, matching time at the release-gated rate, and body
    bytes with their time at a stated 100 Mbit/s. Metadata fetch time is

@@ -7,6 +7,50 @@ use sha2::{Digest, Sha256};
 use std::{net::TcpStream, sync::Arc};
 
 const BUDGETED_IMAP_IO_SLICE: Duration = Duration::from_millis(250);
+const UNBUDGETED_SESSION_LIMIT: Duration = Duration::from_secs(30);
+
+/// The socket beneath TLS, refusing I/O once the session's deadline passes.
+/// Socket timeouts bound one system call, and rustls makes many inside one
+/// `read` while it assembles a record, so a server sending a byte at a time
+/// could otherwise hold that `read` past every deadline checked around it.
+pub(super) struct DeadlineSocket {
+    tcp: TcpStream,
+    deadline: Instant,
+}
+
+impl DeadlineSocket {
+    fn new(tcp: TcpStream, deadline: Instant) -> Self {
+        Self { tcp, deadline }
+    }
+
+    fn check(&self) -> std::io::Result<()> {
+        if Instant::now() >= self.deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "IMAP session deadline exceeded",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl std::io::Read for DeadlineSocket {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.check()?;
+        self.tcp.read(buffer)
+    }
+}
+
+impl std::io::Write for DeadlineSocket {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.check()?;
+        self.tcp.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tcp.flush()
+    }
+}
 
 pub(super) fn connect_tls_stream_with_budget(
     host: &str,
@@ -14,7 +58,7 @@ pub(super) fn connect_tls_stream_with_budget(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
     budget: &MessageFetchBudget<'_>,
-) -> Result<(StreamOwned<ClientConnection, TcpStream>, String), String> {
+) -> Result<(StreamOwned<ClientConnection, DeadlineSocket>, String), String> {
     connect_tls_stream_inner(
         host,
         transport,
@@ -30,7 +74,11 @@ pub(super) fn connect_tls_stream_inner(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<(StreamOwned<ClientConnection, TcpStream>, String), String> {
+) -> Result<(StreamOwned<ClientConnection, DeadlineSocket>, String), String> {
+    let session_deadline = budget.map_or_else(
+        || Instant::now() + UNBUDGETED_SESSION_LIMIT,
+        |budget| budget.deadline,
+    );
     let (server_name, port) = crate::endpoint::parts(host, crate::default_imap_port(transport))
         .map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
     let address = if server_name.contains(':') {
@@ -132,9 +180,9 @@ pub(super) fn connect_tls_stream_inner(
         }
         let connection = ClientConnection::new(Arc::new(config), name)
             .map_err(|error| format!("{host}: TLS configuration failed: {error}"))?;
-        let mut stream = StreamOwned::new(connection, tcp);
+        let mut stream = StreamOwned::new(connection, DeadlineSocket::new(tcp, session_deadline));
         complete_tls_handshake(&mut stream, host, budget)?;
-        refresh_socket_timeout(&stream.sock, budget)
+        refresh_socket_timeout(&stream.sock.tcp, budget)
             .map_err(|error| format!("{host}: could not set TLS I/O timeout: {error}"))?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
         return Ok((stream, greeting));
@@ -142,8 +190,8 @@ pub(super) fn connect_tls_stream_inner(
 
     let connection = ClientConnection::new(Arc::new(config), name)
         .map_err(|error| format!("{host}: TLS configuration failed: {error}"))?;
-    let mut stream = StreamOwned::new(connection, tcp);
-    refresh_socket_timeout(&stream.sock, budget)
+    let mut stream = StreamOwned::new(connection, DeadlineSocket::new(tcp, session_deadline));
+    refresh_socket_timeout(&stream.sock.tcp, budget)
         .map_err(|error| format!("{host}: could not set TLS I/O timeout: {error}"))?;
     let greeting = read_imap_greeting(&mut stream, host, budget)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
@@ -151,7 +199,7 @@ pub(super) fn connect_tls_stream_inner(
 }
 
 fn complete_tls_handshake(
-    stream: &mut StreamOwned<ClientConnection, TcpStream>,
+    stream: &mut StreamOwned<ClientConnection, DeadlineSocket>,
     host: &str,
     budget: Option<&MessageFetchBudget<'_>>,
 ) -> Result<(), String> {
@@ -163,7 +211,7 @@ fn complete_tls_handshake(
 }
 
 fn complete_tls_handshake_until(
-    stream: &mut StreamOwned<ClientConnection, TcpStream>,
+    stream: &mut StreamOwned<ClientConnection, DeadlineSocket>,
     host: &str,
     budget: Option<&MessageFetchBudget<'_>>,
     deadline: Instant,
@@ -175,7 +223,7 @@ fn complete_tls_handshake_until(
         if let Some(budget) = budget {
             budget.check()?;
         }
-        refresh_handshake_socket_timeout(&stream.sock, deadline, budget.is_some())
+        refresh_handshake_socket_timeout(&stream.sock.tcp, deadline, budget.is_some())
             .map_err(|error| format!("{host}: could not set TLS handshake timeout: {error}"))?;
         match stream.conn.complete_io(&mut stream.sock) {
             Ok(_) if !stream.conn.is_handshaking() => return Ok(()),
@@ -242,7 +290,7 @@ fn refresh_socket_timeout(
 }
 
 fn verify_certificate_pin(
-    stream: &StreamOwned<ClientConnection, TcpStream>,
+    stream: &StreamOwned<ClientConnection, DeadlineSocket>,
     host: &str,
     expected: &str,
 ) -> Result<(), String> {
@@ -294,6 +342,47 @@ mod tests {
     }
 
     #[test]
+    fn a_server_trickling_tls_bytes_cannot_outlast_the_session_deadline() {
+        use std::io::Write as _;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            // A record header announcing a large handshake record, then its
+            // body one byte at a time.
+            let _ = peer.write_all(&[0x16, 0x03, 0x03, 0x40, 0x00]);
+            for _ in 0..300 {
+                if peer.write_all(&[0x02]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let socket = TcpStream::connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let config = ClientConfig::builder()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+        let name = ServerName::try_from("example.com").unwrap();
+        let connection = ClientConnection::new(Arc::new(config), name).unwrap();
+        let start = Instant::now();
+        let mut stream = StreamOwned::new(
+            connection,
+            super::DeadlineSocket::new(socket, start + Duration::from_millis(250)),
+        );
+        let mut byte = [0_u8; 1];
+        assert!(std::io::Read::read(&mut stream, &mut byte).is_err());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the read was bounded only per byte"
+        );
+        drop(stream);
+        let _ = server.join();
+    }
+
+    #[test]
     fn unbudgeted_tls_handshake_obeys_an_absolute_deadline_during_partial_io() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -307,7 +396,10 @@ mod tests {
             .with_no_client_auth();
         let name = ServerName::try_from("example.com").unwrap();
         let connection = ClientConnection::new(Arc::new(config), name).unwrap();
-        let mut stream = StreamOwned::new(connection, socket);
+        let mut stream = StreamOwned::new(
+            connection,
+            super::DeadlineSocket::new(socket, Instant::now() + Duration::from_secs(10)),
+        );
         let start = Instant::now();
         let result = complete_tls_handshake_until(
             &mut stream,
@@ -334,7 +426,10 @@ mod tests {
             .with_no_client_auth();
         let name = ServerName::try_from("example.com").unwrap();
         let connection = ClientConnection::new(Arc::new(config), name).unwrap();
-        let mut stream = StreamOwned::new(connection, socket);
+        let mut stream = StreamOwned::new(
+            connection,
+            super::DeadlineSocket::new(socket, Instant::now() + Duration::from_secs(10)),
+        );
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let budget = MessageFetchBudget::for_probe(Duration::from_millis(40), &cancel);
         let start = Instant::now();
