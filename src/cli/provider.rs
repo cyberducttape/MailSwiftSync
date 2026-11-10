@@ -197,17 +197,22 @@ pub(super) fn runbook_command(mut arguments: std::env::ArgsOs) -> eframe::Result
 pub(super) fn doctor_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let mut state = None;
     let mut strict = false;
+    let mut connect = false;
     for argument in arguments.by_ref() {
+        let flag = argument == std::ffi::OsStr::new("--strict")
+            || argument == std::ffi::OsStr::new("--connect");
         if argument == std::ffi::OsStr::new("--strict") && !strict {
             strict = true;
-        } else if state.is_none() && argument != std::ffi::OsStr::new("--strict") {
+        } else if argument == std::ffi::OsStr::new("--connect") && !connect {
+            connect = true;
+        } else if state.is_none() && !flag {
             state = Some(std::path::PathBuf::from(argument));
         } else {
-            eprintln!("Usage: mailswiftsync doctor [state.db] [--strict]");
+            eprintln!("Usage: mailswiftsync doctor [state.db] [--strict] [--connect]");
             std::process::exit(2);
         }
     }
-    let report = crate::doctor::run(state.as_deref());
+    let report = crate::doctor::run(state.as_deref(), connect);
     match serde_json::to_string_pretty(&report) {
         Ok(rendered) => {
             out!("{rendered}");

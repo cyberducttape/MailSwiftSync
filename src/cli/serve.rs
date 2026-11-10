@@ -4,6 +4,7 @@
 //! approval. Reads never take an instance lock; `supervise` remains the
 //! per-ledger worker.
 
+pub(super) mod connection;
 mod controls;
 pub(super) mod http;
 pub(super) mod tls;
@@ -337,8 +338,8 @@ fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result
                 continue;
             }
         };
-        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
-            active.fetch_sub(1, Ordering::AcqRel);
+        let Some(slot) = connection::ConnectionSlot::acquire(&active, MAX_CONCURRENT_CONNECTIONS)
+        else {
             // A plaintext 503 is meaningless to a TLS client; just close.
             if context.tls.is_none()
                 && let Some(refusals) = &refusals
@@ -346,27 +347,23 @@ fn accept_connections(listener: TcpListener, context: Arc<ApiContext>) -> Result
                 let _ = refusals.try_send(stream);
             }
             continue;
-        }
+        };
         let context = Arc::clone(&context);
-        let connection_slots = Arc::clone(&active);
-        let spawned = std::thread::Builder::new()
+        // A failed spawn drops the closure, and with it the slot.
+        let _ = std::thread::Builder::new()
             .name("fleet-api-connection".into())
             .spawn(move || {
+                let _slot = slot;
                 handle_connection(stream, &context);
-                connection_slots.fetch_sub(1, Ordering::AcqRel);
             });
-        if spawned.is_err() {
-            active.fetch_sub(1, Ordering::AcqRel);
-        }
     }
     Err("the listening socket closed".into())
 }
 
-fn handle_connection(mut stream: TcpStream, context: &ApiContext) {
-    // Socket timeouts also bound the TLS handshake, which happens inside
-    // the first read.
-    let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(RESPONSE_WRITE_TIMEOUT));
+fn handle_connection(stream: TcpStream, context: &ApiContext) {
+    // The deadline also bounds the TLS handshake, which happens inside the
+    // first read.
+    let mut stream = connection::DeadlineStream::new(stream, REQUEST_READ_TIMEOUT);
     match &context.tls {
         None => {
             serve_request(&mut stream, context);
@@ -385,12 +382,15 @@ fn handle_connection(mut stream: TcpStream, context: &ApiContext) {
             stream = tls.sock;
         }
     }
-    let _ = stream.shutdown(std::net::Shutdown::Both);
+    let _ = stream.into_inner().shutdown(std::net::Shutdown::Both);
 }
 
 /// Answer one request on a plain or TLS stream; false when nothing could be
 /// exchanged at all (for example a failed TLS handshake).
-fn serve_request(stream: &mut (impl Read + Write), context: &ApiContext) -> bool {
+fn serve_request(
+    stream: &mut (impl Read + Write + connection::BeginResponse),
+    context: &ApiContext,
+) -> bool {
     // After a failed handshake the write below fails too, so no plaintext
     // error ever goes to a TLS port and the caller skips close_notify.
     let response = match read_request_head(stream) {
@@ -398,6 +398,7 @@ fn serve_request(stream: &mut (impl Read + Write), context: &ApiContext) -> bool
         Err(response) => response,
     };
     let head_only = response.head_only;
+    stream.begin_response(RESPONSE_WRITE_TIMEOUT);
     write_response(stream, &response, head_only).is_ok()
 }
 
@@ -546,30 +547,11 @@ impl Response {
     }
 }
 
-/// Answer a connection over the ceiling with a 503, then linger until the
-/// peer closes. Closing a socket whose request has not been read sends a
-/// reset (always on Windows), and the reset can destroy the 503 before the
-/// peer reads it, so the request is drained after the write side is shut.
-/// The linger is bounded in time and bytes.
-fn refuse_busy(mut stream: TcpStream) {
-    let deadline = std::time::Instant::now() + BUSY_LINGER;
-    let _ = stream.set_write_timeout(Some(BUSY_LINGER));
-    if write_response(&mut stream, &busy_response(), false).is_err() {
-        return;
-    }
-    let _ = stream.shutdown(std::net::Shutdown::Write);
-    let mut discard = [0_u8; 4096];
-    let mut drained = 0;
-    while drained < MAX_REQUEST_HEAD_BYTES {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
-            break;
-        }
-        match stream.read(&mut discard) {
-            Ok(0) | Err(_) => break,
-            Ok(read) => drained += read,
-        }
-    }
+/// Answer a connection over the ceiling with a 503.
+fn refuse_busy(stream: TcpStream) {
+    connection::refuse_and_linger(stream, BUSY_LINGER, MAX_REQUEST_HEAD_BYTES, |stream| {
+        write_response(stream, &busy_response(), false)
+    });
 }
 
 fn busy_response() -> Response {
@@ -1114,6 +1096,47 @@ mod tests {
         let mut bytes = Vec::new();
         let _ = plain.read_to_end(&mut bytes);
         assert!(!String::from_utf8_lossy(&bytes).contains("HTTP/1.1"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One socket timeout would restart with every byte, and rustls keeps
+    /// reading inside one `read` until the handshake flight is complete.
+    #[cfg(unix)]
+    #[test]
+    fn a_trickled_tls_handshake_cannot_outlast_the_deadline() {
+        let root = private_root();
+        let Some((certificate, key)) = generated_certificate(&root) else {
+            return;
+        };
+        let config = tls::server_config(&certificate, &key).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        let trickle = std::thread::spawn(move || {
+            // A TLS record header announcing a large handshake record, then
+            // its body one byte at a time.
+            let _ = peer.write_all(&[0x16, 0x03, 0x01, 0x40, 0x00]);
+            for _ in 0..500 {
+                if peer.write_all(&[0x01]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let connection = rustls::ServerConnection::new(config).unwrap();
+        let mut stream = rustls::StreamOwned::new(
+            connection,
+            connection::DeadlineStream::new(accepted, Duration::from_millis(250)),
+        );
+        let started = std::time::Instant::now();
+        let mut buffer = [0_u8; 16];
+        assert!(stream.read(&mut buffer).is_err());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the handshake was bounded only per byte"
+        );
+        drop(stream);
+        let _ = trickle.join();
         std::fs::remove_dir_all(root).unwrap();
     }
 

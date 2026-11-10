@@ -6,7 +6,7 @@
 | Status | Technical Preview |
 | Package version | `0.1.0-alpha.1` |
 | SQLite schema version | `39` |
-| Last reviewed | 2026-10-15 |
+| Last reviewed | 2026-11-09 |
 | Qualified engine | `imapsync 2.314` |
 <!-- release-metadata:end -->
 **Test Coverage:** See the CI-generated test summary artifact for the current
@@ -190,8 +190,8 @@ new metadata verifier against real accounts.
 ### Documentation [OPERATIONAL IMPROVEMENT]
 - [ ] Compatibility matrix with live test results
 - [ ] Provider-specific troubleshooting guides
-- [x] MSP operations procedure for customer scoping, change approvals, wave controls, incident handling, and evidence retention; centralized fleet control remains unavailable.
-- [ ] Central MSP control plane with worker registration, heartbeats, distributed job ownership, remote controls, tenant isolation, and RBAC; `fleet-status` is intentionally read-only aggregation only.
+- [x] MSP operations procedure for customer scoping, change approvals, wave controls, incident handling, and evidence retention.
+- [ ] Live qualification of the central control plane (`mailswiftsync control`: worker enrollment, fenced leases, tenant isolation, RBAC); it is covered by unit and loopback HTTP tests, not by a multi-host drill. Fleet-wide shared provider quotas remain open.
 
 **Status:** Foundation in place, can be extended from real-world usage
 
@@ -284,7 +284,7 @@ new metadata verifier against real accounts.
 ### Recommended (Next Release)
 - 🔲 Live provider validation (Gmail, O365, Fastmail)
 - 🔲 Real-world performance benchmarks
-- ✅ MSP single-customer operational procedure ([runbook](docs/msp-operations-runbook.md)); centralized fleet controls and tenant isolation remain future work.
+- ✅ MSP single-customer operational procedure ([runbook](docs/msp-operations-runbook.md)); fleet-wide shared provider quotas remain future work, and the control plane's tenant isolation awaits live multi-host qualification.
 - 🔲 Complete provider-specific folder and capacity simulation beyond exact mappings and exclusions
 
 ### Future (Post-1.0)

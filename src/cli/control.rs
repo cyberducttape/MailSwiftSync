@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 const USAGE: &str = "Usage:
   mailswiftsync control init <state.db> --admin-email <email> --admin-password-file <file> [--admin-name <name>]
-  mailswiftsync control serve <state.db> [--listen 127.0.0.1:9470] [--tls-cert <pem> --tls-key <pem>] [--oidc-config <toml>] [--allow-non-loopback]
+  mailswiftsync control serve <state.db> [--listen 127.0.0.1:9470] [--tls-cert <pem> --tls-key <pem>] [--oidc-config <toml>] [--max-connections <n>] [--allow-non-loopback]
+  mailswiftsync control backup <state.db> --output <backup.db>
   mailswiftsync control audit-verify <state.db> [--checkpoint <file> [--public-key <hex>]]
   mailswiftsync control audit-checkpoint <state.db> --output <file> [--signing-key <ed25519-pkcs8> [--key-id <id>]]
   mailswiftsync control worker plan|enroll|run ...  (see `control worker`)
@@ -46,6 +47,7 @@ enum Command {
         listen: SocketAddr,
         tls: Option<(PathBuf, PathBuf)>,
         oidc: Option<PathBuf>,
+        max_connections: usize,
     },
     AuditVerify {
         state: PathBuf,
@@ -57,6 +59,10 @@ enum Command {
         output: PathBuf,
         signing_key: Option<PathBuf>,
         key_id: String,
+    },
+    Backup {
+        state: PathBuf,
+        output: PathBuf,
     },
     Worker(agent::Command),
     Plan(plan_upload::Command),
@@ -90,6 +96,7 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             | "--tls-cert"
             | "--tls-key"
             | "--oidc-config"
+            | "--max-connections"
             | "--checkpoint"
             | "--public-key"
             | "--output"
@@ -129,7 +136,26 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
             })
         }
         "serve" => {
-            allowed(&["--listen", "--tls-cert", "--tls-key", "--oidc-config"])?;
+            allowed(&[
+                "--listen",
+                "--tls-cert",
+                "--tls-key",
+                "--oidc-config",
+                "--max-connections",
+            ])?;
+            let max_connections = match options.remove("--max-connections") {
+                None => server::DEFAULT_MAX_CONNECTIONS,
+                Some(value) => value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|count| (1..=server::MAX_MAX_CONNECTIONS).contains(count))
+                    .ok_or_else(|| {
+                        format!(
+                            "--max-connections must be 1 to {}",
+                            server::MAX_MAX_CONNECTIONS
+                        )
+                    })?,
+            };
             let listen = options
                 .remove("--listen")
                 .unwrap_or_else(|| DEFAULT_LISTEN.into())
@@ -148,6 +174,14 @@ fn parse<I: IntoIterator<Item = OsString>>(arguments: I) -> Result<Command, Stri
                 listen,
                 tls,
                 oidc: options.remove("--oidc-config").map(PathBuf::from),
+                max_connections,
+            })
+        }
+        "backup" => {
+            allowed(&["--output"])?;
+            Ok(Command::Backup {
+                state,
+                output: options.remove("--output").ok_or(USAGE)?.into(),
             })
         }
         "audit-verify" => {
@@ -221,6 +255,7 @@ fn run(command: Command) -> Result<(), String> {
             listen,
             tls,
             oidc,
+            max_connections,
         } => {
             let store = store::Store::open(&state)?;
             let oidc = oidc.as_deref().map(oidc::Oidc::load).transpose()?;
@@ -245,7 +280,20 @@ fn run(command: Command) -> Result<(), String> {
                         .join(", ")
                 );
             }
-            server::serve(listener, Arc::new(api::Context { store, oidc }), tls)
+            server::serve(
+                listener,
+                Arc::new(api::Context { store, oidc }),
+                tls,
+                max_connections,
+            )
+        }
+        Command::Backup { state, output } => {
+            let entries = store::Store::backup(&state, &output)?;
+            println!(
+                "Created verified control-plane backup {} ({entries} audit entries verified)",
+                output.display()
+            );
+            Ok(())
         }
         Command::Worker(command) => agent::run(command),
         Command::Plan(command) => plan_upload::run(command),
@@ -308,6 +356,7 @@ mod tests {
                 listen: DEFAULT_LISTEN.parse().unwrap(),
                 tls: None,
                 oidc: None,
+                max_connections: server::DEFAULT_MAX_CONNECTIONS,
             }
         );
         assert!(matches!(
@@ -323,6 +372,21 @@ mod tests {
         ));
         assert!(parse(arguments(&["init", "s.db", "--listen", "0.0.0.0:1"])).is_err());
         assert!(parse(arguments(&["serve", "s.db", "--listen", "0.0.0.0:9470"])).is_err());
+        assert!(matches!(
+            parse(arguments(&["serve", "s.db", "--max-connections", "200"])),
+            Ok(Command::Serve {
+                max_connections: 200,
+                ..
+            })
+        ));
+        for count in ["0", "4097", "many"] {
+            assert!(parse(arguments(&["serve", "s.db", "--max-connections", count])).is_err());
+        }
+        assert!(matches!(
+            parse(arguments(&["backup", "s.db", "--output", "b.db"])),
+            Ok(Command::Backup { .. })
+        ));
+        assert!(parse(arguments(&["backup", "s.db"])).is_err());
         assert!(
             parse(arguments(&[
                 "serve",

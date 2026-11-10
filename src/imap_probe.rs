@@ -791,6 +791,18 @@ pub(crate) fn probe_tls_capabilities_with_transport(
 /// engine launch. Full folder discovery and namespace analysis remain in the
 /// comprehensive preflight probe; the separate live-readiness check observes
 /// only the destination's INBOX quota root when the server advertises QUOTA.
+/// Connect, validate the certificate and read the greeting, without signing
+/// in. STARTTLS and pinning follow the plan, as for a real session.
+pub(crate) fn probe_tls_reachability(
+    host: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+) -> Result<(), String> {
+    tls::connect_tls_stream_inner(host, transport, ca_bundle, certificate_pin_sha256, None)
+        .map(|_| ())
+}
+
 pub(crate) fn probe_tls_authentication_with_transport(
     host: &str,
     user: &str,

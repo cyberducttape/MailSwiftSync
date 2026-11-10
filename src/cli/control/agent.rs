@@ -1478,7 +1478,14 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let context = std::sync::Arc::new(super::super::api::Context { store, oidc: None });
         let server_context = std::sync::Arc::clone(&context);
-        std::thread::spawn(move || super::super::server::serve(listener, server_context, None));
+        std::thread::spawn(move || {
+            super::super::server::serve(
+                listener,
+                server_context,
+                None,
+                super::super::server::DEFAULT_MAX_CONNECTIONS,
+            )
+        });
         let base = server_url(&format!("http://{address}")).unwrap();
 
         let (_, credential) = HttpControl::new(base.clone(), &enrollment, None)
@@ -1500,7 +1507,11 @@ mod tests {
             handle_one(&control, &executor, &fast()).unwrap(),
             Handled::Idle
         );
-        let [assignment] = &context.store.assignments(&tenant, &project.id).unwrap()[..] else {
+        let [assignment] = &context
+            .store
+            .assignments(&tenant, &project.id, None, 10)
+            .unwrap()[..]
+        else {
             panic!("one assignment");
         };
         assert_eq!(assignment.state, "completed");
