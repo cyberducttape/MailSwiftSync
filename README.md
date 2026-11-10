@@ -360,7 +360,7 @@ or recovered without opening the GUI:
 mailswiftsync status /path/to/state.db
 mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync fleet-status /path/to/ledger-directory
-mailswiftsync doctor [/path/to/state.db] [--strict]
+mailswiftsync doctor [/path/to/state.db] [--strict] [--connect]
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
 mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json

@@ -291,7 +291,7 @@ fn print_cli_help() {
         "\nWebhook delivery:\n  notify-webhook <state> <url> --watch [--poll-seconds=N]  Continuously drain durable signed deliveries"
     );
     out!(
-        "\nDoctor:\n  doctor [state.db] [--strict]   Report the local qualification envelope as JSON; --strict sets the exit status\n\nShell integration:\n  completions bash|zsh|fish      Print a shell completion script"
+        "\nDoctor:\n  doctor [state.db] [--strict] [--connect]   Report the local qualification envelope as JSON; --strict sets the exit status; --connect also tests TLS to the saved plan's servers without signing in\n\nShell integration:\n  completions bash|zsh|fish      Print a shell completion script"
     );
 }
 

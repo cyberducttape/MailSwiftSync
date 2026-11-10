@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- `mailswiftsync doctor` adds a `remediation` line to every check that is
+  not ready, and `--connect` tests TLS and the greeting for the saved
+  plan's accounts without signing in. OAuth refresh settings are loaded but
+  not exchanged, since an exchange can rotate the token.
+- The preflight capacity row now always says what to plan for: stage disk,
+  matching time, and, for body-content verification, the bytes to read.
+- A systemd unit for the control plane ships in the packages
+  (`mailswiftsync-control.service`).
+- Both HTTP listeners now enforce their request deadlines beneath TLS. A
+  client sending a handshake one byte at a time could previously hold a
+  connection slot indefinitely, and enough of them could stop the service.
+  Connection slots are also released when a request's thread panics.
+- `control serve` answers `503` with `Retry-After` over its connection
+  ceiling instead of dropping plain HTTP connections, and the ceiling is
+  configurable with `--max-connections`.
+- The control plane refuses to queue a mailbox that already has unfinished
+  work in the project, so a retried request cannot start the same mailbox
+  twice. `GET …/assignments` is now paged, up to 1,000 per page with
+  `next_after`; a client that reads more than 1,000 must follow it.
+  Control-plane database version 7 adds the indexes for both.
+- `control backup` makes an online, verified backup of the control-plane
+  database. Long-expired sessions and enrollment tokens are now removed.
+- Only the user who started a paged plan upload can add to it or commit it,
+  so the plan's author cannot be its approver.
+- `libsqlite3-sys` in the fuzzing workspace moved to 0.39.1 for
+  RUSTSEC-2026-0459; CI and release builds now audit that lockfile too.
 - Body-content verification no longer buffers whole messages. Each page
   fetches the first 256 KiB of every body, and larger bodies continue in
   4 MiB `BODY.PEEK[]<offset.length>` ranges into the same SHA-256, so

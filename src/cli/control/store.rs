@@ -16,7 +16,10 @@ use std::path::Path;
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
+/// Expired sessions and enrollment tokens are kept this long (the audit log
+/// keeps the history), so those tables stay proportional to current use.
+pub(super) const EXPIRED_CREDENTIAL_KEEP_SECONDS: i64 = 7 * 24 * 60 * 60;
 pub(super) const SESSION_SECONDS: i64 = 12 * 60 * 60;
 pub(super) const MAX_API_KEY_DAYS: i64 = 365;
 /// Wrong passwords from one client (address or IPv6 /64) before that
@@ -273,7 +276,7 @@ impl Store {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
         match version {
-            0..=5 => {
+            0..=6 => {
                 let base = if version == 0 { SCHEMA } else { "" };
                 let workers = if version <= 1 {
                     super::workers::SCHEMA_V2
@@ -295,10 +298,15 @@ impl Store {
                 } else {
                     ("", "")
                 };
+                let plans_v6 = if version <= 5 {
+                    super::plans::SCHEMA_V6
+                } else {
+                    ""
+                };
                 connection
                     .execute_batch(&format!(
-                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {assignments} {oidc_v5} {login_v5} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
-                        super::plans::SCHEMA_V6
+                        "BEGIN IMMEDIATE; {base} {workers} {oidc} {assignments} {oidc_v5} {login_v5} {plans_v6} {} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;",
+                        super::workers::SCHEMA_V7
                     ))
                     .map_err(|error| format!("could not create or upgrade the schema: {error}"))?;
             }
@@ -312,6 +320,68 @@ impl Store {
         Ok(Self {
             connection: Mutex::new(connection),
         })
+    }
+
+    /// Copy the database at `source` to a new file at `output` while the
+    /// service keeps running, and prove the copy before keeping it: SQLite's
+    /// integrity check and the whole audit hash chain. Returns the number
+    /// of audit entries verified. An existing `output` is never overwritten.
+    pub(super) fn backup(source: &Path, output: &Path) -> Result<u64, String> {
+        let source_connection = Connection::open_with_flags(
+            source,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| format!("could not open {}: {error}", source.display()))?;
+        let version: i64 = source_connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|error| format!("could not read {}: {error}", source.display()))?;
+        if version != SCHEMA_VERSION {
+            return Err(format!(
+                "{} has schema version {version}; this build backs up version {SCHEMA_VERSION}",
+                source.display()
+            ));
+        }
+        if output.exists() {
+            return Err(format!("{} already exists", output.display()));
+        }
+        crate::credentials::open_secret_file(output)
+            .map_err(|error| format!("could not create {}: {error}", output.display()))?;
+        let copied = (|| {
+            let mut copy = Connection::open(output).map_err(|error| error.to_string())?;
+            {
+                let backup = rusqlite::backup::Backup::new(&source_connection, &mut copy)
+                    .map_err(|error| error.to_string())?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                loop {
+                    match backup.step(-1).map_err(|error| error.to_string())? {
+                        rusqlite::backup::StepResult::Done => break,
+                        rusqlite::backup::StepResult::More => {}
+                        _ if std::time::Instant::now() >= deadline => {
+                            return Err("the database stayed busy for 30 seconds".to_owned());
+                        }
+                        _ => std::thread::sleep(std::time::Duration::from_millis(25)),
+                    }
+                }
+            }
+            let integrity: String = copy
+                .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            if integrity != "ok" {
+                return Err(format!("the copy failed its integrity check: {integrity}"));
+            }
+            Self {
+                connection: Mutex::new(copy),
+            }
+            .verify_audit_chain()
+        })();
+        if copied.is_err() {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let mut path = output.as_os_str().to_owned();
+                path.push(suffix);
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        copied.map_err(|error| format!("the backup was not kept: {error}"))
     }
 
     pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -1359,6 +1429,10 @@ fn insert_session(
     let token = authn::new_token(TokenKind::Session).map_err(StoreError::Internal)?;
     let expires_at = at + SESSION_SECONDS;
     tx.execute(
+        "DELETE FROM sessions WHERE expires_at<=?1",
+        [at - EXPIRED_CREDENTIAL_KEEP_SECONDS],
+    )?;
+    tx.execute(
         "INSERT INTO sessions(token_hash,user_id,method,created_at,expires_at) VALUES(?1,?2,?3,?4,?5)",
         params![authn::token_hash(&token).as_slice(), user_id, method, at, expires_at],
     )?;
@@ -1936,6 +2010,109 @@ mod tests {
         );
         assert_eq!(rows[2].label, "Mailbox 1");
         assert_eq!(rows[2].plan_sha256, "0".repeat(64));
+    }
+
+    #[test]
+    fn a_backup_is_a_verified_independent_copy_and_never_overwrites() {
+        let directory = std::env::temp_dir().join(format!("mss-backup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let source = directory.join("control.db");
+        let store = Store::open(&source).unwrap();
+        let password = authn::test_secret();
+        store
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
+            .unwrap();
+        let output = directory.join("backup.db");
+        // The service keeps its connection open during the backup.
+        assert_eq!(Store::backup(&source, &output).unwrap(), 1);
+        store
+            .login("admin@msp.example", &password, "after", None, false)
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&output).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "{mode:o}");
+        }
+        let restored = Store::open(&output).unwrap();
+        assert_eq!(restored.verify_audit_chain().unwrap(), 1);
+        restored
+            .login("admin@msp.example", &password, "restored", None, false)
+            .unwrap();
+        drop(restored);
+        let before = std::fs::read(&output).unwrap();
+        assert!(Store::backup(&source, &output).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), before);
+
+        // A tampered source is not kept as a good backup.
+        let tampered = directory.join("tampered.db");
+        let copy = directory.join("copy-of-tampered.db");
+        Store::backup(&source, &tampered).unwrap();
+        {
+            let connection = Connection::open(&tampered).unwrap();
+            connection
+                .execute_batch(
+                    "DROP TRIGGER IF EXISTS audit_log_no_update; UPDATE audit_log SET detail='edited';",
+                )
+                .unwrap();
+        }
+        assert!(Store::backup(&tampered, &copy).is_err());
+        assert!(!copy.exists());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_version_six_database_gains_the_assignment_indexes() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(&format!(
+                "{SCHEMA} {} {} {} {} {SCHEMA_V5_LOGIN} {} PRAGMA user_version=6;",
+                super::super::workers::SCHEMA_V2,
+                super::super::oidc::SCHEMA_V3,
+                super::super::workers::SCHEMA_V4,
+                super::super::oidc::SCHEMA_V5,
+                super::super::plans::SCHEMA_V6,
+            ))
+            .unwrap();
+        let store = Store::from_connection(connection).unwrap();
+        let connection = store.lock();
+        let indexes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('assignments_project_mailbox','assignments_project_order')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 2);
+    }
+
+    #[test]
+    fn long_expired_sessions_are_removed_at_the_next_login() {
+        let store = Store::in_memory();
+        let password = authn::test_secret();
+        let id = store
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
+            .unwrap();
+        store
+            .lock()
+            .execute(
+                "INSERT INTO sessions(token_hash,user_id,method,created_at,expires_at) VALUES(zeroblob(32),?1,'password',1,2)",
+                [&id],
+            )
+            .unwrap();
+        store
+            .login("admin@msp.example", &password, "r", None, false)
+            .unwrap();
+        let remaining: i64 = store
+            .lock()
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 1);
     }
 
     #[test]

@@ -6,10 +6,13 @@
 //! are capped, and the whole request must arrive within one deadline.
 
 use super::api::{self, Request, Response};
+use crate::cli::serve::connection::{
+    BeginResponse, ConnectionSlot, DeadlineStream, refuse_and_linger,
+};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
 
 const MAX_HEAD_BYTES: usize = 16 * 1024;
@@ -18,46 +21,69 @@ const MAX_HEAD_BYTES: usize = 16 * 1024;
 pub(super) const MAX_BODY_BYTES: usize = 2 * super::store::MAX_PLAN_BYTES;
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+pub(super) const DEFAULT_MAX_CONNECTIONS: usize = 32;
+pub(super) const MAX_MAX_CONNECTIONS: usize = 4_096;
+const BUSY_LINGER: Duration = Duration::from_secs(1);
+const MAX_QUEUED_REFUSALS: usize = 128;
 
 pub(super) fn serve(
     listener: TcpListener,
     context: Arc<api::Context>,
     tls: Option<Arc<rustls::ServerConfig>>,
+    max_connections: usize,
 ) -> Result<(), String> {
     let active = Arc::new(AtomicUsize::new(0));
+    // Over-ceiling connections are answered on one helper thread, so a slow
+    // peer cannot stall the accept loop. A reverse proxy then sees a 503
+    // with Retry-After instead of a dropped connection.
+    let (refusals, refusal_queue) = std::sync::mpsc::sync_channel::<TcpStream>(MAX_QUEUED_REFUSALS);
+    let refusals = std::thread::Builder::new()
+        .name("control-plane-refusals".into())
+        .spawn(move || refusal_queue.into_iter().for_each(refuse_busy))
+        .is_ok()
+        .then_some(refusals);
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
             std::thread::sleep(Duration::from_millis(100));
             continue;
         };
-        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
-            active.fetch_sub(1, Ordering::AcqRel);
+        let Some(slot) = ConnectionSlot::acquire(&active, max_connections) else {
+            // A plaintext 503 is meaningless to a TLS client; just close.
+            if tls.is_none()
+                && let Some(refusals) = &refusals
+            {
+                let _ = refusals.try_send(stream);
+            }
             continue;
-        }
+        };
         let context = Arc::clone(&context);
         let tls = tls.clone();
-        let slots = Arc::clone(&active);
-        let spawned = std::thread::Builder::new()
+        // A failed spawn drops the closure, and with it the slot.
+        let _ = std::thread::Builder::new()
             .name("control-plane-connection".into())
             .spawn(move || {
+                let _slot = slot;
                 handle_connection(stream, &context, tls);
-                slots.fetch_sub(1, Ordering::AcqRel);
             });
-        if spawned.is_err() {
-            active.fetch_sub(1, Ordering::AcqRel);
-        }
     }
     Err("the listening socket closed".into())
 }
 
+fn refuse_busy(stream: TcpStream) {
+    refuse_and_linger(stream, BUSY_LINGER, MAX_HEAD_BYTES, |stream| {
+        let mut response = Response::error(503, "Service Unavailable", "too many connections");
+        response.headers.push(("Retry-After", "1".into()));
+        write_response(stream, &response)
+    });
+}
+
 fn handle_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     context: &api::Context,
     tls: Option<Arc<rustls::ServerConfig>>,
 ) {
-    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let peer = stream.peer_addr().ok().map(|address| address.ip());
+    let mut stream = DeadlineStream::new(stream, REQUEST_DEADLINE);
     match tls {
         None => exchange(&mut stream, context, peer),
         Some(config) => {
@@ -71,27 +97,10 @@ fn handle_connection(
             stream = tls.sock;
         }
     }
-    let _ = stream.shutdown(std::net::Shutdown::Both);
+    let _ = stream.into_inner().shutdown(std::net::Shutdown::Both);
 }
 
-/// Deadline-bounded reads over a TCP stream, whether or not TLS wraps it.
-trait SetDeadline {
-    fn set_remaining(&mut self, remaining: Duration);
-}
-
-impl SetDeadline for TcpStream {
-    fn set_remaining(&mut self, remaining: Duration) {
-        let _ = self.set_read_timeout(Some(remaining.max(Duration::from_millis(1))));
-    }
-}
-
-impl SetDeadline for rustls::StreamOwned<rustls::ServerConnection, TcpStream> {
-    fn set_remaining(&mut self, remaining: Duration) {
-        self.sock.set_remaining(remaining);
-    }
-}
-
-fn exchange<S: Read + Write + SetDeadline>(
+fn exchange<S: Read + Write + BeginResponse>(
     stream: &mut S,
     context: &api::Context,
     peer: Option<std::net::IpAddr>,
@@ -103,13 +112,11 @@ fn exchange<S: Read + Write + SetDeadline>(
         }
         Err(response) => response,
     };
+    stream.begin_response(WRITE_TIMEOUT);
     let _ = write_response(stream, &response);
 }
 
-fn read_request<S: Read + SetDeadline>(
-    stream: &mut S,
-    deadline: Instant,
-) -> Result<Request, Response> {
+fn read_request<S: Read>(stream: &mut S, deadline: Instant) -> Result<Request, Response> {
     let timeout = || Response::error(408, "Request Timeout", "the request did not arrive in time");
     let mut data = Vec::with_capacity(2048);
     let mut buffer = [0_u8; 4096];
@@ -124,11 +131,9 @@ fn read_request<S: Read + SetDeadline>(
                 "the request head is too large",
             ));
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if Instant::now() >= deadline {
             return Err(timeout());
         }
-        stream.set_remaining(remaining);
         match stream.read(&mut buffer) {
             Ok(0) => return Err(Response::error(400, "Bad Request", "incomplete request")),
             Ok(count) => data.extend_from_slice(&buffer[..count]),
@@ -184,11 +189,9 @@ fn read_request<S: Read + SetDeadline>(
     }
     let mut body = data.split_off(head_end);
     while body.len() < length {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if Instant::now() >= deadline {
             return Err(timeout());
         }
-        stream.set_remaining(remaining);
         match stream.read(&mut buffer) {
             Ok(0) => {
                 return Err(Response::error(
@@ -251,9 +254,6 @@ mod tests {
             self.0.read(buffer)
         }
     }
-    impl SetDeadline for Script {
-        fn set_remaining(&mut self, _: Duration) {}
-    }
 
     fn read(raw: &[u8]) -> Result<Vec<u8>, u16> {
         read_request(
@@ -262,6 +262,33 @@ mod tests {
         )
         .map(|request| request.body)
         .map_err(|response| response.status)
+    }
+
+    #[test]
+    fn connections_over_the_ceiling_are_answered_503() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let context = Arc::new(api::Context {
+            store: super::super::store::Store::in_memory(),
+            oidc: None,
+        });
+        std::thread::spawn(move || serve(listener, context, None, 1));
+        // Holds the only slot: it sends nothing, so the server keeps waiting.
+        let mut holder = TcpStream::connect(address).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut answer = String::new();
+        // The holder is admitted asynchronously, so retry until refused.
+        while !answer.starts_with("HTTP/1.1 503") && Instant::now() < deadline {
+            let mut refused = TcpStream::connect(address).unwrap();
+            refused
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            answer.clear();
+            let _ = refused.read_to_string(&mut answer);
+        }
+        assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
+        assert!(answer.contains("Retry-After: 1"), "{answer}");
+        holder.write_all(b"\r\n\r\n").unwrap();
     }
 
     #[test]
@@ -383,7 +410,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let context = Arc::new(api::Context { store, oidc: None });
-        std::thread::spawn(move || serve(listener, context, None));
+        std::thread::spawn(move || serve(listener, context, None, DEFAULT_MAX_CONNECTIONS));
 
         for clients in [1_usize, 8, 32] {
             let deadline = Instant::now() + Duration::from_secs(5);
