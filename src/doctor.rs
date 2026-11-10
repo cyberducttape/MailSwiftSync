@@ -18,11 +18,63 @@ use std::{
 
 const IMAPSYNC_DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub(crate) struct DoctorCheck {
     pub(crate) name: &'static str,
     pub(crate) status: &'static str,
     pub(crate) detail: String,
+}
+
+impl Serialize for DoctorCheck {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let remediation = remediation(self.name, self.status);
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("name", self.name)?;
+        map.serialize_entry("status", self.status)?;
+        map.serialize_entry("detail", &self.detail)?;
+        if let Some(remediation) = remediation {
+            map.serialize_entry("remediation", remediation)?;
+        }
+        map.end()
+    }
+}
+
+/// What to do about a check that is not ready; `None` for a ready one.
+fn remediation(name: &str, status: &str) -> Option<&'static str> {
+    if !matches!(status, "blocked" | "review") {
+        return None;
+    }
+    Some(match name {
+        "imapsync executable" => {
+            "Install imapsync 2.314 and put it on PATH, or set its path in the migration plan. Other versions may transfer but cannot produce trusted verification evidence."
+        }
+        "doveadm executable" => {
+            "Install Dovecot's doveadm on this host, or set its path in the migration plan."
+        }
+        "keyring configuration" => {
+            "Store the account passwords or OAuth refresh tokens in the OS keyring from the Account view, or with `mailswiftsync oauth-authorize`."
+        }
+        "configured plan envelope" => {
+            "Save a migration plan in the desktop app, or pass one to the headless commands."
+        }
+        "database" => {
+            "Pass the path of a MailSwiftSync ledger, or run a command that creates one; if the file is damaged, restore it with `mailswiftsync restore`."
+        }
+        "state directory permissions" | "secret runtime directory" => {
+            "Create the directory, owned by the account running MailSwiftSync and accessible only to it (mode 0700 on Unix)."
+        }
+        "free space" => {
+            "Free at least 1 GiB on the state filesystem; large verification runs need more, shown in preflight."
+        }
+        "source TLS connection" | "destination TLS connection" => {
+            "Check the host, port, TLS mode, firewall, CA bundle and certificate pin in the plan, then run `doctor --connect` again."
+        }
+        "source OAuth refresh" | "destination OAuth refresh" => {
+            "Authorize the account again with `mailswiftsync oauth-authorize`, which stores a new refresh token."
+        }
+        _ => "Review this check's detail before starting a migration.",
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -35,7 +87,11 @@ pub(crate) struct DoctorReport {
     pub(crate) overall: &'static str,
 }
 
-pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
+/// `connect` also tests the saved plan's servers over the network. It
+/// handshakes and reads the greeting without signing in, and it loads OAuth
+/// refresh settings without exchanging them, because an exchange can rotate
+/// the refresh token. A doctor run must not change anything.
+pub(crate) fn run(state_path: Option<&Path>, connect: bool) -> DoctorReport {
     let mut checks = Vec::new();
     let profile = Form::load().ok();
     let selected_engine = profile
@@ -84,6 +140,9 @@ pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
             ),
         ),
     });
+    if connect && let Some(form) = &profile {
+        checks.extend(connection_checks(form));
+    }
     if let Some(form) = profile {
         checks.push(DoctorCheck {
             name: "configured plan envelope",
@@ -141,6 +200,93 @@ pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
         checks,
         overall,
     }
+}
+
+fn connection_checks(form: &Form) -> Vec<DoctorCheck> {
+    let profile = &form.profile;
+    let sides = [
+        (
+            "source TLS connection",
+            "source OAuth refresh",
+            true,
+            crate::imap_probe::endpoint_for_probe(&profile.source_host, &profile.source_port),
+            &profile.source_tls,
+            &profile.source_ca_bundle,
+            &profile.source_certificate_pin_sha256,
+        ),
+        (
+            "destination TLS connection",
+            "destination OAuth refresh",
+            false,
+            crate::imap_probe::endpoint_for_probe(
+                &profile.destination_host,
+                &profile.destination_port,
+            ),
+            &profile.destination_tls,
+            &profile.destination_ca_bundle,
+            &profile.destination_certificate_pin_sha256,
+        ),
+    ];
+    let mut checks = Vec::new();
+    for (tls_name, oauth_name, source, endpoint, transport, ca_bundle, pin) in sides {
+        checks.push(tls_check(tls_name, endpoint, transport, ca_bundle, pin));
+        if let Some(check) = oauth_check(oauth_name, form.load_oauth_refresh_config(source)) {
+            checks.push(check);
+        }
+    }
+    checks
+}
+
+fn tls_check(
+    name: &'static str,
+    endpoint: Result<String, String>,
+    transport: &str,
+    ca_bundle: &str,
+    pin: &str,
+) -> DoctorCheck {
+    let (status, detail) = match endpoint {
+        Err(error) => ("blocked", error),
+        Ok(_) if transport == "plain" => (
+            "review",
+            "the plan uses plain IMAP, so there is no TLS to test".to_owned(),
+        ),
+        Ok(endpoint) => {
+            match crate::imap_probe::probe_tls_reachability(&endpoint, transport, ca_bundle, pin) {
+                Ok(()) => (
+                    "ready",
+                    format!(
+                        "{endpoint}: certificate validated and greeting received; not signed in"
+                    ),
+                ),
+                Err(error) => ("blocked", error),
+            }
+        }
+    };
+    DoctorCheck {
+        name,
+        status,
+        detail,
+    }
+}
+
+/// `None` when the plan does not use a stored OAuth refresh token.
+fn oauth_check(
+    name: &'static str,
+    config: Result<Option<crate::oauth_refresh::OAuthRefreshConfig>, String>,
+) -> Option<DoctorCheck> {
+    let (status, detail) = match config {
+        Ok(None) => return None,
+        Ok(Some(_)) => (
+            "ready",
+            "refresh settings load from the keyring; the token was not exchanged, so its validity is not established".to_owned(),
+        ),
+        Err(error) => ("blocked", error),
+    };
+    Some(DoctorCheck {
+        name,
+        status,
+        detail,
+    })
 }
 
 fn check_imapsync(path: &str) -> DoctorCheck {
@@ -579,5 +725,77 @@ mod tests {
             elapsed < Duration::from_secs(1),
             "doctor hung for {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn every_check_that_is_not_ready_says_what_to_do() {
+        for name in [
+            "imapsync executable",
+            "doveadm executable",
+            "keyring configuration",
+            "configured plan envelope",
+            "database",
+            "state directory permissions",
+            "secret runtime directory",
+            "free space",
+            "source TLS connection",
+            "destination OAuth refresh",
+        ] {
+            for status in ["blocked", "review"] {
+                let text = remediation(name, status).unwrap();
+                assert_ne!(text, remediation("unknown", status).unwrap(), "{name}");
+            }
+            assert!(remediation(name, "ready").is_none());
+        }
+        let check = DoctorCheck {
+            name: "free space",
+            status: "review",
+            detail: "low".into(),
+        };
+        let rendered = serde_json::to_value(&check).unwrap();
+        assert_eq!(rendered["status"], "review");
+        assert!(rendered["remediation"].as_str().is_some());
+        let ready = DoctorCheck {
+            name: "free space",
+            status: "ready",
+            detail: "ok".into(),
+        };
+        assert!(
+            serde_json::to_value(&ready)
+                .unwrap()
+                .get("remediation")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn connection_checks_report_without_signing_in() {
+        let plain = tls_check(
+            "source TLS connection",
+            Ok("imap.example".into()),
+            "plain",
+            "",
+            "",
+        );
+        assert_eq!(plain.status, "review");
+        let invalid = tls_check(
+            "source TLS connection",
+            Err("no host".into()),
+            "imaps",
+            "",
+            "",
+        );
+        assert_eq!(invalid.status, "blocked");
+        let refused = tls_check(
+            "destination TLS connection",
+            Ok("127.0.0.1:1".into()),
+            "imaps",
+            "",
+            "",
+        );
+        assert_eq!(refused.status, "blocked", "{}", refused.detail);
+        assert!(oauth_check("source OAuth refresh", Ok(None)).is_none());
+        let failed = oauth_check("source OAuth refresh", Err("locked".into())).unwrap();
+        assert_eq!(failed.status, "blocked");
     }
 }
