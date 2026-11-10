@@ -37,9 +37,12 @@ verification, the combined byte budget. Over a limit, the row is blocked and
 says the mailbox will finish as “verification limit exceeded” rather than
 verified; the transfer itself is not refused. Accounts with more than 5,000
 selectable folders, a refused `STATUS`, or a census that runs past 30 seconds
-show the capacity as not established, never as within limits. Above
-1,000,000 messages the row also states the free disk the stage may need, at
-the observed worst case of 808 bytes per staged record.
+show the capacity as not established, never as within limits. A passing row
+also says what to plan for: the free disk the stage may need, at the observed
+worst case of 808 bytes per staged record; the time to match records, at the
+release-gated minimum of 20,000 per second; and, for body-content
+verification, the bytes to read and how long that takes at 100 Mbit/s. Time
+to fetch metadata depends on the servers and is not estimated.
 
 A batch dry run shows the same row for every mailbox. After a mailbox passes
 its dry run, each account is probed again and counted the same way. The row

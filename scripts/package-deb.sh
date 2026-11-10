@@ -56,6 +56,8 @@ install -m 0644 docs/distribution/CREDENTIAL-LIFECYCLE.md \
   "$stage/usr/share/doc/mailswiftsync/docs/distribution/CREDENTIAL-LIFECYCLE.md"
 install -m 0644 docs/distribution/mailswiftsync-supervise.service \
   "$stage/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-supervise.service"
+install -m 0644 docs/distribution/mailswiftsync-control.service \
+  "$stage/usr/share/doc/mailswiftsync/docs/distribution/mailswiftsync-control.service"
 install -m 0644 assets/fonts/OFL.txt \
   "$stage/usr/share/doc/mailswiftsync/OFL-IBM-Plex.txt"
 install -m 0644 docs/distribution/mailswiftsync.1 \

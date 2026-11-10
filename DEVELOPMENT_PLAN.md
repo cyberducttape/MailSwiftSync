@@ -7,13 +7,13 @@ inventory in [capabilities.toml](capabilities.toml); this file orders the work
 and states how each milestone is judged done. Progress and evidence are logged
 in [PROGRESS.md](PROGRESS.md).
 
-## Where the release stands (2026-10-30)
+## Where the release stands (2026-11-09)
 
 - Code-side gates are green: `make check`, the full test suite, the
   cross-platform CI matrix, the IMAP integration lab, fuzzing, and the
   dependency audit.
-- No open GitHub issues and no open code-scanning alerts. PRs #147, #148,
-  #151 and #153 are merged.
+- No open code-scanning alerts. The production-readiness audit (R5 below) is
+  the latest full review.
 - Most remaining 1.0 blockers are **external**: they need signing
   credentials, live provider tenants, or a person with a screen reader. They
   are listed under "Blocked on people" so they are not mistaken for code work.
@@ -175,7 +175,7 @@ Each finding was checked against the code before any change.
 
 | Finding | Verdict | What changed or is planned |
 |---|---|---|
-| Control HTTP server: thread per connection, fixed 32 | Confirmed | Throughput is bounded by serialized SQLite commits (about 1,500 audited requests/s, #168), not by the thread count, so more threads alone would not raise it. A `--max-connections` option waits for #168 to merge (both touch the CLI option list). An async server or pool belongs with M6. |
+| Control HTTP server: thread per connection, fixed 32 | Confirmed | Throughput is bounded by serialized SQLite commits (about 1,500 audited requests/s, #168), not by the thread count, so more threads alone would not raise it. `--max-connections` shipped with R5. An async server or pool belongs with M6. |
 | Central SQLite store behind one mutex | Confirmed; measured in #168 | Every API request commits an audit entry, so a read pool would not remove the bottleneck. A pool or another database is an M6 item. |
 | Agent runs one assignment per loop | Confirmed; staged in M6 | Recorded with R3. |
 | Plan export is one JSON object listing every mailbox | Confirmed; design decision needed | The 256 KiB plan limit holds about 2,000 mailboxes. Options in M8. |
@@ -185,6 +185,28 @@ Each finding was checked against the code before any change.
 | `docs/control-plane.md` says the worker agent is still to come | Confirmed; fixed | The agent shipped in #152; the intro now describes it. |
 | Installer: no native Windows/macOS installers or signed repositories | Agreed; blocked on people | Needs signing identities and repository hosting; see "Blocked on people". |
 | A `doctor` that reports readiness with remediation | Mostly met | `mailswiftsync doctor [--strict]` already reports the OS, engine version and qualification (with an install hint), TLS/auth modes, keyring references, database state, owner-only directories, and free space, with exit codes for automation. Missing: OAuth token readiness, live TLS reachability, and a remediation line for every check. Staged in M8. |
+
+### R5. Production-readiness audit (2026-11-09)
+
+Run against `main` at `9bd15639`. Every finding below was reproduced or read in the code.
+
+| Finding | Verdict | What changed |
+|---|---|---|
+| Weekly dependency audit failing on `fuzz/Cargo.lock` (RUSTSEC-2026-0459) | Confirmed; fixed | `rusqlite` 0.41 in the fuzz workspace. PR CI and releases audited only the main lockfile, so nothing caught it before the weekly run; both now audit it. |
+| Request deadlines were per socket call, so a trickled TLS handshake or record held a slot indefinitely | Confirmed; fixed | `DeadlineStream` enforces absolute read and write deadlines beneath TLS, in both HTTP listeners. |
+| Connection slots leaked when a request thread panicked | Confirmed; fixed | RAII `ConnectionSlot`. |
+| `control serve` dropped connections over its ceiling, which was fixed at 32 | Confirmed; fixed | `503` with `Retry-After`; `--max-connections` (R4's deferred item). |
+| The same mailbox could be queued twice, so two workers could copy it at once | Confirmed; fixed | Refused while queued, leased, or awaiting reconciliation. |
+| `GET …/assignments` returned every row of a plan that can hold 1,000,000 | Confirmed; fixed | Keyset pages of up to 1,000. |
+| A paged upload could be committed by someone other than its author, who could then approve it | Confirmed; fixed | Only the uploader may add pages or commit. |
+| No backup for the control-plane database, which holds the audit log and identities | Confirmed; fixed | `control backup`, with a restore procedure in docs/control-plane.md. |
+| Expired sessions and enrollment tokens were never removed | Confirmed; fixed | Pruned a week after expiry. |
+| Docs said the control plane did not exist | Confirmed; fixed | PRODUCTION_STATUS.md updated. |
+| Panic sites in production code | Checked; no defect | Clippy's restriction lints find 23 in non-test code, all on invariants established just above them. |
+| Workflow action pinning | Checked; no defect | Pinned through `.github/workflows/actions.lock`, verified by CI. |
+| Open code-scanning alerts | Checked; none | |
+| Hostile cross-tenant authorization (R2 §6, still to run) | Checked; no defect | A new test calls every tenant-scoped route as another tenant's manager, on the victim's tenant and with the caller's own tenant substituted. All answer not-found and change nothing. |
+| TLS deadline when the IMAP server itself trickles | Open, low | The same per-call limit applies to the outbound IMAP client. It needs a server the operator configured to misbehave, and it stalls one verification rather than a shared service. |
 
 ### M8. Verification at any message size, and planning it up front
 
@@ -198,15 +220,20 @@ response buffer.
    one range regardless of message size. The per-message bound rose from
    64 MiB to 2 GiB (still within the total budget). Not yet run against a
    live provider.
-2. **Resumable verification segments.** Persist per-folder hashing
-   progress in the durable stage, as metadata pages already are, so an
-   interrupted body pass resumes instead of refetching.
-3. **Time and disk estimate in preflight.** From the census (messages,
-   bytes, oversized count) and measured rates, show the expected stage
-   disk and verification time beside the capacity check.
-4. **`doctor` gaps.** Optional `--connect` checks for OAuth refresh and
-   TLS reachability of configured accounts, and a remediation line for
-   every failing check.
+2. **Resumable verification segments (not started).** Persist
+   per-folder hashing progress in the durable stage, as metadata pages
+   already are, so an interrupted body pass resumes instead of refetching.
+   Today an interrupted body pass refetches, which costs time but cannot
+   produce wrong evidence. Reusing hashes changes what a `body_hash` claim
+   rests on, so it needs its own review and a provider run.
+3. **Time and disk estimate in preflight: done.** Passing capacity rows
+   give stage disk, matching time at the release-gated rate, and body
+   bytes with their time at a stated 100 Mbit/s. Metadata fetch time is
+   server-dependent and deliberately not estimated.
+4. **`doctor` gaps: done.** `--connect` tests TLS and the greeting for
+   the saved plan's accounts without signing in and loads OAuth refresh
+   settings without exchanging them, since an exchange can rotate the
+   token. Every check that is not ready carries a `remediation` line.
 5. **Plan export at MSP scale: done (#170, paged plan upload).** Plan
    mailboxes are rows (up to 1,000,000), large plans upload in pages of
    2,000 that commit as one revision (`control plan upload`), and leases

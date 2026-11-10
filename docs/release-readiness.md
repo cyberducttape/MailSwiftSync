@@ -789,7 +789,8 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 ## Current dependency audit
 
 Pull-request CI, release verification, and the scheduled dependency workflow run
-both `cargo audit` and `cargo deny check advisories bans licenses sources`.
+`cargo audit` over both `Cargo.lock` and `fuzz/Cargo.lock`, and
+`cargo deny check advisories bans licenses sources`.
 RustSec currently reports no published vulnerability advisory for the
 dependency graph. MailSwiftSync no longer depends on Calamine, and the lockfile
 no longer contains the yanked `zip 8.6.0`; the mailbox importer uses `zip 9` and
