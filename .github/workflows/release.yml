@@ -506,7 +506,7 @@ jobs:
         uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: dist/mailswiftsync-release-manifest.txt
-      - uses: softprops/action-gh-release@v3.0.3
+      - uses: softprops/action-gh-release@v3.0.4
         with:
           files: dist/*
           prerelease: ${{ contains(github.ref_name, '-') }}
