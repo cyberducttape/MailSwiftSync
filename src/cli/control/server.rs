@@ -286,8 +286,9 @@ mod tests {
             answer.clear();
             let _ = refused.read_to_string(&mut answer);
         }
-        assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
-        assert!(answer.contains("Retry-After: 1"), "{answer}");
+        // The response text is network input, so it stays out of panic output.
+        assert!(answer.starts_with("HTTP/1.1 503"), "expected a 503 refusal");
+        assert!(answer.contains("Retry-After: 1"), "expected Retry-After: 1");
         holder.write_all(b"\r\n\r\n").unwrap();
     }
 
