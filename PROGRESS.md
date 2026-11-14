@@ -2,6 +2,30 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-14: Lease-loss drill for a crashed worker (M2)
+
+Branch `test/lease-loss-drill` (from `main`). New test
+`cli::control::agent::tests::a_killed_worker_leaves_its_lease_for_reconciliation`:
+
+- The test runs the real control service over HTTP. The real agent loop
+  runs in a child process (the test binary re-executed) with a stand-in
+  engine, a `sleep` process.
+- The agent leases the mailbox, starts the engine, and renews. The test
+  then SIGKILLs the agent; the engine keeps running, as it can after a
+  host crash.
+- Checked: nothing renews the lease after the kill; a second worker gets
+  nothing while it is live or after it expires; after the grace it is
+  `needs_reconciliation`; the dead worker's late `complete` and `renew`
+  are refused with `409`; after the operator stops the engine and
+  requeues, the second worker leases it under a higher fencing token and
+  completes it, and the dead worker's token stays refused.
+- The 30-second lease and 60-second grace are fast-forwarded in the
+  database. The test takes about 8 seconds and passed five consecutive
+  runs with no processes left behind.
+
+Not covered: a lost lease cancelling a real imapsync run through the
+headless stop flag (see M2).
+
 ## 2026-11-09: Production-readiness audit (R5)
 
 Audited `main` at `9bd15639`. Findings and verdicts are in DEVELOPMENT_PLAN.md
@@ -241,8 +265,9 @@ On `feat/control-plane-identity` at `a93ad737`:
 
 ## Next steps
 
-1. Run a live lease-loss drill for M2 in the IMAP integration lab (needs
-   Docker).
+1. Drill a lost lease cancelling a real imapsync run in the IMAP
+   integration lab. The crashed-worker drill is done; this one needs a
+   durable batch in the lab, and batch import is GUI-only.
 2. Push the branch and open a PR stacked on #148 (needs approval).
 3. M3 (per-row batch verification capacity) once PR #147 is merged.
 4. M4 (segmented verification beyond 1M messages per account).

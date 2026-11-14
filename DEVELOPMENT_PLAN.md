@@ -64,8 +64,18 @@ Acceptance criteria:
    `capabilities.toml` row describe the agent honestly.
 
 Criteria 1–5 are met by tests (see PROGRESS.md). For criterion 3, the
-agent-level stop is tested. Cancelling a real imapsync batch through the
-headless stop flag still needs a live drill in the Docker IMAP lab.
+agent-level stop is tested. A crashed worker is drilled with real
+processes (`a_killed_worker_leaves_its_lease_for_reconciliation`): the
+agent runs in a child process against the control service over HTTP and
+is SIGKILLed while its stand-in engine runs. Its lease is never renewed or
+handed out, moves to `needs_reconciliation` after the grace, refuses the
+dead worker's token, and goes to another worker, under a higher token, only
+after an operator requeue. The 30-second lease and 60-second grace are
+fast-forwarded in the database; everything else runs in real time.
+
+Still outstanding: cancelling a real imapsync batch through the headless
+stop flag. It needs the Docker IMAP lab, and the lab cannot build a durable
+batch because batch import is GUI-only.
 
 ### M3. Per-row verification capacity for batch imports: done
 
