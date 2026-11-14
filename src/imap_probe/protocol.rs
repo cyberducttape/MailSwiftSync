@@ -1,6 +1,8 @@
 //! Deadline-bound IMAP command I/O and tagged response framing.
 
-use super::{MAX_IMAP_COMMAND_DURATION, MessageFetchBudget, read_with_deadline};
+use super::{
+    ImapError, ImapErrorKind, MAX_IMAP_COMMAND_DURATION, MessageFetchBudget, read_with_deadline,
+};
 use crate::imap_probe::literal_framing;
 use std::{
     io::{Read, Write},
@@ -14,7 +16,7 @@ pub(super) fn read_imap_tagged<S: Read>(
     tag: &str,
     response: &mut String,
     buffer: &mut [u8; 4096],
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     read_imap_tagged_with_limit(stream, tag, response, buffer, 1_048_576)
 }
 
@@ -23,17 +25,22 @@ pub(super) fn write_imap_command<S: Write>(
     bytes: &[u8],
     budget: Option<&MessageFetchBudget<'_>>,
     operation: &str,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     let Some(budget) = budget else {
         return stream
             .write_all(bytes)
-            .map_err(|error| format!("{operation}: {error}"));
+            .map_err(|error| ImapError::io(format!("{operation}: {error}"), &error));
     };
     let mut offset = 0;
     while offset < bytes.len() {
         budget.check()?;
         match stream.write(&bytes[offset..]) {
-            Ok(0) => return Err(format!("{operation}: IMAP connection closed while writing")),
+            Ok(0) => {
+                return Err(ImapError::new(
+                    ImapErrorKind::Connection,
+                    format!("{operation}: IMAP connection closed while writing"),
+                ));
+            }
             Ok(written) => offset = offset.saturating_add(written),
             Err(error)
                 if matches!(
@@ -43,7 +50,7 @@ pub(super) fn write_imap_command<S: Write>(
             {
                 super::wait_for_io_retry(budget.deadline, Some(budget.cancel));
             }
-            Err(error) => return Err(format!("{operation}: {error}")),
+            Err(error) => return Err(ImapError::io(format!("{operation}: {error}"), &error)),
         }
     }
     Ok(())
@@ -55,19 +62,20 @@ fn read_imap_tagged_with_limit<S: Read>(
     response: &mut String,
     buffer: &mut [u8; 4096],
     max_bytes: usize,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     let mut raw_response = Vec::new();
     let mut scanner = TaggedResponseScanner::new(tag);
     let deadline = Instant::now() + MAX_IMAP_COMMAND_DURATION;
     loop {
         let count = read_with_deadline(stream, buffer, deadline, None)?;
         if count == 0 {
-            return Err(format!("IMAP connection closed before {tag} completed"));
+            return Err(closed_before(tag));
         }
         raw_response.extend_from_slice(&buffer[..count]);
         if raw_response.len() > max_bytes {
-            return Err(format!(
-                "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
+            return Err(ImapError::new(
+                ImapErrorKind::Protocol,
+                format!("IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"),
             ));
         }
         if scanner.scan(&raw_response) {
@@ -85,17 +93,20 @@ pub(super) fn read_imap_tagged_with_budget<S: Read>(
     buffer: &mut [u8; 4096],
     max_bytes: usize,
     budget: &MessageFetchBudget<'_>,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     let mut raw_response = Vec::new();
     let mut scanner = TaggedResponseScanner::new(tag);
     let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
     loop {
         budget.check()?;
         if Instant::now() >= no_progress_deadline {
-            return Err(format!("IMAP response for {tag} stalled for 15 seconds"));
+            return Err(ImapError::new(
+                ImapErrorKind::Timeout,
+                format!("IMAP response for {tag} stalled for 15 seconds"),
+            ));
         }
         match stream.read(buffer) {
-            Ok(0) => return Err(format!("IMAP connection closed before {tag} completed")),
+            Ok(0) => return Err(closed_before(tag)),
             Ok(count) => {
                 no_progress_deadline = Instant::now() + Duration::from_secs(15);
                 raw_response.extend_from_slice(&buffer[..count]);
@@ -111,7 +122,7 @@ pub(super) fn read_imap_tagged_with_budget<S: Read>(
                     Some(budget.cancel),
                 );
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(ImapError::io(error.to_string(), &error)),
         }
         if raw_response.len() > max_bytes {
             return Err(budget.limit_error(
@@ -133,7 +144,7 @@ pub(super) fn read_imap_tagged_with_optional_budget<S: Read>(
     response: &mut String,
     buffer: &mut [u8; 4096],
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     match budget {
         Some(budget) => {
             read_imap_tagged_with_budget(stream, tag, response, buffer, 1_048_576, budget)
@@ -148,17 +159,20 @@ pub(super) fn read_imap_tagged_bytes_with_budget<S: Read>(
     buffer: &mut [u8; 4096],
     max_bytes: usize,
     budget: &MessageFetchBudget<'_>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ImapError> {
     let mut response = Vec::new();
     let mut scanner = TaggedResponseScanner::new(tag);
     let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
     loop {
         budget.check()?;
         if Instant::now() >= no_progress_deadline {
-            return Err(format!("IMAP response for {tag} stalled for 15 seconds"));
+            return Err(ImapError::new(
+                ImapErrorKind::Timeout,
+                format!("IMAP response for {tag} stalled for 15 seconds"),
+            ));
         }
         match stream.read(buffer) {
-            Ok(0) => return Err(format!("IMAP connection closed before {tag} completed")),
+            Ok(0) => return Err(closed_before(tag)),
             Ok(count) => {
                 no_progress_deadline = Instant::now() + Duration::from_secs(15);
                 response.extend_from_slice(&buffer[..count]);
@@ -174,7 +188,7 @@ pub(super) fn read_imap_tagged_bytes_with_budget<S: Read>(
                     Some(budget.cancel),
                 );
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(ImapError::io(error.to_string(), &error)),
         }
         if response.len() > max_bytes {
             return Err(budget.limit_error(
@@ -186,6 +200,13 @@ pub(super) fn read_imap_tagged_bytes_with_budget<S: Read>(
             return Ok(response);
         }
     }
+}
+
+fn closed_before(tag: &str) -> ImapError {
+    ImapError::new(
+        ImapErrorKind::Connection,
+        format!("IMAP connection closed before {tag} completed"),
+    )
 }
 
 #[cfg(test)]
