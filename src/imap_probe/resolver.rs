@@ -274,7 +274,8 @@ pub(super) fn connect_racing(
     addresses: Vec<SocketAddr>,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
-) -> Result<TcpStream, String> {
+) -> Result<TcpStream, super::ImapError> {
+    use super::{ImapError, ImapErrorKind};
     let candidates = interleave_address_families(addresses)
         .into_iter()
         .take(MAX_CONNECTION_ATTEMPTS)
@@ -286,7 +287,10 @@ pub(super) fn connect_racing(
     let mut next_start = Instant::now();
     loop {
         if cancelled() {
-            return Err("connection cancelled".into());
+            return Err(ImapError::new(
+                ImapErrorKind::Cancelled,
+                "connection cancelled",
+            ));
         }
         let now = Instant::now();
         let remaining = deadline.saturating_duration_since(now);
@@ -303,7 +307,9 @@ pub(super) fn connect_racing(
                 .spawn(move || {
                     let _ = sender.send(TcpStream::connect_timeout(&address, remaining));
                 })
-                .map_err(|error| format!("could not start connection attempt: {error}"))?;
+                .map_err(|error| {
+                    ImapError::from(format!("could not start connection attempt: {error}"))
+                })?;
             started += 1;
             next_start = now + CONNECTION_ATTEMPT_DELAY;
         }
@@ -324,12 +330,19 @@ pub(super) fn connect_racing(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    Err(format!(
+    let detail = format!(
         "could not connect to any resolved address: {}",
         last_error
+            .as_ref()
             .map(|error| error.to_string())
             .unwrap_or_else(|| "connection deadline exceeded".into())
-    ))
+    );
+    Err(match last_error {
+        Some(error) if error.kind() != std::io::ErrorKind::TimedOut => {
+            ImapError::new(ImapErrorKind::Connection, detail)
+        }
+        _ => ImapError::new(ImapErrorKind::Timeout, detail),
+    })
 }
 
 #[cfg(test)]
