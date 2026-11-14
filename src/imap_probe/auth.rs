@@ -1,7 +1,7 @@
 //! IMAP authentication and post-authentication readiness checks.
 
 use super::{
-    MessageFetchBudget, imap_command_failure, imap_command_succeeded, imap_quote,
+    ImapError, MessageFetchBudget, imap_command_failure, imap_command_succeeded, imap_quote,
     is_untagged_response, read_imap_tagged_with_optional_budget, write_imap_command,
 };
 use crate::credentials::SecretString;
@@ -16,7 +16,7 @@ pub(super) fn authenticate_imap_stream<S: Read + Write>(
     auth_method: &str,
     greeting: String,
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<(S, String), String> {
+) -> Result<(S, String), ImapError> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
     write_imap_command(
@@ -157,13 +157,15 @@ pub(super) fn reconnect_and_authenticate_imap_stream<S, C>(
     budget: Option<&MessageFetchBudget<'_>>,
     refresh_credential: &mut dyn FnMut() -> Result<SecretString, String>,
     connect: C,
-) -> Result<(S, String), String>
+) -> Result<(S, String), ImapError>
 where
     S: Read + Write,
-    C: FnOnce() -> Result<(S, String), String>,
+    C: FnOnce() -> Result<(S, String), ImapError>,
 {
     let credential = refresh_credential().map_err(|error| {
-        format!("could not refresh the IMAP credential before reconnect: {error}")
+        ImapError::from(format!(
+            "could not refresh the IMAP credential before reconnect: {error}"
+        ))
     })?;
     let (stream, greeting) = connect()?;
     authenticate_imap_stream(
@@ -424,8 +426,9 @@ mod tests {
         )
         .expect_err("rejected LOGIN must fail closed");
 
-        assert!(error.contains("invalid credentials"));
-        assert!(!error.contains(&password));
+        assert_eq!(error.kind(), crate::imap_probe::ImapErrorKind::Server);
+        assert!(error.detail().contains("invalid credentials"));
+        assert!(!error.detail().contains(&password));
     }
 
     #[test]

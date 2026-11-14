@@ -8,6 +8,8 @@ use std::{
 };
 
 mod auth;
+mod error;
+pub(crate) use error::{ImapError, ImapErrorKind};
 mod fetch_pages;
 #[path = "imap_probe/fetch_parser.rs"]
 mod fetch_parser;
@@ -616,26 +618,32 @@ impl<'a> MessageFetchBudget<'a> {
         }
     }
 
+    /// A verification safety limit. A probe is not verification, so there
+    /// the same bound is a protocol failure, as an oversized response is.
     pub(super) fn limit_error(
         &self,
         limit: crate::core::VerificationLimit,
         detail: String,
-    ) -> String {
+    ) -> ImapError {
         if self.verification_limits {
-            limit.tag(detail)
+            ImapError::new(ImapErrorKind::Limit(limit), limit.tag(detail))
+        } else if limit == crate::core::VerificationLimit::Deadline {
+            ImapError::new(ImapErrorKind::Timeout, detail)
         } else {
-            detail
+            ImapError::new(ImapErrorKind::Protocol, detail)
         }
     }
 
-    pub(super) fn check(&self) -> Result<(), String> {
+    pub(super) fn check(&self) -> Result<(), ImapError> {
         if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(if self.verification_limits {
-                "message-level verification cancelled by operator"
-            } else {
-                "IMAP probe cancelled by operator"
-            }
-            .into());
+            return Err(ImapError::new(
+                ImapErrorKind::Cancelled,
+                if self.verification_limits {
+                    "message-level verification cancelled by operator"
+                } else {
+                    "IMAP probe cancelled by operator"
+                },
+            ));
         }
         if Instant::now() >= self.deadline {
             return Err(self.limit_error(
@@ -660,13 +668,19 @@ fn read_with_deadline<S: Read>(
     buffer: &mut [u8],
     deadline: Instant,
     cancel: Option<&AtomicBool>,
-) -> Result<usize, String> {
+) -> Result<usize, ImapError> {
     loop {
         if cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed)) {
-            return Err("IMAP read cancelled by operator".into());
+            return Err(ImapError::new(
+                ImapErrorKind::Cancelled,
+                "IMAP read cancelled by operator",
+            ));
         }
         if Instant::now() >= deadline {
-            return Err("IMAP read deadline exceeded".into());
+            return Err(ImapError::new(
+                ImapErrorKind::Timeout,
+                "IMAP read deadline exceeded",
+            ));
         }
         match stream.read(buffer) {
             Ok(count) => return Ok(count),
@@ -678,7 +692,7 @@ fn read_with_deadline<S: Read>(
             {
                 wait_for_io_retry(deadline, cancel);
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(ImapError::io(error.to_string(), &error)),
         }
     }
 }
@@ -687,7 +701,7 @@ fn read_imap_greeting<S: Read>(
     stream: &mut S,
     host: &str,
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<String, String> {
+) -> Result<String, ImapError> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
     let deadline = budget
@@ -709,7 +723,10 @@ fn read_imap_greeting<S: Read>(
         }
     }
     if !is_untagged_response(&response, "OK") && !is_untagged_response(&response, "PREAUTH") {
-        return Err(format!("{host}: server greeting was missing or invalid"));
+        return Err(ImapError::new(
+            ImapErrorKind::Protocol,
+            format!("{host}: server greeting was missing or invalid"),
+        ));
     }
     Ok(response)
 }
@@ -730,7 +747,7 @@ fn imap_command_failure(
     tag: &str,
     operation: &str,
     host: &str,
-) -> String {
+) -> ImapError {
     let detail = literal_framing::tagged_completion(response.as_ref(), tag)
         .map(String::from_utf8_lossy)
         .map(|line| {
@@ -746,10 +763,13 @@ fn imap_command_failure(
                 .collect::<String>()
         })
         .filter(|line| !line.is_empty());
-    match detail {
-        Some(detail) => format!("{host}: {operation} failed: {detail}"),
-        None => format!("{host}: {operation} failed"),
-    }
+    ImapError::new(
+        ImapErrorKind::Server,
+        match detail {
+            Some(detail) => format!("{host}: {operation} failed: {detail}"),
+            None => format!("{host}: {operation} failed"),
+        },
+    )
 }
 
 /// `body_hash_bound`, when body-content verification is planned, also
@@ -801,6 +821,7 @@ pub(crate) fn probe_tls_reachability(
 ) -> Result<(), String> {
     tls::connect_tls_stream_inner(host, transport, ca_bundle, certificate_pin_sha256, None)
         .map(|_| ())
+        .map_err(String::from)
 }
 
 pub(crate) fn probe_tls_authentication_with_transport(
@@ -811,7 +832,7 @@ pub(crate) fn probe_tls_authentication_with_transport(
     transport: &str,
     ca_bundle: &str,
     certificate_pin_sha256: &str,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     probe_tls_readiness(
         TlsProbeRequest {
             host,
@@ -857,7 +878,7 @@ pub(crate) fn probe_tls_live_readiness_with_transport(
     transport: &str,
     ca_bundle: &str,
     certificate_pin_sha256: &str,
-) -> Result<DestinationQuotaObservation, String> {
+) -> Result<DestinationQuotaObservation, ImapError> {
     probe_tls_readiness(
         TlsProbeRequest {
             host,
@@ -885,7 +906,7 @@ struct TlsProbeRequest<'a> {
 fn probe_tls_readiness(
     request: TlsProbeRequest<'_>,
     check_inbox_quota: bool,
-) -> Result<DestinationQuotaObservation, String> {
+) -> Result<DestinationQuotaObservation, ImapError> {
     let cancel = AtomicBool::new(false);
     let budget = MessageFetchBudget::for_probe(TLS_READINESS_PROBE_BUDGET, &cancel);
     let (stream, greeting) = connect_tls_stream_with_budget(
@@ -919,7 +940,7 @@ fn live_readiness_on_authenticated_stream<S: Read + Write>(
     post_auth_capabilities: &str,
     check_inbox_quota: bool,
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<DestinationQuotaObservation, String> {
+) -> Result<DestinationQuotaObservation, ImapError> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
     write_imap_command(stream, b"a004 NOOP\r\n", budget, "could not write NOOP")?;
@@ -1152,7 +1173,13 @@ pub(crate) enum MailSide {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidedProbeError {
     pub(crate) side: MailSide,
-    pub(crate) message: String,
+    pub(crate) error: ImapError,
+}
+
+impl SidedProbeError {
+    fn on(side: MailSide) -> impl Fn(ImapError) -> Self {
+        move |error| Self { side, error }
+    }
 }
 
 /// List one account's selectable folders with their RFC 6154 special-use
@@ -1166,7 +1193,7 @@ pub(crate) fn list_account_folders_with_transport(
     transport: &str,
     ca_bundle: &str,
     certificate_pin_sha256: &str,
-) -> Result<Vec<MailboxDescriptor>, String> {
+) -> Result<Vec<MailboxDescriptor>, ImapError> {
     let cancel = AtomicBool::new(false);
     let budget = MessageFetchBudget::for_probe(TLS_CAPABILITY_PROBE_BUDGET, &cancel);
     let (stream, greeting) = connect_tls_stream_with_budget(
@@ -1186,6 +1213,7 @@ pub(crate) fn list_account_folders_with_transport(
         Some(&budget),
     )?;
     list_folders_on_authenticated_stream(&mut stream, host, &post_auth_response, &budget)
+        .map_err(ImapError::from)
 }
 
 fn list_folders_on_authenticated_stream<S: Read + Write>(
@@ -1217,14 +1245,17 @@ fn list_folders_on_authenticated_stream<S: Read + Write>(
 pub(crate) fn list_both_account_folders(
     form: &crate::Form,
 ) -> Result<(Vec<MailboxDescriptor>, Vec<MailboxDescriptor>), SidedProbeError> {
-    let sided = |side| move |message| SidedProbeError { side, message };
+    let sided = SidedProbeError::on;
+    let configuration = |side| {
+        move |detail: String| sided(side)(ImapError::new(ImapErrorKind::Configuration, detail))
+    };
     let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)
-        .map_err(sided(MailSide::Source))?;
+        .map_err(configuration(MailSide::Source))?;
     let destination = endpoint_for_probe(
         &form.profile.destination_host,
         &form.profile.destination_port,
     )
-    .map_err(sided(MailSide::Destination))?;
+    .map_err(configuration(MailSide::Destination))?;
     let source_folders = list_account_folders_with_transport(
         &source,
         &form.profile.source_user,
@@ -1299,14 +1330,17 @@ pub(crate) fn fresh_dual_imaps_readiness(form: &crate::Form) -> Result<(), Sided
     if !fresh_imap_authentication_applies(form) {
         return Ok(());
     }
-    let sided = |side| move |message| SidedProbeError { side, message };
+    let sided = SidedProbeError::on;
+    let configuration = |side| {
+        move |detail: String| sided(side)(ImapError::new(ImapErrorKind::Configuration, detail))
+    };
     let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)
-        .map_err(sided(MailSide::Source))?;
+        .map_err(configuration(MailSide::Source))?;
     let destination = endpoint_for_probe(
         &form.profile.destination_host,
         &form.profile.destination_port,
     )
-    .map_err(sided(MailSide::Destination))?;
+    .map_err(configuration(MailSide::Destination))?;
     probe_tls_authentication_with_transport(
         &source,
         &form.profile.source_user,
@@ -1328,10 +1362,10 @@ pub(crate) fn fresh_dual_imaps_readiness(form: &crate::Form) -> Result<(), Sided
     )
     .map_err(sided(MailSide::Destination))?;
     if destination_quota.is_exhausted() {
-        return Err(sided(MailSide::Destination)(
-            "destination INBOX-root quota reports exhausted capacity; live migration was not started"
-                .into(),
-        ));
+        return Err(sided(MailSide::Destination)(ImapError::new(
+            ImapErrorKind::QuotaExhausted,
+            "destination INBOX-root quota reports exhausted capacity; live migration was not started",
+        )));
     }
     Ok(())
 }
@@ -1362,6 +1396,26 @@ impl From<String> for MailboxFetchError {
 impl From<&str> for MailboxFetchError {
     fn from(error: &str) -> Self {
         classify_mailbox_fetch_error(error.to_owned())
+    }
+}
+
+impl From<ImapError> for MailboxFetchError {
+    fn from(error: ImapError) -> Self {
+        use crate::core::VerificationLimit;
+        match error.kind() {
+            // A response cut off at its size bound leaves the rest unread on
+            // the stream, so no later folder may use it; the limit also holds
+            // after a reconnect, so the account check stops here.
+            ImapErrorKind::Cancelled
+            | ImapErrorKind::Limit(VerificationLimit::Deadline | VerificationLimit::ResponseSize) => {
+                Self::Control(error.into())
+            }
+            // The stream may hold part of an unread response, or be closed:
+            // the next folder needs a new session.
+            _ if error.ends_session() => Self::SessionFatal(error.into()),
+            ImapErrorKind::Unclassified => classify_mailbox_fetch_error(error.into()),
+            _ => Self::Folder(error.into()),
+        }
     }
 }
 
@@ -1500,17 +1554,23 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 budget.check()?;
                 let limit = message_fetch_limit(sink.has_durable_stage());
                 if message_fetch_limit_exceeded(sink.len(), uid_page.len(), limit) {
-                    return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
-                        "{host}: account would exceed the {limit}-message verification limit"
-                    )));
+                    return Err(ImapError::limit(
+                        crate::core::VerificationLimit::MessageCount,
+                        format!(
+                            "{host}: account would exceed the {limit}-message verification limit"
+                        ),
+                    ));
                 }
                 if body_hash.is_some()
                     && !sink.has_durable_stage()
                     && body_hash_message_limit_exceeded(sink.len(), uid_page.len())
                 {
-                    return Err(crate::core::VerificationLimit::BodyHashMessageCount.tag(format!(
-                    "{host}: ephemeral body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use a durable SQLite-backed verification run or metadata-only verification"
-                )));
+                    return Err(ImapError::limit(
+                        crate::core::VerificationLimit::BodyHashMessageCount,
+                        format!(
+                            "{host}: ephemeral body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use a durable SQLite-backed verification run or metadata-only verification"
+                        ),
+                    ));
                 }
                 let tag = format!("v{:03}", page_number + 3);
                 page_number = page_number.saturating_add(1);
@@ -1603,11 +1663,11 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                         || body_page.fingerprints.keys().collect::<HashSet<_>>()
                             != page_messages.keys().collect::<HashSet<_>>())
                 {
-                    return Err(format!(
+                    return Err(ImapError::from(format!(
                         "{host}: folder {mailbox}: body FETCH coverage mismatch (metadata {}, body {})",
                         page_messages.len(),
                         body_page.fingerprints.len()
-                    ));
+                    )));
                 }
                 for (key, message) in &page_messages {
                     let fingerprint = body_page
@@ -1748,7 +1808,7 @@ fn fetch_body_remainder<S: Read + Write>(
     options: &BodyHashOptions<'_>,
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
-) -> Result<usize, String> {
+) -> Result<usize, ImapError> {
     while !progress.complete {
         budget.check()?;
         ranges += 1;
@@ -1850,7 +1910,7 @@ fn fetch_mailbox_with_session_reconnect<S, C, R>(
 where
     S: Read + Write,
     C: MessageSink,
-    R: FnMut() -> Result<(S, bool), String>,
+    R: FnMut() -> Result<(S, bool), ImapError>,
 {
     const MAX_CONSECUTIVE_SESSION_RECONNECTS: usize = 3;
 
@@ -1903,9 +1963,9 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     budget: &MessageFetchBudget<'_>,
     mut planner: FetchPagePlanner,
     mut consume_page: F,
-) -> Result<u64, String>
+) -> Result<u64, ImapError>
 where
-    F: FnMut(&mut S, &mut [u8; 4096], &[u64], &str) -> Result<usize, String>,
+    F: FnMut(&mut S, &mut [u8; 4096], &[u64], &str) -> Result<usize, ImapError>,
 {
     let (mut sequence_start, mut enumerated_uid_count, mut last_enumerated_uid) =
         match resume_prefix {
@@ -1917,9 +1977,9 @@ where
                 Some(last_uid),
             ),
             Some(_) => {
-                return Err(format!(
+                return Err(ImapError::from(format!(
                     "{host}: {mailbox} has an invalid persisted verification prefix"
-                ));
+                )));
             }
             None => (1, 0, None),
         };
@@ -1956,9 +2016,9 @@ where
         if let (Some(previous), Some(first)) = (last_enumerated_uid, uids.first())
             && *first <= previous
         {
-            return Err(format!(
+            return Err(ImapError::from(format!(
                 "{host}: FETCH {mailbox} UID order changed across sequence pages"
-            ));
+            )));
         }
         last_enumerated_uid = uids.last().copied().or(last_enumerated_uid);
         enumerated_uid_count = enumerated_uid_count
@@ -2321,6 +2381,7 @@ pub(crate) fn revalidate_tls_account_snapshots(
         condstore_enabled,
         endpoint_label,
     )
+    .map_err(String::from)
 }
 
 fn revalidate_source_selected_folders<S: Read + Write>(
@@ -2330,7 +2391,7 @@ fn revalidate_source_selected_folders<S: Read + Write>(
     expected_snapshots: &HashMap<String, crate::core::FolderSnapshot>,
     condstore_enabled: bool,
     endpoint_label: &str,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<HashMap<String, String>, ImapError> {
     let mut mailboxes = expected_snapshots.keys().collect::<Vec<_>>();
     mailboxes.sort_unstable();
     let mut buffer = [0; 4096];
@@ -2401,9 +2462,9 @@ fn revalidate_source_selected_folders<S: Read + Write>(
             .filter_map(|(changed, field)| changed.then_some(field))
             .collect::<Vec<_>>()
             .join(", ");
-            return Err(format!(
+            return Err(ImapError::from(format!(
                 "{host}: {endpoint_label} folder {mailbox} changed after its verification scan (changed fields: {changed_fields}); rerun the final delta and verification",
-            ));
+            )));
         }
         observations.insert(
             mailbox.clone(),

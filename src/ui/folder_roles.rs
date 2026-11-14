@@ -124,7 +124,7 @@ impl App {
                             };
                             failure
                                 .replace("{side}", side)
-                                .replace("{error}", &error.message)
+                                .replace("{error}", error.error.detail())
                         })?;
                     Ok(propose_special_folder_mappings(
                         &source,

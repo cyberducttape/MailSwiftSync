@@ -14,6 +14,7 @@ use super::{
     read_imap_list_response_with_mailboxes, read_with_deadline, record_list_entry,
     source_snapshot_matches, tagged_response_outside_literals, write_imap_command,
 };
+use crate::imap_probe::{ImapError, ImapErrorKind};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Cursor, Read, Write};
 use std::sync::atomic::AtomicBool;
@@ -87,7 +88,8 @@ fn budgeted_write_honors_cancellation_before_writing() {
     };
     let error = write_imap_command(&mut stream, b"command\r\n", Some(&budget), "write command")
         .unwrap_err();
-    assert!(error.contains("cancelled"));
+    assert_eq!(error.kind(), ImapErrorKind::Cancelled);
+    assert!(error.detail().contains("cancelled"));
     assert!(stream.data.is_empty());
 }
 
@@ -219,7 +221,8 @@ fn list_read_deadline_honors_cancellation_before_waiting_for_data() {
         Some(&cancel),
     )
     .unwrap_err();
-    assert!(error.contains("cancelled by operator"));
+    assert_eq!(error.kind(), ImapErrorKind::Cancelled);
+    assert!(error.detail().contains("cancelled by operator"));
 }
 
 #[test]
@@ -230,7 +233,8 @@ fn immediate_would_block_retries_back_off_until_the_original_deadline() {
 
     let error = read_with_deadline(&mut stream, &mut buffer, deadline, None).unwrap_err();
 
-    assert!(error.contains("deadline exceeded"));
+    assert_eq!(error.kind(), ImapErrorKind::Timeout);
+    assert!(error.detail().contains("deadline exceeded"));
     assert!(stream.calls < 100, "retry loop spun {} times", stream.calls);
 }
 
@@ -250,7 +254,7 @@ fn budgeted_imap_response_readers_back_off_until_their_deadline() {
         &budget,
     )
     .unwrap_err();
-    assert!(error.contains("deadline"));
+    assert!(error.detail().contains("deadline"));
     assert!(
         text_stream.calls < 100,
         "budgeted string reader spun {} times",
@@ -267,7 +271,7 @@ fn budgeted_imap_response_readers_back_off_until_their_deadline() {
         &budget,
     )
     .unwrap_err();
-    assert!(error.contains("deadline"));
+    assert!(error.detail().contains("deadline"));
     assert!(
         bytes_stream.calls < 100,
         "budgeted byte reader spun {} times",
@@ -1229,6 +1233,7 @@ fn tagged_completion_inside_a_literal_cannot_mask_a_failure() {
     assert!(!super::imap_command_succeeded(response, "v004"));
     assert!(
         super::imap_command_failure(response, "v004", "FETCH", "host")
+            .detail()
             .ends_with("v004 NO [LIMIT] too many")
     );
     let ok = b"* 1 FETCH (UID 1 BODY[] {20}\r\nv004 NO not really\r\n)\r\nv004 OK done\r\n";
@@ -1459,7 +1464,9 @@ fn fetch_page_coverage_rejects_missing_and_unexpected_uids() {
 fn message_fetch_budget_honors_operator_cancellation() {
     let cancelled = AtomicBool::new(true);
     let budget = MessageFetchBudget::new(Duration::from_secs(60), &cancelled);
-    assert!(budget.check().unwrap_err().contains("cancelled"));
+    let error = budget.check().unwrap_err();
+    assert_eq!(error.kind(), ImapErrorKind::Cancelled);
+    assert!(error.detail().contains("cancelled"));
 }
 
 #[test]
@@ -1469,8 +1476,13 @@ fn probe_deadline_is_bounded_without_being_misclassified_as_a_verification_limit
     let cancel = AtomicBool::new(false);
     let budget = MessageFetchBudget::for_probe(Duration::ZERO, &cancel);
     let error = budget.check().unwrap_err();
-    assert!(error.contains("IMAP probe exceeded its total execution deadline"));
-    assert_eq!(VerificationLimit::from_detail(&error), None);
+    assert_eq!(error.kind(), ImapErrorKind::Timeout);
+    assert!(
+        error
+            .detail()
+            .contains("IMAP probe exceeded its total execution deadline")
+    );
+    assert_eq!(VerificationLimit::from_detail(error.detail()), None);
 }
 
 #[test]
@@ -1498,14 +1510,18 @@ fn verifier_safety_limits_are_tagged_at_their_source() {
     let cancel = AtomicBool::new(false);
     let expired = MessageFetchBudget::new(Duration::ZERO, &cancel);
     let error = expired.check().unwrap_err();
-    assert_eq!(limit(&error), Some(VerificationLimit::Deadline));
+    assert_eq!(limit(error.detail()), Some(VerificationLimit::Deadline));
+    assert_eq!(
+        error.kind(),
+        ImapErrorKind::Limit(VerificationLimit::Deadline)
+    );
     // The tag does not change how a folder failure is handled.
     assert!(matches!(
-        classify_mailbox_fetch_error(error),
+        MailboxFetchError::from(error),
         MailboxFetchError::Control(_)
     ));
     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-    assert_eq!(limit(&expired.check().unwrap_err()), None);
+    assert_eq!(limit(expired.check().unwrap_err().detail()), None);
 
     let cancel = AtomicBool::new(false);
     let budget = MessageFetchBudget::new(Duration::from_secs(5), &cancel);
@@ -1514,7 +1530,7 @@ fn verifier_safety_limits_are_tagged_at_their_source() {
     let error =
         super::read_imap_tagged_bytes_with_budget(&mut large, "v002", &mut buffer, 16, &budget)
             .unwrap_err();
-    assert_eq!(limit(&error), Some(VerificationLimit::ResponseSize));
+    assert_eq!(limit(error.detail()), Some(VerificationLimit::ResponseSize));
 
     assert_eq!(
         limit(&super::tag_folder_inventory_limit(
@@ -1801,4 +1817,60 @@ fn a_full_inline_prefix_is_unfinished_and_a_short_or_whole_one_is_complete() {
         parse_message_fetch_body_prefixes_response_bytes(overlong, "INBOX", Some(7), 64, Some(4))
             .is_err()
     );
+}
+
+#[test]
+fn verification_fetch_failures_are_routed_by_kind() {
+    use crate::core::VerificationLimit;
+    let route = |kind, detail: &str| MailboxFetchError::from(ImapError::new(kind, detail));
+    // A stalled or oversized response leaves unread bytes on the stream, so
+    // the next folder must not reuse it.
+    assert!(matches!(
+        route(
+            ImapErrorKind::Timeout,
+            "IMAP response for v001 stalled for 15 seconds"
+        ),
+        MailboxFetchError::SessionFatal(_)
+    ));
+    assert!(matches!(
+        route(
+            ImapErrorKind::Limit(VerificationLimit::ResponseSize),
+            "IMAP response for v003 exceeded the 64-byte safety limit"
+        ),
+        MailboxFetchError::Control(_)
+    ));
+    assert!(matches!(
+        route(
+            ImapErrorKind::Protocol,
+            "IMAP response for v001 exceeded the limit"
+        ),
+        MailboxFetchError::SessionFatal(_)
+    ));
+    // A tagged NO completes its command: the session is still usable.
+    assert!(matches!(
+        route(
+            ImapErrorKind::Server,
+            "host: SELECT failed: v001 NO no such mailbox"
+        ),
+        MailboxFetchError::Folder(_)
+    ));
+    assert!(matches!(
+        route(
+            ImapErrorKind::Limit(VerificationLimit::MessageCount),
+            "account would exceed the verification limit"
+        ),
+        MailboxFetchError::Folder(_)
+    ));
+    assert!(matches!(
+        route(
+            ImapErrorKind::Cancelled,
+            "message-level verification cancelled by operator"
+        ),
+        MailboxFetchError::Control(_)
+    ));
+    // Untyped text is still routed as before.
+    assert!(matches!(
+        route(ImapErrorKind::Unclassified, "connection reset by peer"),
+        MailboxFetchError::SessionFatal(_)
+    ));
 }

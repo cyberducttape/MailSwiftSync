@@ -138,6 +138,7 @@ fn spawn_live_auth_probe_in(
                 credential_fingerprint: spec.credential_fingerprint,
                 destination_quota,
             })
+            .map_err(String::from)
         });
         let _ = tx.send(result);
     });
@@ -170,6 +171,7 @@ fn probe_auth_endpoint(endpoint: &ImapProbeEndpoint) -> Result<(), String> {
         &endpoint.ca_bundle,
         &endpoint.certificate_pin_sha256,
     )
+    .map_err(String::from)
 }
 
 #[cfg(test)]

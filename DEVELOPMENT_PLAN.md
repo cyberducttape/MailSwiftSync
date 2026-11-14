@@ -250,7 +250,16 @@ return `Result<_, String>`, so the boundary parses tagged text.
 Stage it as follows:
 
 1. IMAP and verification producers return a typed error carrying class,
-   side, and `retry_after`.
+   side, and `retry_after`. **IMAP client: done.** `imap_probe::ImapError`
+   carries a kind (timeout, connection, TLS, certificate, configuration,
+   protocol, verification limit, quota, server reply) from the transport,
+   TLS, auth, and verification fetch layers. Pre-launch readiness failures
+   reach `ClassifiedFailure::imap` with their side, and only a server reply
+   is still classified from text, with that endpoint's provider vocabulary
+   (which supplies `retry_after`). The verification fetch path routes
+   folder failures by kind. Still text: the OAuth refresh path, folder
+   listing internals, and engine (imapsync) output, which is external and
+   stays classified at the boundary.
 2. Message staging and SQLite errors keep their `rusqlite::Error` source.
 3. Strings are produced only at the UI, report and automation boundaries.
 
