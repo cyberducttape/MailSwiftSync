@@ -58,7 +58,7 @@ pub(super) fn connect_tls_stream_with_budget(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
     budget: &MessageFetchBudget<'_>,
-) -> Result<(StreamOwned<ClientConnection, DeadlineSocket>, String), String> {
+) -> Result<(StreamOwned<ClientConnection, DeadlineSocket>, String), ImapError> {
     connect_tls_stream_inner(
         host,
         transport,
@@ -74,13 +74,13 @@ pub(super) fn connect_tls_stream_inner(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<(StreamOwned<ClientConnection, DeadlineSocket>, String), String> {
+) -> Result<(StreamOwned<ClientConnection, DeadlineSocket>, String), ImapError> {
     let session_deadline = budget.map_or_else(
         || Instant::now() + UNBUDGETED_SESSION_LIMIT,
         |budget| budget.deadline,
     );
     let (server_name, port) = crate::endpoint::parts(host, crate::default_imap_port(transport))
-        .map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
+        .map_err(|error| configuration_error(format!("Invalid IMAP host {host}: {error}")))?;
     let address = if server_name.contains(':') {
         format!("[{server_name}]:{port}")
     } else {
@@ -91,16 +91,19 @@ pub(super) fn connect_tls_stream_inner(
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
     let cancelled =
         || budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed));
-    let sockets = resolve_dns_with_deadline(&address, dns_deadline, &cancelled)
-        .map_err(|error| format!("{host}: {error}"))?;
+    let network = |error: std::io::Error| network_error(host, &error, cancelled());
+    let sockets = resolve_dns_with_deadline(&address, dns_deadline, &cancelled).map_err(network)?;
     if sockets.is_empty() {
-        return Err(format!("{host}: no address found"));
+        return Err(ImapError::new(
+            ImapErrorKind::Connection,
+            format!("{host}: no address found"),
+        ));
     }
     let connect_deadline = budget
         .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
     let mut tcp = connect_racing(sockets, connect_deadline, &cancelled)
-        .map_err(|error| format!("{host}: {error}"))?;
+        .map_err(|error| error.context(host))?;
     let io_timeout = budget
         .map(|budget| {
             budget
@@ -110,35 +113,45 @@ pub(super) fn connect_tls_stream_inner(
         })
         .unwrap_or_else(|| Duration::from_secs(8));
     if io_timeout.is_zero() {
-        return Err(format!("{host}: connection deadline exceeded"));
+        return Err(ImapError::new(
+            ImapErrorKind::Timeout,
+            format!("{host}: connection deadline exceeded"),
+        ));
     }
     tcp.set_read_timeout(Some(io_timeout))
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| ImapError::io(error.to_string(), &error))?;
     tcp.set_write_timeout(Some(io_timeout))
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| ImapError::io(error.to_string(), &error))?;
 
     let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if !ca_bundle.trim().is_empty() {
-        let certificates = CertificateDer::pem_file_iter(ca_bundle.trim())
-            .map_err(|error| format!("{host}: could not open additional CA bundle: {error}"))?;
+        let certificates = CertificateDer::pem_file_iter(ca_bundle.trim()).map_err(|error| {
+            certificate_error(format!(
+                "{host}: could not open additional CA bundle: {error}"
+            ))
+        })?;
         let mut loaded = 0;
         for certificate in certificates {
-            let certificate = certificate
-                .map_err(|error| format!("{host}: invalid certificate in CA bundle: {error}"))?;
-            roots
-                .add(certificate)
-                .map_err(|error| format!("{host}: could not add CA certificate: {error}"))?;
+            let certificate = certificate.map_err(|error| {
+                certificate_error(format!("{host}: invalid certificate in CA bundle: {error}"))
+            })?;
+            roots.add(certificate).map_err(|error| {
+                certificate_error(format!("{host}: could not add CA certificate: {error}"))
+            })?;
             loaded += 1;
         }
         if loaded == 0 {
-            return Err(format!("{host}: CA bundle contained no PEM certificates"));
+            return Err(certificate_error(format!(
+                "{host}: CA bundle contained no PEM certificates"
+            )));
         }
     }
     let config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
-    let name = ServerName::try_from(server_name)
-        .map_err(|error| format!("{host}: invalid TLS server name: {error}"))?;
+    let name = ServerName::try_from(server_name).map_err(|error| {
+        configuration_error(format!("{host}: invalid TLS server name: {error}"))
+    })?;
 
     if transport == "starttls" {
         let mut response = String::new();
@@ -160,7 +173,9 @@ pub(super) fn connect_tls_stream_inner(
         if !imap_command_succeeded(&response, "s001")
             || !advertises_capability(&response, "STARTTLS")
         {
-            return Err(format!("{host}: server does not advertise STARTTLS"));
+            return Err(configuration_error(format!(
+                "{host}: server does not advertise STARTTLS"
+            )));
         }
         write_imap_command(
             &mut tcp,
@@ -176,23 +191,36 @@ pub(super) fn connect_tls_stream_inner(
             budget,
         )?;
         if !imap_command_succeeded(&response, "s002") {
-            return Err(format!("{host}: STARTTLS negotiation failed"));
+            return Err(ImapError::new(
+                ImapErrorKind::Server,
+                format!("{host}: STARTTLS negotiation failed"),
+            ));
         }
-        let connection = ClientConnection::new(Arc::new(config), name)
-            .map_err(|error| format!("{host}: TLS configuration failed: {error}"))?;
+        let connection = ClientConnection::new(Arc::new(config), name).map_err(|error| {
+            configuration_error(format!("{host}: TLS configuration failed: {error}"))
+        })?;
         let mut stream = StreamOwned::new(connection, DeadlineSocket::new(tcp, session_deadline));
         complete_tls_handshake(&mut stream, host, budget)?;
-        refresh_socket_timeout(&stream.sock.tcp, budget)
-            .map_err(|error| format!("{host}: could not set TLS I/O timeout: {error}"))?;
+        refresh_socket_timeout(&stream.sock.tcp, budget).map_err(|error| {
+            ImapError::io(
+                format!("{host}: could not set TLS I/O timeout: {error}"),
+                &error,
+            )
+        })?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
         return Ok((stream, greeting));
     }
 
-    let connection = ClientConnection::new(Arc::new(config), name)
-        .map_err(|error| format!("{host}: TLS configuration failed: {error}"))?;
+    let connection = ClientConnection::new(Arc::new(config), name).map_err(|error| {
+        configuration_error(format!("{host}: TLS configuration failed: {error}"))
+    })?;
     let mut stream = StreamOwned::new(connection, DeadlineSocket::new(tcp, session_deadline));
-    refresh_socket_timeout(&stream.sock.tcp, budget)
-        .map_err(|error| format!("{host}: could not set TLS I/O timeout: {error}"))?;
+    refresh_socket_timeout(&stream.sock.tcp, budget).map_err(|error| {
+        ImapError::io(
+            format!("{host}: could not set TLS I/O timeout: {error}"),
+            &error,
+        )
+    })?;
     let greeting = read_imap_greeting(&mut stream, host, budget)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
     Ok((stream, greeting))
@@ -202,7 +230,7 @@ fn complete_tls_handshake(
     stream: &mut StreamOwned<ClientConnection, DeadlineSocket>,
     host: &str,
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     let deadline = budget
         .map(|budget| budget.deadline)
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8))
@@ -215,16 +243,25 @@ fn complete_tls_handshake_until(
     host: &str,
     budget: Option<&MessageFetchBudget<'_>>,
     deadline: Instant,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     loop {
         if Instant::now() >= deadline {
-            return Err(format!("{host}: TLS handshake deadline exceeded"));
+            return Err(ImapError::new(
+                ImapErrorKind::Timeout,
+                format!("{host}: TLS handshake deadline exceeded"),
+            ));
         }
         if let Some(budget) = budget {
             budget.check()?;
         }
-        refresh_handshake_socket_timeout(&stream.sock.tcp, deadline, budget.is_some())
-            .map_err(|error| format!("{host}: could not set TLS handshake timeout: {error}"))?;
+        refresh_handshake_socket_timeout(&stream.sock.tcp, deadline, budget.is_some()).map_err(
+            |error| {
+                ImapError::io(
+                    format!("{host}: could not set TLS handshake timeout: {error}"),
+                    &error,
+                )
+            },
+        )?;
         match stream.conn.complete_io(&mut stream.sock) {
             Ok(_) if !stream.conn.is_handshaking() => return Ok(()),
             Ok(_) => continue,
@@ -237,7 +274,12 @@ fn complete_tls_handshake_until(
             {
                 super::wait_for_io_retry(deadline, budget.map(|budget| budget.cancel));
             }
-            Err(error) => return Err(format!("{host}: TLS handshake failed: {error}")),
+            Err(error) => {
+                return Err(handshake_error(
+                    format!("{host}: TLS handshake failed: {error}"),
+                    &error,
+                ));
+            }
         }
     }
 }
@@ -293,7 +335,7 @@ fn verify_certificate_pin(
     stream: &StreamOwned<ClientConnection, DeadlineSocket>,
     host: &str,
     expected: &str,
-) -> Result<(), String> {
+) -> Result<(), ImapError> {
     if expected.trim().is_empty() {
         return Ok(());
     }
@@ -301,11 +343,47 @@ fn verify_certificate_pin(
         .conn
         .peer_certificates()
         .and_then(|certificates| certificates.first())
-        .ok_or_else(|| format!("{host}: TLS peer did not provide a certificate"))?;
+        .ok_or_else(|| {
+            certificate_error(format!("{host}: TLS peer did not provide a certificate"))
+        })?;
     if !certificate_matches_pin(certificate.as_ref(), expected) {
-        return Err(format!("{host}: TLS certificate SHA-256 pin mismatch"));
+        return Err(certificate_error(format!(
+            "{host}: TLS certificate SHA-256 pin mismatch"
+        )));
     }
     Ok(())
+}
+
+fn configuration_error(detail: String) -> ImapError {
+    ImapError::new(ImapErrorKind::Configuration, detail)
+}
+
+fn certificate_error(detail: String) -> ImapError {
+    ImapError::new(ImapErrorKind::Certificate, detail)
+}
+
+/// Name resolution and connect failures. The resolver reports cancellation
+/// as an I/O error, so the budget's flag decides that case.
+fn network_error(host: &str, error: &std::io::Error, cancelled: bool) -> ImapError {
+    let detail = format!("{host}: {error}");
+    if cancelled {
+        return ImapError::new(ImapErrorKind::Cancelled, detail);
+    }
+    match ImapError::io(String::new(), error).kind() {
+        ImapErrorKind::Timeout => ImapError::new(ImapErrorKind::Timeout, detail),
+        // A name that does not resolve, or an address that refuses, is
+        // treated as the network: DNS and routing failures are often brief.
+        _ => ImapError::new(ImapErrorKind::Connection, detail),
+    }
+}
+
+/// A handshake I/O error that is not a rustls error is the connection
+/// failing mid-handshake, not TLS negotiation.
+fn handshake_error(detail: String, error: &std::io::Error) -> ImapError {
+    match ImapError::io(String::new(), error).kind() {
+        ImapErrorKind::Unclassified => ImapError::new(ImapErrorKind::Tls, detail),
+        kind => ImapError::new(kind, detail),
+    }
 }
 
 fn certificate_matches_pin(certificate: &[u8], expected: &str) -> bool {
@@ -442,8 +520,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.contains("TLS handshake deadline exceeded"));
-        assert_eq!(crate::core::VerificationLimit::from_detail(&error), None);
+        assert_eq!(error.kind(), crate::imap_probe::ImapErrorKind::Timeout);
+        assert!(error.detail().contains("TLS handshake deadline exceeded"));
+        assert_eq!(
+            crate::core::VerificationLimit::from_detail(error.detail()),
+            None
+        );
         assert!(start.elapsed() < Duration::from_millis(150));
         server.join().unwrap();
     }

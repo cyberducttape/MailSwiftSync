@@ -271,7 +271,8 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
         true,
         "source",
     )
-    .unwrap_err();
+    .unwrap_err()
+    .to_string();
     assert!(
         error.contains("changed fields: UIDVALIDITY, UIDNEXT, EXISTS, HIGHESTMODSEQ"),
         "{error}"
@@ -294,7 +295,8 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
         true,
         "source",
     )
-    .unwrap_err();
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("source folder INBOX changed"), "{error}");
     assert!(error.contains("HIGHESTMODSEQ"), "{error}");
     assert!(
@@ -317,7 +319,8 @@ fn post_destination_source_revalidation_accepts_stable_cursor_and_rejects_modseq
         true,
         "destination",
     )
-    .unwrap_err();
+    .unwrap_err()
+    .to_string();
     assert!(
         error.contains("destination folder INBOX changed"),
         "{error}"
@@ -469,7 +472,7 @@ fn scan_with_session_reconnect<S, R>(
 ) -> Result<u64, MailboxFetchError>
 where
     S: Read + Write,
-    R: FnMut() -> Result<(S, bool), String>,
+    R: FnMut() -> Result<(S, bool), ImapError>,
 {
     let cancelled = AtomicBool::new(false);
     let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
@@ -545,7 +548,7 @@ fn reconnect_authentication_failure_keeps_the_folder_unverified() {
     let mut reconnect_calls = 0;
     let mut reconnect = || {
         reconnect_calls += 1;
-        Err("scripted authentication rejected".to_owned())
+        Err(ImapError::from("scripted authentication rejected"))
     };
 
     let result = scan_with_session_reconnect(

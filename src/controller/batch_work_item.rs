@@ -1100,12 +1100,10 @@ impl BatchAttemptRunner {
                 self.finish_transcript(&task);
                 return AttemptOutcome::Finished;
             }
-            if let Err(SidedProbeError {
-                side,
-                message: error,
-            }) = fresh_dual_imaps_readiness(&task.form)
-            {
-                let failure = classify_sided_failure(&task.form, side, &error);
+            if let Err(SidedProbeError { side, error }) = fresh_dual_imaps_readiness(&task.form) {
+                let failure =
+                    ClassifiedFailure::imap(&error, side, task.form.endpoint_provider(side));
+                let error = String::from(error);
                 if failure.should_retry(attempt, self.retry_count) {
                     let penalized = self
                         .provider_limiter

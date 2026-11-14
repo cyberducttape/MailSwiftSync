@@ -2,6 +2,34 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-14: Typed IMAP client errors (M7 step 1)
+
+Branch `feat/typed-imap-errors` (from `main`):
+
+- New `imap_probe::ImapError { kind, detail }`. The detail is the text the
+  client reported before, so durable details and transcripts are unchanged.
+- Typed at the source: protocol reads and writes, the TLS connect and
+  handshake (rustls certificate errors are told apart from other TLS and
+  I/O failures), DNS and connect racing, authentication, readiness, the
+  fetch budget, and verification limits.
+- `SidedProbeError` carries the typed error, and the batch worker classifies
+  it with `ClassifiedFailure::imap`.
+
+Behaviour changes, each covered by a test:
+
+- Client-side timeouts (read, connect, TLS handshake, a stalled response,
+  the probe's total deadline) were `unknown` and never retried, because
+  their text did not say "timed out". They are now transport failures
+  and are retried.
+- "Server greeting was missing or invalid" was classified as configuration
+  because of the word "missing". It is now a protocol failure, not retried.
+- During verification, a stalled response or one cut off at its size bound
+  was treated as a folder failure, and the next folder reused the stream
+  with that response still unread. A stall now ends the session (reconnect),
+  and a size-limit cut ends the account check.
+
+Evidence: `make check` and `make test` pass locally.
+
 ## 2026-11-09: Production-readiness audit (R5)
 
 Audited `main` at `9bd15639`. Findings and verdicts are in DEVELOPMENT_PLAN.md

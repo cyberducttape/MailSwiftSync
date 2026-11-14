@@ -395,6 +395,14 @@ pub(crate) fn classify_error_for_provider(provider: &str, error: &str) -> Migrat
     let retry_after =
         crate::core::provider_intelligence::provider_signal_for_provider(provider, &detail)
             .and_then(|signal| signal.retry_after);
+    migration_error(class, detail, retry_after)
+}
+
+fn migration_error(
+    class: FailureClass,
+    detail: String,
+    retry_after: Option<Duration>,
+) -> MigrationError {
     match class {
         FailureClass::Cancellation => MigrationError::Cancellation { detail },
         FailureClass::Authentication => MigrationError::Authentication { detail },
@@ -483,6 +491,49 @@ impl ClassifiedFailure {
             Side::Source => source_provider,
             Side::Destination => destination_provider,
         })
+    }
+
+    /// Classify a typed IMAP client failure from one endpoint. The client
+    /// already knows a timeout from a rejected certificate, so only a server
+    /// reply (or a producer that does not type its failures yet) is
+    /// classified from text, with that endpoint's provider vocabulary.
+    pub(crate) fn imap(
+        error: &crate::imap_probe::ImapError,
+        side: crate::controller::rate_domains::Side,
+        provider: &str,
+    ) -> Self {
+        use crate::core::provider_intelligence::ProviderErrorType as Provider;
+        use crate::imap_probe::ImapErrorKind as Kind;
+        let (class, provider_error) = match error.kind() {
+            Kind::Server | Kind::Unclassified => {
+                return Self::classify(provider, vec![side], error.detail());
+            }
+            Kind::Cancelled => (
+                FailureClass::Cancellation,
+                Provider::PermanentProviderFailure,
+            ),
+            // The provider type gives the documented transport backoff.
+            Kind::Timeout | Kind::Connection => (FailureClass::Transport, Provider::Network),
+            // Negotiation failures repeat until the server or the plan
+            // changes, so neither is retried.
+            Kind::Tls => (FailureClass::Transport, Provider::TlsError),
+            Kind::Protocol => (FailureClass::Transport, Provider::ImapBad),
+            Kind::Certificate | Kind::Configuration => (
+                FailureClass::Configuration,
+                Provider::PermanentProviderFailure,
+            ),
+            Kind::Limit(_) => (FailureClass::Verification, Provider::VerificationError),
+            Kind::QuotaExhausted => (FailureClass::Quota, Provider::StorageQuotaExceeded),
+        };
+        Self {
+            provider: provider.to_owned(),
+            sides: vec![side],
+            error: migration_error(class, error.detail().to_owned(), None),
+            provider_error,
+            signal: None,
+            controller_marked: false,
+            verification_limit: matches!(error.kind(), Kind::Limit(_)),
+        }
     }
 
     fn classify(
@@ -996,5 +1047,102 @@ mod tests {
             "Migration failed unexpectedly; recent output: HTTP/1.1 429 Too Many Requests";
         assert_eq!(classify_failure(diagnostics_only), FailureClass::Unknown);
         assert!(!should_retry_batch_error(diagnostics_only, 0, 2));
+    }
+
+    #[test]
+    fn typed_imap_failures_are_classified_by_kind_not_text() {
+        use crate::core::VerificationLimit;
+        use crate::imap_probe::{ImapError, ImapErrorKind as Kind, MailSide};
+        let classify = |kind, detail: &str| {
+            super::ClassifiedFailure::imap(
+                &ImapError::new(kind, detail),
+                MailSide::Destination,
+                "generic",
+            )
+        };
+        // Each of these was "unknown" and never retried while the class came
+        // from text, because none of them says "timed out".
+        for detail in [
+            "IMAP read deadline exceeded",
+            "IMAP probe exceeded its total execution deadline",
+            "mail.example.com: TLS handshake deadline exceeded",
+            "IMAP response for a001 stalled for 15 seconds",
+        ] {
+            let failure = classify(Kind::Timeout, detail);
+            assert_eq!(failure.class(), FailureClass::Transport, "{detail}");
+            assert!(failure.should_retry(0, 2), "{detail}");
+        }
+        // The text says "missing", which used to read as configuration.
+        let greeting = classify(
+            Kind::Protocol,
+            "mail.example.com: server greeting was missing or invalid",
+        );
+        assert_eq!(greeting.class(), FailureClass::Transport);
+        assert!(!greeting.should_retry(0, 2));
+
+        let connection = classify(
+            Kind::Connection,
+            "IMAP connection closed before a001 completed",
+        );
+        assert!(connection.should_retry(0, 2));
+        assert_eq!(connection.sides(), [MailSide::Destination]);
+
+        for kind in [Kind::Certificate, Kind::Configuration] {
+            let failure = classify(kind, "mail.example.com: certificate is fine, really");
+            assert_eq!(failure.class(), FailureClass::Configuration);
+            assert!(!failure.should_retry(0, 2));
+        }
+        assert!(!classify(Kind::Tls, "TLS handshake failed: alert").should_retry(0, 2));
+        assert_eq!(
+            classify(Kind::Cancelled, "IMAP probe cancelled by operator").class(),
+            FailureClass::Cancellation
+        );
+        assert_eq!(
+            classify(
+                Kind::QuotaExhausted,
+                "destination INBOX-root quota exhausted"
+            )
+            .class(),
+            FailureClass::Quota
+        );
+        let limit = classify(
+            Kind::Limit(VerificationLimit::ResponseSize),
+            "response exceeded its bound",
+        );
+        assert_eq!(limit.class(), FailureClass::Verification);
+        assert!(
+            limit
+                .durable_detail("x")
+                .starts_with("[attention_reason=verification_limit_exceeded]")
+        );
+        // A local failure that happens to mention a provider keyword is not
+        // reclassified by it.
+        let timeout = classify(Kind::Timeout, "IMAP read deadline exceeded: authentication");
+        assert_eq!(timeout.class(), FailureClass::Transport);
+    }
+
+    #[test]
+    fn a_server_reply_keeps_the_provider_vocabulary_of_its_endpoint() {
+        use crate::imap_probe::{ImapError, ImapErrorKind as Kind, MailSide};
+        let throttled = ImapError::new(
+            Kind::Server,
+            "outlook.office365.com: IMAP authentication failed: a002 BAD Request is throttled. Suggested Backoff Time: 12000 milliseconds",
+        );
+        let failure =
+            super::ClassifiedFailure::imap(&throttled, MailSide::Destination, "microsoft365");
+        assert_eq!(failure.class(), FailureClass::Capacity);
+        assert_eq!(
+            failure.retry_after(),
+            Some(std::time::Duration::from_millis(12_000))
+        );
+        assert!(failure.should_retry(0, 2));
+
+        let rejected = ImapError::new(
+            Kind::Server,
+            "mail.example.com: IMAP authentication failed: a002 NO [AUTHENTICATIONFAILED] Invalid credentials",
+        );
+        let failure = super::ClassifiedFailure::imap(&rejected, MailSide::Source, "generic");
+        assert_eq!(failure.class(), FailureClass::Authentication);
+        assert!(!failure.should_retry(0, 2));
     }
 }
