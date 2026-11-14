@@ -1524,4 +1524,310 @@ mod tests {
             Err(ControlError::Unauthorized)
         ));
     }
+
+    /// The stand-in for a transfer in the lease-loss drill: a real child
+    /// process that runs until the agent stops it, as the engine would.
+    #[cfg(unix)]
+    struct StandInEngine {
+        digest: String,
+        pid_file: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl Executor for StandInEngine {
+        fn plan_sha256(&self, _: &str, _: &str) -> Result<Option<String>, String> {
+            Ok(Some(self.digest.clone()))
+        }
+        fn execute(&self, _: &str, _: &str, stop: &AtomicBool) -> Result<String, String> {
+            let mut engine = std::process::Command::new("sleep")
+                .arg("600")
+                .spawn()
+                .map_err(|error| error.to_string())?;
+            std::fs::write(&self.pid_file, engine.id().to_string())
+                .map_err(|error| error.to_string())?;
+            while !stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let _ = engine.kill();
+            let _ = engine.wait();
+            Err(crate::headless::STOPPED_BEFORE_COMPLETION.into())
+        }
+    }
+
+    /// Kills what the drill started even when an assertion fails, so a
+    /// failing run leaves no agent or engine behind.
+    #[cfg(unix)]
+    struct DrillProcesses {
+        agent: std::process::Child,
+        pid_file: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl Drop for DrillProcesses {
+        fn drop(&mut self) {
+            let _ = self.agent.kill();
+            let _ = self.agent.wait();
+            if let Some(pid) = std::fs::read_to_string(&self.pid_file)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok())
+            {
+                // SAFETY: the pid is the stand-in engine this drill started.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+            if let Some(directory) = self.pid_file.parent() {
+                let _ = std::fs::remove_dir_all(directory);
+            }
+        }
+    }
+
+    /// Subprocess half of the lease-loss drill below: the real agent loop,
+    /// over HTTP, running the stand-in engine until the parent kills it.
+    /// Without the parent's settings it does nothing.
+    #[cfg(unix)]
+    #[test]
+    fn lease_drill_child_agent() {
+        let Ok(server) = std::env::var("MAILSWIFTSYNC_LEASE_DRILL_SERVER") else {
+            return;
+        };
+        let setting =
+            |name: &str| std::env::var(name).expect("the drill parent supplies its settings");
+        let control = HttpControl::new(
+            server_url(&server).unwrap(),
+            &setting("MAILSWIFTSYNC_LEASE_DRILL_CREDENTIAL"),
+            None,
+        )
+        .unwrap();
+        let executor = StandInEngine {
+            digest: setting("MAILSWIFTSYNC_LEASE_DRILL_DIGEST"),
+            pid_file: setting("MAILSWIFTSYNC_LEASE_DRILL_ENGINE_PID").into(),
+        };
+        // Renew every second so the parent sees renewals stop promptly.
+        let config = AgentConfig {
+            lease_seconds: 30,
+            renew_every: Duration::from_secs(1),
+            completion_retries: 3,
+            completion_backoff: Duration::from_millis(100),
+        };
+        let outcome = run_loop(
+            &control,
+            &executor,
+            &config,
+            Duration::from_millis(200),
+            true,
+        );
+        panic!("the drill parent kills this agent mid-run, but it returned {outcome:?}");
+    }
+
+    /// Lease-loss drill with real processes: the control service over HTTP,
+    /// the agent loop in a child process, and an engine that outlives it.
+    /// The agent is SIGKILLed mid-run, as when its host crashes. The lease
+    /// must stay with the dead worker until it expires, then wait for an
+    /// operator; the dead worker's token must stay refused, and only a
+    /// requeue hands the mailbox to another worker, under a higher token.
+    #[cfg(unix)]
+    #[test]
+    fn a_killed_worker_leaves_its_lease_for_reconciliation() {
+        let store = Store::in_memory();
+        let password = super::super::authn::test_secret();
+        let admin_id = store
+            .bootstrap_administrator("admin@msp.example", "Admin", &password)
+            .unwrap();
+        let admin = Actor {
+            request_id: "drill",
+            label: format!("user:{admin_id}"),
+        };
+        let editor = Actor {
+            request_id: "drill",
+            label: "user:usr_editor".into(),
+        };
+        let tenant = store.create_tenant("Acme", &admin).unwrap().id;
+        let digest = "d1".repeat(32);
+        let project = store
+            .create_project(&tenant, "Move", &approved_plan(&digest), &editor)
+            .unwrap();
+        store
+            .approve_project(
+                &tenant,
+                &project.id,
+                project.plan_revision,
+                &admin_id,
+                &admin,
+            )
+            .unwrap();
+        store
+            .create_assignments(&tenant, &project.id, &["job-1".into()], &admin)
+            .unwrap();
+        let (dead_enrollment, _) = store
+            .create_enrollment(&tenant, "crashes", 10, &admin)
+            .unwrap();
+        let (spare_enrollment, _) = store
+            .create_enrollment(&tenant, "takes-over", 10, &admin)
+            .unwrap();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let context = std::sync::Arc::new(super::super::api::Context { store, oidc: None });
+        let server_context = std::sync::Arc::clone(&context);
+        std::thread::spawn(move || {
+            super::super::server::serve(
+                listener,
+                server_context,
+                None,
+                super::super::server::DEFAULT_MAX_CONNECTIONS,
+            )
+        });
+        let base = server_url(&format!("http://{address}")).unwrap();
+        let enroll = |token: &str| {
+            HttpControl::new(base.clone(), token, None)
+                .unwrap()
+                .enroll(&["imapsync".into()])
+                .unwrap()
+                .1
+        };
+        let dead_credential = enroll(&dead_enrollment);
+        let spare = HttpControl::new(base.clone(), &enroll(&spare_enrollment), None).unwrap();
+        let assignment = || {
+            let [assignment] = &context
+                .store
+                .assignments(&tenant, &project.id, None, 10)
+                .unwrap()[..]
+            else {
+                panic!("one assignment");
+            };
+            assignment.clone()
+        };
+
+        let directory =
+            std::env::temp_dir().join(format!("mss-lease-drill-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let pid_file = directory.join("engine.pid");
+        let agent = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cli::control::agent::tests::lease_drill_child_agent",
+                "--nocapture",
+            ])
+            .env("MAILSWIFTSYNC_LEASE_DRILL_SERVER", base.as_str())
+            .env(
+                "MAILSWIFTSYNC_LEASE_DRILL_CREDENTIAL",
+                dead_credential.as_str(),
+            )
+            .env("MAILSWIFTSYNC_LEASE_DRILL_DIGEST", &digest)
+            .env("MAILSWIFTSYNC_LEASE_DRILL_ENGINE_PID", &pid_file)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut processes = DrillProcesses {
+            agent,
+            pid_file: pid_file.clone(),
+        };
+        let wait_for = |what: &str, condition: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !condition() {
+                assert!(Instant::now() < deadline, "timed out waiting until {what}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        let engine_pid = || {
+            std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok())
+        };
+        // SAFETY: signal 0 only checks that the process exists.
+        let alive = |pid: libc::pid_t| unsafe { libc::kill(pid, 0) } == 0;
+
+        // The agent leases the mailbox, starts its engine, and renews.
+        wait_for("the agent started its engine", &|| engine_pid().is_some());
+        let leased = assignment();
+        assert_eq!(leased.state, "leased");
+        let first_expiry = leased.lease_expires_at.unwrap();
+        wait_for("the agent renewed its lease", &|| {
+            assignment().lease_expires_at.unwrap() > first_expiry
+        });
+
+        // The host crashes: the agent dies, its engine keeps running.
+        processes.agent.kill().unwrap();
+        processes.agent.wait().unwrap();
+        let engine = engine_pid().unwrap();
+        std::thread::sleep(Duration::from_millis(1_500));
+        let last_expiry = assignment().lease_expires_at.unwrap();
+        std::thread::sleep(Duration::from_secs(3));
+        let orphaned = assignment();
+        assert_eq!(orphaned.state, "leased");
+        assert_eq!(
+            orphaned.lease_expires_at,
+            Some(last_expiry),
+            "nothing renews a dead worker's lease"
+        );
+        assert!(alive(engine), "the stand-in engine outlives its agent");
+        // A live lease is never handed out, whatever became of its worker.
+        assert!(spare.lease(30).unwrap().is_none());
+
+        // The 30-second lease and the 60-second grace pass.
+        context
+            .store
+            .lock()
+            .execute(
+                "UPDATE assignments SET lease_expires_at=?2 WHERE id=?1",
+                rusqlite::params![
+                    orphaned.id,
+                    super::super::store::now() - super::super::workers::REASSIGN_GRACE_SECONDS - 1
+                ],
+            )
+            .unwrap();
+        // Nothing hands an expired lease to another worker either: the
+        // dead worker's engine may still be writing.
+        assert!(spare.lease(30).unwrap().is_none());
+        assert_eq!(assignment().state, "needs_reconciliation");
+        let dead = HttpControl::new(base.clone(), &dead_credential, None).unwrap();
+        let late =
+            json!({ "job_id": "job-1", "plan_revision": orphaned.plan_revision, "detail": "late" });
+        assert!(matches!(
+            dead.complete(&orphaned.id, orphaned.fencing_token, "completed", &late),
+            Err(ControlError::LeaseLost)
+        ));
+        assert!(matches!(
+            dead.renew(&orphaned.id, orphaned.fencing_token, 30),
+            Err(ControlError::LeaseLost)
+        ));
+
+        // The operator stops the old engine, then requeues the mailbox.
+        // SAFETY: `engine` is the stand-in engine this test started.
+        unsafe { libc::kill(engine, libc::SIGKILL) };
+        wait_for("the old engine stopped", &|| !alive(engine));
+        context
+            .store
+            .requeue_assignment(
+                &tenant,
+                &project.id,
+                &orphaned.id,
+                "crashed worker's engine confirmed stopped",
+                &admin,
+            )
+            .unwrap();
+        let handed_over = spare
+            .lease(30)
+            .unwrap()
+            .expect("the requeued mailbox is leased");
+        assert_eq!(handed_over.assignment_id, orphaned.id);
+        assert!(handed_over.fencing_token > orphaned.fencing_token);
+        let result = json!({ "job_id": "job-1", "plan_revision": orphaned.plan_revision, "detail": "verified" });
+        spare
+            .complete(
+                &handed_over.assignment_id,
+                handed_over.fencing_token,
+                "completed",
+                &result,
+            )
+            .unwrap();
+        assert!(matches!(
+            dead.complete(&orphaned.id, orphaned.fencing_token, "failed", &late),
+            Err(ControlError::LeaseLost)
+        ));
+        let finished = assignment();
+        assert_eq!(finished.state, "completed");
+        assert_eq!(finished.result.unwrap()["detail"], "verified");
+        drop(processes);
+    }
 }
