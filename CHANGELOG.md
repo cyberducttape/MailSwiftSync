@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Recorded a 2026-11-15 persistent-filesystem ledger benchmark repeat in
+  `docs/release-readiness.md`, including 2,000-job write/read/open latency,
+  WAL, backup, disk-per-mailbox and process RSS measurements. Read-only-open
+  latency remains observational with no asserted budget or host-class claim.
 - Added `mailswiftsync provider-qualification <source-id> <destination-id>` as
   a versioned JSON contract for automation. It shares the bundled qualification
   registry used by the GUI and `doctor`, includes a golden fixture and stable

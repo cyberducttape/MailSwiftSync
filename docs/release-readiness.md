@@ -482,6 +482,21 @@ observations on a tmpfs-backed test ledger, not persistent-storage or
 host-class qualification; the 10,000-job warm-open latency remains
 informational and has no asserted budget.
 
+A further repeat on 2026-11-15 at commit
+`5c55ac87d0e98b2e4f2910a4e8f64bf289ab75d0` used Rust 1.92.0 on Linux
+x86_64 (kernel `7.0.0-43-generic`), an AMD Ryzen 7 7735U host with 16 logical
+CPUs, and `/dev/nvme0n1p2` ext4. The warm run used 2,000 mailbox jobs and
+44,000 writes, with two concurrent read-only pollers and 101 read-only opens
+after the write phase. It measured write p50/p95/p99/max of 100/1,085/1,396/
+3,912 µs, read p95 9.324 ms, warm-open p50/p95/p99/max of
+23.621/25.558/27.925/29.904 ms, zero busy errors, 5,608 KiB WAL high-water,
+a 2 ms checkpoint, 3,284 durable bytes per mailbox, and a 105 ms concurrent
+backup. `/usr/bin/time -v` measured 113,464 KiB peak RSS and 13.87 s wall time
+for the warm benchmark command. These repeat the earlier order of magnitude
+for 2,000 jobs but do not establish a latency budget or show growth at larger
+ledger sizes. This was a developer host, not an isolated performance runner;
+the values remain observational and are not an unattended-service SLO.
+
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a
 long verification scan occupies transfer capacity. **Queue settings →
