@@ -7,7 +7,7 @@
 
 use crate::App;
 use crate::core::{AttentionReason, RecoveryGroup, RecoveryRow};
-use crate::ui::WorkspaceView;
+use crate::ui::{UiLanguage, WorkspaceView};
 use eframe::egui::{self, RichText};
 use std::time::{Duration, Instant};
 
@@ -147,9 +147,11 @@ fn remediation(group: &RecoveryGroup) -> (&'static str, &'static str, WorkspaceV
         ),
     }
 }
-fn progress_checkpoint_label(detail: &str) -> String {
+fn progress_observation_label(detail: &str, language: UiLanguage) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(detail) else {
-        return "Last durable transfer checkpoint is available".to_owned();
+        return language
+            .message("ui.recovery-progress-not-resume-checkpoint")
+            .to_owned();
     };
     let attempt = value.get("attempt").and_then(serde_json::Value::as_u64);
     let progress = value.get("progress");
@@ -160,12 +162,23 @@ fn progress_checkpoint_label(detail: &str) -> String {
         .and_then(|value| value.get("bytes_copied"))
         .and_then(serde_json::Value::as_u64);
     match (attempt, messages, bytes) {
-        (Some(attempt), Some(messages), Some(bytes)) => {
-            format!(
-                "Last durable transfer checkpoint: attempt {attempt}, {messages} messages, {bytes} bytes"
-            )
-        }
-        _ => "Last durable transfer checkpoint is available".to_owned(),
+        (Some(attempt), Some(messages), Some(bytes)) => language
+            .message("ui.recovery-progress-observation")
+            .replace("{attempt}", &attempt.to_string())
+            .replace("{messages}", &messages.to_string())
+            .replace("{bytes}", &bytes.to_string()),
+        _ => language
+            .message("ui.recovery-progress-not-resume-checkpoint")
+            .to_owned(),
+    }
+}
+
+fn resume_semantics_key(engine: Option<&str>, has_engine_state: bool) -> &'static str {
+    match engine {
+        Some("dovecot") if has_engine_state => "ui.recovery-dovecot-checkpoint-revalidate",
+        Some("dovecot") => "ui.recovery-dovecot-checkpoint-missing",
+        Some("imapsync") => "ui.recovery-imapsync-resume-semantics",
+        _ => "ui.recovery-resume-semantics-unknown",
     }
 }
 
@@ -501,12 +514,76 @@ impl App {
                 )
                 .on_hover_text(detail);
             }
-            if let Some(checkpoint) = &row.last_progress_checkpoint {
+            if let Some(progress) = &row.last_progress_observation {
+                let text = progress_observation_label(progress, self.language);
+                let response = ui.label(RichText::new(&text).small().color(colors.text_secondary));
+                crate::ui::name_static_text(&response, &text);
+            }
+            let destination_policy = row
+                .last_transfer_plan_snapshot
+                .as_deref()
+                .and_then(|snapshot| {
+                    crate::migration_plan::decode_report_run_snapshot(snapshot)
+                        .ok()
+                        .flatten()
+                })
+                .map(|plan| plan.profile.into_profile().destination_mutation_policy());
+            if let Some(snapshot) = row.last_transfer_plan_snapshot.as_deref() {
+                let digest = crate::plan_identity::snapshot_sha256(snapshot);
+                let short_digest = digest.get(..12).unwrap_or(&digest);
+                let text = self
+                    .language
+                    .message("ui.recovery-plan-snapshot-hash")
+                    .replace("{}", short_digest);
+                let response = ui.label(RichText::new(&text).small().color(colors.text_secondary));
+                crate::ui::name_static_text(&response, &text);
+                response.on_hover_text(digest);
+            } else {
+                let text = self
+                    .language
+                    .message("ui.recovery-plan-snapshot-unavailable");
+                let response = ui.label(RichText::new(text).small().color(colors.warning));
+                crate::ui::name_static_text(&response, text);
+            }
+            if let Some(policy) = destination_policy {
+                let text = self
+                    .language
+                    .message("ui.recovery-destination-policy")
+                    .replace("{}", self.language.text(policy.label()));
+                let response = ui.label(RichText::new(&text).small().color(
+                    if policy.may_remove_destination_state() {
+                        colors.danger
+                    } else {
+                        colors.text_secondary
+                    },
+                ));
+                crate::ui::name_static_text(&response, &text);
+            } else {
+                let text = self
+                    .language
+                    .message("ui.recovery-destination-policy-unknown");
+                let response = ui.label(RichText::new(text).small().color(colors.warning));
+                crate::ui::name_static_text(&response, text);
+            }
+            let has_engine_state = row.last_emitted_state_sha256.is_some();
+            let text = self.language.message(resume_semantics_key(
+                row.last_transfer_engine.as_deref(),
+                has_engine_state,
+            ));
+            let response = ui.label(RichText::new(text).small().color(colors.warning));
+            crate::ui::name_static_text(&response, text);
+            if let Some(state_digest) = row.last_emitted_state_sha256.as_deref() {
+                let short_digest = state_digest.get(..12).unwrap_or(state_digest);
                 ui.label(
-                    RichText::new(progress_checkpoint_label(checkpoint))
-                        .small()
-                        .color(colors.info),
-                );
+                    RichText::new(
+                        self.language
+                            .message("ui.recovery-engine-state-digest")
+                            .replace("{}", short_digest),
+                    )
+                    .small()
+                    .color(colors.text_secondary),
+                )
+                .on_hover_text(state_digest);
             }
             ui.add_space(4.0);
         }
@@ -582,6 +659,31 @@ mod tests {
     }
 
     #[test]
+    fn recovery_explains_engine_specific_resume_contracts_without_claiming_checkpoint_validity() {
+        assert_eq!(
+            UiLanguage::English.message(resume_semantics_key(Some("imapsync"), false)),
+            "imapsync resumes by rerunning engine matching; prior messages may be rediscovered. MailSwiftSync has no per-message transfer checkpoint."
+        );
+        assert!(
+            UiLanguage::English
+                .message(resume_semantics_key(Some("dovecot"), true))
+                .contains("must be revalidated before reuse")
+        );
+        assert!(
+            UiLanguage::English
+                .message(resume_semantics_key(Some("dovecot"), false))
+                .contains("No Dovecot resume-state digest")
+        );
+        assert!(
+            progress_observation_label(
+                r#"{"attempt":2,"progress":{"messages_copied":7,"bytes_copied":99}}"#,
+                UiLanguage::English,
+            )
+            .contains("not a per-message resume checkpoint")
+        );
+    }
+
+    #[test]
     fn recovery_groups_the_queue_and_hands_a_group_to_mailboxes() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-recovery-{}", uuid::Uuid::new_v4()));
@@ -594,6 +696,27 @@ mod tests {
         let mut app = App::from_state_path(Some(&directory.join("state.db")));
         crate::ui::debug_scene::demo_data(&mut app);
         let project_id = app.queue.project_id().unwrap().to_owned();
+        let transfer_job = app
+            .store
+            .recovery_group_ids(
+                &project_id,
+                "failed",
+                Some(AttentionReason::AuthenticationFailed),
+            )
+            .unwrap()[0]
+            .clone();
+        app.store
+            .insert_run_for_test(
+                &project_id,
+                Some(&transfer_job),
+                "recovery-transfer",
+                "imapsync",
+            )
+            .unwrap();
+        let plan_snapshot = app.form.plan_snapshot();
+        app.store
+            .finish_test_run_with_snapshot("recovery-transfer", &plan_snapshot)
+            .unwrap();
         app.refresh_recovery(&project_id);
         let groups = app.recovery.groups.clone();
         let failed = groups
@@ -612,6 +735,7 @@ mod tests {
         // The open group's mailbox list renders in a real frame.
         app.active_view = WorkspaceView::Recovery;
         let context = crate::ui::styled_test_context();
+        context.enable_accesskit();
         let mut frame = eframe::Frame::_new_kittest();
         let output = context.run_ui(
             egui::RawInput {
@@ -624,6 +748,56 @@ mod tests {
             |ui| eframe::App::ui(&mut app, ui, &mut frame),
         );
         assert!(!output.shapes.is_empty());
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("recovery accessibility tree");
+        let nodes = update
+            .nodes
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        fn accessible_text(
+            id: egui::accesskit::NodeId,
+            nodes: &std::collections::HashMap<egui::accesskit::NodeId, egui::accesskit::Node>,
+            visited: &mut std::collections::HashSet<egui::accesskit::NodeId>,
+            output: &mut Vec<String>,
+        ) {
+            if !visited.insert(id) {
+                return;
+            }
+            let Some(node) = nodes.get(&id) else {
+                return;
+            };
+            if let Some(label) = node.label() {
+                output.push(label.to_owned());
+            }
+            for child in node.children() {
+                accessible_text(*child, nodes, visited, output);
+            }
+        }
+        let mut labels = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        for id in nodes.keys().copied() {
+            accessible_text(id, &nodes, &mut visited, &mut labels);
+        }
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.starts_with("Transfer plan snapshot SHA-256:")),
+            "plan snapshot identity should be exposed to assistive technology: {labels:?}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|label| label == "Destination behavior: Additive copy"),
+            "destination mutation policy should be visible: {labels:?}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.contains("imapsync resumes by rerunning engine matching")),
+            "resume semantics should be visible: {labels:?}"
+        );
         assert_eq!(
             app.recovery.expanded,
             Some((failed.state.clone(), failed.reason)),

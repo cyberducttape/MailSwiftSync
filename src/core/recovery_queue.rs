@@ -26,8 +26,16 @@ pub struct RecoveryRow {
     pub last_run_finished_at: Option<String>,
     /// Outcome of the latest recorded transfer attempt, if any.
     pub last_attempt_outcome: Option<String>,
-    /// Latest bounded engine-progress checkpoint, if one was durably seen.
-    pub last_progress_checkpoint: Option<String>,
+    /// Latest bounded engine-progress observation, if one was durably seen.
+    /// These counters do not identify a per-message transfer checkpoint.
+    pub last_progress_observation: Option<String>,
+    /// Immutable secret-free plan snapshot for the latest transfer run.
+    pub last_transfer_plan_snapshot: Option<String>,
+    /// Engine selected by the latest transfer run, excluding audit-only
+    /// verification runs.
+    pub last_transfer_engine: Option<String>,
+    /// Digest of the latest engine-emitted resume state, if any.
+    pub last_emitted_state_sha256: Option<String>,
     /// Durable history of what was already tried: recorded runs and the
     /// engine transfer attempts they executed (automatic retries included).
     pub runs: u32,
@@ -74,6 +82,9 @@ impl StateStore {
                     (SELECT r.finished_at FROM runs r WHERE r.job_id=m.id ORDER BY r.started_at DESC,r.rowid DESC LIMIT 1),
                     (SELECT tp.outcome FROM transfer_passes tp JOIN runs r ON r.id=tp.run_id WHERE r.job_id=m.id ORDER BY tp.started_at DESC,tp.rowid DESC LIMIT 1)
                     ,(SELECT e.detail FROM events e WHERE e.kind='transfer_progress_checkpoint' AND e.run_id IN (SELECT r.id FROM runs r WHERE r.job_id=m.id) ORDER BY e.created_at DESC,e.id DESC LIMIT 1)
+                    ,(SELECT r.plan_snapshot FROM runs r WHERE r.job_id=m.id AND r.engine <> 'imap-verification' ORDER BY r.started_at DESC,r.rowid DESC LIMIT 1)
+                    ,(SELECT r.engine FROM runs r WHERE r.job_id=m.id AND r.engine <> 'imap-verification' ORDER BY r.started_at DESC,r.rowid DESC LIMIT 1)
+                    ,(SELECT tp.emitted_state_sha256 FROM transfer_passes tp JOIN runs r ON r.id=tp.run_id WHERE r.id=(SELECT latest.id FROM runs latest WHERE latest.job_id=m.id AND latest.engine <> 'imap-verification' ORDER BY latest.started_at DESC,latest.rowid DESC LIMIT 1) ORDER BY tp.started_at DESC,tp.rowid DESC LIMIT 1)
                     ,(SELECT COUNT(*) FROM runs r WHERE r.job_id=m.id)
                     ,(SELECT COUNT(*) FROM transfer_passes tp JOIN runs r ON r.id=tp.run_id WHERE r.job_id=m.id)
              FROM mailbox_jobs m LEFT JOIN mailbox_queue_facts f ON f.job_rowid=m.rowid
@@ -101,9 +112,14 @@ impl StateStore {
                             .filter(|detail| !detail.is_empty()),
                         last_run_finished_at: row.get(6)?,
                         last_attempt_outcome: row.get(7)?,
-                        last_progress_checkpoint: row.get(8)?,
-                        runs: u32::try_from(row.get::<_, i64>(9)?).unwrap_or(u32::MAX),
-                        transfer_attempts: u32::try_from(row.get::<_, i64>(10)?)
+                        last_progress_observation: row.get(8)?,
+                        last_transfer_plan_snapshot: row
+                            .get::<_, Option<String>>(9)?
+                            .filter(|snapshot| !snapshot.is_empty()),
+                        last_transfer_engine: row.get(10)?,
+                        last_emitted_state_sha256: row.get(11)?,
+                        runs: u32::try_from(row.get::<_, i64>(12)?).unwrap_or(u32::MAX),
+                        transfer_attempts: u32::try_from(row.get::<_, i64>(13)?)
                             .unwrap_or(u32::MAX),
                     })
                 },
@@ -169,6 +185,20 @@ mod tests {
         store
             .connection
             .execute(
+                "UPDATE runs SET plan_snapshot='immutable-plan-snapshot' WHERE id='run-0'",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status,detail) VALUES('verify-0',?1,?2,'imap-verification','verification','audit-only-snapshot','completed','[class=transport] timed out')",
+                params![project.id, ids[0]],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
                 "UPDATE runs SET detail='[class=transport] timed out' WHERE id='run-0'",
                 [],
             )
@@ -205,10 +235,16 @@ mod tests {
             Some("[class=transport] timed out")
         );
         assert_eq!(
-            page[0].last_progress_checkpoint.as_deref(),
+            page[0].last_progress_observation.as_deref(),
             Some("{\"attempt\":1,\"progress\":{\"messages_copied\":42}}")
         );
         assert_eq!(page[0].label, "s0 → d0");
+        assert_eq!(page[0].last_transfer_engine.as_deref(), Some("imapsync"));
+        assert_eq!(
+            page[0].last_transfer_plan_snapshot.as_deref(),
+            Some("immutable-plan-snapshot")
+        );
+        assert_eq!(page[0].last_emitted_state_sha256, None);
         let next = store
             .recovery_rows(&project.id, "attention", transport, Some(page[0].rowid), 10)
             .unwrap();

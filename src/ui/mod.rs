@@ -723,6 +723,16 @@ pub(crate) fn name_control(response: &egui::Response, name: &str) {
         .accesskit_node_builder(response.id, |builder| builder.set_label(name.to_owned()));
 }
 
+/// Keep important explanatory text available to screen readers. egui's
+/// ordinary labels are not consistently emitted as standalone AccessKit
+/// nodes across platforms, so assign the semantic role and name explicitly.
+pub(crate) fn name_static_text(response: &egui::Response, text: &str) {
+    response.ctx.accesskit_node_builder(response.id, |builder| {
+        builder.set_role(egui::accesskit::Role::Label);
+        builder.set_label(text.to_owned());
+    });
+}
+
 /// Label column + field. The label is linked to the field so screen readers
 /// announce it as the field's name; `add_field` must return the field's
 /// response (there is deliberately no `()` implementation).
