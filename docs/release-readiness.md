@@ -497,6 +497,19 @@ for 2,000 jobs but do not establish a latency budget or show growth at larger
 ledger sizes. This was a developer host, not an isolated performance runner;
 the values remain observational and are not an unattended-service SLO.
 
+On the same host, a 10,000-job repeat at commit
+`98eeb2eeddbe1751f82f1974e915fbe7815a8818` (each synthetic mailbox
+represents 1,000 messages; the ledger stores job/run/evidence state rather than
+individual message rows) produced 220,000 writes in a 49.38 s write phase.
+Write p50/p95/p99/max was 61/1,215/2,590/7,265 µs, read p95 35.620 ms, and
+read-only-open p50/p95/p99/max was 121.915/135.522/165.254/192.078 ms across
+101 post-write opens. It had zero busy errors, a 13,144 KiB WAL high-water,
+4 ms checkpoint, 3,318 durable bytes per mailbox, and a 364 ms concurrent
+backup. The test finished in 74.53 s after the release binary was built. The
+roughly 5.3× rise in read-only-open p95 from the 2,000-job repeat to 10,000
+jobs is a useful scaling signal, not a controlled comparison or capacity
+limit. No read-only-open latency budget is set from this single host.
+
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a
 long verification scan occupies transfer capacity. **Queue settings →
