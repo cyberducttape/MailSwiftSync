@@ -166,6 +166,7 @@ pub(crate) fn is_ledger_rejection(error: &rusqlite::Error) -> bool {
 
 pub struct StateStore {
     connection: Connection,
+    database_identity: Option<database::DatabaseIdentity>,
 }
 
 impl StateStore {

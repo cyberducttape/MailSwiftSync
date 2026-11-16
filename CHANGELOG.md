@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The headless supervisor now reuses its fully validated read-only ledger
+  connection across idle polls, checking file identity before reuse and
+  reopening with full validation after each supervised pass. This avoids
+  repeating global SQLite integrity scans on every empty-queue poll while
+  preserving validation before execution and after ledger replacement.
 - Recorded 2026-11-15 ledger benchmark repeats in `docs/release-readiness.md`,
   including 2,000- and 10,000-job write/read/open latency, WAL, backup, and
   bytes-per-mailbox measurements. The ledger files were on tmpfs, so these

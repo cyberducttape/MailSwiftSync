@@ -3,11 +3,11 @@
 use super::*;
 
 #[cfg(unix)]
-pub(super) type DatabaseIdentity = (u64, u64);
+pub(crate) type DatabaseIdentity = (u64, u64);
 #[cfg(windows)]
-pub(super) type DatabaseIdentity = crate::windows_private::FileIdentity;
+pub(crate) type DatabaseIdentity = crate::windows_private::FileIdentity;
 #[cfg(all(not(unix), not(windows)))]
-pub(super) type DatabaseIdentity = ();
+pub(crate) type DatabaseIdentity = ();
 
 pub(super) fn database_identity(path: &Path) -> std::io::Result<DatabaseIdentity> {
     let metadata = std::fs::symlink_metadata(path)?;

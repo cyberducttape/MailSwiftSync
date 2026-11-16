@@ -281,7 +281,7 @@ mod tests {
     }
 
     fn close_test_store(store: StateStore) {
-        let StateStore { connection } = store;
+        let StateStore { connection, .. } = store;
         connection
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
             .unwrap();
