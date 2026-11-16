@@ -416,7 +416,7 @@ SQLite is configured for WAL and a 5-second busy timeout, and batched event
 write failures report elapsed write time and batch size.
 `scripts/benchmark-ledger-workload.sh` drives the controller's write path
 (run admission, progress-checkpoint batches, terminal evidence commits) on a
-file-backed ledger while two read-only connections poll it, and gates write
+SQLite ledger while two read-only connections poll it, and gates write
 latency percentiles, SQLITE_BUSY/locked failures, the WAL high-water mark, and
 durable bytes per mailbox. A local release run on 2026-10-20 (Linux x86_64,
 2,000 mailboxes, 44,000 writes) measured write p50 55 µs, p99 0.8 ms, max
@@ -431,6 +431,14 @@ stopped. This is not yet a live-product latency histogram; controller restart
 and SQLITE_FULL cases (the latter covered functionally by
 `controller-chaos-smoke.sh`) remain to be measured on the release host class
 before increasing local worker limits or advertising large queue capacity.
+
+The harness uses `XDG_RUNTIME_DIR` by default when set, which is commonly
+tmpfs. To measure a persistent filesystem, provide an existing private,
+user-owned directory on the target filesystem, for example:
+`MAILSWIFTSYNC_LEDGER_BENCH_ROOT="$HOME" scripts/benchmark-ledger-workload.sh`.
+The script prints the selected root and its mount information before running;
+record that output with the benchmark because a SQLite file-backed test on
+tmpfs is not evidence for persistent-storage latency or durability.
 
 The benchmark now also measures repeated `StateStore::open_readonly` latency
 after the write workload has produced run and evidence history. Each open runs
@@ -516,6 +524,18 @@ limit. The 10,000-job repeat used the same harness and host, with its temporary
 ledger under `/run/user/1000` on tmpfs. These runs do not qualify persistent
 storage behavior. No read-only-open latency budget is set from this single
 host.
+
+With the explicit storage-root option, a 2026-11-16 repeat ran under
+`/home/stephanl`, which `findmnt` identified as `/dev/nvme0n1p2` ext4. At
+2,000 jobs / 44,000 writes, with two concurrent read-only pollers and 101
+post-write opens, it measured write p50/p95/p99/max of 2,033/4,954/7,759/
+65,907 µs, read p95 10.657 ms, read-only-open p50/p95/p99/max of
+42.821/44.331/45.424/45.599 ms, zero busy errors, a 4,333 KiB WAL high-water,
+a 6 ms checkpoint, 3,416 durable bytes per mailbox, and a 122 ms concurrent
+backup. The 105.84 s workload passed all configured gates. This is the first
+recorded repeat whose ledger directory was verified on ext4. It is still a
+single developer-host observation: filesystem type does not establish power-
+loss durability, and the figures do not set a supported-host latency budget.
 
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a

@@ -7,6 +7,12 @@
   bytes-per-mailbox measurements. The ledger files were on tmpfs, so these
   results do not qualify persistent-storage performance; no host-class claim
   or read-only-open latency budget is asserted.
+- Made the ledger benchmark storage root selectable with
+  `MAILSWIFTSYNC_LEDGER_BENCH_ROOT`; the harness now prints the selected
+  filesystem mount so tmpfs runs cannot be mistaken for persistent-storage
+  qualification. Recorded a first ext4-backed 2,000-job sample: all configured
+  gates passed; write p95 was 4.954 ms and read-only-open p95 was 44.331 ms.
+  These are single-host observations, not durability qualification or budgets.
 - Added `mailswiftsync provider-qualification <source-id> <destination-id>` as
   a versioned JSON contract for automation. It shares the bundled qualification
   registry used by the GUI and `doctor`, includes a golden fixture and stable

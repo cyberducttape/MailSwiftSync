@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sustained controller write workload on a file-backed ledger while two
+# Sustained controller write workload on a SQLite ledger while two
 # read-only connections poll it (GUI snapshot worker, status/metrics). Gates
 # write latency, lock contention, WAL growth, durable bytes per mailbox, and
 # whether an operator backup taken mid-workload completes while writes continue.
 # Defaults are release-host gates; override with MAILSWIFTSYNC_LEDGER_*_BUDGET
 # for a qualified host class.
+ledger_root=${MAILSWIFTSYNC_LEDGER_BENCH_ROOT:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}
+if [[ ! -d "$ledger_root" ]]; then
+  printf 'ERROR: ledger benchmark root is not a directory: %s\n' "$ledger_root" >&2
+  exit 1
+fi
+export MAILSWIFTSYNC_LEDGER_BENCH_ROOT="$ledger_root"
+printf 'Ledger benchmark storage root: %s\n' "$ledger_root"
+if command -v findmnt >/dev/null 2>&1; then
+  findmnt --target "$ledger_root" --output TARGET,SOURCE,FSTYPE
+else
+  df -P "$ledger_root"
+fi
 benchmark_output=$(cargo test --locked --release ledger_write_workload_benchmark -- --ignored --nocapture --test-threads=1 2>&1)
 printf '%s\n' "$benchmark_output"
 line=$(printf '%s\n' "$benchmark_output" | awk '/ledger-workload mailboxes=/ { print; exit }')
