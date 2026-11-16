@@ -15,6 +15,13 @@
   gates passed; write p95 was 4.954 ms and read-only-open p95 was 44.331 ms.
   A 10,000-job repeat also passed all gates; read-only-open p95 was 173.431 ms.
   These are single-host observations, not durability qualification or budgets.
+- Recorded the 100,000-job ext4 ledger workload at commit
+  `7eb4bca1c8d56e71e380b30135766af0601f2133`: 300,000 writes, zero busy
+  errors, and all configured write/WAL/backup gates passed. Across 101
+  post-write opens, read-only-open p95 was 1.740 s, making full validation
+  overhead at this ledger cardinality measurable. This remains one synthetic
+  developer-host observation, not a supported-host latency budget or transfer
+  qualification.
 - Updated the ledger workload's initial mailbox population to use the batched
   queue-creation path, keeping large-cardinality benchmark setup from issuing
   one SQLite transaction per synthetic mailbox.

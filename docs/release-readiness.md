@@ -551,6 +551,23 @@ but remains a single-host workload result. The open-time increase with ledger
 size is material, and still has no supported-host budget; repeat at 100,000
 jobs and profile representative persistent storage before capacity claims.
 
+A 100,000-job repeat at commit `7eb4bca1c8d56e71e380b30135766af0601f2133`
+used the same host, Rust 1.92.0, and explicit ext4-backed `/home/stephanl`
+root. Each synthetic mailbox represents 1,000 messages; the ledger therefore
+models 100 million message totals without storing individual message rows. The
+run performed 300,000 writes in a 1,955.27 s write phase (2,131.92 s total
+test time). Write p50/p95/p99/max was 1,472/17,723/19,752/54,513 µs; read
+p95 was 311.079 ms; and read-only-open p50/p95/p99/max was
+1,723.031/1,740.216/1,756.938/1,766.758 ms across 101 post-write opens.
+It had zero busy errors, a 45,171 KiB WAL high-water, a 19 ms checkpoint,
+3,274 durable bytes per mailbox, and a 4.304 s concurrent backup that finished
+while writes continued. All configured write, busy-error, WAL, bytes-per-job,
+and backup gates passed. The result makes the cost of full ledger validation on
+routine read-only opens concrete at this cardinality; it does not establish a
+supported latency budget or qualify other host/storage configurations. The
+benchmark is synthetic ledger/controller state, not a mailbox transfer or
+provider qualification.
+
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a
 long verification scan occupies transfer capacity. **Queue settings →
