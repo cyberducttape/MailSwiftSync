@@ -49,6 +49,7 @@ impl App {
                     "{}  →  {}",
                     self.form.profile.source_host, self.form.profile.destination_host
                 ));
+                self.provider_qualification_banner(ui);
                 ui.label(
                     self.language
                         .message("ui.source-mail-not-deleted-by-default"),

@@ -8,7 +8,7 @@
 //! ledger (plaintext-import passwords and preflight credential fingerprints).
 
 use crate::controller::{BulkQueueSummary, queue::SessionSecrets};
-use crate::core::{QueueRow, StateStore};
+use crate::core::{QueueRow, QueueSelectionSummary, StateStore};
 use std::collections::HashMap;
 
 /// Rows kept for presentation before the cache is cleared and refilled.
@@ -20,6 +20,42 @@ struct FilterKey {
     state: Option<String>,
     generation: u64,
     page_matches: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QueueReadRequest {
+    pub(crate) project_id: Option<String>,
+    pub(crate) len: usize,
+    pub(crate) generation: u64,
+    pub(crate) search: String,
+    pub(crate) state_filter: String,
+    pub(crate) page_matches: bool,
+    pub(crate) page_range: std::ops::Range<usize>,
+    pub(crate) load_rowids: Vec<i64>,
+    pub(crate) transient: HashMap<String, String>,
+    pub(crate) selected_ids: Vec<String>,
+    pub(crate) all_selected: bool,
+    pub(crate) selection_summary_requested: bool,
+}
+
+pub(crate) struct QueueReadProjection {
+    pub(crate) project_id: Option<String>,
+    pub(crate) generation: u64,
+    folded_search: String,
+    state: Option<String>,
+    page_matches: bool,
+    visible: Option<Vec<i64>>,
+    visible_count: usize,
+    visible_paged: bool,
+    filter_changed: bool,
+    pub(crate) filter_error: Option<String>,
+    page_start: usize,
+    page: Vec<i64>,
+    rows: Vec<QueueRow>,
+    pub(crate) selection_summary: Option<Result<QueueSelectionSummary, String>>,
+    selected_ids: Vec<String>,
+    all_selected: bool,
+    queue_summary: Result<BulkQueueSummary, String>,
 }
 
 /// Durable, queue-wide facts for the command center.
@@ -46,6 +82,8 @@ pub(crate) struct MailboxQueue {
     /// SQLite; explicit selection and transient overlays retain matching IDs.
     visible_paged: bool,
     rows: HashMap<i64, QueueRow>,
+    /// Row IDs fetched asynchronously for the current virtualized viewport.
+    pages: HashMap<usize, Vec<i64>>,
     rowid_by_id: HashMap<String, i64>,
     /// Presentation-only states of rows during a run: a claimed row waiting
     /// out a retry backoff is `retrying` while its durable state stays
@@ -56,6 +94,10 @@ pub(crate) struct MailboxQueue {
     /// this session. Live admission requires an unchanged binding.
     pub(crate) preflight_credentials: HashMap<String, String>,
     summary: Option<(u64, BulkQueueSummary)>,
+    summary_error: Option<String>,
+    selection_summary: Option<(u64, QueueSelectionSummary)>,
+    selection_summary_key: Option<(Vec<String>, bool)>,
+    selection_summary_error: Option<String>,
     /// Command-center facts, recomputed only when the queue generation moves.
     fleet: Option<(u64, QueueFleetFacts)>,
 }
@@ -99,12 +141,16 @@ impl MailboxQueue {
         self.generation = self.generation.wrapping_add(1);
         self.filter = None;
         self.rows.clear();
+        self.pages.clear();
         self.rowid_by_id.clear();
         self.visible.clear();
         self.visible_count = 0;
         self.filter_error = None;
         self.visible_paged = false;
         self.summary = None;
+        self.summary_error = None;
+        self.selection_summary = None;
+        self.selection_summary_key = None;
         self.fleet = None;
     }
 
@@ -116,6 +162,7 @@ impl MailboxQueue {
             self.rows.remove(&rowid);
         }
         self.summary = None;
+        self.summary_error = None;
         self.generation = self.generation.wrapping_add(1);
         if self
             .filter
@@ -401,6 +448,7 @@ impl MailboxQueue {
         if self.rows.len() + missing.len() > MAX_CACHED_ROWS {
             self.rows.clear();
             self.rowid_by_id.clear();
+            self.pages.clear();
         }
         for row in store
             .queue_rows(project_id, &missing)
@@ -417,21 +465,240 @@ impl MailboxQueue {
         self.rows.get(&rowid)
     }
 
+    pub(crate) fn cached_visible_page(&self, range: std::ops::Range<usize>) -> Option<Vec<i64>> {
+        let start = range.start.min(self.visible_count);
+        let end = range.end.min(self.visible_count).max(start);
+        if !self.visible_paged {
+            return Some(self.visible.get(start..end)?.to_vec());
+        }
+        self.pages
+            .iter()
+            .find(|(page_start, ids)| {
+                **page_start <= start && page_start.saturating_add(ids.len()) >= end
+            })
+            .map(|(page_start, ids)| ids[start - *page_start..end - *page_start].to_vec())
+    }
+
+    pub(crate) fn apply_read_projection(&mut self, result: QueueReadProjection) {
+        if result.filter_changed {
+            self.filter = Some(FilterKey {
+                folded_search: result.folded_search,
+                state: result.state,
+                generation: result.generation,
+                page_matches: result.page_matches,
+            });
+            self.visible = result.visible.unwrap_or_default();
+            self.pages.clear();
+        }
+        self.visible_count = result.visible_count;
+        self.visible_paged = result.visible_paged;
+        self.filter_error = result.filter_error;
+        if self.rows.len().saturating_add(result.rows.len()) > MAX_CACHED_ROWS {
+            self.rows.clear();
+            self.rowid_by_id.clear();
+            self.pages.clear();
+        }
+        if !result.page.is_empty() || result.page_start == 0 {
+            self.pages.insert(result.page_start, result.page);
+        }
+        for row in result.rows {
+            self.rowid_by_id.insert(row.id.clone(), row.rowid);
+            self.rows.insert(row.rowid, row);
+        }
+        self.selection_summary_error = None;
+        match result.selection_summary {
+            Some(Ok(summary)) => {
+                self.selection_summary = Some((self.generation, summary));
+                self.selection_summary_key = Some((result.selected_ids, result.all_selected));
+            }
+            Some(Err(error)) => self.selection_summary_error = Some(error),
+            None => {}
+        }
+        match result.queue_summary {
+            Ok(summary) => {
+                self.summary = Some((self.generation, summary));
+                self.summary_error = None;
+            }
+            Err(error) => self.summary_error = Some(error),
+        }
+    }
+
+    pub(crate) fn current_filter_matches(
+        &self,
+        search: &str,
+        state_filter: &str,
+        page_matches: bool,
+    ) -> bool {
+        self.filter.as_ref().is_some_and(|filter| {
+            filter.folded_search == crate::ui::fold_search_text(search.trim())
+                && filter.state.as_deref().unwrap_or("all")
+                    == match state_filter {
+                        "" => "all",
+                        state => state,
+                    }
+                && filter.generation == self.generation
+                && filter.page_matches == page_matches
+        })
+    }
+
+    pub(crate) fn selection_projection(&self) -> Option<&QueueSelectionSummary> {
+        self.selection_summary.as_ref().map(|(_, summary)| summary)
+    }
+
+    pub(crate) fn selection_projection_error(&self) -> Option<&str> {
+        self.selection_summary_error.as_deref()
+    }
+
+    pub(crate) fn selection_projection_matches(
+        &self,
+        selected_ids: &[String],
+        all_selected: bool,
+    ) -> bool {
+        self.selection_summary_key
+            .as_ref()
+            .is_some_and(|(ids, all)| *all == all_selected && ids == selected_ids)
+    }
+
+    pub(crate) fn cached_queue_summary(&self) -> Option<BulkQueueSummary> {
+        self.summary
+            .as_ref()
+            .filter(|(generation, _)| *generation == self.generation)
+            .map(|(_, summary)| *summary)
+    }
+
+    pub(crate) fn queue_summary_error(&self) -> Option<&str> {
+        self.summary_error.as_deref()
+    }
+
+    pub(crate) fn transient_snapshot(&self) -> HashMap<String, String> {
+        self.transient.clone()
+    }
+
+    pub(crate) fn read_projection(
+        &mut self,
+        store: &StateStore,
+        request: QueueReadRequest,
+    ) -> QueueReadProjection {
+        if self.project_id != request.project_id {
+            if let Some(project_id) = request.project_id.clone() {
+                self.attach(project_id, request.len);
+            } else {
+                self.detach();
+            }
+            self.generation = request.generation;
+        }
+        if self.generation != request.generation || self.transient != request.transient {
+            self.invalidate();
+            self.generation = request.generation;
+            self.transient = request.transient.clone();
+        }
+        if self.filter_error.is_some() {
+            self.retry_filter();
+        }
+        self.len = request.len;
+        let queue_summary = self
+            .summary(store)
+            .map_err(|error| format!("Could not read mailbox queue status: {error}"));
+        let filter_result = self.refresh_filter_with_paging(
+            store,
+            &request.search,
+            &request.state_filter,
+            request.page_matches,
+        );
+        let filter_changed = filter_result.as_ref().is_ok_and(|changed| *changed);
+        let mut filter_error = filter_result.as_ref().err().cloned();
+        let (page_start, page, rows, selection_summary) = if filter_error.is_none() {
+            let range = request.page_range.clone();
+            match self.visible_page(store, range.clone()) {
+                Err(error) => {
+                    filter_error = Some(error);
+                    (range.start, Vec::new(), Vec::new(), None)
+                }
+                Ok(page) => {
+                    let mut rowids_to_load = page.clone();
+                    rowids_to_load.extend(request.load_rowids.iter().copied());
+                    rowids_to_load.sort_unstable();
+                    rowids_to_load.dedup();
+                    match self.load(store, &rowids_to_load) {
+                        Err(error) => {
+                            filter_error = Some(error);
+                            (range.start, Vec::new(), Vec::new(), None)
+                        }
+                        Ok(()) => {
+                            let rows = rowids_to_load
+                                .iter()
+                                .filter_map(|rowid| self.cached(*rowid).cloned())
+                                .collect();
+                            let selection_summary = request
+                                .selection_summary_requested
+                                .then_some(request.project_id.as_deref())
+                                .flatten()
+                                .map(|project_id| {
+                                    store
+                                .queue_selection_summary(
+                                    project_id,
+                                    &request.selected_ids,
+                                    request.all_selected,
+                                    self.visible(),
+                                )
+                                .map_err(|error| {
+                                    format!("Could not read the selected mailbox summary: {error}")
+                                })
+                                });
+                            (range.start, page, rows, selection_summary)
+                        }
+                    }
+                }
+            }
+        } else {
+            (request.page_range.start, Vec::new(), Vec::new(), None)
+        };
+        QueueReadProjection {
+            project_id: request.project_id,
+            generation: request.generation,
+            folded_search: crate::ui::fold_search_text(request.search.trim()),
+            state: match request.state_filter.as_str() {
+                "" | "all" => None,
+                state => Some(state.to_owned()),
+            },
+            page_matches: request.page_matches,
+            visible: filter_changed.then(|| self.visible.clone()),
+            visible_count: self.visible_count,
+            visible_paged: self.visible_paged,
+            filter_changed,
+            filter_error,
+            page_start,
+            page,
+            rows,
+            selection_summary,
+            selected_ids: request.selected_ids,
+            all_selected: request.all_selected,
+            queue_summary,
+        }
+    }
+
     /// One row by job ID, from the cache or the ledger.
-    pub(crate) fn row_by_id(&mut self, store: &StateStore, job_id: &str) -> Option<QueueRow> {
+    pub(crate) fn row_by_id(
+        &mut self,
+        store: &StateStore,
+        job_id: &str,
+    ) -> rusqlite::Result<Option<QueueRow>> {
         if let Some(row) = self
             .rowid_by_id
             .get(job_id)
             .and_then(|rowid| self.rows.get(rowid))
         {
-            return Some(row.clone());
+            return Ok(Some(row.clone()));
         }
-        let row = store
-            .queue_row(self.project_id.as_deref()?, job_id)
-            .ok()??;
+        let Some(project_id) = self.project_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(row) = store.queue_row(project_id, job_id)? else {
+            return Ok(None);
+        };
         self.rowid_by_id.insert(row.id.clone(), row.rowid);
         self.rows.insert(row.rowid, row.clone());
-        Some(row)
+        Ok(Some(row))
     }
 
     /// Verified transfer totals and the queue's endpoint hosts, cached per
@@ -526,6 +793,45 @@ mod tests {
     }
 
     #[test]
+    fn background_projection_loads_filtered_page_and_selection_summary_together() {
+        let store = StateStore::in_memory().unwrap();
+        let queue = imported(&store, 20);
+        let project_id = queue.project_id().unwrap().to_owned();
+        let rowids = store.queue_rowids(&project_id, "", None).unwrap();
+        let rows = store.queue_rows(&project_id, &rowids).unwrap();
+        let selected_ids = vec![rows[10].id.clone()];
+        let request = QueueReadRequest {
+            project_id: Some(project_id),
+            len: queue.len(),
+            generation: queue.generation(),
+            search: "user1".into(),
+            state_filter: "all".into(),
+            page_matches: false,
+            page_range: 0..3,
+            load_rowids: Vec::new(),
+            transient: Default::default(),
+            selected_ids,
+            all_selected: false,
+            selection_summary_requested: true,
+        };
+
+        let mut worker_queue = MailboxQueue::default();
+        let projection = worker_queue.read_projection(&store, request);
+
+        assert_eq!(projection.visible_count, 11);
+        assert_eq!(projection.page.len(), 3);
+        assert_eq!(projection.rows.len(), 3);
+        assert_eq!(
+            projection
+                .selection_summary
+                .unwrap()
+                .unwrap()
+                .selected_loaded,
+            1
+        );
+    }
+
+    #[test]
     fn filter_index_and_row_cache_follow_durable_state() {
         let store = StateStore::in_memory().unwrap();
         let mut queue = imported(&store, 20);
@@ -549,7 +855,7 @@ mod tests {
 
         // A row waiting out a retry is presented and filtered by that state.
         queue.set_transient(&row.id, "retrying");
-        let row = queue.row_by_id(&store, &row.id).unwrap();
+        let row = queue.row_by_id(&store, &row.id).unwrap().unwrap();
         assert_eq!(queue.presented_state(&row), "retrying");
         assert!(queue.refresh_filter(&store, "", "retrying").unwrap());
         assert_eq!(queue.visible(), [row.rowid]);

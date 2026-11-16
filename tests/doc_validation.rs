@@ -540,6 +540,10 @@ fn runtime_image_applies_security_updates_and_is_scanned_in_ci_and_release() {
         .expect("runtime image scanner should exist");
 
     assert!(dockerfile.contains("apt-mark hold dovecot-core dovecot-imapd"));
+    assert!(
+        dockerfile.contains("COPY capabilities.toml ./capabilities.toml"),
+        "the builder must include compile-time provider qualification data"
+    );
     assert!(dockerfile.contains("ARG DEBIAN_SNAPSHOT=20261107T000000Z"));
     assert!(dockerfile.contains("snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}"));
     assert!(dockerfile.contains("snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}"));
@@ -1271,6 +1275,7 @@ fn imap_fuzz_workflow_runs_targets_with_nightly() {
 
 #[test]
 fn workflows_use_a_pinned_rust_toolchain_action_and_verify_action_lock() {
+    let rust_toolchain_action = "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8";
     for path in [
         ".github/workflows/ci.yml",
         ".github/workflows/codeql.yml",
@@ -1279,12 +1284,23 @@ fn workflows_use_a_pinned_rust_toolchain_action_and_verify_action_lock() {
         ".github/workflows/release.yml",
     ] {
         let workflow = std::fs::read_to_string(path).expect("workflow should be checked in");
-        if workflow.contains("dtolnay/rust-toolchain@") {
-            assert!(workflow.contains("dtolnay/rust-toolchain@master"), "{path}");
+        for line in workflow
+            .lines()
+            .filter(|line| line.contains("dtolnay/rust-toolchain@"))
+        {
+            assert!(line.contains(rust_toolchain_action), "{path}: {line}");
+            assert!(
+                !line.contains("@master") && !line.contains("@main"),
+                "Rust toolchain actions must use immutable commit refs: {path}: {line}"
+            );
             assert!(workflow.contains("toolchain: 1.92.0"), "{path}");
         }
     }
 
+    let action_lock = std::fs::read_to_string(".github/workflows/actions.lock")
+        .expect("action lock should be checked in");
+    assert!(action_lock.contains(rust_toolchain_action));
+    assert!(action_lock.contains("sha1-683b588c487a69d01f6c6ddf40f036ff682cc2c8"));
     let verify = std::fs::read_to_string(".github/workflows/verify-actions-lock.yml")
         .expect("action lock verification workflow should exist");
     assert!(verify.contains("gh actions-lock --verify"));
@@ -1532,6 +1548,45 @@ fn provider_qualification_manifest_covers_every_release_required_route() {
                 .expect("provider qualification pair must be a string")
         })
         .collect::<std::collections::BTreeSet<_>>();
+
+    let invalidation = capabilities["qualification_invalidation_conditions"]
+        .as_array()
+        .expect("provider qualification invalidation rules must be explicit");
+    assert!(
+        !invalidation.is_empty(),
+        "qualification statuses need invalidation conditions"
+    );
+    let mut provider_ids = std::collections::BTreeSet::new();
+    for record in capabilities["provider_qualifications"]
+        .as_array()
+        .expect("provider qualifications must be an array")
+    {
+        let source = record["source_provider"]
+            .as_str()
+            .expect("qualification source provider ID is required");
+        let destination = record["destination_provider"]
+            .as_str()
+            .expect("qualification destination provider ID is required");
+        assert!(
+            provider_ids.insert((source, destination)),
+            "provider-pair qualification identifiers must be unique"
+        );
+        if record["status"].as_str() == Some("qualified") {
+            assert!(
+                record["evidence_digest"]
+                    .as_str()
+                    .is_some_and(|digest| digest.len() == 64
+                        && digest.bytes().all(|byte| byte.is_ascii_hexdigit())),
+                "qualified provider pairs require an evidence SHA-256 digest"
+            );
+            assert!(
+                record["last_qualified"]
+                    .as_str()
+                    .is_some_and(|date| date != "none"),
+                "qualified provider pairs require a qualification date"
+            );
+        }
+    }
 
     assert!(
         required_pairs.is_subset(&manifest_pairs),

@@ -134,6 +134,30 @@ fn proof_tier(evidence: &core::MailboxEvidence) -> &'static str {
     }
 }
 
+fn assurance_steps(
+    transfer_completed: bool,
+    evidence: Option<&core::MailboxEvidence>,
+) -> serde_json::Value {
+    let metadata_verified = evidence.is_some_and(|value| {
+        matches!(
+            value.verification_method(),
+            core::VerificationMethod::MetadataReconciliation | core::VerificationMethod::BodyHash
+        ) && value.is_exact_match()
+    });
+    let content_verified = evidence.is_some_and(|value| {
+        value.verification_method() == core::VerificationMethod::BodyHash
+            && value.verification_outcome() == core::VerificationOutcome::ExactBodyMatch
+            && value.is_exact_match()
+    });
+    serde_json::json!({
+        "transfer": if transfer_completed { "completed" } else { "not_complete" },
+        "metadata": if metadata_verified { "verified" } else { "not_verified" },
+        "content": if content_verified { "verified_within_configured_bounds" } else { "not_verified" },
+        "cutover_acceptance": "not_established",
+        "cutover_acceptance_reason": "requires_project_cutover_workflow_and_explicit_operator_or_customer_approval"
+    })
+}
+
 fn execution_executable_sha256(plan_snapshot: &str) -> Option<String> {
     let snapshot: toml::Value = toml::from_str(plan_snapshot).ok()?;
     let identity = snapshot
@@ -333,6 +357,10 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "source_mailbox": job.source_mailbox,
                 "destination_mailbox": job.destination_mailbox,
                 "state": job.state,
+                "assurance_steps": assurance_steps(
+                    matches!(job.state.as_str(), "completed" | "verified" | "verified_with_exceptions" | "delta_required" | "verification_difference"),
+                    mailbox.evidence.as_ref().map(|(_, value, _)| value),
+                ),
                 "verification_acceptance": mailbox.acceptance.as_ref().map(|value| serde_json::json!({
                     "run_id": value.run_id,
                     "operator": value.operator,
@@ -366,7 +394,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-customer-proof",
-        "format_version": 6,
+        "format_version": 7,
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
         "migration_id": project.id.clone(),
@@ -970,6 +998,11 @@ mod tests {
             flag_verification: None,
         };
         assert_eq!(assurance_status(&evidence), "aggregate_match");
+        let steps = assurance_steps(true, Some(&evidence));
+        assert_eq!(steps["transfer"], "completed");
+        assert_eq!(steps["metadata"], "not_verified");
+        assert_eq!(steps["content"], "not_verified");
+        assert_eq!(steps["cutover_acceptance"], "not_established");
 
         evidence.authoritative = true;
         assert_eq!(assurance_status(&evidence), "engine_confirmed");
@@ -982,9 +1015,18 @@ mod tests {
             excepted_messages: 0,
         });
         assert_eq!(assurance_status(&evidence), "metadata_match");
+        assert_eq!(
+            assurance_steps(true, Some(&evidence))["metadata"],
+            "verified"
+        );
 
         evidence.verification_method = core::VerificationMethod::BodyHash;
         assert_eq!(assurance_status(&evidence), "bounded_content_match");
+        evidence.verification_outcome = Some(core::VerificationOutcome::ExactBodyMatch);
+        assert_eq!(
+            assurance_steps(true, Some(&evidence))["content"],
+            "verified_within_configured_bounds"
+        );
 
         evidence.missing_messages = 1;
         evidence.verification_outcome = Some(core::VerificationOutcome::Missing);
@@ -1144,7 +1186,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
         assert_eq!(certificate["engine"], "imapsync 2.314");
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
-        assert_eq!(certificate["format_version"], 6);
+        assert_eq!(certificate["format_version"], 7);
         assert_eq!(
             certificate["cutover_readiness"]["status"],
             "not_established"
@@ -1160,6 +1202,11 @@ mod tests {
         assert_eq!(evidence["proof_tier"], "aggregate");
         assert_eq!(evidence["proof_result"], "engine_confirmed");
         assert_eq!(evidence["cutover_readiness"], "not_established");
+        let steps = &certificate["mailboxes"][0]["assurance_steps"];
+        assert_eq!(steps["transfer"], "completed");
+        assert_eq!(steps["metadata"], "not_verified");
+        assert_eq!(steps["content"], "not_verified");
+        assert_eq!(steps["cutover_acceptance"], "not_established");
         assert_eq!(
             evidence["migration_plan_sha256"],
             crate::plan_identity::snapshot_sha256(&plan_snapshot)

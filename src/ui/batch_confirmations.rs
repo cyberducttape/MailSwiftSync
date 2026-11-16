@@ -399,6 +399,10 @@ crate::ui::name_modal(ui, &modal_heading);
                 ui.label(self.language.text(
                     "Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.",
                 ));
+                ui.colored_label(
+                    self.theme_colors().warning,
+                    self.language.message("ui.selected-provider-qualification-warning"),
+                );
                 ui.label(
                     RichText::new(
                         self.language.text(

@@ -143,6 +143,40 @@ pub(crate) fn run(state_path: Option<&Path>, connect: bool) -> DoctorReport {
     if connect && let Some(form) = &profile {
         checks.extend(connection_checks(form));
     }
+    if let Some(form) = profile.as_ref() {
+        let qualification = crate::provider_qualification::for_endpoints(
+            &form.profile.source_host,
+            &form.profile.destination_host,
+        );
+        let status = match qualification.status {
+            crate::provider_qualification::QualificationState::Qualified => "ready",
+            crate::provider_qualification::QualificationState::GenericLabOnly
+            | crate::provider_qualification::QualificationState::NotQualified
+            | crate::provider_qualification::QualificationState::Unknown => "review",
+        };
+        let mut detail = format!(
+            "{}; tested engine: {}; last qualified: {}; evidence digest: {}; limitations: {}",
+            qualification.pair,
+            qualification.tested_engine.as_deref().unwrap_or("unknown"),
+            qualification.last_qualified.as_deref().unwrap_or("none"),
+            qualification.evidence_digest.as_deref().unwrap_or("none"),
+            qualification.limitations,
+        );
+        detail.push_str(&format!(
+            "; qualification state: {:?}; invalidation conditions: {}",
+            qualification.status,
+            if qualification.invalidation_conditions.is_empty() {
+                "not available".to_owned()
+            } else {
+                qualification.invalidation_conditions.join("; ")
+            },
+        ));
+        checks.push(DoctorCheck {
+            name: "provider-pair qualification",
+            status,
+            detail,
+        });
+    }
     if let Some(form) = profile {
         checks.push(DoctorCheck {
             name: "configured plan envelope",

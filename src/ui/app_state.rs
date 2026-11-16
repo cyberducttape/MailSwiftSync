@@ -64,6 +64,10 @@ pub(crate) struct App {
     /// The batch queue: durable rows in SQLite, read through a bounded
     /// presentation model.
     pub(crate) queue: crate::ui::queue_model::MailboxQueue,
+    /// SQL-backed mailbox filtering, paging, and row reads run away from egui.
+    pub(crate) queue_read_worker: Option<crate::ui::queue_read_worker::QueueReadWorker>,
+    pub(crate) queue_read_error: Option<String>,
+    pub(crate) queue_read_worker_required: bool,
     /// Recovery workspace view state (groups, open group, page).
     pub(crate) recovery: crate::ui::recovery::RecoveryState,
     pub(crate) waves: crate::ui::waves::WaveUi,
@@ -96,6 +100,9 @@ pub(crate) struct App {
     /// Table positions drawn last frame, used to prefetch the next frame's
     /// rows from the ledger.
     pub(crate) bulk_rendered_range: (usize, usize),
+    /// Selected-review rows drawn last frame, prefetched independently from
+    /// the mailbox table viewport.
+    pub(crate) bulk_selection_rendered_range: (usize, usize),
     pub(crate) bulk_message: String,
     /// OS-keyring IDs typed on the Mailboxes page for rows without credentials.
     pub(crate) bulk_source_keyring_apply: String,
@@ -358,6 +365,63 @@ impl App {
         self.bulk_selection_count() == 0
     }
 
+    pub(crate) fn queue_read_request(&self) -> crate::ui::queue_model::QueueReadRequest {
+        let same_filter = self.queue.current_filter_matches(
+            &self.bulk_search,
+            &self.bulk_state_filter,
+            self.bulk_selection_is_empty(),
+        );
+        let (start, end) = if same_filter {
+            self.bulk_rendered_range
+        } else {
+            (0, 0)
+        };
+        let visible_count = self.queue.visible_count();
+        let start = start.saturating_sub(64).min(visible_count);
+        let end = end
+            .saturating_add(64)
+            .max(start.saturating_add(64))
+            .min(visible_count.max(start.saturating_add(64)));
+        let selection_summary_requested = self.bulk_selection_view_dirty || !same_filter;
+        let mut selected_ids = if selection_summary_requested {
+            self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        selected_ids.sort();
+        let (selected_start, selected_end) = self.bulk_selection_rendered_range;
+        let selected_len = self.bulk_selection_view.rows.len();
+        let selected_start = if selected_start >= selected_len {
+            0
+        } else {
+            selected_start.saturating_sub(16)
+        };
+        let selected_end = selected_end
+            .saturating_add(16)
+            .max(selected_start.saturating_add(32))
+            .min(selected_len);
+        let load_rowids = self
+            .bulk_selection_view
+            .rows
+            .get(selected_start..selected_end)
+            .unwrap_or_default()
+            .to_vec();
+        crate::ui::queue_model::QueueReadRequest {
+            project_id: self.queue.project_id().map(str::to_owned),
+            len: self.queue.len(),
+            generation: self.queue.generation(),
+            search: self.bulk_search.clone(),
+            state_filter: self.bulk_state_filter.clone(),
+            page_matches: self.bulk_selection_is_empty(),
+            page_range: start..end,
+            load_rowids,
+            transient: self.queue.transient_snapshot(),
+            selected_ids,
+            all_selected: self.bulk_all_selected,
+            selection_summary_requested,
+        }
+    }
+
     pub(crate) fn bulk_is_selected(&self, job_id: &str) -> bool {
         if self.bulk_all_selected {
             !self.bulk_selected_ids.contains(job_id)
@@ -507,6 +571,32 @@ impl App {
         }
     }
 
+    pub(crate) fn enable_queue_read_worker(&mut self) -> bool {
+        if self.queue_read_worker.is_some() {
+            return true;
+        }
+        let Some(path) = self
+            .state_path
+            .clone()
+            .filter(|_| self.persistence_available)
+        else {
+            return false;
+        };
+        self.queue_read_worker_required = true;
+        match crate::ui::queue_read_worker::QueueReadWorker::spawn(path) {
+            Ok(worker) => {
+                self.queue_read_worker = Some(worker);
+                true
+            }
+            Err(error) => {
+                self.queue_read_error = Some(format!(
+                    "Could not start mailbox queue read worker: {error}"
+                ));
+                false
+            }
+        }
+    }
+
     /// Refresh the database-backed UI read model at a low frequency. egui may
     /// repaint many times per second while a process is producing output;
     /// those repaints must not turn into repeated SQLite reads.
@@ -628,6 +718,10 @@ impl App {
                 .snapshot_worker
                 .as_ref()
                 .is_some_and(crate::ui::snapshot_worker::SnapshotWorker::in_flight)
+            || self
+                .queue_read_worker
+                .as_ref()
+                .is_some_and(crate::ui::queue_read_worker::QueueReadWorker::in_flight)
             || self.keyring_operation_receiver.is_some()
             || self.engine_setup_receiver.is_some()
             || self

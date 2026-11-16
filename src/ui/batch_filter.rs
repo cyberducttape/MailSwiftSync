@@ -8,6 +8,14 @@ use crate::App;
 impl App {
     /// Bring the filtered row index up to date. Returns whether it changed.
     pub(crate) fn refresh_bulk_filter_cache(&mut self) -> bool {
+        if self.queue_read_worker_required {
+            let request = self.queue_read_request();
+            let Some(worker) = self.queue_read_worker.as_mut() else {
+                return false;
+            };
+            worker.request(request);
+            return false;
+        }
         let page_matches = self.bulk_selection_is_empty();
         match self.queue.refresh_filter_with_paging(
             &self.store,

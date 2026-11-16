@@ -2,6 +2,17 @@
 schema_version = 1
 last_reviewed = "2026-11-09"
 
+# A qualification remains valid only for the recorded provider pair, engine
+# version/binary, MailSwiftSync build, provider versions, and authentication
+# semantics. Any change requires review and may invalidate the evidence.
+qualification_invalidation_conditions = [
+    "MailSwiftSync release commit or executable digest changes",
+    "Migration engine name, version, or executable digest changes",
+    "Source or destination provider/server version changes materially",
+    "Authentication mode, mailbox mapping, or transfer semantics change",
+    "Qualification evidence expires, is revoked, or fails integrity validation",
+]
+
 [release]
 status = "Technical Preview"
 qualified_engine = "imapsync"
@@ -11,65 +22,92 @@ qualified_engine_version = "2.314"
 # assertion. These rows are rendered into both release-facing documents.
 [[provider_qualifications]]
 pair = "cPanel/Dovecot → cPanel/Dovecot"
+source_provider = "cpanel_dovecot"
+destination_provider = "cpanel_dovecot"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "Priority hosting route; no live hosting-provider evidence is bundled. The packaged Dovecot fixture is generic lab evidence only."
 
 [[provider_qualifications]]
 pair = "cPanel/Dovecot → Microsoft 365"
+source_provider = "cpanel_dovecot"
+destination_provider = "microsoft365"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "Priority hosting route; no live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "cPanel/Dovecot → Google Workspace"
+source_provider = "cpanel_dovecot"
+destination_provider = "google_workspace"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "No live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "Google Workspace → Microsoft 365"
+source_provider = "google_workspace"
+destination_provider = "microsoft365"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "No live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "Microsoft 365 → Google Workspace"
+source_provider = "microsoft365"
+destination_provider = "google_workspace"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "No live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "Fastmail → Generic IMAP"
+source_provider = "fastmail"
+destination_provider = "generic_imap"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "No live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "Fastmail → Google Workspace"
+source_provider = "fastmail"
+destination_provider = "google_workspace"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "No live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "Fastmail → Microsoft 365"
+source_provider = "fastmail"
+destination_provider = "microsoft365"
 status = "not_qualified"
 last_qualified = "none"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "No live provider-pair evidence is bundled."
 
 [[provider_qualifications]]
 pair = "Generic IMAP → Generic IMAP"
+source_provider = "generic_imap"
+destination_provider = "generic_imap"
 status = "generic_lab_only"
 last_qualified = "generic lab fixtures"
 tested_engine = "imapsync 2.314"
+evidence_digest = ""
 limitations = "Generic fixtures are not live provider qualification."
 
 # Release-facing feature status. Keep implementation state separate from live

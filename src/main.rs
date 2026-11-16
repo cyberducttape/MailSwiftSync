@@ -31,6 +31,7 @@ mod plan_identity;
 mod process;
 mod progress;
 mod provider;
+mod provider_qualification;
 mod reports;
 mod runner;
 mod storage;

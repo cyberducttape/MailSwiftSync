@@ -35,6 +35,7 @@ impl ProviderPreset {
         Self::ZohoMail,
     ];
 
+    #[cfg(test)]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::GenericImap => "Generic IMAP preset",
@@ -55,6 +56,18 @@ impl ProviderPreset {
             Self::Microsoft365 => "Microsoft 365",
             Self::Fastmail => "Fastmail",
             Self::ZohoMail => "Zoho Mail",
+        }
+    }
+
+    /// Stable identifier used by `capabilities.toml` qualification records.
+    pub(crate) fn qualification_id(self) -> &'static str {
+        match self {
+            Self::GenericImap => "generic_imap",
+            Self::CpanelDovecot => "cpanel_dovecot",
+            Self::GoogleWorkspace => "google_workspace",
+            Self::Microsoft365 => "microsoft365",
+            Self::Fastmail => "fastmail",
+            Self::ZohoMail => "zoho_mail",
         }
     }
 

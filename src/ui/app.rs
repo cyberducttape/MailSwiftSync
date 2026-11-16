@@ -890,6 +890,7 @@ crate::ui::name_modal(ui, &modal_heading);
     pub(crate) fn plan_workflow_controls(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
         let workflow_step = self.current_plan_workflow_step();
+        self.provider_qualification_banner(ui);
         if self.running() {
             if ui
                 .button(self.language.message("ui.stop-migration"))

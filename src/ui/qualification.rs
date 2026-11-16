@@ -1,42 +1,65 @@
 //! Operator-facing provider qualification and pre-migration simulation.
 
-use crate::{App, core, provider::ProviderPreset};
+use crate::{App, core, provider_qualification};
 use eframe::egui::{self, RichText};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QualificationRoute {
-    GmailToMicrosoft365,
-    Microsoft365ToGmail,
-    FastmailToMicrosoft365,
-    Other,
-}
-
-fn qualification_route(source: ProviderPreset, destination: ProviderPreset) -> QualificationRoute {
-    match (source, destination) {
-        (ProviderPreset::GoogleWorkspace, ProviderPreset::Microsoft365) => {
-            QualificationRoute::GmailToMicrosoft365
+fn qualification_status_key(status: provider_qualification::QualificationState) -> &'static str {
+    match status {
+        provider_qualification::QualificationState::Qualified => "ui.provider-status-qualified",
+        provider_qualification::QualificationState::GenericLabOnly => {
+            "ui.provider-status-generic-lab"
         }
-        (ProviderPreset::Microsoft365, ProviderPreset::GoogleWorkspace) => {
-            QualificationRoute::Microsoft365ToGmail
+        provider_qualification::QualificationState::NotQualified => {
+            "ui.provider-status-not-qualified"
         }
-        (ProviderPreset::Fastmail, ProviderPreset::Microsoft365) => {
-            QualificationRoute::FastmailToMicrosoft365
-        }
-        _ => QualificationRoute::Other,
+        provider_qualification::QualificationState::Unknown => "ui.provider-status-unknown",
     }
 }
 
 impl App {
+    pub(crate) fn provider_qualification_banner(&self, ui: &mut egui::Ui) {
+        let colors = self.theme_colors();
+        let status =
+            provider_qualification::for_presets(self.source_provider, self.destination_provider);
+        let status_color = match status.status {
+            provider_qualification::QualificationState::Qualified => colors.success,
+            provider_qualification::QualificationState::Unknown => colors.danger,
+            _ => colors.warning,
+        };
+        crate::ui::card(ui, |ui| {
+            let heading = self
+                .language
+                .message("ui.provider-path-qualification-status")
+                .replace("{pair}", &status.pair)
+                .replace(
+                    "{status}",
+                    self.language
+                        .message(qualification_status_key(status.status)),
+                );
+            ui.label(
+                RichText::new(heading)
+                    .strong()
+                    .family(crate::ui::fonts::medium())
+                    .color(status_color),
+            );
+            ui.label(RichText::new(&status.limitations).color(colors.text_secondary));
+            if status.status != provider_qualification::QualificationState::Qualified {
+                ui.label(
+                    RichText::new(self.language.message("ui.provider-qualification-warning"))
+                        .color(colors.text_secondary),
+                );
+            }
+        });
+    }
+
     pub(crate) fn provider_qualification_card(&self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
-        let source = self.language.text(self.source_provider.label());
-        let destination = self.language.text(self.destination_provider.label());
-        let route = qualification_route(self.source_provider, self.destination_provider);
-        let route_label = match route {
-            QualificationRoute::GmailToMicrosoft365 => "Google Workspace → Microsoft 365",
-            QualificationRoute::Microsoft365ToGmail => "Microsoft 365 → Google Workspace",
-            QualificationRoute::FastmailToMicrosoft365 => "Fastmail → Microsoft 365",
-            QualificationRoute::Other => "{} → {}",
+        let status =
+            provider_qualification::for_presets(self.source_provider, self.destination_provider);
+        let status_color = match status.status {
+            provider_qualification::QualificationState::Qualified => colors.success,
+            provider_qualification::QualificationState::Unknown => colors.danger,
+            _ => colors.warning,
         };
 
         crate::ui::card(ui, |ui| {
@@ -44,53 +67,69 @@ impl App {
                 crate::ui::section_label(ui, self.language.message("ui.provider-qualification"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new(self.language.message("ui.unqualified"))
-                            .strong()
-                            .family(crate::ui::fonts::medium())
-                            .color(colors.warning),
+                        RichText::new(
+                            self.language
+                                .message(qualification_status_key(status.status)),
+                        )
+                        .strong()
+                        .family(crate::ui::fonts::medium())
+                        .color(status_color),
                     );
                 });
             });
-            let pair = if route == QualificationRoute::Other {
-                route_label
-                    .replacen("{}", source, 1)
-                    .replacen("{}", destination, 1)
-            } else {
-                route_label.to_owned()
-            };
             ui.label(
-                RichText::new(pair)
+                RichText::new(&status.pair)
                     .size(16.0)
                     .strong()
                     .family(crate::ui::fonts::semibold()),
             );
-            ui.label(
-                RichText::new(self.language.message("ui.community-unqualified-path"))
-                    .strong()
-                    .family(crate::ui::fonts::medium())
-                    .color(colors.warning),
-            );
-            ui.label(
-                RichText::new(self.language.text(
-                    "The generic IMAP migration path is available, but this provider pair has not passed the MailSwiftSync production qualification suite.",
-                ))
-                .color(colors.text_secondary),
-            );
-            ui.label(
-                RichText::new(self.language.text(
-                    "Last qualification: none · no live provider evidence is currently bundled.",
-                ))
-                .small()
-                .color(colors.text_secondary),
-            );
+            ui.label(RichText::new(&status.limitations).color(colors.text_secondary));
+            if let Some(date) = status.last_qualified.as_deref() {
+                ui.label(
+                    self.language
+                        .message("ui.provider-last-qualified")
+                        .replace("{}", date),
+                );
+            }
+            if let Some(engine) = status.tested_engine.as_deref() {
+                ui.label(
+                    self.language
+                        .message("ui.provider-tested-engine")
+                        .replace("{}", engine),
+                );
+            }
+            if let Some(digest) = status.evidence_digest.as_deref() {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.provider-evidence-digest")
+                            .replace("{}", digest),
+                    )
+                    .small()
+                    .color(colors.text_secondary),
+                );
+            }
+            if status.status != provider_qualification::QualificationState::Qualified {
+                ui.label(
+                    RichText::new(self.language.message("ui.provider-qualification-warning"))
+                        .color(colors.warning),
+                );
+            }
             ui.add_space(5.0);
-            ui.label(
-                RichText::new(self.language.text(
-                    "Qualification requires tested authentication, folder inventory and mapping, independent verification, interruption recovery, throttling recovery, and large-mailbox coverage.",
-                ))
-                .small()
-                .color(colors.text_secondary),
-            );
+            if !status.invalidation_conditions.is_empty() {
+                ui.label(
+                    RichText::new(self.language.message("ui.provider-invalidation-conditions"))
+                        .strong()
+                        .small(),
+                );
+                for condition in status.invalidation_conditions {
+                    ui.label(
+                        RichText::new(format!("• {condition}"))
+                            .small()
+                            .color(colors.text_secondary),
+                    );
+                }
+            }
         });
     }
 
@@ -496,34 +535,22 @@ fn simulation_risks(
 
 #[cfg(test)]
 mod tests {
-    use super::{QualificationRoute, format_quota_details, qualification_route, simulation_risks};
+    use super::{format_quota_details, simulation_risks};
     use crate::core::ServerCapabilities;
     use crate::provider::ProviderPreset;
+    use crate::provider_qualification::{QualificationState, for_presets};
 
     #[test]
-    fn only_the_declared_release_routes_are_named_qualification_pairs() {
-        assert_eq!(
-            qualification_route(
-                ProviderPreset::GoogleWorkspace,
-                ProviderPreset::Microsoft365
-            ),
-            QualificationRoute::GmailToMicrosoft365
+    fn qualification_ui_uses_the_shared_registry_for_declared_and_unlisted_pairs() {
+        let status = for_presets(
+            ProviderPreset::GoogleWorkspace,
+            ProviderPreset::Microsoft365,
         );
-        assert_eq!(
-            qualification_route(
-                ProviderPreset::Microsoft365,
-                ProviderPreset::GoogleWorkspace
-            ),
-            QualificationRoute::Microsoft365ToGmail
-        );
-        assert_eq!(
-            qualification_route(ProviderPreset::Fastmail, ProviderPreset::Microsoft365),
-            QualificationRoute::FastmailToMicrosoft365
-        );
-        assert_eq!(
-            qualification_route(ProviderPreset::GoogleWorkspace, ProviderPreset::GenericImap),
-            QualificationRoute::Other
-        );
+        assert_eq!(status.status, QualificationState::NotQualified);
+        assert_eq!(status.pair, "Google Workspace → Microsoft 365");
+
+        let unlisted = for_presets(ProviderPreset::ZohoMail, ProviderPreset::Microsoft365);
+        assert_eq!(unlisted.status, QualificationState::Unknown);
     }
 
     #[test]

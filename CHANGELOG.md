@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Mailbox review cards and customer proof exports now expose transfer completion,
+  metadata reconciliation, bounded content verification, and cutover acceptance
+  as separate states. Cutover acceptance remains unestablished until the separate
+  project-level approval and source-quiescence workflow records it. Customer-proof
+  format version 7 adds these per-mailbox assurance steps, including when no
+  verification evidence exists.
+- Docker builds now copy the provider qualification manifest required by the
+  compile-time GUI and `doctor` qualification model. A repository test guards
+  this builder input so containerized release and integration builds keep working.
+- Rust toolchain setup actions now use the immutable commit SHA recorded in
+  `actions.lock` across CI, release, CodeQL, dependency-audit, and DAST workflows.
+  Workflow validation checks that every such reference is immutable and matches
+  the locked commit.
+- Provider qualification status now comes from `capabilities.toml` across the
+  GUI and `doctor` JSON, with stable provider IDs, tested engine, qualification
+  date, evidence digest, limitations, and explicit invalidation conditions.
+  Missing or incomplete records remain unqualified/unknown; the GUI no longer
+  maintains a separate three-route list.
+- Mailbox lookup now preserves SQLite errors instead of converting them into a
+  missing-row result. The operator sees distinct messages for a deleted mailbox
+  and an unavailable ledger.
+- Mailbox filtering, page selection, visible-row reads, and selection summaries
+  now run through a dedicated read-only SQLite worker. Requests are tied to the
+  current project, filter, and queue generation; stale responses are ignored,
+  while the operator's selected mailbox IDs remain independent of page loads.
+- Provider qualification status is now persistently visible beside migration
+  execution controls and in live-migration confirmation reviews, including
+  batch confirmation. This makes clear that generic IMAP support and a passing
+  preflight do not establish live provider-pair qualification.
 - Provider cooldowns now normalize endpoints with the shared parser, so IPv4,
   DNS, bare IPv6 and bracketed IPv6 endpoints map to the correct command-center
   health row.

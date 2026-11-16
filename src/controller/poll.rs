@@ -34,6 +34,38 @@ pub(crate) fn poll_worker<T>(slot: &mut Option<Receiver<T>>) -> WorkerPoll<T> {
 
 impl App {
     pub(crate) fn poll(&mut self) {
+        let queue_request = self.queue_read_request();
+        let queue_filter_was_current = self.queue.current_filter_matches(
+            &self.bulk_search,
+            &self.bulk_state_filter,
+            self.bulk_selection_is_empty(),
+        );
+        let selection_was_dirty = self.bulk_selection_view_dirty;
+        let queue_read_poll = self
+            .queue_read_worker
+            .as_mut()
+            .map(|worker| worker.poll(&mut self.queue, &queue_request));
+        match queue_read_poll {
+            Some(crate::ui::queue_read_worker::QueueReadPoll::Applied) => {
+                self.queue_read_error = None;
+                if selection_was_dirty || !queue_filter_was_current {
+                    self.bulk_selection_view_dirty = true;
+                    if let Some(error) = self.queue.selection_projection_error().map(str::to_owned)
+                    {
+                        self.keep_stale_bulk_selection(error);
+                    } else {
+                        self.refresh_bulk_selection_view();
+                    }
+                }
+            }
+            Some(crate::ui::queue_read_worker::QueueReadPoll::Failed(error)) => {
+                self.queue_read_error = Some(error.clone());
+                if self.bulk_selection_view_dirty {
+                    self.keep_stale_bulk_selection(error);
+                }
+            }
+            Some(crate::ui::queue_read_worker::QueueReadPoll::Idle) | None => {}
+        }
         // Exact callers (probe results, assessment, admission) recompute the
         // fingerprint themselves; this per-frame check only expires stale
         // observations promptly, so it need not hash files on every repaint.

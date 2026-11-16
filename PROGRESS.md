@@ -2,6 +2,85 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-15: Explicit per-mailbox assurance steps
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- The Mailboxes review card now shows transfer completion, metadata
+  reconciliation, bounded content verification, and cutover approval separately
+  without requiring the operator to open the full Verification view.
+- Customer proof format version 7 exports the same four statuses for every
+  mailbox. Cutover acceptance stays `not_established` and explains that it is a
+  separate project-level approval and source-quiescence decision.
+- Added regression assertions for aggregate-only evidence and updated provider
+  evidence validation to accept proof version 7 while rejecting unknown future
+  versions.
+- Traced a failing hosted container integration build to the Docker builder
+  omitting the compile-time `capabilities.toml`; added the missing input and a
+  repository regression assertion.
+
+Evidence: focused customer-proof Rust test, provider evidence Python tests
+(15 passed, 1 skipped), `cargo fmt`, localization validation, and `git diff
+--check` passed. `cargo clippy --locked --all-targets --all-features -- -D
+warnings` passed. `cargo test --locked --all-targets --all-features` passed
+(1,511 passed, 14 ignored, plus all integration and documentation targets).
+
+## 2026-11-15: Immutable Rust toolchain action references
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- Replaced `dtolnay/rust-toolchain@master` with its locked 40-character commit
+  in CI, release, CodeQL, dependency-audit, and authenticated DAST workflows.
+- Strengthened the workflow regression test to require the exact immutable ref
+  and matching action-lock entry. The lockfile verifier reports all workflows
+  valid.
+
+Evidence: `cargo fmt --check`, the focused Rust workflow-lock regression test,
+`gh actions-lock --verify` (all 10 workflows valid), and `git diff --check`
+passed. `actionlint` is not installed in this work environment; CI's pinned
+actionlint workflow gate remains the YAML syntax check.
+
+## 2026-11-15: Data-driven provider qualification and explicit queue lookup errors
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- Connected qualification display and `doctor` JSON to a shared model loaded
+  from `capabilities.toml`; provider identifiers, date, engine, digest,
+  limitations, and invalidation conditions are now sourced from one registry.
+  Unknown custom-host routes fail closed, and a `qualified` entry is displayed
+  green only when its date, engine, and 64-character evidence digest exist.
+- `MailboxQueue::row_by_id` now returns `rusqlite::Result<Option<QueueRow>>`;
+  the operations view distinguishes a missing mailbox from ledger read errors.
+- The provider qualification table in release docs is regenerated with evidence
+  digest and invalidation columns. Registry validation tests ensure unique route
+  identifiers, explicit invalidation conditions, and provenance for any future
+  qualified status.
+
+Evidence: `cargo fmt --check`, `cargo check --locked --all-targets
+--all-features`, `cargo clippy --locked --all-targets --all-features -- -D
+warnings`, `cargo test --locked --all-targets --all-features` (1,511 passed,
+14 ignored plus all integration/doc test targets), capability-claim generation
+and validation, and UI localization validation passed.
+
+## 2026-11-15: Background mailbox queue reads and visible provider qualification
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- Moved mailbox filtering, paged row IDs, visible-row reads, queue totals, and
+  selection summaries to a dedicated read-only SQLite worker for the desktop
+  GUI. Requests carry project/filter/generation identity and stale responses
+  are discarded. Selection IDs are independent of the currently loaded page.
+- Queue read failures preserve prior selection state, display an unavailable or
+  loading state rather than an empty result, and retry on a bounded interval.
+- Added a persistent provider-pair qualification warning next to execution
+  controls and in individual and batch live-migration confirmation reviews.
+
+Evidence: `cargo fmt --check`, `cargo check --locked --all-targets
+--all-features`, `cargo clippy --locked --all-targets --all-features -- -D
+warnings`, `cargo test --locked --all-targets --all-features` (1,507 passed,
+14 ignored plus all integration/doc test targets), and
+`python3 scripts/verify-ui-localization.py` passed.
+
 ## 2026-11-15: IPv6 cooldown matching and stale batch selection recovery
 
 Branch `fix/ipv6-cooldown-and-stale-batch-summary`:

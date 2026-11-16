@@ -526,10 +526,20 @@ impl App {
                 )
             };
             if ui.button(label).clicked() {
-                if let Some(job_id) = failure.job_id.as_deref()
-                    && let Some(job) = self.queue.row_by_id(&self.store, job_id)
-                {
-                    self.bulk_search = job.label;
+                if let Some(job_id) = failure.job_id.as_deref() {
+                    match self.queue.row_by_id(&self.store, job_id) {
+                        Ok(Some(job)) => self.bulk_search = job.label,
+                        Ok(None) => {
+                            self.bulk_message =
+                                self.language.message("ui.mailbox-row-not-found").to_owned();
+                        }
+                        Err(error) => {
+                            self.bulk_message = self
+                                .language
+                                .message("ui.mailbox-ledger-read-failed")
+                                .replace("{error}", &error.to_string());
+                        }
+                    }
                 }
                 self.active_view = view;
             }
