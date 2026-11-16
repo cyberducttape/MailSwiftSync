@@ -125,7 +125,7 @@ Experimental or planned:
   application; MailSwiftSync ships no OAuth client and these flows have not yet
   been qualified against live Google or Microsoft tenants.
 - Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
-- A scheduler/API that can survive the desktop closing. (`supervise` provides a foreground, maintenance-window-aware batch controller; body hashing is currently an explicit per-mailbox opt-in rather than a default batch mode.)
+- The optional `mailswiftsync control` service and leased-worker agent can coordinate approved work independently of the desktop. They remain experimental: the service is single-node, and live multi-user, identity-provider, and multi-host recovery qualification is outstanding. See the [control-plane guide](docs/control-plane.md). The local `supervise` command remains a foreground batch controller; body hashing is an explicit per-mailbox opt-in rather than a default batch mode.
 - UIDVALIDITY-aware delta checkpoint binding is implemented for native Dovecot; encrypted-imapsync verification persists bounded metadata pages, body fingerprints, and UID cursors across controller interruption, while provider qualification and large-mailbox recovery evidence remain outstanding.
 - Published large-scale migration case studies and compatibility matrix.
 
@@ -519,13 +519,15 @@ that MailSwiftSync validates on the opened file handle. They are read into the
 zeroizing execution path and are never stored in the ledger. Batch headless modes intentionally require credentials
 to be provided through the already admitted durable queue.
 
-These commands are headless control-plane operations; they do not yet replace
-the GUI with a continuously running scheduler. `headless live` is an explicit
-one-shot operation for a single-mailbox project: it runs a fresh dry preflight
-in the same process, then promotes only that exact plan and credential
-fingerprint. It refuses restored batch queues rather than silently selecting
-one row. `batch-preflight` and `batch-live` operate only on a complete durable
-queue previously imported and validated through the GUI; they refuse an
+The `headless` subcommands are one-shot local operations; they do not provide a
+continuously running scheduler. `supervise` is the foreground local batch
+controller, while the optional experimental service and leased-worker flow are
+documented in the [control-plane guide](docs/control-plane.md). `headless live`
+is an explicit one-shot operation for a single-mailbox project: it runs a fresh
+dry preflight in the same process, then promotes only that exact plan and
+credential fingerprint. It refuses restored batch queues rather than silently
+selecting one row. `batch-preflight` and `batch-live` operate only on a complete
+durable queue previously imported and validated through the GUI; they refuse an
 ambiguous or partially restored queue.
 
 A completed project remains immutable by default. To run a later incremental
