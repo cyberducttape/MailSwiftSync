@@ -1271,6 +1271,7 @@ fn imap_fuzz_workflow_runs_targets_with_nightly() {
 
 #[test]
 fn workflows_use_a_pinned_rust_toolchain_action_and_verify_action_lock() {
+    let rust_toolchain_action = "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8";
     for path in [
         ".github/workflows/ci.yml",
         ".github/workflows/codeql.yml",
@@ -1279,12 +1280,23 @@ fn workflows_use_a_pinned_rust_toolchain_action_and_verify_action_lock() {
         ".github/workflows/release.yml",
     ] {
         let workflow = std::fs::read_to_string(path).expect("workflow should be checked in");
-        if workflow.contains("dtolnay/rust-toolchain@") {
-            assert!(workflow.contains("dtolnay/rust-toolchain@master"), "{path}");
+        for line in workflow
+            .lines()
+            .filter(|line| line.contains("dtolnay/rust-toolchain@"))
+        {
+            assert!(line.contains(rust_toolchain_action), "{path}: {line}");
+            assert!(
+                !line.contains("@master") && !line.contains("@main"),
+                "Rust toolchain actions must use immutable commit refs: {path}: {line}"
+            );
             assert!(workflow.contains("toolchain: 1.92.0"), "{path}");
         }
     }
 
+    let action_lock = std::fs::read_to_string(".github/workflows/actions.lock")
+        .expect("action lock should be checked in");
+    assert!(action_lock.contains(rust_toolchain_action));
+    assert!(action_lock.contains("sha1-683b588c487a69d01f6c6ddf40f036ff682cc2c8"));
     let verify = std::fs::read_to_string(".github/workflows/verify-actions-lock.yml")
         .expect("action lock verification workflow should exist");
     assert!(verify.contains("gh actions-lock --verify"));

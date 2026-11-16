@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Rust toolchain setup actions now use the immutable commit SHA recorded in
+  `actions.lock` across CI, release, CodeQL, dependency-audit, and DAST workflows.
+  Workflow validation checks that every such reference is immutable and matches
+  the locked commit.
 - Provider qualification status now comes from `capabilities.toml` across the
   GUI and `doctor` JSON, with stable provider IDs, tested engine, qualification
   date, evidence digest, limitations, and explicit invalidation conditions.

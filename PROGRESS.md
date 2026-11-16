@@ -2,6 +2,21 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-15: Immutable Rust toolchain action references
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- Replaced `dtolnay/rust-toolchain@master` with its locked 40-character commit
+  in CI, release, CodeQL, dependency-audit, and authenticated DAST workflows.
+- Strengthened the workflow regression test to require the exact immutable ref
+  and matching action-lock entry. The lockfile verifier reports all workflows
+  valid.
+
+Evidence: `cargo fmt --check`, the focused Rust workflow-lock regression test,
+`gh actions-lock --verify` (all 10 workflows valid), and `git diff --check`
+passed. `actionlint` is not installed in this work environment; CI's pinned
+actionlint workflow gate remains the YAML syntax check.
+
 ## 2026-11-15: Data-driven provider qualification and explicit queue lookup errors
 
 Branch `fix/ipv6-cooldown-and-stale-batch-summary`:

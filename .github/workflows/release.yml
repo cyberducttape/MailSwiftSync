@@ -22,7 +22,7 @@ jobs:
       - name: Classify release channel
         id: release-channel
         run: echo "value=$(scripts/release-channel.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.92.0
           components: rustfmt, clippy
@@ -149,7 +149,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.92.0
           targets: ${{ matrix.target }}
@@ -299,7 +299,7 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.92.0
       - name: Generate Rust dependency SBOM from Cargo.lock
@@ -393,7 +393,7 @@ jobs:
       - name: Assert the tested revision is the release tag SHA
         shell: bash
         run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.92.0
           components: rustfmt, clippy
@@ -433,7 +433,7 @@ jobs:
           "Runner environment: $env:RUNNER_ENVIRONMENT"
           "Runner OS/arch: $env:RUNNER_OS/$env:RUNNER_ARCH"
           "Release revision: $env:GITHUB_SHA"
-      - uses: dtolnay/rust-toolchain@master # revision locked by actions.lock
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.92.0
           components: rustfmt, clippy
