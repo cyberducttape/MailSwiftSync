@@ -844,6 +844,40 @@ report export. The 1.09 GB stage high-water mark is a planning observation,
 not a reservation or universal disk ceiling, and this matrix is not large-byte
 mailbox or provider qualification.
 
+A focused four-shape run at 100,000 messages per endpoint was completed on
+2026-11-16 at commit `bcf6763817816efbed1fd0462a3c7cf19ce694c5`, using Rust
+1.92.0 on the same shared AMD Ryzen 7 7735U workstation (Ubuntu 26.04.1,
+Linux 7.0.0-43-generic, x86_64, ext4 on NVMe). Each shape ran as its own
+process against a durable SQLite stage. The benchmark harness's RSS and
+throughput gates were relaxed for measurement (`32,768 MiB` and no minimum
+rate); this run is observational and does not qualify those thresholds.
+The invocation was:
+
+```sh
+MAILSWIFTSYNC_VERIFY_SIZES=100000 \
+MAILSWIFTSYNC_VERIFY_SHAPES='typical duplicate_ids absent_ids mismatch_heavy' \
+MAILSWIFTSYNC_VERIFY_PEAK_RSS_BUDGET_MIB=32768 \
+MAILSWIFTSYNC_VERIFY_MIN_RECONCILE_RATE=0 \
+/usr/bin/time -v scripts/benchmark-verification-scale.sh
+```
+
+| Fixture shape | Stage / reconcile | Reconcile rate | Resume reconcile | FLAGS compared / time | Peak RSS | Stage after staging | Peak stage / journal | Staging / reconciliation writes | Mismatch rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Typical | 1.841 s / 1.948 s | 51,334/s | 1.976 s | 98,000 / 581 ms | 22 MiB | 64,651,264 B | 105,372,120 B / 9,722,328 B | 82,563,072 B / 64,884,736 B | 2,000 |
+| Duplicate IDs | 1.877 s / 2.122 s | 47,125/s | 2.128 s | 98,000 / 628 ms | 22 MiB | 64,913,408 B | 105,679,448 B / 9,779,800 B | 88,297,472 B / 64,921,600 B | 2,000 |
+| Absent IDs | 1.734 s / 1.800 s | 55,555/s | 1.808 s | 50,000 / 339 ms | 22 MiB | 55,058,432 B | 78,127,928 B / 7,107,384 B | 75,534,336 B / 42,541,056 B | 10,000 |
+| Mismatch-heavy | 1.868 s / 4.542 s | 22,016/s | 4.595 s | 50,000 / 557 ms | 22 MiB | 64,446,464 B | 99,940,824 B / 9,722,328 B | 86,732,800 B / 67,743,744 B | 60,000 |
+
+The mismatch-heavy fixture was the slowest and wrote the most reconciliation
+data among these cases; its stage high-water was about 100 MB, with a separate
+9.7 MB rollback-journal high-water.
+These are synthetic reconciliation measurements, not end-to-end migration
+results. They exclude IMAP fetching, transfer, concurrent workers, final
+evidence/report commits, and large-byte messages. The 22 MiB per-process RSS
+does not include the separate cold compilation in the outer timed command.
+This four-shape run does not replace the typical-shape size matrix above or
+establish a general disk budget, provider capacity, or production limit.
+
 ## When verification reaches a limit
 
 Every bound above fails closed, but the transfer has usually finished by the
