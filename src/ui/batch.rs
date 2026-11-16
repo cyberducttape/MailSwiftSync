@@ -15,6 +15,20 @@ use crate::ui::status::recommended_workspace_action;
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OperatorActionColumn {
+    Compact,
+    FullText,
+}
+
+fn operator_action_column(table_width: f32) -> OperatorActionColumn {
+    if table_width >= 1100.0 {
+        OperatorActionColumn::FullText
+    } else {
+        OperatorActionColumn::Compact
+    }
+}
+
 impl App {
     pub(crate) fn current_batch_action_plan(
         &self,
@@ -800,7 +814,8 @@ impl App {
             let missing = std::cell::RefCell::new(Vec::new());
             let table_width = ui.available_width();
             let show_endpoints = table_width >= 760.0;
-            let show_operator_action = table_width >= 1100.0;
+            let action_column = operator_action_column(table_width);
+            let show_operator_action = action_column == OperatorActionColumn::FullText;
             // An auto column only grows to its content after the remainder
             // columns have claimed the width, which pushed long badges past
             // the panel edge. Reserve the widest badge in this language.
@@ -833,6 +848,8 @@ impl App {
             table = table.column(Column::initial(state_width).at_least(96.0).clip(true));
             if show_operator_action {
                 table = table.column(Column::remainder().at_least(90.0).clip(true));
+            } else {
+                table = table.column(Column::initial(32.0).at_least(28.0).clip(true));
             }
             table
                 .header(32.0, |mut header| {
@@ -843,6 +860,8 @@ impl App {
                     labels.push("State");
                     if show_operator_action {
                         labels.push("Operator action");
+                    } else {
+                        labels.push("");
                     }
                     for label in labels {
                         header.col(|ui| {
@@ -971,6 +990,36 @@ impl App {
                                             .color(self.theme_colors().text_secondary),
                                         );
                                     }
+                                }
+                            });
+                        } else {
+                            row.col(|ui| {
+                                if job_state == "attention" {
+                                    let action = job
+                                        .attention_reason
+                                        .map(|reason| {
+                                            self.language.text(reason.recommended_action())
+                                        })
+                                        .unwrap_or_else(|| {
+                                            self.language.message("ui.inspect-durable-run-detail")
+                                        });
+                                    let accessible_label = format!(
+                                        "{}: {action}",
+                                        self.language.message("ui.operator-action")
+                                    );
+                                    let response = ui.label(
+                                        RichText::new("!")
+                                            .strong()
+                                            .color(self.theme_colors().warning),
+                                    );
+                                    response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::WidgetType::Label,
+                                            true,
+                                            accessible_label.clone(),
+                                        )
+                                    });
+                                    response.on_hover_text(accessible_label);
                                 }
                             });
                         }
@@ -1617,6 +1666,24 @@ impl App {
             self.bulk_selection_view_dirty = true;
             ui.ctx().request_repaint();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OperatorActionColumn, operator_action_column};
+
+    #[test]
+    fn operator_action_remains_available_when_the_full_text_column_does_not_fit() {
+        assert_eq!(operator_action_column(760.0), OperatorActionColumn::Compact);
+        assert_eq!(
+            operator_action_column(1099.9),
+            OperatorActionColumn::Compact
+        );
+        assert_eq!(
+            operator_action_column(1100.0),
+            OperatorActionColumn::FullText
+        );
     }
 }
 

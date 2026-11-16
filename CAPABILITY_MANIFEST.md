@@ -3,13 +3,32 @@
 **Status source:** [`capabilities.toml`](capabilities.toml)
 **Last reviewed:**
 <!-- capability-review-date:begin -->
-2026-11-09
+2026-11-15
 <!-- capability-review-date:end -->
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
+The GUI reads the same provider-pair records from the bundled `capabilities.toml`
+at build time and shows the selected route's status on the Plan page and live
+confirmation. It does not fetch qualification evidence at runtime; changes to
+the registry take effect in a newly built application. The GUI's readiness
+observations and migration simulation are not provider-qualification results.
 The `[documentation]` policy in `capabilities.toml` also marks terms that must
 remain confined to the README's experimental/planned status section; CI checks
-that status layout against the machine-readable source.
+that status layout against the machine-readable source. These generated-document
+checks validate claim consistency and formatting; they do not prove that UI or
+controller execution paths are wired or that a live provider has been qualified.
+
+## Status semantics
+
+`implemented` describes code availability; it does not imply that the complete
+operator workflow is integrated, provider-qualified, or production-supported.
+`partial` means the named capability has a usable subset with explicit gaps.
+Provider qualification is recorded separately in the evidence table below and
+requires a valid evidence digest, date, engine identity, and supported scope.
+Generic lab evidence, successful authentication, dry preflight, and simulation
+remain distinct from live provider-pair qualification. Review the per-capability
+notes and [production status](PRODUCTION_STATUS.md) before relying on a partial
+workflow.
 
 ## Machine-Readable Status
 

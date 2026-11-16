@@ -1,6 +1,6 @@
 # Authoritative capability status for documentation and release review.
 schema_version = 1
-last_reviewed = "2026-11-09"
+last_reviewed = "2026-11-15"
 
 # A qualification remains valid only for the recorded provider pair, engine
 # version/binary, MailSwiftSync build, provider versions, and authentication
