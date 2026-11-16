@@ -105,6 +105,51 @@ impl App {
         if !self.bulk_selection_view_dirty {
             return;
         }
+        if self.queue_read_worker_required {
+            self.refresh_bulk_filter_cache();
+            if !self.queue.current_filter_matches(
+                &self.bulk_search,
+                &self.bulk_state_filter,
+                self.bulk_selection_is_empty(),
+            ) {
+                return;
+            }
+            if let Some(error) = self.queue.selection_projection_error().map(str::to_owned) {
+                self.keep_stale_bulk_selection(error);
+                return;
+            }
+            let mut selected_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
+            selected_ids.sort();
+            if !self
+                .queue
+                .selection_projection_matches(&selected_ids, self.bulk_all_selected)
+            {
+                return;
+            }
+            if let Some(summary) = self.queue.selection_projection() {
+                self.bulk_selection_view = SelectionView {
+                    rows: if self.bulk_all_selected && self.bulk_selection_count() > 1 {
+                        Vec::new()
+                    } else {
+                        summary.selected_rowids.clone()
+                    },
+                    selected_loaded: summary.selected_loaded,
+                    ready: summary.ready,
+                    review: summary.review,
+                    live_eligible: summary.live_eligible,
+                    delta_eligible: summary.delta_eligible,
+                    visible: if self.queue.is_unfiltered_paged() {
+                        summary.selected_loaded
+                    } else {
+                        summary.visible
+                    },
+                };
+                self.bulk_selection_view_dirty = false;
+                self.bulk_selection_retry_at = None;
+                self.bulk_selection_error = None;
+            }
+            return;
+        }
         if self
             .bulk_selection_retry_at
             .is_some_and(|retry_at| std::time::Instant::now() < retry_at)
@@ -151,7 +196,7 @@ impl App {
         self.bulk_selection_error = None;
     }
 
-    fn keep_stale_bulk_selection(&mut self, error: String) {
+    pub(crate) fn keep_stale_bulk_selection(&mut self, error: String) {
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
         self.bulk_selection_error = Some(error.clone());
         self.bulk_message = self
@@ -523,6 +568,23 @@ impl App {
                 self.refresh_bulk_selection_view();
                 ui.ctx().request_repaint();
             }
+            if let Some(error) = self.queue_read_error.clone() {
+                self.queue_unavailable_card(ui, "Mailbox queue read unavailable", &error);
+                return;
+            }
+            if self.queue_read_worker_required
+                && !self.queue.current_filter_matches(
+                    &self.bulk_search,
+                    &self.bulk_state_filter,
+                    self.bulk_selection_is_empty(),
+                )
+            {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(self.language.message("ui.loading-mailbox-queue"));
+                });
+                return;
+            }
             if let Some(error) = self.queue.filter_error().map(str::to_owned) {
                 self.queue_unavailable_card(ui, "Mailbox filtering unavailable", &error);
                 return;
@@ -716,14 +778,21 @@ impl App {
                     .min(visible_count);
                 (start, end)
             };
-            let prefetch = self
-                .queue
-                .visible_page(&self.store, prefetch_start..prefetch_end)
-                .unwrap_or_else(|error| {
-                    self.bulk_message = error;
-                    Vec::new()
-                });
-            if let Err(error) = self.queue.load(&self.store, &prefetch) {
+            let prefetch = if self.queue_read_worker_required {
+                self.queue
+                    .cached_visible_page(prefetch_start..prefetch_end)
+                    .unwrap_or_default()
+            } else {
+                self.queue
+                    .visible_page(&self.store, prefetch_start..prefetch_end)
+                    .unwrap_or_else(|error| {
+                        self.bulk_message = error;
+                        Vec::new()
+                    })
+            };
+            if !self.queue_read_worker_required
+                && let Err(error) = self.queue.load(&self.store, &prefetch)
+            {
                 self.bulk_message = error;
             }
             let page_rowids = std::cell::RefCell::new((prefetch_start, prefetch));
@@ -792,8 +861,19 @@ impl App {
                             if position < page.0 || position >= page_end {
                                 let start = position.saturating_sub(16);
                                 let end = start.saturating_add(64).min(visible_count);
-                                match self.queue.visible_page(&self.store, start..end) {
+                                let page_result = if self.queue_read_worker_required {
+                                    self.queue
+                                        .cached_visible_page(start..end)
+                                        .ok_or_else(|| "page is still loading".to_owned())
+                                } else {
+                                    self.queue.visible_page(&self.store, start..end)
+                                };
+                                match page_result {
                                     Ok(rowids) => *page = (start, rowids),
+                                    Err(_) if self.queue_read_worker_required => {
+                                        page.0 = position;
+                                        page.1.clear();
+                                    }
                                     Err(error) => {
                                         self.bulk_message = error;
                                         page.0 = position;
@@ -903,10 +983,15 @@ impl App {
             }
             let missing = missing.into_inner();
             if !missing.is_empty() {
-                if let Err(error) = self.queue.load(&self.store, &missing) {
-                    self.bulk_message = error;
+                if self.queue_read_worker_required {
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(100));
+                } else {
+                    if let Err(error) = self.queue.load(&self.store, &missing) {
+                        self.bulk_message = error;
+                    }
+                    ui.ctx().request_repaint();
                 }
-                ui.ctx().request_repaint();
             }
             ui.label(
                 RichText::new(self.language.message("ui.batch-actions-apply-only-to-explicitly-selected-rows-use-select-unresolved-a54ac35192"))
@@ -1167,10 +1252,20 @@ impl App {
         let mut open_assessment = None;
         if self.bulk_selection_count() == 1 {
             if let Some(&rowid) = self.bulk_selection_view.rows.first() {
-                if let Err(error) = self.queue.load(&self.store, &[rowid]) {
-                    self.bulk_message = error;
+                if self.queue_read_worker_required {
+                    if self.queue.cached(rowid).is_some() {
+                        open_assessment = self.review_card(ui, rowid);
+                    } else {
+                        ui.spinner();
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(100));
+                    }
+                } else {
+                    if let Err(error) = self.queue.load(&self.store, &[rowid]) {
+                        self.bulk_message = error;
+                    }
+                    open_assessment = self.review_card(ui, rowid);
                 }
-                open_assessment = self.review_card(ui, rowid);
             } else {
                 ui.label(
                     self.language
@@ -1250,19 +1345,32 @@ impl App {
         // Six lines, five gaps between them, the card's 12 px vertical
         // margins, and its 1 px border.
         let card_height = 6.0 * line + 5.0 * spacing + 2.0 * 12.0 + 2.0;
+        let rendered = std::cell::Cell::new((usize::MAX, 0_usize));
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_rows(ui, card_height, selected.len(), |ui, rows| {
+                let (start, end) = rendered.get();
+                rendered.set((start.min(rows.start), end.max(rows.end)));
                 let rowids = &selected[rows];
-                if let Err(error) = self.queue.load(&self.store, rowids) {
+                if !self.queue_read_worker_required
+                    && let Err(error) = self.queue.load(&self.store, rowids)
+                {
                     self.bulk_message = error;
                 }
                 for rowid in rowids {
                     if let Some(job) = self.queue.cached(*rowid) {
                         self.review_summary_card(ui, job);
+                    } else if self.queue_read_worker_required {
+                        ui.spinner();
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(100));
                     }
                 }
             });
+        let (start, end) = rendered.get();
+        if start != usize::MAX {
+            self.bulk_selection_rendered_range = (start, end);
+        }
         self.bulk_selection_view.rows = selected;
         open_assessment
     }

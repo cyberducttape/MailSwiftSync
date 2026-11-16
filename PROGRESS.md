@@ -2,6 +2,25 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-15: Background mailbox queue reads and visible provider qualification
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- Moved mailbox filtering, paged row IDs, visible-row reads, queue totals, and
+  selection summaries to a dedicated read-only SQLite worker for the desktop
+  GUI. Requests carry project/filter/generation identity and stale responses
+  are discarded. Selection IDs are independent of the currently loaded page.
+- Queue read failures preserve prior selection state, display an unavailable or
+  loading state rather than an empty result, and retry on a bounded interval.
+- Added a persistent provider-pair qualification warning next to execution
+  controls and in individual and batch live-migration confirmation reviews.
+
+Evidence: `cargo fmt --check`, `cargo check --locked --all-targets
+--all-features`, `cargo clippy --locked --all-targets --all-features -- -D
+warnings`, `cargo test --locked --all-targets --all-features` (1,507 passed,
+14 ignored plus all integration/doc test targets), and
+`python3 scripts/verify-ui-localization.py` passed.
+
 ## 2026-11-15: IPv6 cooldown matching and stale batch selection recovery
 
 Branch `fix/ipv6-cooldown-and-stale-batch-summary`:

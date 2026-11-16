@@ -33,6 +33,7 @@ pub(crate) mod overview;
 mod plan;
 mod qualification;
 pub(crate) mod queue_model;
+pub(crate) mod queue_read_worker;
 mod recovery;
 mod reports;
 mod settings;

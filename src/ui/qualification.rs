@@ -27,6 +27,32 @@ fn qualification_route(source: ProviderPreset, destination: ProviderPreset) -> Q
 }
 
 impl App {
+    pub(crate) fn provider_qualification_banner(&self, ui: &mut egui::Ui) {
+        let colors = self.theme_colors();
+        let route = format!(
+            "{} → {}",
+            self.form.profile.source_host, self.form.profile.destination_host
+        );
+        crate::ui::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.provider-path-not-qualified")
+                            .replace("{}", &route),
+                    )
+                    .strong()
+                    .family(crate::ui::fonts::medium())
+                    .color(colors.warning),
+                );
+            });
+            ui.label(
+                RichText::new(self.language.message("ui.provider-qualification-warning"))
+                    .color(colors.text_secondary),
+            );
+        });
+    }
+
     pub(crate) fn provider_qualification_card(&self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
         let source = self.language.text(self.source_provider.label());

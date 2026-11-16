@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Mailbox filtering, page selection, visible-row reads, and selection summaries
+  now run through a dedicated read-only SQLite worker. Requests are tied to the
+  current project, filter, and queue generation; stale responses are ignored,
+  while the operator's selected mailbox IDs remain independent of page loads.
+- Provider qualification status is now persistently visible beside migration
+  execution controls and in live-migration confirmation reviews, including
+  batch confirmation. This makes clear that generic IMAP support and a passing
+  preflight do not establish live provider-pair qualification.
 - Provider cooldowns now normalize endpoints with the shared parser, so IPv4,
   DNS, bare IPv6 and bracketed IPv6 endpoints map to the correct command-center
   health row.

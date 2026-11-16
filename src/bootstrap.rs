@@ -410,6 +410,9 @@ impl App {
             ),
             preview: false,
             queue,
+            queue_read_worker: None,
+            queue_read_error: None,
+            queue_read_worker_required: false,
             recovery: Default::default(),
             waves: Default::default(),
             settings_open: false,
@@ -427,6 +430,7 @@ impl App {
             bulk_selection_retry_at: None,
             bulk_selection_error: None,
             bulk_rendered_range: (0, 0),
+            bulk_selection_rendered_range: (0, 0),
             bulk_message: if restored_bulk_project_id.is_some() {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()

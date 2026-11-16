@@ -241,6 +241,17 @@ impl App {
     pub(crate) fn bulk_queue_summary(
         &mut self,
     ) -> Result<crate::controller::BulkQueueSummary, String> {
+        if self.queue_read_worker_required {
+            if let Some(summary) = self.queue.cached_queue_summary() {
+                return Ok(summary);
+            }
+            self.refresh_bulk_filter_cache();
+            return Err(self
+                .queue
+                .queue_summary_error()
+                .map(str::to_owned)
+                .unwrap_or_else(|| self.language.message("ui.loading-mailbox-queue").to_owned()));
+        }
         self.queue.summary(&self.store)
     }
 }

@@ -102,6 +102,7 @@ pub(crate) fn run() -> eframe::Result<()> {
                 #[cfg(debug_assertions)]
                 crate::ui::debug_scene::apply(&mut app);
                 app.enable_snapshot_worker();
+                app.enable_queue_read_worker();
                 Ok(Box::new(app))
             }),
         );

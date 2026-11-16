@@ -84,7 +84,9 @@ pub use models::{
     MailboxStateCounts, MailboxStatusPage, Project, ProjectListItem, RunListItem, RunSummary,
 };
 pub use policy::destination_identity_from_parts;
-pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts, state_filter_members};
+pub use queue::{
+    QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts, QueueSelectionSummary, state_filter_members,
+};
 pub use recovery_queue::{RecoveryGroup, RecoveryRow};
 pub(crate) use runs::{
     RETRY_SCHEDULED_EVENT, VERIFICATION_CAPACITY_EVENT, retry_scheduled_detail,
