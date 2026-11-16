@@ -521,6 +521,15 @@ impl App {
                         .color(colors.text_secondary),
                 );
             }
+            let destination_policy = row
+                .last_transfer_plan_snapshot
+                .as_deref()
+                .and_then(|snapshot| {
+                    crate::migration_plan::decode_report_run_snapshot(snapshot)
+                        .ok()
+                        .flatten()
+                })
+                .map(|plan| plan.profile.into_profile().destination_mutation_policy());
             if let Some(snapshot) = row.last_transfer_plan_snapshot.as_deref() {
                 let digest = crate::plan_identity::snapshot_sha256(snapshot);
                 let short_digest = digest.get(..12).unwrap_or(&digest);
@@ -534,32 +543,39 @@ impl App {
                     .color(colors.text_secondary),
                 )
                 .on_hover_text(digest);
-                if let Ok(Some(plan)) = crate::migration_plan::decode_report_run_snapshot(snapshot)
-                {
-                    let policy = plan.profile.into_profile().destination_mutation_policy();
-                    ui.label(
-                        RichText::new(
-                            self.language
-                                .message("ui.recovery-destination-policy")
-                                .replace("{}", self.language.text(policy.label())),
-                        )
-                        .small()
-                        .color(if policy.may_remove_destination_state() {
-                            colors.danger
-                        } else {
-                            colors.text_secondary
-                        }),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new(
-                            self.language
-                                .message("ui.recovery-destination-policy-unknown"),
-                        )
-                        .small()
-                        .color(colors.warning),
-                    );
-                }
+            } else {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.recovery-plan-snapshot-unavailable"),
+                    )
+                    .small()
+                    .color(colors.warning),
+                );
+            }
+            if let Some(policy) = destination_policy {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.recovery-destination-policy")
+                            .replace("{}", self.language.text(policy.label())),
+                    )
+                    .small()
+                    .color(if policy.may_remove_destination_state() {
+                        colors.danger
+                    } else {
+                        colors.text_secondary
+                    }),
+                );
+            } else {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.recovery-destination-policy-unknown"),
+                    )
+                    .small()
+                    .color(colors.warning),
+                );
             }
             let has_engine_state = row.last_emitted_state_sha256.is_some();
             ui.label(
