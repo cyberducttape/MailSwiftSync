@@ -2,6 +2,20 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-16: Keep unclassified OAuth failures out of text classification (M7)
+
+The `Unclassified` OAuth error path previously handed its diagnostic string to
+the legacy provider classifier. A persistence diagnostic containing words such
+as `invalid_grant` could therefore be mistaken for an authentication failure.
+It now remains `Unknown`, carries no provider signal or retry delay, and is
+terminal for the current attempt. Regression test covers the misleading-text
+case.
+
+Evidence: focused regression and full `cargo +1.92.0 test --locked
+--all-targets --all-features` passed (1,524 passed, 14 ignored);
+`cargo +1.92.0 clippy --locked --all-targets --all-features -- -D warnings`
+and formatting check passed.
+
 ## 2026-11-16: Typed OAuth refresh failures (M7, partial)
 
 Patch was carried from branch `feat/typed-oauth-refresh-errors` onto current
@@ -12,7 +26,7 @@ admission maps those to the endpoint side and controller failure class without
 parsing presentation text. `Retry-After` accepts delta-seconds and HTTP-date
 values and is capped at 30 minutes. Authorization-code exchange converts the
 typed error at its CLI/API boundary. Keyring and rotation-persistence errors
-remain unclassified. Revalidation on current `main` is in progress.
+remain unclassified and now bypass legacy text classification.
 
 ## Existing progress entries
 ## 2026-11-16: Preserve SQLite errors in verification page writes (M7 step 2)
