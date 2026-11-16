@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Recorded the 2026-11-16 local packaged integration run against the exact
+  `fef8dabc` source commit and container digest. Both imapsync and native
+  Dovecot fixtures passed; the documented expert UID-cache interruption still
+  surfaced a verification difference. This is explicitly non-qualifying local
+  evidence, not hosted-provider, large-mailbox, or power-loss qualification.
 - The provider qualification card now identifies its status as coming from
   this build's bundled evidence registry, so operators do not mistake it for
   a live provider lookup.
