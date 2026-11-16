@@ -194,6 +194,43 @@ pub(super) fn runbook_command(mut arguments: std::env::ArgsOs) -> eframe::Result
     }
 }
 
+pub(super) fn provider_qualification_command(
+    mut arguments: std::env::ArgsOs,
+) -> eframe::Result<()> {
+    const USAGE: &str = "Usage: mailswiftsync provider-qualification <source-provider-id> <destination-provider-id>";
+    let (Some(source), Some(destination)) = (arguments.next(), arguments.next()) else {
+        eprintln!("{USAGE}");
+        std::process::exit(2);
+    };
+    if arguments.next().is_some() {
+        eprintln!("{USAGE}");
+        std::process::exit(2);
+    }
+    let parse_id = |value: std::ffi::OsString| {
+        value
+            .into_string()
+            .ok()
+            .and_then(|value| crate::provider::ProviderPreset::from_qualification_id(&value))
+    };
+    let (Some(source), Some(destination)) = (parse_id(source), parse_id(destination)) else {
+        eprintln!(
+            "Provider IDs must be one of: generic_imap, cpanel_dovecot, google_workspace, microsoft365, fastmail, zoho_mail.\n{USAGE}"
+        );
+        std::process::exit(2);
+    };
+    let report = crate::provider_qualification::report_for_presets(source, destination);
+    match serde_json::to_string_pretty(&report) {
+        Ok(report) => {
+            out!("{report}");
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("Provider qualification serialization failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub(super) fn doctor_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
     let mut state = None;
     let mut strict = false;

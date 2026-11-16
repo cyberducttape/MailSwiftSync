@@ -19,6 +19,31 @@ The three status commands emit the versioned status automation contract:
 | `mailswiftsync status <state.db> [project] --summary` | `mailswiftsync-status-summary` | `1` | [`status-summary.v1.json`](../tests/fixtures/automation/status-summary.v1.json) |
 | `mailswiftsync fleet-status <directory>` | `mailswiftsync-fleet-status` | `1` | [`fleet-status.v1.json`](../tests/fixtures/automation/fleet-status.v1.json) |
 
+## Provider qualification status
+
+Use `mailswiftsync provider-qualification <source-id> <destination-id>` to
+emit the provider-pair status used by the desktop interface. Provider IDs are
+the stable values in `capabilities.toml`: `generic_imap`, `cpanel_dovecot`,
+`google_workspace`, `microsoft365`, `fastmail`, and `zoho_mail`. The command
+emits `mailswiftsync-provider-qualification`, version `1`, including the
+qualification state, evidence digest, tested engine, limitations, and
+invalidation conditions.
+
+For example, compare the cPanel/Dovecot route against the checked-in
+[`provider-qualification.v1.json`](../tests/fixtures/automation/provider-qualification.v1.json)
+fixture with:
+
+```bash
+mailswiftsync provider-qualification cpanel_dovecot cpanel_dovecot
+```
+
+This is the reviewed registry bundled into the executable, not a live evidence
+lookup: `source` is `bundled_capabilities_manifest` and
+`runtime_evidence_loaded` is always `false`. A `qualified` state is accepted
+only when the bundled record contains a date, engine, and SHA-256-shaped
+evidence digest. A successful readiness probe, migration simulation, or this
+status command does not itself qualify a provider pair.
+
 The standalone `mailswiftsync reverify` command also emits a versioned JSON
 result (`mailswiftsync.reverify`, version `4`). It selects the latest completed
 live transfer as its baseline by default; `--baseline-run RUN_ID` can select a
