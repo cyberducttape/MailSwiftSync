@@ -168,6 +168,21 @@ pub(super) fn render_metrics_across(
         output,
         "mailswiftsync_oldest_running_heartbeat_age_seconds {oldest_running_heartbeat_age_seconds}"
     );
+    let oldest_queued_run_age_seconds = summaries
+        .iter()
+        .flat_map(|summary| &summary.projects)
+        .map(|project| project.operations.oldest_queued_run_age_seconds)
+        .max()
+        .unwrap_or(0);
+    gauge_header(
+        &mut output,
+        "mailswiftsync_oldest_queued_run_age_seconds",
+        "Seconds since the oldest durable mailbox child run entered queued state; includes initial queue wait and is 0 when no child runs are queued.",
+    );
+    let _ = writeln!(
+        output,
+        "mailswiftsync_oldest_queued_run_age_seconds {oldest_queued_run_age_seconds}"
+    );
     let mut verification_capacity = [("passed", 0_usize), ("blocked", 0), ("unknown", 0)];
     for project in summaries.iter().flat_map(|summary| &summary.projects) {
         for (status, total) in &mut verification_capacity {
@@ -424,6 +439,7 @@ mod tests {
                     unfinished_attempt_messages_copied: 4,
                     unfinished_attempt_bytes_copied: 4096,
                     oldest_running_heartbeat_age_seconds: 75,
+                    oldest_queued_run_age_seconds: 120,
                     verification_capacity: [("blocked".into(), 2)].into(),
                     verification_compared_source_messages: 1_000,
                     verification_exact_message_matches: 990,
@@ -454,6 +470,7 @@ mod tests {
         assert!(output.contains("mailswiftsync_transfer_retries_total 1"));
         assert!(output.contains("mailswiftsync_unfinished_attempt_messages_copied 4"));
         assert!(output.contains("mailswiftsync_oldest_running_heartbeat_age_seconds 75"));
+        assert!(output.contains("mailswiftsync_oldest_queued_run_age_seconds 120"));
         assert!(output.contains("mailswiftsync_verification_compared_source_messages 1000"));
         assert!(output.contains("mailswiftsync_verification_exact_message_matches 990"));
         assert!(output.contains("mailswiftsync_attention_mailboxes{reason=\"interrupted\"} 2"));

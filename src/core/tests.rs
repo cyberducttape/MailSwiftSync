@@ -5003,6 +5003,72 @@ fn heartbeat_age_tracks_the_stalest_running_mailbox() {
 }
 
 #[test]
+fn queued_run_age_tracks_oldest_child_and_clears_after_claims() {
+    let db = StateStore::in_memory().unwrap();
+    let (project, jobs) = db
+        .create_project_with_mailboxes(
+            "queue-age",
+            "source",
+            "destination",
+            &[("one".into(), "one".into()), ("two".into(), "two".into())],
+        )
+        .unwrap();
+    assert_eq!(
+        db.project_operation_metrics(&project.id)
+            .unwrap()
+            .oldest_queued_run_age_seconds,
+        0,
+        "mailbox rows without admitted child runs are not durable queued work"
+    );
+
+    let children = db
+        .begin_batch_run_with_children(
+            &project.id,
+            &jobs,
+            "queue-age-parent",
+            "batch",
+            &[],
+            "",
+            &[],
+        )
+        .unwrap();
+    db.connection
+        .execute(
+            "UPDATE runs SET started_at=datetime('now','-600 seconds') WHERE id=?1",
+            [&children[0]],
+        )
+        .unwrap();
+    db.connection
+        .execute(
+            "UPDATE runs SET started_at=datetime('now','-120 seconds') WHERE id=?1",
+            [&children[1]],
+        )
+        .unwrap();
+    let age = db
+        .project_operation_metrics(&project.id)
+        .unwrap()
+        .oldest_queued_run_age_seconds;
+    assert!((600..660).contains(&age), "{age}");
+
+    db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "queue-age-parent", &children[0])
+        .unwrap();
+    let age = db
+        .project_operation_metrics(&project.id)
+        .unwrap()
+        .oldest_queued_run_age_seconds;
+    assert!((120..180).contains(&age), "{age}");
+
+    db.claim_batch_mailbox_for_child(&project.id, &jobs[1], "queue-age-parent", &children[1])
+        .unwrap();
+    assert_eq!(
+        db.project_operation_metrics(&project.id)
+            .unwrap()
+            .oldest_queued_run_age_seconds,
+        0
+    );
+}
+
+#[test]
 fn claim_refuses_an_already_running_child_and_changes_nothing() {
     let db = StateStore::in_memory().unwrap();
     let (project, jobs) = db
