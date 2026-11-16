@@ -459,7 +459,9 @@ these measurements for capacity decisions.
 A repeat of the same release benchmark on 2026-10-25 at commit
 `d0da235bfcaa596c644c2c9fce6eed431fe909cb` measured 2,000 mailbox jobs and
 44,000 writes on Linux x86_64 (kernel `7.0.0-38-generic`), an AMD Ryzen 7
-7735U host with 16 logical CPUs, using the `/dev/nvme0n1p2` ext4 filesystem.
+7735U host with 16 logical CPUs. The worktree was on `/dev/nvme0n1p2` ext4, but
+the benchmark's temporary ledger backing filesystem was not recorded, so this
+run cannot be classified as persistent-storage performance.
 It reported write p50/p95/p99/max of 59 µs / 692 µs / 954 µs / 5.4 ms,
 read p95 of 7.6 ms, zero busy errors, a 6.8 MiB WAL high-water mark, a 2 ms
 checkpoint, 3.2 KB durable ledger per mailbox, and a 122 ms concurrent
@@ -485,7 +487,9 @@ informational and has no asserted budget.
 A further repeat on 2026-11-15 at commit
 `5c55ac87d0e98b2e4f2910a4e8f64bf289ab75d0` used Rust 1.92.0 on Linux
 x86_64 (kernel `7.0.0-43-generic`), an AMD Ryzen 7 7735U host with 16 logical
-CPUs, and `/dev/nvme0n1p2` ext4. The warm run used 2,000 mailbox jobs and
+CPUs. Although the worktree was on `/dev/nvme0n1p2` ext4, the harness chose
+`XDG_RUNTIME_DIR=/run/user/1000` for its temporary database; that path is
+tmpfs. The warm run used 2,000 mailbox jobs and
 44,000 writes, with two concurrent read-only pollers and 101 read-only opens
 after the write phase. It measured write p50/p95/p99/max of 100/1,085/1,396/
 3,912 µs, read p95 9.324 ms, warm-open p50/p95/p99/max of
@@ -508,7 +512,10 @@ read-only-open p50/p95/p99/max was 121.915/135.522/165.254/192.078 ms across
 backup. The test finished in 74.53 s after the release binary was built. The
 roughly 5.3× rise in read-only-open p95 from the 2,000-job repeat to 10,000
 jobs is a useful scaling signal, not a controlled comparison or capacity
-limit. No read-only-open latency budget is set from this single host.
+limit. The 10,000-job repeat used the same harness and host, with its temporary
+ledger under `/run/user/1000` on tmpfs. These runs do not qualify persistent
+storage behavior. No read-only-open latency budget is set from this single
+host.
 
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a
@@ -747,7 +754,7 @@ separately; do not claim adaptive useful-throughput optimization today.
   startup and GPU initialization remain separate platform-release measurements.
 
   Durable workspace restart/read behavior has a separate opt-in command,
-  `scripts/benchmark-reload-scale.sh`. It seeds and closes a file-backed
+  `scripts/benchmark-reload-scale.sh`. It seeds and closes a SQLite-backed
   100,000-row project, reopens it, then reads bounded mailbox, status, and
   verification pages plus aggregate counts. The latest local release baseline
   was 557 ms to seed, 286 ms to reopen, and 84 ms for those bounded reads. This
@@ -756,7 +763,9 @@ separately; do not claim adaptive useful-throughput optimization today.
   enforces default budgets of 5,000 ms for seeding, 2,000 ms for reopen, and
   1,000 ms for bounded reads. Qualified hosts may override these with
   `MAILSWIFTSYNC_RELOAD_*_BUDGET_MS`; missing or malformed metrics fail the
-  script.
+  script. The 2026-11-15 run measured 2,027 ms to seed, 531 ms to reopen, and
+  281 ms for bounded reads. Its database was under `/tmp` on tmpfs, so these
+  figures do not qualify persistent-storage restart behavior.
 - Provider consent is implemented as a CLI authorization-code flow with PKCE
   (`oauth-authorize`) for the operator's registered application; it still
   needs a recorded live pilot against Google and Microsoft tenants, and

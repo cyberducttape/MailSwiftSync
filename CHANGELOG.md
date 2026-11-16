@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-- Recorded a 2026-11-15 persistent-filesystem ledger benchmark repeat in
-  `docs/release-readiness.md`, including 2,000- and 10,000-job write/read/open
-  latency, WAL, backup, and disk-per-mailbox measurements. The 10,000-job
-  read-only-open p95 was 135.5 ms; these remain single-host observations with
-  no asserted budget or host-class claim.
+- Recorded 2026-11-15 ledger benchmark repeats in `docs/release-readiness.md`,
+  including 2,000- and 10,000-job write/read/open latency, WAL, backup, and
+  bytes-per-mailbox measurements. The ledger files were on tmpfs, so these
+  results do not qualify persistent-storage performance; no host-class claim
+  or read-only-open latency budget is asserted.
 - Added `mailswiftsync provider-qualification <source-id> <destination-id>` as
   a versioned JSON contract for automation. It shares the bundled qualification
   registry used by the GUI and `doctor`, includes a golden fixture and stable
