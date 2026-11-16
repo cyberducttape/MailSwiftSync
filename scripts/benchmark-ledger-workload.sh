@@ -1,12 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sustained controller write workload on a file-backed ledger while two
+# Sustained controller write workload on a SQLite ledger while two
 # read-only connections poll it (GUI snapshot worker, status/metrics). Gates
 # write latency, lock contention, WAL growth, durable bytes per mailbox, and
 # whether an operator backup taken mid-workload completes while writes continue.
 # Defaults are release-host gates; override with MAILSWIFTSYNC_LEDGER_*_BUDGET
 # for a qualified host class.
+ledger_root=${MAILSWIFTSYNC_LEDGER_BENCH_ROOT:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}
+if [[ ! -d "$ledger_root" ]]; then
+  printf 'ERROR: ledger benchmark root is not a directory: %s\n' "$ledger_root" >&2
+  exit 1
+fi
+export MAILSWIFTSYNC_LEDGER_BENCH_ROOT="$ledger_root"
+printf 'Benchmark timestamp (UTC): %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  printf 'Git commit: %s\n' "$(git rev-parse HEAD)"
+else
+  printf 'Git commit: unavailable\n'
+fi
+printf 'OS/kernel: %s\n' "$(uname -a)"
+printf 'Rust compiler: %s\n' "$(rustc --version --verbose | tr '\n' ' ')"
+printf 'Cargo: %s\n' "$(cargo --version)"
+printf 'Logical CPUs: %s\n' "$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 'unknown')"
+if command -v lscpu >/dev/null 2>&1; then
+  lscpu | awk -F: '/^Model name:/ && !printed { gsub(/^[ \t]+/, "", $2); print "CPU model: " $2; printed=1 }'
+fi
+if [[ -r /proc/meminfo ]]; then
+  awk '/^MemTotal:/ { printf "Host memory: %.0f MiB\n", $2 / 1024; exit }' /proc/meminfo
+fi
+printf 'Workload: mailboxes=%s batches_per_run=%s readonly_open_samples=%s\n' \
+  "${MAILSWIFTSYNC_LEDGER_BENCH_MAILBOXES:-2000}" \
+  "${MAILSWIFTSYNC_LEDGER_BENCH_BATCHES:-20}" \
+  "${MAILSWIFTSYNC_LEDGER_OPEN_SAMPLES:-101}"
+printf 'Ledger benchmark storage root: %s\n' "$ledger_root"
+if command -v findmnt >/dev/null 2>&1; then
+  findmnt --target "$ledger_root" --output TARGET,SOURCE,FSTYPE
+else
+  df -P "$ledger_root"
+fi
 benchmark_output=$(cargo test --locked --release ledger_write_workload_benchmark -- --ignored --nocapture --test-threads=1 2>&1)
 printf '%s\n' "$benchmark_output"
 line=$(printf '%s\n' "$benchmark_output" | awk '/ledger-workload mailboxes=/ { print; exit }')

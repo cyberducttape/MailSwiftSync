@@ -71,6 +71,21 @@ impl ProviderPreset {
         }
     }
 
+    /// Parse the stable provider identifiers accepted by the qualification
+    /// status CLI. Display labels and endpoint hostnames are intentionally not
+    /// accepted as identifiers so automation remains unambiguous.
+    pub(crate) fn from_qualification_id(value: &str) -> Option<Self> {
+        match value {
+            "generic_imap" => Some(Self::GenericImap),
+            "cpanel_dovecot" => Some(Self::CpanelDovecot),
+            "google_workspace" => Some(Self::GoogleWorkspace),
+            "microsoft365" => Some(Self::Microsoft365),
+            "fastmail" => Some(Self::Fastmail),
+            "zoho_mail" => Some(Self::ZohoMail),
+            _ => None,
+        }
+    }
+
     /// Recognize a provider from its preset IMAP endpoint so profiles loaded
     /// without a remembered preset still get the provider-specific card.
     pub(crate) fn infer_from_host(host: &str) -> Option<Self> {
@@ -181,5 +196,20 @@ mod tests {
         assert_eq!(ProviderPreset::GoogleWorkspace.runbook_name(), "gmail");
         assert_eq!(ProviderPreset::Microsoft365.runbook_name(), "microsoft365");
         assert_eq!(ProviderPreset::Fastmail.runbook_name(), "fastmail");
+    }
+
+    #[test]
+    fn every_stable_qualification_id_round_trips_and_unknown_ids_are_rejected() {
+        for preset in ProviderPreset::ALL {
+            assert_eq!(
+                ProviderPreset::from_qualification_id(preset.qualification_id()),
+                Some(preset)
+            );
+        }
+        assert_eq!(
+            ProviderPreset::from_qualification_id("Google Workspace"),
+            None
+        );
+        assert_eq!(ProviderPreset::from_qualification_id("unknown"), None);
     }
 }

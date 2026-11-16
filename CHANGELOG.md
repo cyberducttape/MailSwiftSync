@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- Recorded 2026-11-15 ledger benchmark repeats in `docs/release-readiness.md`,
+  including 2,000- and 10,000-job write/read/open latency, WAL, backup, and
+  bytes-per-mailbox measurements. The ledger files were on tmpfs, so these
+  results do not qualify persistent-storage performance; no host-class claim
+  or read-only-open latency budget is asserted.
+- Made the ledger benchmark storage root selectable with
+  `MAILSWIFTSYNC_LEDGER_BENCH_ROOT`; the harness now prints the selected
+  filesystem mount and the run's toolchain/host/workload provenance so tmpfs
+  runs cannot be mistaken for persistent-storage qualification. Recorded a
+  first ext4-backed 2,000-job sample: all configured
+  gates passed; write p95 was 4.954 ms and read-only-open p95 was 44.331 ms.
+  A 10,000-job repeat also passed all gates; read-only-open p95 was 173.431 ms.
+  These are single-host observations, not durability qualification or budgets.
+- Recorded the 100,000-job ext4 ledger workload at commit
+  `7eb4bca1c8d56e71e380b30135766af0601f2133`: 300,000 writes, zero busy
+  errors, and all configured write/WAL/backup gates passed. Across 101
+  post-write opens, read-only-open p95 was 1.740 s, making full validation
+  overhead at this ledger cardinality measurable. This remains one synthetic
+  developer-host observation, not a supported-host latency budget or transfer
+  qualification.
+- Updated the ledger workload's initial mailbox population to use the batched
+  queue-creation path, keeping large-cardinality benchmark setup from issuing
+  one SQLite transaction per synthetic mailbox.
+- Added `mailswiftsync provider-qualification <source-id> <destination-id>` as
+  a versioned JSON contract for automation. It shares the bundled qualification
+  registry used by the GUI and `doctor`, includes a golden fixture and stable
+  provider IDs, and explicitly reports that no runtime evidence was loaded.
 - Verification page writes now retain the original `rusqlite::Error` in the
   staging API, including `SQLITE_FULL`, instead of flattening SQLite failures
   into display strings. The existing disk-full recovery regression checks the

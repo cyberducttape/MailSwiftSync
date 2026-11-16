@@ -424,6 +424,9 @@ projection with exact per-project mailbox state counts and no mailbox rows.
 `status`, `status --summary`, and `fleet-status` follow the versioned
 [automation contract](docs/automation-contract.md): dispatch on `format` and
 `format_version`, not on the ledger `schema_version`.
+`provider-qualification` emits the same bundled provider-pair status used by
+the GUI, with an explicit marker that runtime qualification evidence is not
+loaded by the command.
 `recover` takes the application lock, verifies recorded
 process ownership before signalling anything, preserves identities it cannot
 prove, and applies the same conservative recovery transition as GUI startup.

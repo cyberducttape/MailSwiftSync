@@ -3,7 +3,7 @@
 //! can label a route qualified.
 
 use crate::provider::ProviderPreset;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 const CAPABILITIES: &str = include_str!("../capabilities.toml");
@@ -29,7 +29,7 @@ struct QualificationRecord {
     limitations: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ProviderQualificationStatus {
     pub(crate) pair: String,
     pub(crate) status: QualificationState,
@@ -40,12 +40,41 @@ pub(crate) struct ProviderQualificationStatus {
     pub(crate) invalidation_conditions: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum QualificationState {
     Qualified,
     GenericLabOnly,
     NotQualified,
     Unknown,
+}
+
+/// Stable automation envelope for the qualification state bundled into this
+/// executable. This is a reviewed build input, not a runtime evidence lookup.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct ProviderQualificationReport {
+    pub(crate) format: &'static str,
+    pub(crate) format_version: u32,
+    pub(crate) source: &'static str,
+    pub(crate) runtime_evidence_loaded: bool,
+    pub(crate) source_provider_id: &'static str,
+    pub(crate) destination_provider_id: &'static str,
+    pub(crate) qualification: ProviderQualificationStatus,
+}
+
+pub(crate) fn report_for_presets(
+    source: ProviderPreset,
+    destination: ProviderPreset,
+) -> ProviderQualificationReport {
+    ProviderQualificationReport {
+        format: "mailswiftsync-provider-qualification",
+        format_version: 1,
+        source: "bundled_capabilities_manifest",
+        runtime_evidence_loaded: false,
+        source_provider_id: source.qualification_id(),
+        destination_provider_id: destination.qualification_id(),
+        qualification: for_presets(source, destination),
+    }
 }
 
 static REGISTRY: OnceLock<Result<RegistryFile, String>> = OnceLock::new();
@@ -137,7 +166,8 @@ fn unknown_status(source: &str, destination: &str) -> ProviderQualificationStatu
 #[cfg(test)]
 mod tests {
     use super::{
-        QualificationRecord, QualificationState, for_endpoints, for_presets, status_for_record,
+        QualificationRecord, QualificationState, for_endpoints, for_presets, report_for_presets,
+        status_for_record,
     };
     use crate::provider::ProviderPreset;
 
@@ -201,5 +231,32 @@ mod tests {
             Some("a".repeat(64).as_str())
         );
         assert_eq!(status.invalidation_conditions, ["release changes"]);
+    }
+
+    #[test]
+    fn automation_report_distinguishes_bundled_status_from_runtime_evidence() {
+        let report =
+            report_for_presets(ProviderPreset::CpanelDovecot, ProviderPreset::CpanelDovecot);
+        assert_eq!(report.format, "mailswiftsync-provider-qualification");
+        assert_eq!(report.format_version, 1);
+        assert_eq!(report.source, "bundled_capabilities_manifest");
+        assert!(!report.runtime_evidence_loaded);
+        assert_eq!(
+            report.qualification.status,
+            QualificationState::NotQualified
+        );
+
+        let value = serde_json::to_value(report).unwrap();
+        assert_eq!(value["qualification"]["status"], "not_qualified");
+        assert_eq!(value["runtime_evidence_loaded"], false);
+        assert_eq!(
+            value["qualification"]["pair"],
+            "cPanel/Dovecot → cPanel/Dovecot"
+        );
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/automation/provider-qualification.v1.json"
+        ))
+        .unwrap();
+        assert_eq!(value, expected);
     }
 }

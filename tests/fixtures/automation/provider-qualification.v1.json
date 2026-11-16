@@ -1,0 +1,23 @@
+{
+  "format": "mailswiftsync-provider-qualification",
+  "format_version": 1,
+  "source": "bundled_capabilities_manifest",
+  "runtime_evidence_loaded": false,
+  "source_provider_id": "cpanel_dovecot",
+  "destination_provider_id": "cpanel_dovecot",
+  "qualification": {
+    "pair": "cPanel/Dovecot → cPanel/Dovecot",
+    "status": "not_qualified",
+    "last_qualified": null,
+    "tested_engine": "imapsync 2.314",
+    "evidence_digest": null,
+    "limitations": "Priority hosting route; no live hosting-provider evidence is bundled. The packaged Dovecot fixture is generic lab evidence only.",
+    "invalidation_conditions": [
+      "MailSwiftSync release commit or executable digest changes",
+      "Migration engine name, version, or executable digest changes",
+      "Source or destination provider/server version changes materially",
+      "Authentication mode, mailbox mapping, or transfer semantics change",
+      "Qualification evidence expires, is revoked, or fails integrity validation"
+    ]
+  }
+}
