@@ -562,7 +562,21 @@ impl ClassifiedFailure {
                 FailureClass::Configuration,
                 Provider::PermanentProviderFailure,
             ),
-            Kind::Unclassified => return Self::classify(provider, vec![side], &detail),
+            // This producer explicitly could not classify the failure (for
+            // example, keyring persistence after token rotation). Keep it
+            // unknown and terminal instead of reinterpreting its diagnostic
+            // text as a provider response.
+            Kind::Unclassified => {
+                return Self {
+                    provider: provider.to_owned(),
+                    sides: vec![side],
+                    error: migration_error(FailureClass::Unknown, detail, None),
+                    provider_error: Provider::PermanentProviderFailure,
+                    signal: None,
+                    controller_marked: true,
+                    verification_limit: false,
+                };
+            }
         };
         Self {
             provider: provider.to_owned(),
@@ -857,6 +871,26 @@ mod tests {
             );
             assert!(!failure.should_retry(0, 2), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn unclassified_oauth_failure_does_not_parse_provider_words_from_detail() {
+        let detail = "token rotation persistence failed after invalid_grant diagnostic";
+        let error = crate::oauth_refresh::OAuthRefreshError::new(
+            crate::oauth_refresh::OAuthRefreshErrorKind::Unclassified,
+            detail,
+        );
+        let failure = super::ClassifiedFailure::oauth_refresh(
+            &error,
+            crate::imap_probe::MailSide::Destination,
+            "gmail",
+        );
+
+        assert_eq!(failure.class(), super::FailureClass::Unknown);
+        assert!(!failure.should_retry(0, 3));
+        assert_eq!(failure.error.detail(), detail);
+        assert!(failure.signal.is_none());
+        assert!(failure.controller_marked);
     }
 
     #[test]
