@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The provider qualification card now identifies its status as coming from
+  this build's bundled evidence registry, so operators do not mistake it for
+  a live provider lookup.
 - OAuth refresh failures explicitly marked unclassified (including token
   rotation persistence failures) now remain unknown and non-retryable instead
   of being reclassified from diagnostic wording.
