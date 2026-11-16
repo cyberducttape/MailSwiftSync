@@ -7,6 +7,12 @@
   Dovecot fixtures passed; the documented expert UID-cache interruption still
   surfaced a verification difference. This is explicitly non-qualifying local
   evidence, not hosted-provider, large-mailbox, or power-loss qualification.
+- Added reviewed seed requests for valid HTTP versions and malformed fleet API
+  authentication/framing headers, and retained the corpus evolved by local
+  fuzzing. The empty-corpus 30-second smoke completed 3.18 million executions;
+  a seeded 10-second repeat completed 633,246 executions and reached 364
+  coverage counters, without a crash. These are smoke results, not sustained
+  fuzz qualification.
 - The provider qualification card now identifies its status as coming from
   this build's bundled evidence registry, so operators do not mistake it for
   a live provider lookup.
