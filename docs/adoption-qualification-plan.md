@@ -31,6 +31,22 @@ The following reproducible lab runs are retained as engineering evidence
 only; they do not satisfy the required size matrix, direct-imapsync comparison,
 provider qualification, or signed-result acceptance criteria.
 
+### 2026-11-16: local commit-pinned packaged integration run
+
+| Field | Observed value |
+|---|---|
+| MailSwiftSync commit | `fef8dabc66bfdb0c3fafe13c3d08831a67a882bb` |
+| Build artifact | Podman image ID `d51d6f111a45affc105fe935914b17819db339934d9f3167a2c44229d71c4f9c`; image digest `sha256:7e6e37bf93f059db0f14971ee3be42608adebd7efe89352051d98cd701406801` |
+| Host | Linux `7.0.0-43-generic`, x86_64; 16 logical CPUs; 14.4 GiB RAM; Podman 5.7.0 (rootless) |
+| Packaged engines | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875`; Dovecot `2.3.19.1 (9b53102964)` |
+| Result | Both packaged integration scripts exited 0. The imapsync path exercised seed, independent metadata/flag verification, delta, special-folder and UID fixtures, report export, backup/restore, and interruption/recovery cases. Its documented `--useuid --usecache` interruption fixture produced an extra destination message and was reported as a verification difference. The native Dovecot path completed its seed, verification, delta, and fixture checks. |
+| Retained local outputs | `/tmp/mss-local-qualification-fef8dabc-exact` contains customer-proof exports, integration environment output, and scale progress. These files are local, unsigned, and were not uploaded as a qualification bundle. |
+| Scope limits | Synthetic local Dovecot only; small fixture plus a bounded large-APPEND interruption case. No hosted-provider test, 1/10/50/100 GiB mailbox matrix, direct-imapsync A/B comparison, power-loss campaign, or signed independent result bundle. Verification was metadata-level where reported; it does not establish complete message-body integrity or cutover readiness. |
+
+This run is tied to the exact source commit and image digest, but it remains
+engineering evidence only. A successful local harness exit does not establish
+provider compatibility or production qualification.
+
 ### 2026-10-17: packaged verification-provenance and recovery regression run
 
 | Field | Observed value |
