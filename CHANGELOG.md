@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Rebuilt the packaged integration image from current main and reran both local
+  IMAP engines plus controller, storage-fault, TLS-floor, and OAuth-refresh
+  smoke paths. The imapsync fixture finished with 15/15 Level 2 metadata
+  evidence; native Dovecot finished with 17/17 Level 1 aggregate evidence. The
+  expert UID-cache interruption again produced 61/60 and was reported for
+  review. Exact image, engine, proof digests, and limits are recorded in the
+  adoption qualification plan; this is unsigned generic-lab evidence only.
 - Recorded the 2026-11-16 local packaged integration run against the exact
   `fef8dabc` source commit and container digest. Both imapsync and native
   Dovecot fixtures passed; the documented expert UID-cache interruption still
