@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- OAuth refresh failures explicitly marked unclassified (including token
+  rotation persistence failures) now remain unknown and non-retryable instead
+  of being reclassified from diagnostic wording.
 - The headless supervisor now reuses its fully validated read-only ledger
   connection across idle polls, checking file identity before reuse and
   reopening with full validation after each supervised pass. This avoids
