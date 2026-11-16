@@ -11,6 +11,52 @@ use uuid::Uuid;
 
 use super::{ExtractedMessage, ExtractedMessages, MailboxMessageKey, sqlite_i64};
 
+/// A durable-stage write failure. SQLite errors remain typed at the storage
+/// boundary so retry and recovery policy can inspect their result codes.
+#[derive(Debug)]
+pub(crate) enum MessageStageError {
+    Sqlite(rusqlite::Error),
+    Other(String),
+}
+
+impl std::fmt::Display for MessageStageError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sqlite(error) => error.fmt(formatter),
+            Self::Other(error) => formatter.write_str(error),
+        }
+    }
+}
+
+impl std::error::Error for MessageStageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sqlite(error) => Some(error),
+            Self::Other(_) => None,
+        }
+    }
+}
+
+impl From<rusqlite::Error> for MessageStageError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sqlite(error)
+    }
+}
+
+impl From<String> for MessageStageError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+// The IMAP sink still has a string error contract. Its typed propagation is
+// the next M7 step; the staging API itself no longer discards SQLite codes.
+impl From<MessageStageError> for String {
+    fn from(error: MessageStageError) -> Self {
+        error.to_string()
+    }
+}
+
 pub(crate) const STAGE_BATCH_SIZE: i64 = 512;
 /// Keep a free-space reserve on the filesystem receiving SQLite stage pages.
 /// This is a safety floor, not a claim that the remaining space is enough for
@@ -648,7 +694,7 @@ impl MessageMetadataStage {
         &mut self,
         side: StagedMessageSide,
         messages: &ExtractedMessages,
-    ) -> Result<(), String> {
+    ) -> Result<(), MessageStageError> {
         self.insert_messages_with_fingerprints(side, messages, &HashMap::new())
     }
 
@@ -657,7 +703,7 @@ impl MessageMetadataStage {
         side: StagedMessageSide,
         messages: &ExtractedMessages,
         fingerprints: &HashMap<MailboxMessageKey, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), MessageStageError> {
         self.insert_page_with_fingerprints(side, messages, fingerprints, None)
     }
 
@@ -667,48 +713,36 @@ impl MessageMetadataStage {
         messages: &ExtractedMessages,
         fingerprints: &HashMap<MailboxMessageKey, String>,
         checkpoint: Option<(&str, FolderSnapshot, u64)>,
-    ) -> Result<(), String> {
+    ) -> Result<(), MessageStageError> {
         self.ensure_free_space()?;
         if fingerprints.keys().any(|key| !messages.contains_key(key)) {
-            return Err("body fingerprint did not have a matching staged message".to_owned());
+            return Err("body fingerprint did not have a matching staged message"
+                .to_owned()
+                .into());
         }
-        let tx = self
-            .connection()?
-            .unchecked_transaction()
-            .map_err(|e| e.to_string())?;
+        let tx = self.connection()?.unchecked_transaction()?;
         // HashMap iteration order is randomized. Persist each fetched page in
         // canonical key order so the staged verifier's row traversal and
         // duplicate-Message-ID pairing are repeatable.
         let mut ordered_messages = messages.iter().collect::<Vec<_>>();
         ordered_messages.sort_by(|(left, _), (right, _)| left.cmp(right));
         {
-            let mut insert = tx.prepare_cached("INSERT OR REPLACE INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,identity_provenance,internal_date,date_key,size_bytes,flags) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8,?9,?10)").map_err(|e| e.to_string())?;
+            let mut insert = tx.prepare_cached("INSERT OR REPLACE INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,identity_provenance,internal_date,date_key,size_bytes,flags) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
             for (key, message) in ordered_messages {
-                let uidvalidity = key
-                    .uidvalidity
-                    .map(sqlite_i64)
-                    .transpose()
-                    .map_err(|e| e.to_string())?
-                    .unwrap_or(-1);
-                let size = message
-                    .size_bytes
-                    .map(sqlite_i64)
-                    .transpose()
-                    .map_err(|e| e.to_string())?;
-                insert
-                    .execute(params![
-                        side.as_i64(),
-                        key.mailbox.as_ref(),
-                        uidvalidity,
-                        key.uid,
-                        message.message_id,
-                        message.identity_provenance().as_str(),
-                        message.internal_date,
-                        metadata_date_key(message.internal_date.as_deref()),
-                        size,
-                        message.flags
-                    ])
-                    .map_err(|e| e.to_string())?;
+                let uidvalidity = key.uidvalidity.map(sqlite_i64).transpose()?.unwrap_or(-1);
+                let size = message.size_bytes.map(sqlite_i64).transpose()?;
+                insert.execute(params![
+                    side.as_i64(),
+                    key.mailbox.as_ref(),
+                    uidvalidity,
+                    key.uid,
+                    message.message_id,
+                    message.identity_provenance().as_str(),
+                    message.internal_date,
+                    metadata_date_key(message.internal_date.as_deref()),
+                    size,
+                    message.flags
+                ])?;
             }
             // Fingerprints share the page's transaction: a page is staged
             // with all of its body hashes or not at all, and a durable stage
@@ -717,28 +751,20 @@ impl MessageMetadataStage {
                 .prepare_cached(
                     "INSERT OR REPLACE INTO stage_fingerprints(side,mailbox,uidvalidity,uid,fingerprint) VALUES(?1,?2,?3,?4,?5)",
                 )
-                .map_err(|e| e.to_string())?;
+                ?;
             for (key, fingerprint) in fingerprints {
-                let uidvalidity = key
-                    .uidvalidity
-                    .map(sqlite_i64)
-                    .transpose()
-                    .map_err(|e| e.to_string())?
-                    .unwrap_or(-1);
-                insert_fingerprint
-                    .execute(params![
-                        side.as_i64(),
-                        key.mailbox.as_ref(),
-                        uidvalidity,
-                        key.uid,
-                        fingerprint
-                    ])
-                    .map_err(|e| e.to_string())?;
+                let uidvalidity = key.uidvalidity.map(sqlite_i64).transpose()?.unwrap_or(-1);
+                insert_fingerprint.execute(params![
+                    side.as_i64(),
+                    key.mailbox.as_ref(),
+                    uidvalidity,
+                    key.uid,
+                    fingerprint
+                ])?;
             }
         }
         if let Some((mailbox, snapshot, last_uid)) = checkpoint {
-            let (uidvalidity, uidnext, exists, highest_modseq) =
-                snapshot.to_sql().map_err(|error| error.to_string())?;
+            let (uidvalidity, uidnext, exists, highest_modseq) = snapshot.to_sql()?;
             let updated = tx
                 .execute(
                     "UPDATE stage_cursors SET last_uid=?7,completed=0 WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3 AND uidnext=?4 AND exists_count=?5 AND highest_modseq IS ?6",
@@ -749,17 +775,18 @@ impl MessageMetadataStage {
                         uidnext,
                         exists,
                         highest_modseq,
-                        sqlite_i64(last_uid).map_err(|error| error.to_string())?
+                        sqlite_i64(last_uid)?
                     ],
                 )
-                .map_err(|error| error.to_string())?;
+                ?;
             if updated != 1 {
                 return Err(format!(
                     "folder {mailbox}: verification cursor does not belong to the current snapshot"
-                ));
+                )
+                .into());
             }
         }
-        tx.commit().map_err(|e| e.to_string())?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -2111,7 +2138,7 @@ mod tests {
                 Some(("INBOX", folder, 7)),
             )
             .unwrap_err();
-        assert!(error.contains("injected cursor failure"));
+        assert!(error.to_string().contains("injected cursor failure"));
         assert_eq!(stage.count_mailbox(side, "INBOX", 42).unwrap(), 0);
         assert_eq!(stage.folder_cursors().unwrap()[0].last_uid, 0);
         stage.finish().unwrap();
@@ -2196,9 +2223,16 @@ mod tests {
         let error = stage
             .insert_messages(StagedMessageSide::Source, &oversized)
             .unwrap_err();
+        let MessageStageError::Sqlite(sqlite_error) = &error else {
+            panic!("expected SQLite error to remain typed, got {error}");
+        };
         assert!(
-            error.contains("database or disk is full"),
-            "expected SQLITE_FULL, got {error}"
+            matches!(
+                sqlite_error,
+                rusqlite::Error::SqliteFailure(error, _)
+                    if error.code == rusqlite::ErrorCode::DiskFull
+            ),
+            "expected SQLITE_FULL, got {sqlite_error}"
         );
         assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 0);
         drop(stage);

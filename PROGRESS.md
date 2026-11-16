@@ -2,6 +2,23 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-16: Preserve SQLite errors in verification page writes (M7 step 2)
+
+Branch `fix/typed-verification-storage-errors`:
+
+- Added `MessageStageError`, which preserves `rusqlite::Error` as its source
+  for staged page writes while keeping non-SQLite validation errors distinct.
+- Updated the disk-full regression to assert the typed `SQLITE_FULL` result and
+  verify the page transaction rolls back while the durable stage survives.
+- The IMAP message sink still converts stage errors to strings. Extending the
+  typed error through the fetch adapter and controller classification remains
+  outstanding; this is not completion of M7.
+
+Evidence: focused SQLite-full and page-rollback tests passed; full
+`cargo test --locked --all-targets --all-features` passed (1,511 passed, 14
+ignored, all integration/documentation tests passed); `cargo clippy --locked
+--all-targets --all-features -- -D warnings` and `cargo fmt --check` passed.
+
 ## 2026-11-15: Explicit per-mailbox assurance steps
 
 Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
