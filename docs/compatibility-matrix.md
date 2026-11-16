@@ -10,7 +10,7 @@ This matrix documents provider support and test coverage.
   runnable counts and pass/fail results come from the CI test summary artifact.
 - **Message verification** — Aggregate verification is wired for all engines; encrypted imapsync runs additionally perform bounded metadata-level reconciliation by default and an explicit bounded body-hash mode when selected. Neither path is provider qualification evidence.
 
-A row is not considered generally supported (1.0 release) until it has a successful live pilot using disposable or fully backed-up mailboxes. Current status shows code-level support and is suitable for technical previews and early adoption.
+A row is not considered generally supported (1.0 release) until it has a successful live pilot using disposable or fully backed-up mailboxes. Code-path coverage and generic lab results support technical-preview evaluation only; they do not qualify a provider route for customer production use. Until the provider-specific gates below are complete, use the product only in a laboratory or a supervised pilot with an independent recovery plan.
 
 Release enforcement is defined by the machine-readable
 `tests/provider-evidence/policy.json`, not by wording in this document. The
