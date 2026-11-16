@@ -12,6 +12,7 @@
   filesystem mount so tmpfs runs cannot be mistaken for persistent-storage
   qualification. Recorded a first ext4-backed 2,000-job sample: all configured
   gates passed; write p95 was 4.954 ms and read-only-open p95 was 44.331 ms.
+  A 10,000-job repeat also passed all gates; read-only-open p95 was 173.431 ms.
   These are single-host observations, not durability qualification or budgets.
 - Added `mailswiftsync provider-qualification <source-id> <destination-id>` as
   a versioned JSON contract for automation. It shares the bundled qualification

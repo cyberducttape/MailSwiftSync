@@ -537,6 +537,18 @@ recorded repeat whose ledger directory was verified on ext4. It is still a
 single developer-host observation: filesystem type does not establish power-
 loss durability, and the figures do not set a supported-host latency budget.
 
+A 10,000-job repeat at commit `44dcf9d9920f056f70290b9cd6109610950f49ba`
+used the same explicit `/home/stephanl` root and ext4 filesystem. It performed
+220,000 writes in a 203.21 s write phase (256.38 s total test time). Write
+p50/p95/p99/max was 617/3,081/4,725/16,983 µs, read p95 46.795 ms, and
+read-only-open p50/p95/p99/max was 127.962/173.431/213.519/228.477 ms across
+101 opens. The run had zero busy errors, a 9,990 KiB WAL high-water, a 3 ms
+checkpoint, 3,424 durable bytes per mailbox, and a 503 ms concurrent backup;
+all configured gates passed. This extends the ext4 observation to 10,000 jobs
+but remains a single-host workload result. The open-time increase with ledger
+size is material, and still has no supported-host budget; repeat at 100,000
+jobs and profile representative persistent storage before capacity claims.
+
 By default, batch verification runs inside the admitted mailbox worker attempt
 and retains that attempt's provider-rate admission through verification, so a
 long verification scan occupies transfer capacity. **Queue settings →
