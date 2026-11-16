@@ -536,6 +536,45 @@ impl ClassifiedFailure {
         }
     }
 
+    /// Preserve OAuth refresh classification and an HTTP Retry-After value
+    /// when the token endpoint fails before a migration engine is launched.
+    pub(crate) fn oauth_refresh(
+        error: &crate::oauth_refresh::OAuthRefreshError,
+        side: crate::imap_probe::MailSide,
+        provider: &str,
+    ) -> Self {
+        use crate::core::provider_intelligence::ProviderErrorType as Provider;
+        use crate::oauth_refresh::OAuthRefreshErrorKind as Kind;
+        let detail = error.to_string();
+        let (class, provider_error) = match error.kind {
+            Kind::Authentication => (FailureClass::Authentication, Provider::Authentication),
+            Kind::Capacity => (FailureClass::Capacity, Provider::RateLimited),
+            Kind::Transport => (FailureClass::Transport, Provider::Network),
+            Kind::Provider if error.retry_after.is_some() => {
+                (FailureClass::Capacity, Provider::TemporaryProviderFailure)
+            }
+            Kind::Provider => (FailureClass::Transport, Provider::TemporaryProviderFailure),
+            Kind::Configuration => (
+                FailureClass::Configuration,
+                Provider::PermanentProviderFailure,
+            ),
+            Kind::InvalidResponse => (
+                FailureClass::Configuration,
+                Provider::PermanentProviderFailure,
+            ),
+            Kind::Unclassified => return Self::classify(provider, vec![side], &detail),
+        };
+        Self {
+            provider: provider.to_owned(),
+            sides: vec![side],
+            error: migration_error(class, detail, error.retry_after),
+            provider_error,
+            signal: None,
+            controller_marked: true,
+            verification_limit: false,
+        }
+    }
+
     fn classify(
         provider: &str,
         sides: Vec<crate::controller::rate_domains::Side>,
@@ -780,6 +819,46 @@ pub(crate) fn classified_failure_detail(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oauth_refresh_failures_preserve_class_side_and_retry_after() {
+        let error = crate::oauth_refresh::OAuthRefreshError::new(
+            crate::oauth_refresh::OAuthRefreshErrorKind::Capacity,
+            "token endpoint returned HTTP 429",
+        )
+        .with_retry_after(Some(std::time::Duration::from_secs(37)));
+        let failure = super::ClassifiedFailure::oauth_refresh(
+            &error,
+            crate::imap_probe::MailSide::Destination,
+            "microsoft365",
+        );
+        assert_eq!(failure.class(), super::FailureClass::Capacity);
+        assert_eq!(
+            failure.retry_after(),
+            Some(std::time::Duration::from_secs(37))
+        );
+        assert_eq!(
+            failure.sides(),
+            &[crate::controller::rate_domains::Side::Destination]
+        );
+        assert!(failure.should_retry(0, 2));
+    }
+
+    #[test]
+    fn oauth_authentication_and_invalid_responses_are_not_retried() {
+        for kind in [
+            crate::oauth_refresh::OAuthRefreshErrorKind::Authentication,
+            crate::oauth_refresh::OAuthRefreshErrorKind::InvalidResponse,
+        ] {
+            let error = crate::oauth_refresh::OAuthRefreshError::new(kind, "token refresh failed");
+            let failure = super::ClassifiedFailure::oauth_refresh(
+                &error,
+                crate::imap_probe::MailSide::Source,
+                "gmail",
+            );
+            assert!(!failure.should_retry(0, 2), "{kind:?}");
+        }
+    }
+
     #[test]
     fn verification_limits_are_verification_failures_with_their_own_reason() {
         let tagged = crate::core::VerificationLimit::Deadline

@@ -76,6 +76,10 @@
 - IMAP LIST parsing now preserves typed timeout, protocol, server and resource
   limit errors through folder discovery instead of reclassifying failures by
   matching their text.
+- OAuth token refresh failures now retain their source classification through
+  batch retry decisions. Authentication and malformed responses stop for
+  operator review; transport and temporary provider errors follow the bounded
+  retry policy, and provider `Retry-After` values are honored up to 30 minutes.
 - The IMAP client enforces its session deadline beneath TLS, so a server
   sending a record one byte at a time cannot stall verification past it.
 - `mailswiftsync doctor` adds a `remediation` line to every check that is

@@ -635,7 +635,8 @@ pub(crate) fn exchange_code(exchange: &CodeExchange<'_>) -> Result<OAuthRefreshC
         exchange.token_endpoint,
         &code_exchange_form(exchange),
         "mailswiftsync-oauth-authorize",
-    )?;
+    )
+    .map_err(String::from)?;
     refresh_config_from_token(exchange, token)
 }
 

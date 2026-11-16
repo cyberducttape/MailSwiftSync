@@ -15,6 +15,7 @@ use crate::credentials::SecretString;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt,
     io::Read,
     net::SocketAddr,
     sync::{Mutex, OnceLock},
@@ -29,6 +30,79 @@ const MAX_REFRESH_CONFIG_BYTES: usize = 64 * 1024;
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const REFRESH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_TOTAL_BUDGET: Duration = Duration::from_secs(30);
+const MAX_OAUTH_RETRY_AFTER: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OAuthRefreshErrorKind {
+    Authentication,
+    Capacity,
+    Transport,
+    Configuration,
+    Provider,
+    InvalidResponse,
+    Unclassified,
+}
+
+/// A token exchange failure classified where its HTTP or transport cause is
+/// still known. Presentation text is retained for the operator, while the
+/// controller consumes `kind` and `retry_after` without parsing that text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OAuthRefreshError {
+    pub(crate) kind: OAuthRefreshErrorKind,
+    pub(crate) retry_after: Option<Duration>,
+    detail: String,
+}
+
+impl OAuthRefreshError {
+    pub(crate) fn new(kind: OAuthRefreshErrorKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            retry_after: None,
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn with_retry_after(mut self, retry_after: Option<Duration>) -> Self {
+        self.retry_after = retry_after.map(|delay| delay.min(MAX_OAUTH_RETRY_AFTER));
+        self
+    }
+
+    fn with_detail(mut self, detail: String) -> Self {
+        self.detail = detail;
+        self
+    }
+
+    pub(crate) fn context(mut self, context: &str) -> Self {
+        self.detail = format!("{context}: {}", self.detail);
+        self
+    }
+}
+
+impl fmt::Display for OAuthRefreshError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::ops::Deref for OAuthRefreshError {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.detail
+    }
+}
+
+impl From<OAuthRefreshError> for String {
+    fn from(error: OAuthRefreshError) -> Self {
+        error.detail
+    }
+}
+
+impl From<String> for OAuthRefreshError {
+    fn from(detail: String) -> Self {
+        Self::new(OAuthRefreshErrorKind::Unclassified, detail)
+    }
+}
 
 pub(crate) struct RefreshRequest<'a> {
     pub(crate) token_endpoint: &'a str,
@@ -206,12 +280,15 @@ impl ExpiresIn {
 /// Exchange a refresh token for a fresh access token over a bounded HTTPS
 /// client. Redirects are disabled so a token cannot be forwarded to another
 /// origin, and Rustls provides certificate and hostname validation.
-pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<RefreshedToken, String> {
+pub(crate) fn refresh_access_token(
+    request: &RefreshRequest<'_>,
+) -> Result<RefreshedToken, OAuthRefreshError> {
     post_token_request(
         request.token_endpoint,
         &refresh_form(request),
         "mailswiftsync-oauth-refresh",
     )
+    .map_err(|error| error.context("OAuth refresh"))
 }
 
 /// POST one form-encoded grant to an HTTPS token endpoint and parse the
@@ -221,34 +298,59 @@ pub(crate) fn post_token_request(
     token_endpoint: &str,
     form: &[(&str, &str)],
     user_agent: &str,
-) -> Result<RefreshedToken, String> {
-    let endpoint = reqwest::Url::parse(token_endpoint)
-        .map_err(|error| format!("invalid OAuth token endpoint: {error}"))?;
+) -> Result<RefreshedToken, OAuthRefreshError> {
+    let endpoint = reqwest::Url::parse(token_endpoint).map_err(|error| {
+        OAuthRefreshError::new(
+            OAuthRefreshErrorKind::Configuration,
+            format!("invalid OAuth token endpoint: {error}"),
+        )
+    })?;
     if endpoint.scheme() != "https" {
-        return Err("the OAuth token endpoint must use https://".to_owned());
+        return Err(OAuthRefreshError::new(
+            OAuthRefreshErrorKind::Configuration,
+            "the OAuth token endpoint must use https://",
+        ));
     }
     if endpoint.username() != "" || endpoint.password().is_some() {
-        return Err("the OAuth token endpoint must not contain user information".to_owned());
+        return Err(OAuthRefreshError::new(
+            OAuthRefreshErrorKind::Configuration,
+            "the OAuth token endpoint must not contain user information",
+        ));
     }
     let host = endpoint
         .host_str()
-        .ok_or_else(|| "the OAuth token endpoint is missing a host".to_owned())?
+        .ok_or_else(|| {
+            OAuthRefreshError::new(
+                OAuthRefreshErrorKind::Configuration,
+                "the OAuth token endpoint is missing a host",
+            )
+        })?
         .to_owned();
-    let policy = crate::organization_policy::OrganizationPolicy::load()
-        .map_err(|error| format!("OAuth organization policy is unavailable: {error}"))?;
+    let policy = crate::organization_policy::OrganizationPolicy::load().map_err(|error| {
+        OAuthRefreshError::new(
+            OAuthRefreshErrorKind::Configuration,
+            format!("OAuth organization policy is unavailable: {error}"),
+        )
+    })?;
     crate::organization_policy::validate_oauth_endpoint_policy(
         &endpoint,
         &policy.oauth,
         "OAuth token",
-    )?;
+    )
+    .map_err(|error| OAuthRefreshError::new(OAuthRefreshErrorKind::Configuration, error))?;
     let addresses = crate::organization_policy::resolve_policy_checked_https_target(
         &endpoint,
         policy.oauth.allow_private_networks,
         &policy.oauth.allowed_domains,
         "OAuth token",
-    )?;
-    let client =
-        oauth_http_client(&host, &addresses).map_err(|error| format!("{host}: {error}"))?;
+    )
+    .map_err(|error| OAuthRefreshError::new(OAuthRefreshErrorKind::Configuration, error))?;
+    let client = oauth_http_client(&host, &addresses).map_err(|error| {
+        OAuthRefreshError::new(
+            OAuthRefreshErrorKind::Configuration,
+            format!("{host}: {error}"),
+        )
+    })?;
     let mut response = client
         .post(endpoint)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -256,18 +358,25 @@ pub(crate) fn post_token_request(
         .form(form)
         .send()
         .map_err(|error| {
-            format!(
+            let detail = format!(
                 "{host}: token endpoint request failed: {}",
                 error.without_url()
-            )
+            );
+            OAuthRefreshError::new(OAuthRefreshErrorKind::Transport, detail)
         })?;
     let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_retry_after);
     if response
         .content_length()
         .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
     {
-        return Err(format!(
-            "{host}: token endpoint response exceeded {MAX_RESPONSE_BYTES} bytes"
+        return Err(OAuthRefreshError::new(
+            OAuthRefreshErrorKind::InvalidResponse,
+            format!("{host}: token endpoint response exceeded {MAX_RESPONSE_BYTES} bytes"),
         ));
     }
     let mut raw = Zeroizing::new(Vec::new());
@@ -275,21 +384,44 @@ pub(crate) fn post_token_request(
     loop {
         let count = match response.read(&mut buffer) {
             Ok(count) => count,
-            Err(error) => return Err(error.to_string()),
+            Err(error) => {
+                return Err(OAuthRefreshError::new(
+                    OAuthRefreshErrorKind::Transport,
+                    format!("{host}: could not read token endpoint response: {error}"),
+                )
+                .with_retry_after(retry_after));
+            }
         };
         if count == 0 {
             break;
         }
         raw.extend_from_slice(&buffer[..count]);
         if raw.len() > MAX_RESPONSE_BYTES {
-            return Err(format!(
-                "token endpoint response exceeded {MAX_RESPONSE_BYTES} bytes"
+            return Err(OAuthRefreshError::new(
+                OAuthRefreshErrorKind::InvalidResponse,
+                format!("token endpoint response exceeded {MAX_RESPONSE_BYTES} bytes"),
             ));
         }
     }
     let response_body = Zeroizing::new(String::from_utf8_lossy(&raw).into_owned());
-    parse_token_response(&format!("HTTP/1.1 {status}"), &response_body, form)
-        .map_err(|error| redact_token_request_secrets(error, form))
+    parse_token_response(&format!("HTTP/1.1 {status}"), &response_body, form).map_err(|error| {
+        let detail = redact_token_request_secrets(error.to_string(), form);
+        error.with_retry_after(retry_after).with_detail(detail)
+    })
+}
+
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(value)
+                .ok()
+                .and_then(|date| date.signed_duration_since(chrono::Utc::now()).to_std().ok())
+        })
+        .map(|delay| delay.min(MAX_OAUTH_RETRY_AFTER))
 }
 
 fn redact_token_request_secrets(error: String, form: &[(&str, &str)]) -> String {
@@ -359,17 +491,30 @@ fn parse_token_response(
     status_line: &str,
     body: &str,
     request_form: &[(&str, &str)],
-) -> Result<RefreshedToken, String> {
-    let status_code = status_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| format!("could not parse token endpoint status line: {status_line}"))?;
+) -> Result<RefreshedToken, OAuthRefreshError> {
+    let status_code = status_line.split_whitespace().nth(1).ok_or_else(|| {
+        OAuthRefreshError::new(
+            OAuthRefreshErrorKind::Unclassified,
+            format!("could not parse token endpoint status line: {status_line}"),
+        )
+    })?;
     if status_code != "200" {
+        let status = status_code.parse::<u16>().unwrap_or_default();
+        let status_kind = match status {
+            401 | 403 => OAuthRefreshErrorKind::Authentication,
+            408 => OAuthRefreshErrorKind::Transport,
+            429 => OAuthRefreshErrorKind::Capacity,
+            500..=599 => OAuthRefreshErrorKind::Provider,
+            300..=399 => OAuthRefreshErrorKind::Configuration,
+            400..=499 => OAuthRefreshErrorKind::Configuration,
+            _ => OAuthRefreshErrorKind::Unclassified,
+        };
         // Outages often return an HTML or empty error page; report the HTTP
         // status rather than a JSON parse error that hides it.
         let Ok(response) = serde_json::from_str::<TokenResponse>(body) else {
-            return Err(format!(
-                "token endpoint rejected the token request (HTTP {status_code})"
+            return Err(OAuthRefreshError::new(
+                status_kind,
+                format!("token endpoint rejected the token request (HTTP {status_code})"),
             ));
         };
         let error_code = response
@@ -397,19 +542,36 @@ fn parse_token_response(
             (true, false) => format!(": {description}"),
             (true, true) => String::new(),
         };
-        return Err(format!(
-            "token endpoint rejected the token request (HTTP {status_code}{diagnostic})"
+        let kind = match error_code.as_str() {
+            "invalid_grant" | "invalid_client" | "unauthorized_client" => {
+                OAuthRefreshErrorKind::Authentication
+            }
+            _ => status_kind,
+        };
+        return Err(OAuthRefreshError::new(
+            kind,
+            format!("token endpoint rejected the token request (HTTP {status_code}{diagnostic})"),
         ));
     }
-    let response: TokenResponse = serde_json::from_str(body)
-        .map_err(|error| format!("token endpoint response was not valid JSON: {error}"))?;
+    let response: TokenResponse = serde_json::from_str(body).map_err(|error| {
+        OAuthRefreshError::new(
+            OAuthRefreshErrorKind::InvalidResponse,
+            format!("token endpoint response was not valid JSON: {error}"),
+        )
+    })?;
     let access_token = response
         .access_token
         .filter(|token| !token.is_empty())
-        .ok_or_else(|| "token endpoint response did not include an access_token".to_owned())?;
+        .ok_or_else(|| {
+            OAuthRefreshError::new(
+                OAuthRefreshErrorKind::InvalidResponse,
+                "token endpoint response did not include an access_token",
+            )
+        })?;
     if access_token.as_bytes().len() > MAX_TOKEN_BYTES {
-        return Err(format!(
-            "token endpoint access_token exceeds the {MAX_TOKEN_BYTES}-byte limit"
+        return Err(OAuthRefreshError::new(
+            OAuthRefreshErrorKind::InvalidResponse,
+            format!("token endpoint access_token exceeds the {MAX_TOKEN_BYTES}-byte limit"),
         ));
     }
     let refresh_token = response.refresh_token.filter(|token| !token.is_empty());
@@ -417,8 +579,9 @@ fn parse_token_response(
         .as_ref()
         .is_some_and(|token| token.as_bytes().len() > MAX_TOKEN_BYTES)
     {
-        return Err(format!(
-            "token endpoint refresh_token exceeds the {MAX_TOKEN_BYTES}-byte limit"
+        return Err(OAuthRefreshError::new(
+            OAuthRefreshErrorKind::InvalidResponse,
+            format!("token endpoint refresh_token exceeds the {MAX_TOKEN_BYTES}-byte limit"),
         ));
     }
     let expires_in = response.expires_in.and_then(ExpiresIn::into_u64);
@@ -510,6 +673,7 @@ mod tests {
             r#"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#;
         let error = parse_token_response(status, body, &[]).unwrap_err();
         assert!(error.contains("Token has been expired or revoked."));
+        assert_eq!(error.kind, OAuthRefreshErrorKind::Authentication);
     }
 
     #[test]
@@ -555,6 +719,51 @@ mod tests {
                 .unwrap_err();
         assert!(error.contains("HTTP 503"), "{error}");
         assert!(!error.contains("JSON"), "{error}");
+        assert_eq!(error.kind, OAuthRefreshErrorKind::Provider);
+    }
+
+    #[test]
+    fn retry_after_accepts_delta_seconds_and_is_bounded() {
+        assert_eq!(parse_retry_after("12"), Some(Duration::from_secs(12)));
+        assert_eq!(
+            parse_retry_after("Fri, 01 Jan 2100 00:00:00 GMT"),
+            Some(MAX_OAUTH_RETRY_AFTER)
+        );
+        assert_eq!(parse_retry_after("not-a-delay"), None);
+        assert_eq!(parse_retry_after("999999"), Some(MAX_OAUTH_RETRY_AFTER));
+    }
+
+    #[test]
+    fn token_http_statuses_have_non_ambiguous_retry_classes() {
+        for (status, expected) in [
+            (
+                "HTTP/1.1 401 Unauthorized",
+                OAuthRefreshErrorKind::Authentication,
+            ),
+            (
+                "HTTP/1.1 403 Forbidden",
+                OAuthRefreshErrorKind::Authentication,
+            ),
+            (
+                "HTTP/1.1 408 Request Timeout",
+                OAuthRefreshErrorKind::Transport,
+            ),
+            ("HTTP/1.1 302 Found", OAuthRefreshErrorKind::Configuration),
+        ] {
+            let error = parse_token_response(status, "not-json", &[]).unwrap_err();
+            assert_eq!(error.kind, expected, "{status}: {error}");
+        }
+    }
+
+    #[test]
+    fn throttled_token_response_has_a_typed_capacity_class() {
+        let error = parse_token_response(
+            "HTTP/1.1 429 Too Many Requests",
+            r#"{"error":"slow_down"}"#,
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, OAuthRefreshErrorKind::Capacity);
     }
 
     #[test]
