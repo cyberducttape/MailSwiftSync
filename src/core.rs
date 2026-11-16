@@ -243,6 +243,18 @@ impl StateStore {
         Ok(())
     }
     #[cfg(test)]
+    pub(crate) fn finish_test_run_with_snapshot(
+        &self,
+        run_id: &str,
+        plan_snapshot: &str,
+    ) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE runs SET status='completed',finished_at=CURRENT_TIMESTAMP,plan_snapshot=?2 WHERE id=?1",
+            params![run_id, plan_snapshot],
+        )?;
+        Ok(())
+    }
+    #[cfg(test)]
     fn set_mailbox_state_for_test(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
         self.connection.execute(
             "UPDATE mailbox_jobs SET state=?1 WHERE id=?2",
