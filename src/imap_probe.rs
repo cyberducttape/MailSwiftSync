@@ -1213,7 +1213,6 @@ pub(crate) fn list_account_folders_with_transport(
         Some(&budget),
     )?;
     list_folders_on_authenticated_stream(&mut stream, host, &post_auth_response, &budget)
-        .map_err(ImapError::from)
 }
 
 fn list_folders_on_authenticated_stream<S: Read + Write>(
@@ -1221,7 +1220,7 @@ fn list_folders_on_authenticated_stream<S: Read + Write>(
     host: &str,
     post_auth_response: &str,
     budget: &MessageFetchBudget<'_>,
-) -> Result<Vec<MailboxDescriptor>, String> {
+) -> Result<Vec<MailboxDescriptor>, ImapError> {
     write_imap_command(
         stream,
         authenticated_list_command(
@@ -2099,8 +2098,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
         &mut buffer,
         &mut mailbox_details,
         budget,
-    )
-    .map_err(tag_folder_inventory_limit)?;
+    )?;
     let mut mailboxes = mailbox_details
         .iter()
         .filter(|mailbox| mailbox.selectable)
@@ -2353,8 +2351,7 @@ pub(crate) fn revalidate_tls_account_snapshots(
         &mut buffer,
         &mut descriptors,
         budget,
-    )
-    .map_err(tag_folder_inventory_limit)?;
+    )?;
     if inventory.selectable_mailbox_count
         != descriptors.iter().filter(|item| item.selectable).count()
     {
@@ -2704,16 +2701,6 @@ fn untagged_ok_response_text(line: &str) -> Option<&str> {
     let response = line.strip_prefix("* ")?;
     let (status, text) = response.split_once(' ')?;
     status.eq_ignore_ascii_case("OK").then_some(text)
-}
-
-/// LIST parsing is shared with preflight discovery, so its inventory bounds
-/// are tagged as verification limits only where verification reads LIST.
-fn tag_folder_inventory_limit(error: String) -> String {
-    if error.contains("LIST inventory exceeded") || error.contains("-mailbox limit") {
-        crate::core::VerificationLimit::FolderInventory.tag(error)
-    } else {
-        error
-    }
 }
 
 /// Extract the canonical `PERMANENTFLAGS` set from a SELECT response. RFC

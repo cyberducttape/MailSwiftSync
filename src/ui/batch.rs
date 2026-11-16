@@ -105,15 +105,18 @@ impl App {
         if !self.bulk_selection_view_dirty {
             return;
         }
+        if self
+            .bulk_selection_retry_at
+            .is_some_and(|retry_at| std::time::Instant::now() < retry_at)
+        {
+            return;
+        }
         self.refresh_bulk_filter_cache();
-        let mut view = std::mem::take(&mut self.bulk_selection_view);
-        view.rows.clear();
-        view.visible = 0;
-        view.live_eligible = 0;
-        view.delta_eligible = 0;
-        view.ready = 0;
-        view.review = 0;
-        view.selected_loaded = 0;
+        if let Some(error) = self.queue.filter_error().map(str::to_owned) {
+            self.keep_stale_bulk_selection(error);
+            return;
+        }
+        let mut view = SelectionView::default();
         // Compact select-all keeps no per-row list.
         let compact_all = self.bulk_all_selected && self.bulk_selection_count() > 1;
         if let Some(project_id) = self.queue.project_id() {
@@ -139,13 +142,25 @@ impl App {
                         summary.visible
                     };
                 }
-                Err(error) => {
-                    self.bulk_message = format!("Could not read the mailbox queue: {error}");
-                }
+                Err(error) => return self.keep_stale_bulk_selection(error.to_string()),
             }
         }
         self.bulk_selection_view = view;
         self.bulk_selection_view_dirty = false;
+        self.bulk_selection_retry_at = None;
+        self.bulk_selection_error = None;
+    }
+
+    fn keep_stale_bulk_selection(&mut self, error: String) {
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+        self.bulk_selection_error = Some(error.clone());
+        self.bulk_message = self
+            .language
+            .message("ui.selection-summary-refresh-failed")
+            .replace("{error}", &error);
+        self.bulk_selection_retry_at = Some(std::time::Instant::now() + RETRY_DELAY);
+        // Keep dirty set so the next bounded retry runs automatically.
+        self.bulk_selection_view_dirty = true;
     }
 
     /// The first selected job ID in queue order.
@@ -1133,6 +1148,14 @@ impl App {
             .size(12.0)
             .color(self.theme_colors().text_secondary),
         );
+        if let Some(error) = self.bulk_selection_error.as_deref() {
+            ui.colored_label(
+                self.theme_colors().warning,
+                self.language
+                    .message("ui.selection-summary-stale")
+                    .replace("{error}", error),
+            );
+        }
         ui.separator();
         if self.bulk_selection_is_empty() {
             ui.label(
@@ -1475,7 +1498,7 @@ pub(crate) struct SelectionView {
 
 #[cfg(test)]
 mod selection_inspector_tests {
-    use super::format_data_size;
+    use super::{SelectionView, format_data_size};
 
     #[test]
     fn recorded_data_size_uses_readable_binary_units_without_rounding_small_values_to_zero() {
@@ -1483,5 +1506,45 @@ mod selection_inspector_tests {
         assert_eq!(format_data_size(1536), "1.5 KiB");
         assert_eq!(format_data_size(2 * 1024 * 1024), "2.0 MiB");
         assert_eq!(format_data_size(3 * 1024 * 1024 * 1024), "3.0 GiB");
+    }
+
+    #[test]
+    fn failed_selection_refresh_retains_view_and_schedules_bounded_retry() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-stale-selection-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let state_path = directory.join("state.db");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        app.bulk_selection_view = SelectionView {
+            selected_loaded: 12,
+            ready: 9,
+            review: 3,
+            ..SelectionView::default()
+        };
+        app.bulk_selection_view_dirty = true;
+
+        app.keep_stale_bulk_selection("database is locked".into());
+
+        assert_eq!(app.bulk_selection_view.selected_loaded, 12);
+        assert_eq!(app.bulk_selection_view.ready, 9);
+        assert_eq!(app.bulk_selection_view.review, 3);
+        assert!(app.bulk_selection_view_dirty);
+        assert!(app.bulk_selection_retry_at.is_some());
+        assert!(
+            app.bulk_selection_error
+                .as_deref()
+                .unwrap()
+                .contains("locked")
+        );
+        drop(app);
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_dir(directory);
     }
 }

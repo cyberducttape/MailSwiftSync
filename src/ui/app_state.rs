@@ -88,6 +88,11 @@ pub(crate) struct App {
     pub(crate) bulk_selection_view: crate::ui::batch::SelectionView,
     /// Rebuild the selected-row projection only after queue/state/selection changes.
     pub(crate) bulk_selection_view_dirty: bool,
+    /// A failed projection read retains the last good view and retries after
+    /// this bounded delay.
+    pub(crate) bulk_selection_retry_at: Option<std::time::Instant>,
+    /// Error from the most recent selection projection refresh.
+    pub(crate) bulk_selection_error: Option<String>,
     /// Table positions drawn last frame, used to prefetch the next frame's
     /// rows from the ledger.
     pub(crate) bulk_rendered_range: (usize, usize),

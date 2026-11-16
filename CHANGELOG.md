@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Provider cooldowns now normalize endpoints with the shared parser, so IPv4,
+  DNS, bare IPv6 and bracketed IPv6 endpoints map to the correct command-center
+  health row.
+- If SQLite cannot refresh the selected-mailbox summary, the GUI keeps the last
+  successful counts, labels them stale, and retries at a bounded interval.
+- IMAP LIST parsing now preserves typed timeout, protocol, server and resource
+  limit errors through folder discovery instead of reclassifying failures by
+  matching their text.
 - The IMAP client enforces its session deadline beneath TLS, so a server
   sending a record one byte at a time cannot stall verification past it.
 - `mailswiftsync doctor` adds a `remediation` line to every check that is

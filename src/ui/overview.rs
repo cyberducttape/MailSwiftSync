@@ -273,6 +273,15 @@ impl App {
         if !self.queue.is_empty() && self.bulk_selection_view_dirty {
             self.refresh_bulk_selection_view();
         }
+        if let Some(error) = self.bulk_selection_error.as_deref() {
+            ui.colored_label(
+                self.theme_colors().warning,
+                self.language
+                    .message("ui.selection-summary-stale")
+                    .replace("{error}", error),
+            );
+            ui.add_space(8.0);
+        }
         self.operator_cockpit(ui, phase, workspace_attention_count, has_bulk_jobs);
         ui.add_space(16.0);
 

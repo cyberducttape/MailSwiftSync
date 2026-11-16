@@ -18,7 +18,6 @@ impl App {
             Ok(changed) => changed,
             Err(error) => {
                 self.bulk_message = error;
-                self.bulk_selection_view = Default::default();
                 false
             }
         }

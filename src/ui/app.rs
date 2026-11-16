@@ -62,6 +62,11 @@ impl eframe::App for App {
             ctx.request_repaint();
         } else if self.background_work_pending() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        } else if self.bulk_selection_view_dirty
+            && let Some(retry_at) = self.bulk_selection_retry_at
+        {
+            let delay = retry_at.saturating_duration_since(std::time::Instant::now());
+            ctx.request_repaint_after(delay.max(std::time::Duration::from_millis(50)));
         }
     }
 

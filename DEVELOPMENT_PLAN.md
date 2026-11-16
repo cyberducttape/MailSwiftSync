@@ -267,9 +267,10 @@ Stage it as follows:
    reach `ClassifiedFailure::imap` with their side, and only a server reply
    is still classified from text, with that endpoint's provider vocabulary
    (which supplies `retry_after`). The verification fetch path routes
-   folder failures by kind. Still text: the OAuth refresh path, folder
-   listing internals, and engine (imapsync) output, which is external and
-   stays classified at the boundary.
+   folder failures by kind. Folder-list parsing now preserves typed
+   protocol, server, timeout and resource-limit errors through verification
+   discovery. Still text: the OAuth refresh path and engine (imapsync) output,
+   which is external and stays classified at the boundary.
 2. Message staging and SQLite errors keep their `rusqlite::Error` source.
 3. Strings are produced only at the UI, report and automation boundaries.
 

@@ -2,6 +2,24 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-15: IPv6 cooldown matching and stale batch selection recovery
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- Command-center cooldown matching now uses the shared endpoint parser and
+  covers IPv4, DNS, bare IPv6, and bracketed IPv6 endpoints with and without
+  explicit ports.
+- A failed SQLite selection-summary read retains the last successful view,
+  exposes a stale-data warning, and retries after 500 ms. Filtering failures
+  no longer erase the cached summary either.
+- Completed typed IMAP LIST error propagation through folder discovery; the
+  verification path no longer tags inventory limits by parsing error text.
+
+Evidence: `cargo fmt --check`, `cargo check --locked --all-targets
+--all-features`, `cargo clippy --locked --all-targets --all-features -- -D
+warnings`, and `cargo test --locked --all-targets --all-features` passed
+(1,611 passed, 14 ignored).
+
 ## 2026-11-14: Lease-loss drill for a crashed worker (M2)
 
 Branch `test/lease-loss-drill` (from `main`). New test
