@@ -29,6 +29,10 @@ qualification-pack builder are the starting harness. A test is not release
 evidence unless its artifacts identify the exact software and configuration
 used.
 
+The separate [migration snapshot audit benchmark](migration-audit-benchmark.md)
+measures synthetic snapshot reconciliation and temporary-stage growth. Its
+results are not end-to-end mailbox migration or provider-qualification evidence.
+
 ## Mandatory scenario matrix
 
 | Scenario | Expected result |
