@@ -83,6 +83,14 @@ impl App {
                     .strong()
                     .family(crate::ui::fonts::semibold()),
             );
+            ui.label(
+                RichText::new(
+                    self.language
+                        .message("ui.provider-qualification-record-source"),
+                )
+                .small()
+                .color(colors.text_secondary),
+            );
             ui.label(RichText::new(&status.limitations).color(colors.text_secondary));
             if let Some(date) = status.last_qualified.as_deref() {
                 ui.label(
