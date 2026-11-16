@@ -1533,6 +1533,45 @@ fn provider_qualification_manifest_covers_every_release_required_route() {
         })
         .collect::<std::collections::BTreeSet<_>>();
 
+    let invalidation = capabilities["qualification_invalidation_conditions"]
+        .as_array()
+        .expect("provider qualification invalidation rules must be explicit");
+    assert!(
+        !invalidation.is_empty(),
+        "qualification statuses need invalidation conditions"
+    );
+    let mut provider_ids = std::collections::BTreeSet::new();
+    for record in capabilities["provider_qualifications"]
+        .as_array()
+        .expect("provider qualifications must be an array")
+    {
+        let source = record["source_provider"]
+            .as_str()
+            .expect("qualification source provider ID is required");
+        let destination = record["destination_provider"]
+            .as_str()
+            .expect("qualification destination provider ID is required");
+        assert!(
+            provider_ids.insert((source, destination)),
+            "provider-pair qualification identifiers must be unique"
+        );
+        if record["status"].as_str() == Some("qualified") {
+            assert!(
+                record["evidence_digest"]
+                    .as_str()
+                    .is_some_and(|digest| digest.len() == 64
+                        && digest.bytes().all(|byte| byte.is_ascii_hexdigit())),
+                "qualified provider pairs require an evidence SHA-256 digest"
+            );
+            assert!(
+                record["last_qualified"]
+                    .as_str()
+                    .is_some_and(|date| date != "none"),
+                "qualified provider pairs require a qualification date"
+            );
+        }
+    }
+
     assert!(
         required_pairs.is_subset(&manifest_pairs),
         "capabilities.toml must list every release-required evidence route; missing: {:?}",

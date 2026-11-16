@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Provider qualification status now comes from `capabilities.toml` across the
+  GUI and `doctor` JSON, with stable provider IDs, tested engine, qualification
+  date, evidence digest, limitations, and explicit invalidation conditions.
+  Missing or incomplete records remain unqualified/unknown; the GUI no longer
+  maintains a separate three-route list.
+- Mailbox lookup now preserves SQLite errors instead of converting them into a
+  missing-row result. The operator sees distinct messages for a deleted mailbox
+  and an unavailable ledger.
 - Mailbox filtering, page selection, visible-row reads, and selection summaries
   now run through a dedicated read-only SQLite worker. Requests are tied to the
   current project, filter, and queue generation; stale responses are ignored,

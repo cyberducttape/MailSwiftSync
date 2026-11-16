@@ -2,6 +2,28 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-15: Data-driven provider qualification and explicit queue lookup errors
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- Connected qualification display and `doctor` JSON to a shared model loaded
+  from `capabilities.toml`; provider identifiers, date, engine, digest,
+  limitations, and invalidation conditions are now sourced from one registry.
+  Unknown custom-host routes fail closed, and a `qualified` entry is displayed
+  green only when its date, engine, and 64-character evidence digest exist.
+- `MailboxQueue::row_by_id` now returns `rusqlite::Result<Option<QueueRow>>`;
+  the operations view distinguishes a missing mailbox from ledger read errors.
+- The provider qualification table in release docs is regenerated with evidence
+  digest and invalidation columns. Registry validation tests ensure unique route
+  identifiers, explicit invalidation conditions, and provenance for any future
+  qualified status.
+
+Evidence: `cargo fmt --check`, `cargo check --locked --all-targets
+--all-features`, `cargo clippy --locked --all-targets --all-features -- -D
+warnings`, `cargo test --locked --all-targets --all-features` (1,511 passed,
+14 ignored plus all integration/doc test targets), capability-claim generation
+and validation, and UI localization validation passed.
+
 ## 2026-11-15: Background mailbox queue reads and visible provider qualification
 
 Branch `fix/ipv6-cooldown-and-stale-batch-summary`:

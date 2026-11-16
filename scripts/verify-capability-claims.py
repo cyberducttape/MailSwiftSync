@@ -145,18 +145,23 @@ def render_capability_review_date(manifest: dict) -> str:
 def render_provider_qualification_table(manifest: dict) -> str:
     """Render qualification evidence status, distinct from provider presets."""
     lines = [
-        "| Provider pair | Status | Last qualified | Tested engine | Limitations |",
-        "|---|---|---|---|---|",
+        "| Provider pair | Status | Last qualified | Tested engine | Evidence digest | Limitations | Invalidation conditions |",
+        "|---|---|---|---|---|---|---|",
     ]
     for qualification in manifest.get("provider_qualifications", []):
         status = str(qualification.get("status", "")).replace("_", " ")
+        invalidation = "; ".join(
+            manifest.get("qualification_invalidation_conditions", [])
+        ) or "Not specified"
         lines.append(
-            "| {pair} | {status} | {last} | `{engine}` | {limitations} |".format(
+            "| {pair} | {status} | {last} | `{engine}` | {digest} | {limitations} | {invalidation} |".format(
                 pair=qualification.get("pair", ""),
                 status=status,
                 last=qualification.get("last_qualified", ""),
                 engine=qualification.get("tested_engine", ""),
+                digest=qualification.get("evidence_digest") or "—",
                 limitations=qualification.get("limitations", ""),
+                invalidation=invalidation,
             )
         )
     return "\n".join(lines)

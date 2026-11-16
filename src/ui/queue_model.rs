@@ -678,20 +678,27 @@ impl MailboxQueue {
     }
 
     /// One row by job ID, from the cache or the ledger.
-    pub(crate) fn row_by_id(&mut self, store: &StateStore, job_id: &str) -> Option<QueueRow> {
+    pub(crate) fn row_by_id(
+        &mut self,
+        store: &StateStore,
+        job_id: &str,
+    ) -> rusqlite::Result<Option<QueueRow>> {
         if let Some(row) = self
             .rowid_by_id
             .get(job_id)
             .and_then(|rowid| self.rows.get(rowid))
         {
-            return Some(row.clone());
+            return Ok(Some(row.clone()));
         }
-        let row = store
-            .queue_row(self.project_id.as_deref()?, job_id)
-            .ok()??;
+        let Some(project_id) = self.project_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(row) = store.queue_row(project_id, job_id)? else {
+            return Ok(None);
+        };
         self.rowid_by_id.insert(row.id.clone(), row.rowid);
         self.rows.insert(row.rowid, row.clone());
-        Some(row)
+        Ok(Some(row))
     }
 
     /// Verified transfer totals and the queue's endpoint hosts, cached per
@@ -848,7 +855,7 @@ mod tests {
 
         // A row waiting out a retry is presented and filtered by that state.
         queue.set_transient(&row.id, "retrying");
-        let row = queue.row_by_id(&store, &row.id).unwrap();
+        let row = queue.row_by_id(&store, &row.id).unwrap().unwrap();
         assert_eq!(queue.presented_state(&row), "retrying");
         assert!(queue.refresh_filter(&store, "", "retrying").unwrap());
         assert_eq!(queue.visible(), [row.rowid]);
