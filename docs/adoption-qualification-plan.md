@@ -31,6 +31,24 @@ The following reproducible lab runs are retained as engineering evidence
 only; they do not satisfy the required size matrix, direct-imapsync comparison,
 provider qualification, or signed-result acceptance criteria.
 
+### 2026-11-16: current-HEAD packaged IMAP and fault-injection run
+
+| Field | Observed value |
+|---|---|
+| MailSwiftSync commit | `b86db1a3eb48ac15d97120de4a155489e4dfa4eb` |
+| Build artifact | Rootless Podman image ID `b1ce2714210d2ba85f678ce031699a3ab6488da3ea4171a411561160444788fd`; image digest `sha256:a49146a424dfb2199c5699bd1c08e4c03a467e93492bf93197e551a2c8251959`; packaged binary SHA-256 `3de8906497510e3c13b4090e2def0c58dd87c3d332fafa28b439c38fa5288aa2` |
+| Host | Linux `7.0.0-43-generic`, x86_64; AMD Ryzen 7 7735U; 16 logical CPUs; 14 GiB RAM; Podman `5.7.0` rootless |
+| Packaged engines | imapsync `2.314`, SHA-256 `dda1a7380cdab8c8bfc981724ab84ef1f5b18d630221df8d0517fed708271875`; Dovecot `2.3.19.1 (9b53102964)` |
+| imapsync result | Seed: 14/14 messages; final delta: 15/15. Both reports had zero missing, extra, modified, unmatched, or failed messages, Level 2 metadata reconciliation, and complete FLAGS coverage (14/14 then 15/15); message bodies were not compared and cutover readiness was not established. |
+| Native Dovecot result | Seed: 16/16 messages; final delta: 17/17. Both reports had zero missing, extra, modified, unmatched, or failed messages, Level 1 aggregate evidence; this is not independent per-message reconciliation or body proof. Cutover readiness was not established. |
+| Fault and protocol results | Packaged controller recovery, controller storage/corruption recovery, destination write-limit fault, TLS 1.2 floor, and forced OAuth refresh callbacks passed. The interruption matrix recovered default, large-APPEND, engine-kill, destination-crash, source-crash, and three repeated-controller-crash cases to their expected verified counts. The expert `--useuid --usecache` case produced 61 destination messages for 60 source messages and was correctly held as a verification difference. |
+| Retained local outputs | `/tmp/mss-local-qualification-b86db1a3` contains the two customer-proof pairs, integration environment records, test logs, and `run-manifest.json` (SHA-256 `ff7c9240e7cb60365f7003e5ecd86398a59854ccf7a7d964ab0c011802ee6bd6`). Directory and files are owner-only. The outputs are unsigned, local, and were not uploaded or committed. |
+| Scope limits | Synthetic local Dovecot only. This is not cPanel/hosted-provider qualification, a 1/10/50/100 GiB profile, direct-imapsync A/B comparison, full body-integrity proof, power-loss campaign, or signed independent result bundle. |
+
+This run is tied to the exact current source commit and image digest. The
+imapsync and Dovecot evidence levels remain distinct; successful fixture exits
+do not establish hosted-provider compatibility or production qualification.
+
 ### 2026-11-16: local commit-pinned packaged integration run
 
 | Field | Observed value |
