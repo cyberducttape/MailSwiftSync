@@ -449,6 +449,29 @@ fn confirmation_dialogs_are_named_start_safe_and_keep_focus_inside() {
 }
 
 #[test]
+fn live_migration_confirmation_exposes_provider_qualification_boundary() {
+    let mut harness = Harness::new(1.0, false);
+    harness.app.source_provider = crate::provider::ProviderPreset::CpanelDovecot;
+    harness.app.destination_provider = crate::provider::ProviderPreset::CpanelDovecot;
+    harness.app.live_confirm_open = true;
+
+    let nodes = harness.tree();
+    let text = nodes
+        .values()
+        .filter_map(|node| node.label().or_else(|| node.value()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("Provider path: cPanel/Dovecot → cPanel/Dovecot — NOT PRODUCTION-QUALIFIED"),
+        "live confirmation must expose the provider-pair qualification state:\n{text}"
+    );
+    assert!(
+        text.contains("This route has not completed the live provider qualification suite."),
+        "live confirmation must explain that generic support is not qualification:\n{text}"
+    );
+}
+
+#[test]
 fn failed_preflight_remediation_opens_the_plan_from_the_keyboard() {
     let mut harness = Harness::new(1.0, false);
     harness.app.preflight = vec![(
