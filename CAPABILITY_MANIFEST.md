@@ -254,7 +254,7 @@ particular target.
 - Technical previews on non-critical mailboxes
 - Testing provider connectivity and configuration
 - Validating IMAP transfer mechanics
-- Early adoption with careful operator oversight
+- Supervised pilots using disposable or fully backed-up, non-critical mailboxes with an independent recovery plan
 
 **Not yet ready for:**
 - Unattended migrations (no external scheduler/recovery approval and provider quotas remain unqualified)
