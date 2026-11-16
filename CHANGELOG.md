@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `mailswiftsync provider-qualification <source-id> <destination-id>` as
+  a versioned JSON contract for automation. It shares the bundled qualification
+  registry used by the GUI and `doctor`, includes a golden fixture and stable
+  provider IDs, and explicitly reports that no runtime evidence was loaded.
 - Verification page writes now retain the original `rusqlite::Error` in the
   staging API, including `SQLITE_FULL`, instead of flattening SQLite failures
   into display strings. The existing disk-full recovery regression checks the
