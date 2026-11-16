@@ -48,6 +48,7 @@
     "projects[].operations.transfer_attempts": "integer",
     "projects[].operations.unfinished_attempt_bytes_copied": "integer",
     "projects[].operations.oldest_running_heartbeat_age_seconds": "integer",
+    "projects[].operations.oldest_queued_run_age_seconds": "integer",
     "projects[].operations.unfinished_attempt_messages_copied": "integer",
     "projects[].operations.verification_message_findings": "map",
     "projects[].operations.verification_message_findings{}": "integer",

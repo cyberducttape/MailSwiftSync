@@ -131,7 +131,12 @@ for each attempt that lacks a terminal outcome. These snapshots can be stale
 and retries can repeat work; they are neither unique mailbox coverage nor a
 throughput measure. `oldest_running_heartbeat_age_seconds` is the time
 since the stalest running mailbox's last claim, progress checkpoint, or
-scheduled retry (`0` when none is running). `verification_capacity` counts
+scheduled retry (`0` when none is running). `oldest_queued_run_age_seconds`
+is the age of the oldest durable queued child
+run in the project (`0` if none); internal retry waits stay in `running` and
+are reflected by the running-heartbeat age. The queue age starts when the
+child run is durably admitted, so it includes time waiting for an available
+worker. `verification_capacity` counts
 mailboxes by the status of their latest batch dry-run "Verification capacity"
 row: `passed`, `blocked` (above the message limit or body-content byte
 budget, so the mailbox will finish as "verification limit exceeded"), or
@@ -179,6 +184,7 @@ mailbox, run, customer, or endpoint labels. The metric contract is:
 | `mailswiftsync_projects_on_hold` | Gauge | Projects whose operator hold currently stops new mailbox launches. |
 | `mailswiftsync_registered_engine_processes` | Gauge | Durable process registrations, not a process-liveness check. Validate process ownership before acting on a PID. |
 | `mailswiftsync_oldest_running_heartbeat_age_seconds` | Gauge | Seconds since the stalest `running` mailbox's last claim, progress checkpoint, or scheduled retry; `0` when none is running. Alert when it grows: a mailbox is still marked running while nothing advances it. Verification writes no checkpoints, so allow for the longest expected verification. |
+| `mailswiftsync_oldest_queued_run_age_seconds` | Gauge | Seconds since the oldest durable queued mailbox child run was admitted; `0` when none is queued. It includes worker wait time and has no project or mailbox labels. Internal retries remain running and are reflected in the running-heartbeat gauge. |
 | `mailswiftsync_verification_capacity_mailboxes{status}` | Gauge | Mailboxes by their latest batch dry-run verification capacity row: `passed`, `blocked`, or `unknown`. A `blocked` mailbox will transfer but finish as "verification limit exceeded"; alert before a live run. |
 | `mailswiftsync_transfer_attempts_total` | Counter | Cumulative transfer attempts recorded in the projected ledger. |
 | `mailswiftsync_transfer_retries_total` | Counter | Cumulative attempts after the first attempt of a pass. |
