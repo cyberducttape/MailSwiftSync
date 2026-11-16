@@ -415,8 +415,10 @@ message identifiers. The selector marks German and Bahasa Indonesia as partial
 so neither is mistaken for a fully reviewed release locale. Choose the language in **Settings → Appearance → Language**; the
 choice is saved with the local appearance preferences. The localization
 coverage check validates catalog parity, source-copy coverage, stable keys,
-and format placeholders. Command-line output, protocol diagnostics, and
-generated evidence reports remain in English.
+and format placeholders; it does not assess translation completeness or
+linguistic quality. Matching catalog keys are not evidence that every message
+has been translated or reviewed by a fluent speaker. Command-line output,
+protocol diagnostics, and generated evidence reports remain in English.
 
 `status` emits secret-free JSON containing project/mailbox states and recorded
 process identities. For large ledgers, `status --summary` emits a bounded
