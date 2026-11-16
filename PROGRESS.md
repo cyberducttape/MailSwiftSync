@@ -2,6 +2,19 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-16: Typed OAuth refresh failures (M7, partial)
+
+Patch was carried from branch `feat/typed-oauth-refresh-errors` onto current
+`main` as `feat/typed-oauth-refresh-errors-main`; the original worktree remains
+untouched. The OAuth producer now has typed authentication, capacity,
+transport, configuration, provider and invalid-response failures. Live batch
+admission maps those to the endpoint side and controller failure class without
+parsing presentation text. `Retry-After` accepts delta-seconds and HTTP-date
+values and is capped at 30 minutes. Authorization-code exchange converts the
+typed error at its CLI/API boundary. Keyring and rotation-persistence errors
+remain unclassified. Revalidation on current `main` is in progress.
+
+## Existing progress entries
 ## 2026-11-16: Preserve SQLite errors in verification page writes (M7 step 2)
 
 Branch `fix/typed-verification-storage-errors`:
@@ -115,7 +128,6 @@ Evidence: `cargo fmt --check`, `cargo check --locked --all-targets
 --all-features`, `cargo clippy --locked --all-targets --all-features -- -D
 warnings`, and `cargo test --locked --all-targets --all-features` passed
 (1,611 passed, 14 ignored).
-
 ## 2026-11-14: Lease-loss drill for a crashed worker (M2)
 
 Branch `test/lease-loss-drill` (from `main`). New test

@@ -249,6 +249,14 @@ impl Form {
         &mut self,
         source: bool,
     ) -> Result<OAuthRefreshOutcome, String> {
+        self.refresh_oauth_access_token_typed(source)
+            .map_err(String::from)
+    }
+
+    pub(crate) fn refresh_oauth_access_token_typed(
+        &mut self,
+        source: bool,
+    ) -> Result<OAuthRefreshOutcome, crate::oauth_refresh::OAuthRefreshError> {
         let auth_method = if source {
             &self.profile.source_auth
         } else {
@@ -282,11 +290,14 @@ impl Form {
                 let recovery_error =
                     crate::oauth_refresh::put_refresh_recovery(recovery_key.to_owned(), recovery)
                         .err();
-                return Err(format!(
-                    "[oauth_refresh_rotation_persistence_pending] CRITICAL: OAuth refresh rotation succeeded but the rotated refresh token could not be persisted; no new token exchange was attempted. Retry keyring persistence before resuming the migration (persistence error: {error}{})",
-                    recovery_error.map_or_else(String::new, |value| format!(
-                        "; recovery retention error: {value}"
-                    ))
+                return Err(crate::oauth_refresh::OAuthRefreshError::new(
+                    crate::oauth_refresh::OAuthRefreshErrorKind::Unclassified,
+                    format!(
+                        "[oauth_refresh_rotation_persistence_pending] CRITICAL: OAuth refresh rotation succeeded but the rotated refresh token could not be persisted; no new token exchange was attempted. Retry keyring persistence before resuming the migration (persistence error: {error}{})",
+                        recovery_error.map_or_else(String::new, |value| format!(
+                            "; recovery retention error: {value}"
+                        ))
+                    ),
                 ));
             }
             if source {
@@ -315,8 +326,10 @@ impl Form {
             config = recovered;
         }
         let side = if source { "source" } else { "destination" };
-        let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
-            .map_err(|error| format!("Could not refresh the {side} OAuth access token: {error}"))?;
+        let refreshed =
+            crate::oauth_refresh::refresh_access_token(&config.as_request()).map_err(|error| {
+                error.context(&format!("Could not refresh the {side} OAuth access token"))
+            })?;
         let expires_in = refreshed.expires_in;
         if let Some(rotated_refresh_token) = refreshed.refresh_token {
             let previous = config.clone();
@@ -345,11 +358,14 @@ impl Form {
                         crate::oauth_refresh::put_refresh_recovery(key, recovery)
                     })
                 .err();
-                return Err(format!(
-                    "[oauth_refresh_rotation_persistence_pending] CRITICAL: OAuth refresh rotation succeeded but the rotated refresh token could not be persisted; the original refresh token may already be consumed. Retry keyring persistence before resuming the migration (persistence error: {error}{})",
-                    retention_error.map_or_else(String::new, |value| format!(
-                        "; recovery retention error: {value}"
-                    ))
+                return Err(crate::oauth_refresh::OAuthRefreshError::new(
+                    crate::oauth_refresh::OAuthRefreshErrorKind::Unclassified,
+                    format!(
+                        "[oauth_refresh_rotation_persistence_pending] CRITICAL: OAuth refresh rotation succeeded but the rotated refresh token could not be persisted; the original refresh token may already be consumed. Retry keyring persistence before resuming the migration (persistence error: {error}{})",
+                        retention_error.map_or_else(String::new, |value| format!(
+                            "; recovery retention error: {value}"
+                        ))
+                    ),
                 ));
             }
             if source {

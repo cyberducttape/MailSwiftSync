@@ -409,6 +409,18 @@ pub(crate) enum AttemptOutcome {
 struct CredentialRefreshFailure {
     side: crate::imap_probe::MailSide,
     message: String,
+    typed: Option<crate::oauth_refresh::OAuthRefreshError>,
+}
+
+fn classify_credential_refresh_failure(
+    form: &crate::migration_plan::Form,
+    failure: &CredentialRefreshFailure,
+) -> ClassifiedFailure {
+    if let Some(error) = failure.typed.as_ref() {
+        ClassifiedFailure::oauth_refresh(error, failure.side, form.endpoint_provider(failure.side))
+    } else {
+        classify_sided_failure(form, failure.side, &failure.message)
+    }
 }
 
 fn refresh_live_credentials(
@@ -420,6 +432,7 @@ fn refresh_live_credentials(
             .map_err(|message| CredentialRefreshFailure {
                 side: crate::imap_probe::MailSide::Source,
                 message,
+                typed: None,
             })?;
     }
     if form.destination_password.is_empty()
@@ -429,6 +442,7 @@ fn refresh_live_credentials(
             .map_err(|message| CredentialRefreshFailure {
                 side: crate::imap_probe::MailSide::Destination,
                 message,
+                typed: None,
             })?;
     }
     let refreshes = [
@@ -453,6 +467,7 @@ fn refresh_live_credentials(
             let mut lock_map = locks.lock().map_err(|_| CredentialRefreshFailure {
                 side,
                 message: "OAuth refresh lock registry was poisoned".to_owned(),
+                typed: None,
             })?;
             lock_map
                 .entry(refresh_id.trim().to_owned())
@@ -462,9 +477,14 @@ fn refresh_live_credentials(
         let _guard = refresh_lock.lock().map_err(|_| CredentialRefreshFailure {
             side,
             message: "OAuth refresh lock was poisoned".to_owned(),
+            typed: None,
         })?;
-        form.refresh_oauth_access_token(source)
-            .map_err(|message| CredentialRefreshFailure { side, message })?;
+        form.refresh_oauth_access_token_typed(source)
+            .map_err(|error| CredentialRefreshFailure {
+                side,
+                message: error.to_string(),
+                typed: Some(error),
+            })?;
     }
     Ok(())
 }
@@ -1065,7 +1085,7 @@ impl BatchAttemptRunner {
             // a large queue cannot consume an expired bearer token.
             if let Err(error) = refresh_live_credentials(&mut task.form, &self.oauth_refresh_locks)
             {
-                let failure = classify_sided_failure(&task.form, error.side, &error.message);
+                let failure = classify_credential_refresh_failure(&task.form, &error);
                 if failure.should_retry(attempt, self.retry_count) {
                     let penalized = self
                         .provider_limiter
@@ -1651,9 +1671,10 @@ mod tests {
         let throttled = CredentialRefreshFailure {
             side: crate::imap_probe::MailSide::Destination,
             message: "Request is throttled. Suggested Backoff Time: 12000 milliseconds".into(),
+            typed: None,
         };
         let retryable = |failure: &CredentialRefreshFailure, attempt| {
-            classify_sided_failure(&form, failure.side, &failure.message).should_retry(attempt, 2)
+            classify_credential_refresh_failure(&form, failure).should_retry(attempt, 2)
         };
         assert!(retryable(&throttled, 0));
         assert!(!retryable(&throttled, 2));
@@ -1661,6 +1682,7 @@ mod tests {
         let rejected = CredentialRefreshFailure {
             side: crate::imap_probe::MailSide::Destination,
             message: "invalid_grant: refresh token expired".into(),
+            typed: None,
         };
         assert!(!retryable(&rejected, 0));
     }
