@@ -2,6 +2,26 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-15: Explicit per-mailbox assurance steps
+
+Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
+
+- The Mailboxes review card now shows transfer completion, metadata
+  reconciliation, bounded content verification, and cutover approval separately
+  without requiring the operator to open the full Verification view.
+- Customer proof format version 7 exports the same four statuses for every
+  mailbox. Cutover acceptance stays `not_established` and explains that it is a
+  separate project-level approval and source-quiescence decision.
+- Added regression assertions for aggregate-only evidence and updated provider
+  evidence validation to accept proof version 7 while rejecting unknown future
+  versions.
+
+Evidence: focused customer-proof Rust test, provider evidence Python tests
+(15 passed, 1 skipped), `cargo fmt`, localization validation, and `git diff
+--check` passed. `cargo clippy --locked --all-targets --all-features -- -D
+warnings` passed. `cargo test --locked --all-targets --all-features` passed
+(1,511 passed, 14 ignored, plus all integration and documentation targets).
+
 ## 2026-11-15: Immutable Rust toolchain action references
 
 Branch `fix/ipv6-cooldown-and-stale-batch-summary`:

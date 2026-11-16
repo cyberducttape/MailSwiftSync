@@ -1491,6 +1491,66 @@ impl App {
                         self.theme_colors().text_secondary
                     }),
             );
+            let metadata_verified = evidence.is_some_and(|mailbox| {
+                mailbox.evidence.as_ref().is_some_and(|(_, value, _)| {
+                    matches!(
+                        value.verification_method(),
+                        crate::core::VerificationMethod::MetadataReconciliation
+                            | crate::core::VerificationMethod::BodyHash
+                    ) && value.is_exact_match()
+                })
+            });
+            let content_verified = evidence.is_some_and(|mailbox| {
+                mailbox.evidence.as_ref().is_some_and(|(_, value, _)| {
+                    value.verification_method() == crate::core::VerificationMethod::BodyHash
+                        && value.verification_outcome()
+                            == crate::core::VerificationOutcome::ExactBodyMatch
+                        && value.is_exact_match()
+                })
+            });
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(self.language.message("ui.assurance"))
+                    .strong()
+                    .family(crate::ui::fonts::medium()),
+            );
+            for (label, status) in [
+                (
+                    self.language.message("ui.transfer"),
+                    matches!(
+                        self.queue.presented_state(job),
+                        "completed"
+                            | "verified"
+                            | "verified_with_exceptions"
+                            | "delta_required"
+                            | "verification_difference"
+                    ),
+                ),
+                (
+                    self.language.message("ui.assurance-metadata"),
+                    metadata_verified,
+                ),
+                (
+                    self.language.message("ui.assurance-content"),
+                    content_verified,
+                ),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(label).strong());
+                    ui.label(self.language.message(if status {
+                        "ui.confirmed"
+                    } else {
+                        "ui.not-confirmed"
+                    }));
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(self.language.message("ui.cutover")).strong());
+                ui.label(self.language.message("ui.not-confirmed"))
+                    .on_hover_text(self.language.message(
+                        "ui.cutover-approval-requires-explicit-operator-customer-approval",
+                    ));
+            });
             if let Some((_, inventory, snapshot)) = evidence.and_then(|row| row.evidence.as_ref()) {
                 ui.add_space(4.0);
                 ui.label(

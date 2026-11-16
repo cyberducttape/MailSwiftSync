@@ -228,7 +228,7 @@ monotonically cumulative counters.
 
 Reports, proofs, certificates, and support bundles carry their own `format`
 markers and are artifact formats, not part of this automation contract.
-The `mailswiftsync-customer-proof` artifact uses format version `6`. Per-mailbox
+The `mailswiftsync-customer-proof` artifact uses format version `7`. Per-mailbox
 `assurance_status` distinguishes `aggregate_match`, `metadata_match`,
 `bounded_content_match`, `engine_confirmed`, `with_exceptions`, and `incomplete`.
 The summary reports `mailboxes_by_assurance` and does not emit a single
@@ -257,8 +257,15 @@ folder observations. `verification_observation_source.kind` identifies which
 record supplied those observations (`transfer_attempt`,
 `standalone_verification_run`, or `not_recorded`). A `not_recorded` observation
 is not evidence that either endpoint was unchanged.
-Consumers of version 5 must update before accepting version 6. Each evidence
-row also carries `proof_tier` (`aggregate`, `metadata`, or bounded `content`)
+Consumers of version 5 must update before accepting version 6. Version 7 adds
+per-mailbox `assurance_steps` with independent transfer, metadata, bounded
+content, and cutover-acceptance statuses. Cutover acceptance remains
+`not_established` in per-mailbox evidence because it is a separate project-level
+approval and source-quiescence decision. Consumers of version 6 must update
+before accepting version 7. The Mailboxes review card presents the same four
+steps directly: transfer completion, metadata reconciliation, bounded content
+verification, and explicit cutover acceptance. Each evidence row also carries
+`proof_tier` (`aggregate`, `metadata`, or bounded `content`)
 separately from `proof_result`; none implies cutover readiness.
 `cutover_readiness.status` remains `not_established`: the operator
 quiescence barrier is not machine-enforced and the two servers do not provide

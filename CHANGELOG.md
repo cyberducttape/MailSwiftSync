@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Mailbox review cards and customer proof exports now expose transfer completion,
+  metadata reconciliation, bounded content verification, and cutover acceptance
+  as separate states. Cutover acceptance remains unestablished until the separate
+  project-level approval and source-quiescence workflow records it. Customer-proof
+  format version 7 adds these per-mailbox assurance steps, including when no
+  verification evidence exists.
 - Rust toolchain setup actions now use the immutable commit SHA recorded in
   `actions.lock` across CI, release, CodeQL, dependency-audit, and DAST workflows.
   Workflow validation checks that every such reference is immutable and matches
