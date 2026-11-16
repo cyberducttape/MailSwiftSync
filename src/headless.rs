@@ -1344,6 +1344,11 @@ pub(crate) fn headless_supervise(
     // actionable project instead of exiting or retrying it in a tight loop.
     let mut backoff = std::collections::HashMap::<String, ProjectBackoff>::new();
     let mut last_served_project: Option<String> = None;
+    // Full ledger validation is expensive at fleet scale. Reuse the validated
+    // read-only connection during idle polls, but invalidate it if the ledger
+    // path is replaced/restored. It is dropped before each migration pass and
+    // reopened (with full validation) afterward.
+    let mut poll_store: Option<core::StateStore> = None;
     let stopped = |reason: String, completed: usize, failed: usize, last: &Option<String>| {
         if failed == 0 {
             Ok(format!(
@@ -1376,25 +1381,39 @@ pub(crate) fn headless_supervise(
             thread::sleep(poll_interval);
             continue;
         }
-        let store = match core::StateStore::open_readonly(state_path) {
-            Ok(store) => store,
-            Err(error) if supervisor_should_retry_storage_error(&error) => {
-                eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
-                thread::sleep(poll_interval);
-                continue;
+        if let Some(store) = poll_store.as_ref() {
+            match store.database_path_matches(state_path) {
+                Ok(true) => {}
+                Ok(false) => poll_store = None,
+                Err(error) => return Err(error.to_string()),
             }
-            Err(error) => return Err(error.to_string()),
+        }
+        if poll_store.is_none() {
+            match core::StateStore::open_readonly(state_path) {
+                Ok(store) => poll_store = Some(store),
+                Err(error) if supervisor_should_retry_storage_error(&error) => {
+                    eprintln!(
+                        "Migration supervisor waiting for transient SQLite contention: {error}"
+                    );
+                    thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        let Some(store) = poll_store.as_ref() else {
+            return Err("migration supervisor could not retain its validated ledger reader".into());
         };
         let candidates = match store.projects_with_automation_safe_batch_work() {
             Ok(projects) => projects,
             Err(error) if supervisor_should_retry_storage_error(&error) => {
+                poll_store = None;
                 eprintln!("Migration supervisor waiting for transient SQLite contention: {error}");
                 thread::sleep(poll_interval);
                 continue;
             }
             Err(error) => return Err(error.to_string()),
         };
-        drop(store);
         // Forget backoff for projects that no longer have actionable work.
         // A set keeps this linear in the number of projects.
         let actionable = candidates
@@ -1432,6 +1451,7 @@ pub(crate) fn headless_supervise(
         let project_id = project_id.to_owned();
         last_served_project = Some(project_id.clone());
         idle_polls = 0;
+        drop(poll_store.take());
         match headless_batch_execute_project(state_path, &project_id, acknowledge_destination_loss)
         {
             Ok(message) => {

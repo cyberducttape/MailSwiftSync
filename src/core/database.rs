@@ -2,6 +2,7 @@ use super::*;
 mod files;
 mod invariants;
 mod schema;
+pub(super) use files::DatabaseIdentity;
 use files::{
     create_private_database_file, database_identity, remove_created_database_file,
     verify_database_identity, verify_database_parent,
@@ -184,6 +185,17 @@ pub(crate) const QUEUE_FACT_COUNT_TRIGGERS: &str = "DROP TRIGGER IF EXISTS mailb
      END;";
 
 impl StateStore {
+    /// Check whether the path still names the file opened by this store.
+    /// Read-only supervisors use this before reusing a validated connection
+    /// across idle polls, so replacing/restoring the ledger forces a fresh
+    /// open and validation.
+    pub(crate) fn database_path_matches(&self, path: &Path) -> std::io::Result<bool> {
+        let Some(expected) = self.database_identity else {
+            return Ok(false);
+        };
+        Ok(database_identity(path)? == expected)
+    }
+
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
         verify_database_parent(path)
@@ -197,6 +209,7 @@ impl StateStore {
                 path,
                 OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
             )?,
+            database_identity: Some(database_identity),
         };
         verify_database_identity(path, database_identity)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -252,7 +265,10 @@ impl StateStore {
         if stored_schema_version == CURRENT_SCHEMA_VERSION {
             Self::validate_schema_layout(&connection)?;
             if Self::current_schema_data_is_clean_after_layout(&connection) {
-                return Ok(Self { connection });
+                return Ok(Self {
+                    connection,
+                    database_identity: Some(database_identity),
+                });
             }
             let mut migrated = Connection::open_in_memory()?;
             {
@@ -261,6 +277,7 @@ impl StateStore {
             }
             let store = Self {
                 connection: migrated,
+                database_identity: None,
             };
             store.migrate()?;
             Self::validate_schema_layout(&store.connection)?;
@@ -275,6 +292,7 @@ impl StateStore {
         }
         let store = Self {
             connection: migrated,
+            database_identity: None,
         };
         store.migrate()?;
         Self::validate_schema_layout(&store.connection)?;
@@ -312,12 +330,16 @@ impl StateStore {
                 "the ledger needs a local repair before this control can be used",
             ));
         }
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            database_identity: Some(database_identity),
+        })
     }
 
     pub fn in_memory() -> rusqlite::Result<Self> {
         let store = Self {
             connection: Connection::open_in_memory()?,
+            database_identity: None,
         };
         store.migrate()?;
         Self::validate_schema_layout(&store.connection)?;
@@ -1488,7 +1510,22 @@ mod schema_check_expression_tests {
 
 #[cfg(test)]
 mod database_identity_tests {
-    use super::{database_identity, verify_database_identity};
+    use super::{StateStore, database_identity, verify_database_identity};
+
+    #[test]
+    fn readonly_store_is_reusable_only_for_its_original_file_path() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("state.db");
+        drop(StateStore::open(&path).unwrap());
+
+        let store = StateStore::open_readonly(&path).unwrap();
+        assert!(store.database_path_matches(&path).unwrap());
+
+        let memory_store = StateStore::in_memory().unwrap();
+        assert!(!memory_store.database_path_matches(&path).unwrap());
+        drop((store, memory_store));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn replaced_database_path_is_detected() {
