@@ -192,6 +192,13 @@ mod tests {
         store
             .connection
             .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status,detail) VALUES('verify-0',?1,?2,'imap-verification','verification','audit-only-snapshot','completed','[class=transport] timed out')",
+                params![project.id, ids[0]],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
                 "UPDATE runs SET detail='[class=transport] timed out' WHERE id='run-0'",
                 [],
             )
