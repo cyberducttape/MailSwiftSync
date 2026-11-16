@@ -7247,7 +7247,9 @@ fn progress_checkpoints_keep_only_the_newest_per_attempt() {
 
 /// Sustained controller write workload against a SQLite ledger while
 /// read-only connections poll it, as the GUI snapshot worker and
-/// status/metrics processes do. Reports write-latency percentiles,
+/// status/metrics processes do. Seeds jobs through the same batched project
+/// creation path used for imported queues so setup cost does not scale as
+/// individual mailbox transactions. Reports write-latency percentiles,
 /// SQLITE_BUSY/locked failures, the WAL high-water mark, checkpoint time,
 /// and durable bytes per migrated mailbox. Run via
 /// scripts/benchmark-ledger-workload.sh.
@@ -7286,19 +7288,22 @@ fn ledger_write_workload_benchmark() {
     let path = directory.join("state.db");
     let wal = directory.join("state.db-wal");
     let db = StateStore::open(&path).unwrap();
-    let project = db
-        .create_project("ledger-bench", "source.example", "destination.example")
-        .unwrap();
-    let jobs = (0..mailboxes)
+    let mailbox_specs = (0..mailboxes)
         .map(|index| {
-            db.add_mailbox(
-                &project.id,
-                &format!("user{index}@source.example"),
-                &format!("user{index}@destination.example"),
+            (
+                format!("user{index}@source.example"),
+                format!("user{index}@destination.example"),
             )
-            .unwrap()
         })
         .collect::<Vec<_>>();
+    let (project, jobs) = db
+        .create_project_with_mailboxes(
+            "ledger-bench",
+            "source.example",
+            "destination.example",
+            &mailbox_specs,
+        )
+        .unwrap();
     let baseline_bytes = std::fs::metadata(&path).unwrap().len();
 
     let stop = std::sync::Arc::new(AtomicBool::new(false));

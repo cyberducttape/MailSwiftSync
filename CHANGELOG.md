@@ -15,6 +15,9 @@
   gates passed; write p95 was 4.954 ms and read-only-open p95 was 44.331 ms.
   A 10,000-job repeat also passed all gates; read-only-open p95 was 173.431 ms.
   These are single-host observations, not durability qualification or budgets.
+- Updated the ledger workload's initial mailbox population to use the batched
+  queue-creation path, keeping large-cardinality benchmark setup from issuing
+  one SQLite transaction per synthetic mailbox.
 - Added `mailswiftsync provider-qualification <source-id> <destination-id>` as
   a versioned JSON contract for automation. It shares the bundled qualification
   registry used by the GUI and `doctor`, includes a golden fixture and stable
