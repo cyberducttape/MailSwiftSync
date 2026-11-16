@@ -1,5 +1,14 @@
 #![no_main]
 
+mod core {
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) enum VerificationLimit {
+        FolderInventory,
+        ResponseSize,
+        Deadline,
+    }
+}
+
 #[path = "imap_probe/mod.rs"]
 mod imap_probe;
 #[path = "../../src/imap_protocol.rs"]

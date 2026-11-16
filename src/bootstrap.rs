@@ -424,6 +424,8 @@ impl App {
             bulk_destination_keyring_apply: String::new(),
             bulk_selection_view: Default::default(),
             bulk_selection_view_dirty: true,
+            bulk_selection_retry_at: None,
+            bulk_selection_error: None,
             bulk_rendered_range: (0, 0),
             bulk_message: if restored_bulk_project_id.is_some() {
                 "Restored durable batch queue; credentials must be entered again before validation."

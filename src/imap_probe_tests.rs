@@ -1531,19 +1531,6 @@ fn verifier_safety_limits_are_tagged_at_their_source() {
         super::read_imap_tagged_bytes_with_budget(&mut large, "v002", &mut buffer, 16, &budget)
             .unwrap_err();
     assert_eq!(limit(error.detail()), Some(VerificationLimit::ResponseSize));
-
-    assert_eq!(
-        limit(&super::tag_folder_inventory_limit(
-            "IMAP LIST response exceeded the 100000-mailbox limit".into()
-        )),
-        Some(VerificationLimit::FolderInventory)
-    );
-    assert_eq!(
-        limit(&super::tag_folder_inventory_limit(
-            "IMAP connection closed".into()
-        )),
-        None
-    );
 }
 
 #[test]

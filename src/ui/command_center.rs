@@ -30,11 +30,18 @@ fn provider_display_name(provider: &str, host: &str) -> String {
     }
 }
 
-fn endpoint_host(endpoint: &str) -> &str {
-    endpoint
-        .rsplit_once(':')
-        .filter(|(_, port)| port.bytes().all(|byte| byte.is_ascii_digit()))
-        .map_or(endpoint, |(host, _)| host)
+fn endpoint_host(endpoint: &str) -> Option<String> {
+    crate::endpoint::parts(endpoint, 993)
+        .ok()
+        .map(|(host, _)| host)
+}
+
+fn same_endpoint_host(endpoint: &str, host: &str) -> bool {
+    let Some(parsed_endpoint_host) = endpoint_host(endpoint) else {
+        return false;
+    };
+    parsed_endpoint_host
+        .eq_ignore_ascii_case(&endpoint_host(host).unwrap_or_else(|| host.to_owned()))
 }
 
 /// Group the queue's hosts by provider (hosted providers collapse to one row;
@@ -64,9 +71,9 @@ pub(crate) fn provider_health(
                         || (note.provider == provider
                             && (provider != "generic"
                                 || note.endpoint.as_deref().is_some_and(|endpoint| {
-                                    members.iter().any(|host| {
-                                        endpoint_host(endpoint).eq_ignore_ascii_case(host)
-                                    })
+                                    members
+                                        .iter()
+                                        .any(|host| same_endpoint_host(endpoint, host))
                                 })))
                 })
                 .map(|note| note.until.saturating_duration_since(now))
@@ -388,5 +395,27 @@ mod tests {
                 .iter()
                 .all(|row| row.paused_for.is_some())
         );
+    }
+
+    #[test]
+    fn endpoint_cooldowns_match_ipv4_dns_and_ipv6_forms() {
+        let now = Instant::now();
+        let cases = [
+            ("192.0.2.10", "192.0.2.10:143"),
+            ("mail.example.test", "mail.example.test:993"),
+            ("2001:db8::1", "2001:db8::1"),
+            ("2001:db8::1", "[2001:db8::1]"),
+            ("2001:db8::1", "[2001:db8::1]:143"),
+        ];
+        for (host, endpoint) in cases {
+            let hosts = [host.to_owned()];
+            let cooldown = note("generic", Some(endpoint), now + Duration::from_secs(20));
+            let health = provider_health(&hosts, &[&cooldown], now);
+            assert_eq!(
+                health[0].paused_for,
+                Some(Duration::from_secs(20)),
+                "{endpoint}"
+            );
+        }
     }
 }

@@ -3,6 +3,10 @@
 use super::{MAX_IMAP_LIST_INVENTORY_BYTES, MessageFetchBudget, read_with_deadline};
 use crate::imap_probe::{list_parser, literal_framing};
 use crate::imap_protocol::{atom_eq, is_tagged_response, is_untagged_response};
+use crate::{
+    core::VerificationLimit,
+    imap_probe::{ImapError, ImapErrorKind},
+};
 use std::{
     borrow::Cow,
     io::Read,
@@ -38,7 +42,7 @@ pub(super) fn read_imap_list_response<S: Read>(
     tag: &str,
     buffer: &mut [u8; 4096],
 ) -> Result<ListInventorySummary, String> {
-    read_imap_list_response_inner(stream, tag, buffer, None, None)
+    read_imap_list_response_inner(stream, tag, buffer, None, None).map_err(String::from)
 }
 
 #[cfg(test)]
@@ -49,7 +53,8 @@ pub(super) fn read_imap_list_response_with_mailboxes<S: Read>(
     mailboxes: &mut Vec<String>,
 ) -> Result<ListInventorySummary, String> {
     let mut details = Vec::new();
-    let summary = read_imap_list_response_inner(stream, tag, buffer, Some(&mut details), None)?;
+    let summary = read_imap_list_response_inner(stream, tag, buffer, Some(&mut details), None)
+        .map_err(String::from)?;
     mailboxes.extend(
         details
             .into_iter()
@@ -65,7 +70,7 @@ pub(super) fn read_imap_list_response_with_details<S: Read>(
     buffer: &mut [u8; 4096],
     mailboxes: &mut Vec<MailboxDescriptor>,
     budget: &MessageFetchBudget<'_>,
-) -> Result<ListInventorySummary, String> {
+) -> Result<ListInventorySummary, ImapError> {
     read_imap_list_response_inner(stream, tag, buffer, Some(mailboxes), Some(budget))
 }
 
@@ -75,7 +80,7 @@ fn read_imap_list_response_inner<S: Read>(
     buffer: &mut [u8; 4096],
     mut mailbox_details: Option<&mut Vec<MailboxDescriptor>>,
     budget: Option<&MessageFetchBudget<'_>>,
-) -> Result<ListInventorySummary, String> {
+) -> Result<ListInventorySummary, ImapError> {
     let mut line = Vec::new();
     let started = Instant::now();
     let mut last_read = Instant::now();
@@ -94,7 +99,10 @@ fn read_imap_list_response_inner<S: Read>(
             budget.check()?;
         }
         if last_read.elapsed() > MAX_INTER_READ_STALL {
-            return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
+            return Err(ImapError::new(
+                ImapErrorKind::Timeout,
+                "IMAP LIST response stalled (no data received for 15 seconds)",
+            ));
         }
         let budget_deadline = budget.map_or(deadline, |budget| budget.deadline);
         let read_deadline = (last_read + MAX_INTER_READ_STALL)
@@ -108,10 +116,22 @@ fn read_imap_list_response_inner<S: Read>(
         )?;
         last_read = Instant::now();
         if count == 0 {
-            return Err(format!("IMAP connection closed before {tag} completed"));
+            return Err(ImapError::new(
+                ImapErrorKind::Connection,
+                format!("IMAP connection closed before {tag} completed"),
+            ));
         }
         if started.elapsed() > MAX_IMAP_LIST_DURATION {
-            return Err("IMAP LIST response exceeded the 60-second processing limit".into());
+            return Err(match budget {
+                Some(budget) => budget.limit_error(
+                    VerificationLimit::Deadline,
+                    "IMAP LIST response exceeded the 60-second processing limit".into(),
+                ),
+                None => ImapError::new(
+                    ImapErrorKind::Timeout,
+                    "IMAP LIST response exceeded the 60-second processing limit",
+                ),
+            });
         }
         let mut offset = 0;
         while offset < count {
@@ -128,18 +148,22 @@ fn read_imap_list_response_inner<S: Read>(
             offset += 1;
             line.push(byte);
             if line.len() > MAX_IMAP_LIST_LINE_BYTES {
-                return Err("IMAP LIST response record exceeded 64 KiB".into());
+                return Err(response_limit("IMAP LIST response record exceeded 64 KiB"));
             }
             if byte != b'\n' {
                 continue;
             }
             if line.len() < 2 || line[line.len() - 2] != b'\r' {
-                return Err("IMAP LIST response record did not end with CRLF".into());
+                return Err(protocol_error(
+                    "IMAP LIST response record did not end with CRLF",
+                ));
             }
             let text = match std::str::from_utf8(&line) {
                 Ok(text) => Cow::Borrowed(text),
                 Err(_) if literal_header.is_some() || is_list_response_bytes(&line) => {
-                    return Err("IMAP LIST response record was not valid UTF-8".into());
+                    return Err(protocol_error(
+                        "IMAP LIST response record was not valid UTF-8",
+                    ));
                 }
                 Err(_) => String::from_utf8_lossy(&line),
             };
@@ -151,7 +175,9 @@ fn read_imap_list_response_inner<S: Read>(
             if let Some(header) = literal_header.take() {
                 let mailbox_literal = literal_is_mailbox;
                 if text.bytes().any(|byte| byte.is_ascii_control()) {
-                    return Err("IMAP LIST data after literal contained a control octet".into());
+                    return Err(protocol_error(
+                        "IMAP LIST data after literal contained a control octet",
+                    ));
                 }
                 let after_extension_closers = text.trim_start_matches(')');
                 let closes_extension_list = !mailbox_literal
@@ -165,23 +191,24 @@ fn read_imap_list_response_inner<S: Read>(
                     && !text.chars().next().is_some_and(char::is_whitespace)
                     && !closes_extension_list
                 {
-                    return Err(if mailbox_literal {
-                        "malformed data after IMAP LIST mailbox literal".into()
+                    return Err(protocol_error(if mailbox_literal {
+                        "malformed data after IMAP LIST mailbox literal"
                     } else {
-                        "malformed data after IMAP LIST extension literal".into()
-                    });
+                        "malformed data after IMAP LIST extension literal"
+                    }));
                 }
                 let mut header = header;
                 if let Some(size) = list_literal_size(text) {
                     if size > MAX_IMAP_LIST_LITERAL_BYTES {
-                        return Err("IMAP LIST literal exceeded 1 MiB".into());
+                        return Err(response_limit("IMAP LIST literal exceeded 1 MiB"));
                     }
                     ignored_literal_bytes = ignored_literal_bytes
                         .checked_add(size)
                         .filter(|total| *total <= MAX_IMAP_LIST_INVENTORY_BYTES)
                         .ok_or_else(|| {
-                            "IMAP LIST extension literals exceeded the inventory byte limit"
-                                .to_owned()
+                            inventory_limit(
+                                "IMAP LIST extension literals exceeded the inventory byte limit",
+                            )
                         })?;
                     header.push_str(text);
                     literal_header = Some(header);
@@ -191,7 +218,7 @@ fn read_imap_list_response_inner<S: Read>(
                     continue;
                 }
                 header.push_str(text);
-                record_list_entry(
+                record_list_entry_typed(
                     &header,
                     mailbox_literal_seen.then_some(literal_value.as_slice()),
                     &mut summary,
@@ -206,7 +233,7 @@ fn read_imap_list_response_inner<S: Read>(
             }
             let literal_size = list_literal_size(text);
             if is_untagged_response(text, "LIST") && literal_size.is_none() {
-                record_list_entry(
+                record_list_entry_typed(
                     text,
                     None,
                     &mut summary,
@@ -228,27 +255,29 @@ fn read_imap_list_response_inner<S: Read>(
                         })
                         .take(512)
                         .collect::<String>();
-                    return Err(format!("IMAP LIST command {tag} failed: {detail}"));
+                    return Err(ImapError::new(
+                        ImapErrorKind::Server,
+                        format!("IMAP LIST command {tag} failed: {detail}"),
+                    ));
                 }
                 return Ok(summary);
             }
             if let Some(literal_size) = list_literal_size(text) {
                 if literal_size > MAX_IMAP_LIST_LITERAL_BYTES {
-                    return Err("IMAP LIST literal exceeded 1 MiB".into());
+                    return Err(response_limit("IMAP LIST literal exceeded 1 MiB"));
                 }
                 if is_untagged_response(text, "LIST") {
                     let header = literal_framing::literal_header(text.as_bytes())
-                        .ok_or_else(|| "malformed IMAP LIST literal header".to_owned())?;
+                        .ok_or_else(|| protocol_error("malformed IMAP LIST literal header"))?;
                     let prefix = text
                         .get(..header.start)
-                        .ok_or_else(|| "malformed IMAP LIST literal position".to_owned())?;
+                        .ok_or_else(|| protocol_error("malformed IMAP LIST literal position"))?;
                     match list_parser::literal_is_mailbox_name(prefix) {
                         Some(true) => {
                             if literal_size == 0 {
-                                return Err(
-                                    "IMAP LIST returned an empty mailbox-name literal; unsupported"
-                                        .into(),
-                                );
+                                return Err(protocol_error(
+                                    "IMAP LIST returned an empty mailbox-name literal; unsupported",
+                                ));
                             }
                             literal_header = Some(text.to_owned());
                             literal_value.clear();
@@ -261,8 +290,9 @@ fn read_imap_list_response_inner<S: Read>(
                                 .checked_add(literal_size)
                                 .filter(|total| *total <= MAX_IMAP_LIST_INVENTORY_BYTES)
                                 .ok_or_else(|| {
-                                    "IMAP LIST extension literals exceeded the inventory byte limit"
-                                        .to_owned()
+                                    inventory_limit(
+                                        "IMAP LIST extension literals exceeded the inventory byte limit",
+                                    )
                                 })?;
                             literal_header = Some(text.to_owned());
                             literal_value.clear();
@@ -271,7 +301,7 @@ fn read_imap_list_response_inner<S: Read>(
                             literal_remaining = literal_size;
                         }
                         None => {
-                            return Err("malformed IMAP LIST literal placement".into());
+                            return Err(protocol_error("malformed IMAP LIST literal placement"));
                         }
                     }
                 }
@@ -287,6 +317,7 @@ fn is_list_response_bytes(line: &[u8]) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(super) fn record_list_entry(
     line: &str,
     literal_name: Option<&[u8]>,
@@ -294,6 +325,23 @@ pub(super) fn record_list_entry(
     mailbox_details: &mut Option<&mut Vec<MailboxDescriptor>>,
     inventory_bytes: &mut usize,
 ) -> Result<(), String> {
+    record_list_entry_typed(
+        line,
+        literal_name,
+        summary,
+        mailbox_details,
+        inventory_bytes,
+    )
+    .map_err(String::from)
+}
+
+fn record_list_entry_typed(
+    line: &str,
+    literal_name: Option<&[u8]>,
+    summary: &mut ListInventorySummary,
+    mailbox_details: &mut Option<&mut Vec<MailboxDescriptor>>,
+    inventory_bytes: &mut usize,
+) -> Result<(), ImapError> {
     if !is_untagged_response(line, "LIST") {
         return Ok(());
     }
@@ -303,25 +351,29 @@ pub(super) fn record_list_entry(
     match literal_name {
         Some(bytes) => {
             std::str::from_utf8(bytes)
-                .map_err(|_| "IMAP LIST mailbox literal was not valid UTF-8".to_owned())?;
+                .map_err(|_| protocol_error("IMAP LIST mailbox literal was not valid UTF-8"))?;
             if bytes.iter().any(u8::is_ascii_control) {
-                return Err("IMAP LIST mailbox literal contained a control octet".to_owned());
+                return Err(protocol_error(
+                    "IMAP LIST mailbox literal contained a control octet",
+                ));
             }
         }
         None => {
             list_parser::mailbox_name(line)
-                .ok_or_else(|| "IMAP LIST mailbox name was missing or malformed".to_owned())?;
+                .ok_or_else(|| protocol_error("IMAP LIST mailbox name was missing or malformed"))?;
         }
     }
     if !list_parser::has_fixed_fields(line) {
-        return Err("IMAP LIST delimiter or mailbox field was missing or malformed".to_owned());
+        return Err(protocol_error(
+            "IMAP LIST delimiter or mailbox field was missing or malformed",
+        ));
     }
     let delimiter = list_parser::delimiter(line);
     summary.mailbox_count = summary.mailbox_count.saturating_add(1);
     if summary.mailbox_count > MAX_IMAP_LIST_MAILBOXES {
-        return Err(format!(
+        return Err(inventory_limit(format!(
             "IMAP LIST response exceeded the {MAX_IMAP_LIST_MAILBOXES}-mailbox limit"
-        ));
+        )));
     }
     let special_use = list_special_use(line);
     if !special_use.is_empty() {
@@ -334,9 +386,9 @@ pub(super) fn record_list_entry(
     if let Some(details) = mailbox_details.as_deref_mut() {
         let wire_name = match literal_name {
             Some(bytes) => String::from_utf8(bytes.to_vec())
-                .map_err(|_| "IMAP LIST mailbox literal was not valid UTF-8".to_owned())?,
+                .map_err(|_| protocol_error("IMAP LIST mailbox literal was not valid UTF-8"))?,
             None => list_parser::mailbox_name(line)
-                .ok_or_else(|| "IMAP LIST mailbox name was missing or malformed".to_owned())?,
+                .ok_or_else(|| protocol_error("IMAP LIST mailbox name was missing or malformed"))?,
         };
         let descriptor_bytes = wire_name
             .len()
@@ -345,9 +397,9 @@ pub(super) fn record_list_entry(
             .saturating_add(256);
         *inventory_bytes = inventory_bytes.saturating_add(descriptor_bytes);
         if *inventory_bytes > MAX_IMAP_LIST_INVENTORY_BYTES {
-            return Err(format!(
+            return Err(inventory_limit(format!(
                 "IMAP LIST inventory exceeded the {MAX_IMAP_LIST_INVENTORY_BYTES}-byte limit"
-            ));
+            )));
         }
         details.push(MailboxDescriptor {
             wire_name,
@@ -357,6 +409,18 @@ pub(super) fn record_list_entry(
         });
     }
     Ok(())
+}
+
+fn protocol_error(detail: impl Into<String>) -> ImapError {
+    ImapError::new(ImapErrorKind::Protocol, detail)
+}
+
+fn response_limit(detail: impl Into<String>) -> ImapError {
+    ImapError::limit(VerificationLimit::ResponseSize, detail.into())
+}
+
+fn inventory_limit(detail: impl Into<String>) -> ImapError {
+    ImapError::limit(VerificationLimit::FolderInventory, detail.into())
 }
 
 fn list_special_use(line: &str) -> Vec<String> {
