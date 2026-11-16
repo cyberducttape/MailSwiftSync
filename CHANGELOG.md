@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Verification page writes now retain the original `rusqlite::Error` in the
+  staging API, including `SQLITE_FULL`, instead of flattening SQLite failures
+  into display strings. The existing disk-full recovery regression checks the
+  typed error code and confirms the durable stage remains recoverable. Typed
+  propagation through the IMAP sink and retry policy remains in progress.
 - Mailbox review cards and customer proof exports now expose transfer completion,
   metadata reconciliation, bounded content verification, and cutover acceptance
   as separate states. Cutover acceptance remains unestablished until the separate
