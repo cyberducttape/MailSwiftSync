@@ -6,6 +6,39 @@ use std::{
 
 pub const MAX_IMAP_LIST_INVENTORY_BYTES: usize = 32 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ImapErrorKind {
+    Timeout,
+    Connection,
+    Server,
+    Protocol,
+}
+
+#[derive(Debug)]
+pub(crate) struct ImapError(String);
+
+impl ImapError {
+    pub(crate) fn new(kind: ImapErrorKind, detail: impl Into<String>) -> Self {
+        Self(format!("{kind:?}: {}", detail.into()))
+    }
+
+    pub(crate) fn limit(_limit: crate::core::VerificationLimit, detail: String) -> Self {
+        Self(detail)
+    }
+}
+
+impl From<ImapError> for String {
+    fn from(error: ImapError) -> Self {
+        error.0
+    }
+}
+
+impl From<String> for ImapError {
+    fn from(detail: String) -> Self {
+        Self(detail)
+    }
+}
+
 pub struct MessageFetchBudget<'a> {
     pub deadline: Instant,
     pub cancel: &'a AtomicBool,
@@ -20,6 +53,14 @@ impl MessageFetchBudget<'_> {
             return Err("fuzz stream deadline exceeded".into());
         }
         Ok(())
+    }
+
+    pub fn limit_error(
+        &self,
+        limit: crate::core::VerificationLimit,
+        detail: String,
+    ) -> ImapError {
+        ImapError::limit(limit, detail)
     }
 }
 
