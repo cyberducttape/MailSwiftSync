@@ -13,6 +13,11 @@
   a seeded 10-second repeat completed 633,246 executions and reached 364
   coverage counters, without a crash. These are smoke results, not sustained
   fuzz qualification.
+- Added a repeatable `migrateaudit` staging benchmark and recorded 1k/10k/100k
+  unique-identity local measurements. At 100k records per side, the equal
+  synthetic snapshots passed in 104.93 seconds with 147.13 MiB sampled stage
+  storage and 38.78 MiB peak RSS on tmpfs; this does not qualify persistent
+  storage or a supported capacity envelope.
 - The provider qualification card now identifies its status as coming from
   this build's bundled evidence registry, so operators do not mistake it for
   a live provider lookup.
