@@ -13,6 +13,26 @@ if [[ ! -d "$ledger_root" ]]; then
   exit 1
 fi
 export MAILSWIFTSYNC_LEDGER_BENCH_ROOT="$ledger_root"
+printf 'Benchmark timestamp (UTC): %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  printf 'Git commit: %s\n' "$(git rev-parse HEAD)"
+else
+  printf 'Git commit: unavailable\n'
+fi
+printf 'OS/kernel: %s\n' "$(uname -a)"
+printf 'Rust compiler: %s\n' "$(rustc --version --verbose | tr '\n' ' ')"
+printf 'Cargo: %s\n' "$(cargo --version)"
+printf 'Logical CPUs: %s\n' "$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf 'unknown')"
+if command -v lscpu >/dev/null 2>&1; then
+  lscpu | awk -F: '/^Model name:/ && !printed { gsub(/^[ \t]+/, "", $2); print "CPU model: " $2; printed=1 }'
+fi
+if [[ -r /proc/meminfo ]]; then
+  awk '/^MemTotal:/ { printf "Host memory: %.0f MiB\n", $2 / 1024; exit }' /proc/meminfo
+fi
+printf 'Workload: mailboxes=%s batches_per_run=%s readonly_open_samples=%s\n' \
+  "${MAILSWIFTSYNC_LEDGER_BENCH_MAILBOXES:-2000}" \
+  "${MAILSWIFTSYNC_LEDGER_BENCH_BATCHES:-20}" \
+  "${MAILSWIFTSYNC_LEDGER_OPEN_SAMPLES:-101}"
 printf 'Ledger benchmark storage root: %s\n' "$ledger_root"
 if command -v findmnt >/dev/null 2>&1; then
   findmnt --target "$ledger_root" --output TARGET,SOURCE,FSTYPE

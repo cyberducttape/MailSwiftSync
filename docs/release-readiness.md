@@ -436,9 +436,11 @@ The harness uses `XDG_RUNTIME_DIR` by default when set, which is commonly
 tmpfs. To measure a persistent filesystem, provide an existing private,
 user-owned directory on the target filesystem, for example:
 `MAILSWIFTSYNC_LEDGER_BENCH_ROOT="$HOME" scripts/benchmark-ledger-workload.sh`.
-The script prints the selected root and its mount information before running;
-record that output with the benchmark because a SQLite file-backed test on
-tmpfs is not evidence for persistent-storage latency or durability.
+The script prints the Git revision, timestamp, Rust/Cargo versions, OS/kernel,
+available CPU and memory details, workload parameters, selected root, and its
+mount information before running. Retain that output with the benchmark: a
+SQLite file-backed test on tmpfs is not evidence for persistent-storage
+latency or durability.
 
 The benchmark now also measures repeated `StateStore::open_readonly` latency
 after the write workload has produced run and evidence history. Each open runs

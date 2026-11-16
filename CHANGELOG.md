@@ -9,8 +9,9 @@
   or read-only-open latency budget is asserted.
 - Made the ledger benchmark storage root selectable with
   `MAILSWIFTSYNC_LEDGER_BENCH_ROOT`; the harness now prints the selected
-  filesystem mount so tmpfs runs cannot be mistaken for persistent-storage
-  qualification. Recorded a first ext4-backed 2,000-job sample: all configured
+  filesystem mount and the run's toolchain/host/workload provenance so tmpfs
+  runs cannot be mistaken for persistent-storage qualification. Recorded a
+  first ext4-backed 2,000-job sample: all configured
   gates passed; write p95 was 4.954 ms and read-only-open p95 was 44.331 ms.
   A 10,000-job repeat also passed all gates; read-only-open p95 was 173.431 ms.
   These are single-host observations, not durability qualification or budgets.
