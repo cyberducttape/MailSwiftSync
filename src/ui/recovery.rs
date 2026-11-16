@@ -7,7 +7,7 @@
 
 use crate::App;
 use crate::core::{AttentionReason, RecoveryGroup, RecoveryRow};
-use crate::ui::WorkspaceView;
+use crate::ui::{UiLanguage, WorkspaceView};
 use eframe::egui::{self, RichText};
 use std::time::{Duration, Instant};
 
@@ -147,9 +147,11 @@ fn remediation(group: &RecoveryGroup) -> (&'static str, &'static str, WorkspaceV
         ),
     }
 }
-fn progress_checkpoint_label(detail: &str) -> String {
+fn progress_observation_label(detail: &str, language: UiLanguage) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(detail) else {
-        return "Last durable transfer checkpoint is available".to_owned();
+        return language
+            .message("ui.recovery-progress-not-resume-checkpoint")
+            .to_owned();
     };
     let attempt = value.get("attempt").and_then(serde_json::Value::as_u64);
     let progress = value.get("progress");
@@ -160,12 +162,23 @@ fn progress_checkpoint_label(detail: &str) -> String {
         .and_then(|value| value.get("bytes_copied"))
         .and_then(serde_json::Value::as_u64);
     match (attempt, messages, bytes) {
-        (Some(attempt), Some(messages), Some(bytes)) => {
-            format!(
-                "Last durable transfer checkpoint: attempt {attempt}, {messages} messages, {bytes} bytes"
-            )
-        }
-        _ => "Last durable transfer checkpoint is available".to_owned(),
+        (Some(attempt), Some(messages), Some(bytes)) => language
+            .message("ui.recovery-progress-observation")
+            .replace("{attempt}", &attempt.to_string())
+            .replace("{messages}", &messages.to_string())
+            .replace("{bytes}", &bytes.to_string()),
+        _ => language
+            .message("ui.recovery-progress-not-resume-checkpoint")
+            .to_owned(),
+    }
+}
+
+fn resume_semantics_key(engine: Option<&str>, has_engine_state: bool) -> &'static str {
+    match engine {
+        Some("dovecot") if has_engine_state => "ui.recovery-dovecot-checkpoint-revalidate",
+        Some("dovecot") => "ui.recovery-dovecot-checkpoint-missing",
+        Some("imapsync") => "ui.recovery-imapsync-resume-semantics",
+        _ => "ui.recovery-resume-semantics-unknown",
     }
 }
 
@@ -501,12 +514,74 @@ impl App {
                 )
                 .on_hover_text(detail);
             }
-            if let Some(checkpoint) = &row.last_progress_checkpoint {
+            if let Some(progress) = &row.last_progress_observation {
                 ui.label(
-                    RichText::new(progress_checkpoint_label(checkpoint))
+                    RichText::new(progress_observation_label(progress, self.language))
                         .small()
-                        .color(colors.info),
+                        .color(colors.text_secondary),
                 );
+            }
+            if let Some(snapshot) = row.last_transfer_plan_snapshot.as_deref() {
+                let digest = crate::plan_identity::snapshot_sha256(snapshot);
+                let short_digest = digest.get(..12).unwrap_or(&digest);
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.recovery-plan-snapshot-hash")
+                            .replace("{}", short_digest),
+                    )
+                    .small()
+                    .color(colors.text_secondary),
+                )
+                .on_hover_text(digest);
+                if let Ok(Some(plan)) = crate::migration_plan::decode_report_run_snapshot(snapshot)
+                {
+                    let policy = plan.profile.into_profile().destination_mutation_policy();
+                    ui.label(
+                        RichText::new(
+                            self.language
+                                .message("ui.recovery-destination-policy")
+                                .replace("{}", self.language.text(policy.label())),
+                        )
+                        .small()
+                        .color(if policy.may_remove_destination_state() {
+                            colors.danger
+                        } else {
+                            colors.text_secondary
+                        }),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(
+                            self.language
+                                .message("ui.recovery-destination-policy-unknown"),
+                        )
+                        .small()
+                        .color(colors.warning),
+                    );
+                }
+            }
+            let has_engine_state = row.last_emitted_state_sha256.is_some();
+            ui.label(
+                RichText::new(self.language.message(resume_semantics_key(
+                    row.last_transfer_engine.as_deref(),
+                    has_engine_state,
+                )))
+                .small()
+                .color(colors.warning),
+            );
+            if let Some(state_digest) = row.last_emitted_state_sha256.as_deref() {
+                let short_digest = state_digest.get(..12).unwrap_or(state_digest);
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .message("ui.recovery-engine-state-digest")
+                            .replace("{}", short_digest),
+                    )
+                    .small()
+                    .color(colors.text_secondary),
+                )
+                .on_hover_text(state_digest);
             }
             ui.add_space(4.0);
         }
@@ -579,6 +654,31 @@ mod tests {
         assert!(english("delta_required").contains("final catch-up"));
         assert!(english("cancelled").contains("cancelled"));
         assert!(english("attention").contains("operator review"));
+    }
+
+    #[test]
+    fn recovery_explains_engine_specific_resume_contracts_without_claiming_checkpoint_validity() {
+        assert_eq!(
+            UiLanguage::English.message(resume_semantics_key(Some("imapsync"), false)),
+            "imapsync resumes by rerunning engine matching; prior messages may be rediscovered. MailSwiftSync has no per-message transfer checkpoint."
+        );
+        assert!(
+            UiLanguage::English
+                .message(resume_semantics_key(Some("dovecot"), true))
+                .contains("must be revalidated before reuse")
+        );
+        assert!(
+            UiLanguage::English
+                .message(resume_semantics_key(Some("dovecot"), false))
+                .contains("No Dovecot resume-state digest")
+        );
+        assert!(
+            progress_observation_label(
+                r#"{"attempt":2,"progress":{"messages_copied":7,"bytes_copied":99}}"#,
+                UiLanguage::English,
+            )
+            .contains("not a per-message resume checkpoint")
+        );
     }
 
     #[test]
