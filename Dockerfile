@@ -47,6 +47,7 @@ WORKDIR /build
 ARG MAILSWIFTSYNC_GIT_SHA=unknown
 ENV MAILSWIFTSYNC_GIT_SHA=$MAILSWIFTSYNC_GIT_SHA
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY capabilities.toml ./capabilities.toml
 COPY src ./src
 COPY locales ./locales
 # The desktop crate embeds the bundled Plex fonts at compile time. Keep the

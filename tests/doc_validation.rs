@@ -540,6 +540,10 @@ fn runtime_image_applies_security_updates_and_is_scanned_in_ci_and_release() {
         .expect("runtime image scanner should exist");
 
     assert!(dockerfile.contains("apt-mark hold dovecot-core dovecot-imapd"));
+    assert!(
+        dockerfile.contains("COPY capabilities.toml ./capabilities.toml"),
+        "the builder must include compile-time provider qualification data"
+    );
     assert!(dockerfile.contains("ARG DEBIAN_SNAPSHOT=20261107T000000Z"));
     assert!(dockerfile.contains("snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}"));
     assert!(dockerfile.contains("snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}"));

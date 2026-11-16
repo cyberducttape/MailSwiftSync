@@ -8,6 +8,9 @@
   project-level approval and source-quiescence workflow records it. Customer-proof
   format version 7 adds these per-mailbox assurance steps, including when no
   verification evidence exists.
+- Docker builds now copy the provider qualification manifest required by the
+  compile-time GUI and `doctor` qualification model. A repository test guards
+  this builder input so containerized release and integration builds keep working.
 - Rust toolchain setup actions now use the immutable commit SHA recorded in
   `actions.lock` across CI, release, CodeQL, dependency-audit, and DAST workflows.
   Workflow validation checks that every such reference is immutable and matches

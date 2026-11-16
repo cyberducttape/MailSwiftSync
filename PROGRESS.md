@@ -15,6 +15,9 @@ Branch `fix/ipv6-cooldown-and-stale-batch-summary`:
 - Added regression assertions for aggregate-only evidence and updated provider
   evidence validation to accept proof version 7 while rejecting unknown future
   versions.
+- Traced a failing hosted container integration build to the Docker builder
+  omitting the compile-time `capabilities.toml`; added the missing input and a
+  repository regression assertion.
 
 Evidence: focused customer-proof Rust test, provider evidence Python tests
 (15 passed, 1 skipped), `cargo fmt`, localization validation, and `git diff
