@@ -15,6 +15,19 @@ import subprocess
 import tempfile
 import time
 
+THEME_NAMES = (
+    "Default",
+    "ClassicGreen",
+    "ClassicAmber",
+    "ClassicWhite",
+    "Retro80sNeon",
+    "HighContrast",
+    "TerminalBlue",
+    "Commodore64",
+    "Windows95",
+    "Windows31",
+)
+
 
 def own_window(pid: int) -> str | None:
     tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True, timeout=5)
@@ -32,7 +45,12 @@ def main() -> None:
     parser.add_argument("--binary", type=Path, default=Path("target/debug/mailswiftsync"))
     parser.add_argument("--output", type=Path, default=Path("docs/wiki/assets"))
     parser.add_argument("--window", default="1440x1000", help="Preview size, e.g. 900x640")
-    parser.add_argument("--theme", default="Default", help="Theme name as stored in appearance.toml, e.g. HighContrast")
+    parser.add_argument(
+        "--theme",
+        default="Default",
+        choices=THEME_NAMES,
+        help="Theme enum name as stored in appearance.toml (for example Retro80sNeon)",
+    )
     parser.add_argument("--light", action="store_true", help="Capture the light variant")
     args = parser.parse_args()
     for program in ("xwininfo", "xprop", "import"):
