@@ -8,9 +8,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 
-![Migration plan — Default dark theme](docs/wiki/assets/migration-plan.png)
+![Migration plan — Retro 80s Neon theme](docs/wiki/assets/migration-plan.png)
 
-> Screenshots show the running desktop application in the Default dark theme, using synthetic demo data and an isolated workspace.
+> Screenshots show the running desktop application in the Retro 80s Neon theme, using synthetic demo data and an isolated workspace.
 
 <details>
 <summary>Overview and verification workspace</summary>
@@ -22,7 +22,7 @@
 </details>
 
 To refresh these images on an X11/XWayland desktop, run `cargo build --locked`
-followed by `python3 scripts/capture-ui-previews.py`. The capture script uses
+followed by `python3 scripts/capture-ui-previews.py --theme Retro80sNeon`. The capture script uses
 temporary state and configuration; it requires `xwininfo`, `xprop`, and
 ImageMagick's `import` command.
 
@@ -569,7 +569,7 @@ restoring an earlier verified backup returns the ledger to normal operation.
 It does not cover the transfer engine itself running out of destination
 storage.
 
-![Mailboxes workspace — Default dark theme](docs/wiki/assets/batch-queue.png)
+![Mailboxes workspace — Retro 80s Neon theme](docs/wiki/assets/batch-queue.png)
 
 The on-screen **Activity** log is intentionally capped at 10,000 lines for desktop stability; the structured durable event ledger remains the longer-lived audit record. Raw engine transcripts stay process-local and are not written to SQLite.
 
