@@ -374,6 +374,7 @@ fn resolve_webhook_target(
         &policy.allowed_domains,
         "webhook",
     )
+    .map_err(String::from)
 }
 
 #[cfg(test)]

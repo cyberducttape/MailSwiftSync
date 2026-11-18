@@ -142,14 +142,15 @@ pub(crate) fn resolve_policy_checked_https_target(
     allow_private_networks: bool,
     allowed_domains: &[String],
     label: &str,
-) -> Result<Vec<SocketAddr>, String> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| format!("the {label} endpoint is missing a host"))?;
-    validate_endpoint_host(url, allow_private_networks, allowed_domains, label)?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| format!("the {label} endpoint is missing a port"))?;
+) -> Result<Vec<SocketAddr>, PolicyTargetError> {
+    let host = url.host_str().ok_or_else(|| {
+        PolicyTargetError::Policy(format!("the {label} endpoint is missing a host"))
+    })?;
+    validate_endpoint_host(url, allow_private_networks, allowed_domains, label)
+        .map_err(PolicyTargetError::Policy)?;
+    let port = url.port_or_known_default().ok_or_else(|| {
+        PolicyTargetError::Policy(format!("the {label} endpoint is missing a port"))
+    })?;
     let addresses = match host.parse::<IpAddr>() {
         Ok(address) => vec![SocketAddr::new(address, port)],
         Err(_) => crate::imap_probe::resolve_dns_with_deadline(
@@ -157,21 +158,50 @@ pub(crate) fn resolve_policy_checked_https_target(
             Instant::now() + Duration::from_secs(10),
             &|| false,
         )
-        .map_err(|error| format!("could not resolve {label} endpoint host: {error}"))?,
+        .map_err(|error| {
+            PolicyTargetError::Resolution(format!(
+                "could not resolve {label} endpoint host: {error}"
+            ))
+        })?,
     };
     if addresses.is_empty() {
-        return Err(format!("{label} endpoint host resolved to no addresses"));
+        return Err(PolicyTargetError::Resolution(format!(
+            "{label} endpoint host resolved to no addresses"
+        )));
     }
     if !allow_private_networks
         && addresses
             .iter()
             .any(|address| !is_allowed_public_egress(address.ip()))
     {
-        return Err(format!(
+        return Err(PolicyTargetError::Policy(format!(
             "{label} endpoint host resolves to a non-public or local-only address disabled by organization policy"
-        ));
+        )));
     }
     Ok(addresses)
+}
+
+/// Why an HTTPS target could not be checked: the endpoint or organization
+/// policy rejects it, which retrying cannot change, or its name could not be
+/// resolved right now, which a later attempt may get past.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PolicyTargetError {
+    Policy(String),
+    Resolution(String),
+}
+
+impl std::fmt::Display for PolicyTargetError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Policy(detail) | Self::Resolution(detail) => formatter.write_str(detail),
+        }
+    }
+}
+
+impl From<PolicyTargetError> for String {
+    fn from(error: PolicyTargetError) -> Self {
+        error.to_string()
+    }
 }
 
 fn validate_endpoint_host(
@@ -944,6 +974,32 @@ mod tests {
             let address = address.parse().unwrap();
             assert!(super::is_allowed_public_egress(address), "{address}");
         }
+    }
+
+    #[test]
+    fn target_checks_separate_policy_refusals_from_resolution_failures() {
+        use super::{PolicyTargetError, resolve_policy_checked_https_target};
+        let private = reqwest::Url::parse("https://10.0.0.1/token").unwrap();
+        assert!(matches!(
+            resolve_policy_checked_https_target(&private, false, &[], "OAuth token"),
+            Err(PolicyTargetError::Policy(_))
+        ));
+        let outside = reqwest::Url::parse("https://login.example.net/token").unwrap();
+        assert!(matches!(
+            resolve_policy_checked_https_target(
+                &outside,
+                false,
+                &["example.com".into()],
+                "OAuth token"
+            ),
+            Err(PolicyTargetError::Policy(_))
+        ));
+        // RFC 6761 reserves .invalid so it never resolves.
+        let unresolvable = reqwest::Url::parse("https://mailswiftsync-test.invalid/token").unwrap();
+        assert!(matches!(
+            resolve_policy_checked_https_target(&unresolvable, false, &[], "OAuth token"),
+            Err(PolicyTargetError::Resolution(_))
+        ));
     }
 
     #[test]

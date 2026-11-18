@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- OAuth token refresh no longer ends a run on transient conditions that the
+  typed classification had marked as configuration: a DNS failure or empty
+  answer for the token endpoint is now a transport failure, and HTTP 400
+  replies carrying `temporarily_unavailable`, `server_error` (RFC 6749) or
+  `slow_down` (RFC 8628) are retried as provider or capacity failures.
+
 - Rebuilt the packaged integration image from current main and reran both local
   IMAP engines plus controller, storage-fault, TLS-floor, and OAuth-refresh
   smoke paths. The imapsync fixture finished with 15/15 Level 2 metadata
