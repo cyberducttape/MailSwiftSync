@@ -894,45 +894,53 @@ Linux Wayland configuration disables winit's default `ab_glyph` renderer and
 the lockfile no longer contains `ttf-parser`. Release qualification must
 recheck the XLSX ZIP/XML path before publishing artifacts.
 
-The 2026-10-17 `cargo audit --deny yanked` run over both `Cargo.lock` and
+The 2026-11-19 `cargo audit --deny yanked` run over both `Cargo.lock` and
 `fuzz/Cargo.lock` reported no vulnerable or yanked crates. The application
-lockfile still emits three unmaintained-crate warnings at the refreshed
-versions: `zvariant 5.15.1`
+lockfile reports four allowed unmaintained-crate warnings: `zvariant 5.15.1`
 ([RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html)),
 `zbus_names 4.3.5`
 ([RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html)),
-and `zvariant_derive 5.15.1`
-([RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)).
-Updating to the newest compatible patches did not clear these notices. The
-current lockfile reaches them through both Linux Secret Service keyring support
-and the Linux accessibility stack. These are maintenance notices, not
-published vulnerability findings. Upstream states that this functionality was
-merged into `zbus` 6.0 and the standalone crates will receive no further
-releases ([upstream migration notice](https://github.com/z-galaxy/zbus/issues/2043)).
+`zvariant_derive 5.15.1`
+([RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)),
+and `chrono 0.4.45`
+([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)).
+These are maintenance notices, not published vulnerability findings. The
+three zbus-family crates remain in the Linux Secret Service and accessibility
+dependency graph. Upstream states that this functionality was merged into
+`zbus` 6.0 and the standalone crates will receive no further releases
+([upstream migration notice](https://github.com/z-galaxy/zbus/issues/2043)).
 The current `keyring` and GUI/accessibility dependency graph still resolves the
 older crate family; do not claim this exposure is remediated merely because
 `cargo deny check advisories` succeeds. Track compatible parent-crate updates,
-then qualify Linux keyring behavior and accessibility before removing this
-notice. Re-run both audit tools against the exact release lockfile.
+then qualify Linux keyring behavior and accessibility before removing these
+exceptions.
+
+`chrono` is a direct dependency used for RFC 3339 and RFC 2822 parsing,
+maintenance-window timezone/DST handling, and timestamp calculations across
+the application. Its migration to `jiff` is a separate maintenance item; it
+must preserve date parsing and timezone transition behavior, and requires the
+full cross-platform runtime suite before its exception is removed. The current
+exception is recorded in `deny.toml` and remains until that migration is
+complete.
 
 The dependency policy sets `unmaintained = "all"` so newly introduced
-unmaintained transitive crates fail the scheduled and pull-request checks.
-Only the three listed zbus-family advisory IDs are excepted, with a reason in
+unmaintained crates fail the scheduled and pull-request checks unless a specific
+advisory is explicitly excepted. The three zbus-family notices and the direct
+`chrono` notice are the four current exceptions, each with a reason in
 `deny.toml`; `unused-ignored-advisory = "deny"` makes obsolete exceptions
 fail. Python qualification helpers and the `pip-audit` toolchain use generated
 hash-locked requirement files, installed with pip's `--require-hashes` mode.
 
-The repository's GitHub security settings were also checked on 2026-10-17:
-Dependabot security alerts and security updates are disabled. The repository
-does contain weekly Dependabot update configuration and a scheduled dependency
-audit workflow, but neither is a substitute for GitHub's per-advisory alerts
-and automated security-update PRs. A repository administrator must enable
-Dependabot alerts and security updates, then verify the settings and resulting
-alerts before GA; this workspace's GitHub authorization cannot change that
-repository-level setting.
+The repository's GitHub security settings were checked through the repository
+API on 2026-11-19. Dependabot security updates are disabled. That API response
+does not expose the Dependabot alerts setting, so its current state must be
+confirmed in the repository's Security settings before GA. Weekly Dependabot
+update configuration and the scheduled dependency audit workflow are not
+substitutes for per-advisory alerts and automated security-update PRs.
 
-The same settings snapshot shows GitHub secret scanning enabled but push
-protection and non-provider-pattern scanning disabled. Therefore, enabled
+The same API response shows GitHub secret scanning enabled, but push
+protection, non-provider-pattern scanning, and validity checks are disabled.
+Therefore, enabled
 secret scanning must not be described as push-time prevention or coverage of
 all credential formats. Before GA, a repository administrator should enable
 push protection and non-provider-pattern scanning where available, review any
