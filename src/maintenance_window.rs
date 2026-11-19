@@ -335,7 +335,7 @@ mod tests {
     fn cet_closes_in(spec: &str, now: &ZonedDateTime) -> Option<Option<u64>> {
         MaintenanceWindow::parse(spec)
             .unwrap()
-            .closes_in_at(&now)
+            .closes_in_at(now)
             .map(|close| close.map(|duration| duration.as_secs() / 60))
     }
 
