@@ -2,6 +2,21 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-19: Reconcile verification-resume roadmap with current behavior
+
+The M8.2 entry had become stale. Durable metadata scans now resume committed
+folder prefixes under a matching tracked CONDSTORE snapshot, validating the
+stored rows and cursor before reuse. Body-hash fingerprints are still
+refetched after interruption, so resumable content hashing remains open.
+`DEVELOPMENT_PLAN.md` now separates these two scopes and records the evidence
+and limits; `docs/verification-envelope.md` and
+`docs/release-readiness.md` describe the implemented metadata-resume contract.
+
+Evidence: implementation in `src/imap_probe.rs` and
+`src/core/message_staging.rs`; scripted edge cases in
+`src/imap_probe_resume_tests.rs` and stage tests. This is a documentation
+alignment change; no tests were run for it.
+
 ## 2026-11-19: Persist stable failure codes (M7, partial)
 
 Controller failures now carry stable identifiers independent of diagnostic
@@ -227,7 +242,8 @@ Evidence: `make check` and `make test` pass locally.
 ## 2026-11-09: Production-readiness audit (R5)
 
 Audited `main` at `9bd15639`. Findings and verdicts are in DEVELOPMENT_PLAN.md
-under R5. M8.3 and M8.4 are done in the same change; M8.2 is not started.
+under R5. At that audit, M8.2 had not started; durable metadata-prefix resume
+was implemented later. Resumable body-hash ranges remain open.
 
 Evidence: see the gate results on the pull request. New regression tests
 cover the TLS and plain deadlines, slot release after a panic, 503 refusals,

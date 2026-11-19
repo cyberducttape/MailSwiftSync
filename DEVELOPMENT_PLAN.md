@@ -230,14 +230,21 @@ response buffer.
    one range regardless of message size. The per-message bound rose from
    64 MiB to 2 GiB (still within the total budget). Not yet run against a
    live provider.
-2. **Resumable verification segments (not started).** Persist
-   per-folder hashing progress in the durable stage, as metadata pages
-   already are, so an interrupted body pass resumes instead of refetching.
-   Today an interrupted body pass refetches, which costs time but cannot
-   produce wrong evidence. Discarding prior body fingerprints on restart is
-   a documented safety invariant (docs/release-readiness.md, enforced by
-   `durable_stage_reopen_invalidates_rows_and_content_fingerprints`), so
-   reversing it needs a maintainer decision and a live provider run.
+2. **Resumable metadata segments: done; resumable body-hash segments: not
+   started.** Durable metadata scans retain committed page/cursor pairs and
+   resume an incomplete folder only after a fresh SELECT matches
+   UIDVALIDITY, UIDNEXT, EXISTS, and a tracked HIGHESTMODSEQ. The stage also
+   checks row count, maximum UID, cursor consistency, and absence of old body
+   fingerprints. Completed folders are reused only when their row count
+   equals EXISTS. Untracked or changed snapshots restart at the first page;
+   body fingerprints are always refetched. This protects FLAGS and content
+   evidence from stale reuse while reducing repeated metadata reads. The
+   scripted resume suite covers the next-sequence cursor, sparse UIDs,
+   snapshot drift, flag-only changes, custom keywords, and MODSEQ parsing
+   (see `src/imap_probe_resume_tests.rs` and the stage tests). It does not
+   establish cross-server atomicity or live-provider CONDSTORE behavior.
+   Resuming partial body-hash ranges remains open; `docs/release-readiness.md`
+   documents why old content fingerprints are invalidated on reopen.
 3. **Time and disk estimate in preflight: done.** Passing capacity rows
    give stage disk, matching time at the release-gated rate, and body
    bytes with their time at a stated 100 Mbit/s. Metadata fetch time is
