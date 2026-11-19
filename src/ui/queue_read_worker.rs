@@ -44,6 +44,7 @@ fn worker_loop(path: PathBuf, requests: Receiver<QueueReadRequest>, responses: S
                     page_matches: false,
                     page_range: 0..0,
                     load_rowids: Vec::new(),
+                    load_job_ids: Vec::new(),
                     transient: Default::default(),
                     selected_ids: Vec::new(),
                     all_selected: false,
@@ -198,6 +199,7 @@ fn same_view(left: &QueueReadRequest, right: &QueueReadRequest) -> bool {
         && left.search == right.search
         && left.state_filter == right.state_filter
         && left.page_matches == right.page_matches
+        && left.load_job_ids == right.load_job_ids
         && left.transient == right.transient
         && left.selected_ids == right.selected_ids
         && left.all_selected == right.all_selected
@@ -219,6 +221,7 @@ mod tests {
             page_matches: false,
             page_range: 0..32,
             load_rowids: vec![1, 2],
+            load_job_ids: Vec::new(),
             transient: Default::default(),
             selected_ids: vec!["mailbox-1".into()],
             all_selected: false,

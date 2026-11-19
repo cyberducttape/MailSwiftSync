@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 /// Rows kept for presentation before the cache is cleared and refilled.
 const MAX_CACHED_ROWS: usize = 4_096;
+pub(crate) const MAX_ACTIVITY_LABEL_ROWS: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FilterKey {
@@ -32,6 +33,9 @@ pub(crate) struct QueueReadRequest {
     pub(crate) page_matches: bool,
     pub(crate) page_range: std::ops::Range<usize>,
     pub(crate) load_rowids: Vec<i64>,
+    /// Additional mailbox labels needed by Activity, independent of the
+    /// currently visible Mailboxes page.
+    pub(crate) load_job_ids: Vec<String>,
     pub(crate) transient: HashMap<String, String>,
     pub(crate) selected_ids: Vec<String>,
     pub(crate) all_selected: bool,
@@ -615,7 +619,7 @@ impl MailboxQueue {
         );
         let filter_changed = filter_result.as_ref().is_ok_and(|changed| *changed);
         let mut filter_error = filter_result.as_ref().err().cloned();
-        let (page_start, page, rows, selection_summary) = if filter_error.is_none() {
+        let (page_start, page, mut rows, selection_summary) = if filter_error.is_none() {
             let range = request.page_range.clone();
             match self.visible_page(store, range.clone()) {
                 Err(error) => {
@@ -661,6 +665,23 @@ impl MailboxQueue {
         } else {
             (request.page_range.start, Vec::new(), Vec::new(), None)
         };
+        if filter_error.is_none() {
+            for job_id in request.load_job_ids.iter().take(MAX_ACTIVITY_LABEL_ROWS) {
+                match self.row_by_id(store, job_id) {
+                    Ok(Some(row)) => {
+                        if !rows.iter().any(|loaded| loaded.rowid == row.rowid) {
+                            rows.push(row);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        filter_error =
+                            Some(format!("Could not read active mailbox labels: {error}"));
+                        break;
+                    }
+                }
+            }
+        }
         QueueReadProjection {
             project_id: request.project_id,
             generation: request.generation,
@@ -817,6 +838,7 @@ mod tests {
             page_matches: false,
             page_range: 0..3,
             load_rowids: Vec::new(),
+            load_job_ids: Vec::new(),
             transient: Default::default(),
             selected_ids,
             all_selected: false,
@@ -837,6 +859,37 @@ mod tests {
                 .selected_loaded,
             1
         );
+    }
+
+    #[test]
+    fn background_projection_loads_activity_labels_outside_the_visible_page() {
+        let store = StateStore::in_memory().unwrap();
+        let queue = imported(&store, 4);
+        let project_id = queue.project_id().unwrap().to_owned();
+        let rowids = store.queue_rowids(&project_id, "", None).unwrap();
+        let rows = store.queue_rows(&project_id, &rowids).unwrap();
+        let activity_job = rows[3].id.clone();
+        let request = QueueReadRequest {
+            project_id: Some(project_id),
+            len: queue.len(),
+            generation: queue.generation(),
+            search: String::new(),
+            state_filter: "all".into(),
+            page_matches: true,
+            page_range: 0..1,
+            load_rowids: Vec::new(),
+            load_job_ids: vec![activity_job.clone()],
+            transient: Default::default(),
+            selected_ids: Vec::new(),
+            all_selected: false,
+            selection_summary_requested: false,
+        };
+
+        let mut worker_queue = MailboxQueue::default();
+        let projection = worker_queue.read_projection(&store, request);
+
+        assert!(projection.rows.iter().any(|row| row.id == activity_job));
+        assert_eq!(projection.page.len(), 1);
     }
 
     #[test]
