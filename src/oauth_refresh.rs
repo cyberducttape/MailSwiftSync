@@ -344,7 +344,17 @@ pub(crate) fn post_token_request(
         &policy.oauth.allowed_domains,
         "OAuth token",
     )
-    .map_err(|error| OAuthRefreshError::new(OAuthRefreshErrorKind::Configuration, error))?;
+    .map_err(|error| {
+        use crate::organization_policy::PolicyTargetError;
+        let kind = match &error {
+            // A DNS failure or empty answer is a transient network condition;
+            // treating it as configuration would end the run on a resolver
+            // hiccup.
+            PolicyTargetError::Resolution(_) => OAuthRefreshErrorKind::Transport,
+            PolicyTargetError::Policy(_) => OAuthRefreshErrorKind::Configuration,
+        };
+        OAuthRefreshError::new(kind, error.to_string())
+    })?;
     let client = oauth_http_client(&host, &addresses).map_err(|error| {
         OAuthRefreshError::new(
             OAuthRefreshErrorKind::Configuration,
@@ -546,6 +556,11 @@ fn parse_token_response(
             "invalid_grant" | "invalid_client" | "unauthorized_client" => {
                 OAuthRefreshErrorKind::Authentication
             }
+            // RFC 6749 section 5.2 lets a token endpoint report these with
+            // HTTP 400; they mean "later", not "misconfigured".
+            "temporarily_unavailable" | "server_error" => OAuthRefreshErrorKind::Provider,
+            // RFC 8628 section 3.5: the client is polling too fast.
+            "slow_down" => OAuthRefreshErrorKind::Capacity,
             _ => status_kind,
         };
         return Err(OAuthRefreshError::new(
@@ -752,6 +767,20 @@ mod tests {
         ] {
             let error = parse_token_response(status, "not-json", &[]).unwrap_err();
             assert_eq!(error.kind, expected, "{status}: {error}");
+        }
+    }
+
+    #[test]
+    fn transient_oauth_error_codes_are_retryable_even_with_http_400() {
+        for (code, expected) in [
+            ("temporarily_unavailable", OAuthRefreshErrorKind::Provider),
+            ("server_error", OAuthRefreshErrorKind::Provider),
+            ("slow_down", OAuthRefreshErrorKind::Capacity),
+            ("invalid_scope", OAuthRefreshErrorKind::Configuration),
+        ] {
+            let body = format!(r#"{{"error":"{code}"}}"#);
+            let error = parse_token_response("HTTP/1.1 400 Bad Request", &body, &[]).unwrap_err();
+            assert_eq!(error.kind, expected, "{code}: {error}");
         }
     }
 
