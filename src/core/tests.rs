@@ -1719,6 +1719,94 @@ fn terminal_batch_run_clears_process_identity_atomically() {
 }
 
 #[test]
+fn terminal_failure_code_is_queryable_and_backfilled_from_legacy_detail() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("failure-code", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source-user", "destination-user")
+        .unwrap();
+    db.begin_run(&project.id, &job, "run-failure-code", "imapsync")
+        .unwrap();
+    db.finish_run(
+        "run-failure-code",
+        "failed",
+        "[class=transport] [failure_code=imap.timeout] connection timed out",
+    )
+    .unwrap();
+
+    assert_eq!(
+        db.latest_run(&job)
+            .unwrap()
+            .unwrap()
+            .failure_code
+            .as_deref(),
+        Some("imap.timeout")
+    );
+    assert_eq!(
+        db.recent_run_list(&project.id, 10).unwrap()[0]
+            .failure_code
+            .as_deref(),
+        Some("imap.timeout")
+    );
+    assert_eq!(
+        db.project_report_snapshot(&project.id)
+            .unwrap()
+            .unwrap()
+            .runs[0]
+            .run
+            .failure_code
+            .as_deref(),
+        Some("imap.timeout")
+    );
+
+    let invalid_job = db
+        .add_mailbox(&project.id, "invalid-source", "invalid-destination")
+        .unwrap();
+    db.begin_run(
+        &project.id,
+        &invalid_job,
+        "run-invalid-failure-code",
+        "imapsync",
+    )
+    .unwrap();
+    db.finish_run(
+        "run-invalid-failure-code",
+        "failed",
+        "[failure_code=Upper.Case] invalid legacy marker",
+    )
+    .unwrap();
+
+    // Model a v39 ledger: terminal diagnostic markers existed, but the
+    // structured column did not. Migration should preserve the stable code.
+    db.connection
+        .execute("ALTER TABLE runs DROP COLUMN failure_code", [])
+        .unwrap();
+    db.connection
+        .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION - 1)
+        .unwrap();
+    db.migrate().unwrap();
+
+    assert_eq!(
+        db.latest_run(&job)
+            .unwrap()
+            .unwrap()
+            .failure_code
+            .as_deref(),
+        Some("imap.timeout")
+    );
+    assert_eq!(
+        db.latest_run(&invalid_job)
+            .unwrap()
+            .unwrap()
+            .failure_code
+            .as_deref(),
+        None
+    );
+}
+
+#[test]
 fn terminal_run_and_mailbox_state_are_committed_together() {
     let db = StateStore::in_memory().unwrap();
     let project = db.create_project("test", "source", "destination").unwrap();

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Terminal run failure codes are now stored in a constrained SQLite column,
+  exposed through run queries and reports, and backfilled from legacy tagged
+  details during schema migration. Operator project reports moved to format
+  version 4 and customer proofs to version 8.
+
 - Durable failure details and retry events now include stable failure codes
   for typed IMAP, OAuth, and local SQLite failures.
 

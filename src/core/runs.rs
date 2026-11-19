@@ -1,5 +1,15 @@
 use super::*;
 
+fn failure_code_from_detail(detail: &str) -> Option<&str> {
+    let code = detail.split_once("[failure_code=")?.1.split_once(']')?.0;
+    (!code.is_empty()
+        && code.len() <= 64
+        && code.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
+        }))
+    .then_some(code)
+}
+
 fn validate_managed_cutover_run_admission(
     tx: &rusqlite::Transaction<'_>,
     project_id: &str,
@@ -635,6 +645,9 @@ impl StateStore {
         ) {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let failure_code = (status != "completed")
+            .then(|| failure_code_from_detail(detail))
+            .flatten();
         let detail = bounded_event_detail(detail);
         let tx = self.connection.unchecked_transaction()?;
         let project_id: String = tx.query_row(
@@ -662,8 +675,8 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let changed = tx.execute(
-            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND status='running'",
-            params![status, detail, run_id],
+            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2,failure_code=?3 WHERE id=?4 AND status='running'",
+            params![status, detail, failure_code, run_id],
         )?;
         if changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -777,6 +790,9 @@ impl StateStore {
         ) {
             return Err(super::ledger_rejection("unknown terminal mailbox state"));
         }
+        let failure_code = (run_status != "completed")
+            .then(|| failure_code_from_detail(detail))
+            .flatten();
         let attention_reason =
             attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
         let detail = bounded_event_detail(detail);
@@ -818,8 +834,8 @@ impl StateStore {
             ));
         }
         let run_changed = tx.execute(
-            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND project_id=?4 AND job_id=?5 AND (status='running' OR (status='queued' AND ?1 IN ('cancelled','failed','verification_failed'))) ",
-            params![run_status, detail, run_id, project_id, job_id],
+            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2,failure_code=?3 WHERE id=?4 AND project_id=?5 AND job_id=?6 AND (status='running' OR (status='queued' AND ?1 IN ('cancelled','failed','verification_failed'))) ",
+            params![run_status, detail, failure_code, run_id, project_id, job_id],
         )?;
         if run_changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);

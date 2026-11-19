@@ -259,7 +259,14 @@ monotonically cumulative counters.
 
 Reports, proofs, certificates, and support bundles carry their own `format`
 markers and are artifact formats, not part of this automation contract.
-The `mailswiftsync-customer-proof` artifact uses format version `7`. Per-mailbox
+The operator `mailswiftsync-project-report` artifact uses format version `4`;
+each run includes nullable `failure_code` as a stable machine-readable terminal
+cause, separate from diagnostic detail. The `mailswiftsync-customer-proof`
+artifact uses format version `8`; its run entries also include nullable
+`failure_code`. Consumers should treat a null code as unavailable or not
+applicable, not infer a cause from prose.
+
+Per-mailbox
 `assurance_status` distinguishes `aggregate_match`, `metadata_match`,
 `bounded_content_match`, `engine_confirmed`, `with_exceptions`, and `incomplete`.
 The summary reports `mailboxes_by_assurance` and does not emit a single
@@ -293,7 +300,9 @@ per-mailbox `assurance_steps` with independent transfer, metadata, bounded
 content, and cutover-acceptance statuses. Cutover acceptance remains
 `not_established` in per-mailbox evidence because it is a separate project-level
 approval and source-quiescence decision. Consumers of version 6 must update
-before accepting version 7. The Mailboxes review card presents the same four
+before accepting version 7. Version 8 adds the nullable per-run `failure_code`
+field for stable failure classification. Consumers of version 7 must update
+before accepting version 8. The Mailboxes review card presents the same four
 steps directly: transfer completion, metadata reconciliation, bounded content
 verification, and explicit cutover acceptance. Each evidence row also carries
 `proof_tier` (`aggregate`, `metadata`, or bounded `content`)

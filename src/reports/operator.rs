@@ -268,12 +268,13 @@ pub(crate) fn export_project_json(
             "started_at": run.started_at,
             "finished_at": run.finished_at,
             "verification_limit": verification_limit_json(&run.detail),
+            "failure_code": run.failure_code,
             "detail": run.detail,
         })
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-project-report",
-        "format_version": 3,
+        "format_version": 4,
         "application_version": env!("CARGO_PKG_VERSION"),
         "run_manifest_complete": true,
         "project": {
@@ -539,6 +540,7 @@ pub(crate) fn export_health(
                 "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
                 "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                 "status": run.status,
+                "failure_code": run.failure_code,
                 "started_at": run.started_at,
                 "finished_at": run.finished_at,
                 "detail": run.detail,
@@ -716,6 +718,22 @@ mod project_json_tests {
                 },
             )
             .unwrap();
+        let failed_job = store
+            .add_mailbox(&project.id, "failed-source", "failed-destination")
+            .unwrap();
+        store
+            .begin_run(&project.id, &failed_job, "failure-run", "imapsync")
+            .unwrap();
+        store
+            .finish_run_for_mailbox(
+                &project.id,
+                &failed_job,
+                "failure-run",
+                "failed",
+                "failed",
+                "[failure_code=imap.timeout] connection timed out",
+            )
+            .unwrap();
         let directory = crate::credentials::create_secret_directory().unwrap();
         let path = directory.join("project-report.json");
         export_project_json(&store, &project.id, &path).unwrap();
@@ -723,9 +741,16 @@ mod project_json_tests {
         let report: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(report["format"], "mailswiftsync-project-report");
-        assert_eq!(report["format_version"], 3);
-        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 21);
-        assert_eq!(report["runs"].as_array().unwrap().len(), 22);
+        assert_eq!(report["format_version"], 4);
+        assert_eq!(report["mailboxes"].as_array().unwrap().len(), 22);
+        assert_eq!(report["runs"].as_array().unwrap().len(), 23);
+        let failed_run = report["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["id"] == "failure-run")
+            .unwrap();
+        assert_eq!(failed_run["failure_code"], "imap.timeout");
         let reverification = report["runs"]
             .as_array()
             .unwrap()

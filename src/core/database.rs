@@ -512,8 +512,9 @@ impl StateStore {
         // version 36 separates final-delta-started from cutover-ready webhook
         // events and repairs queued legacy classifications; version 37 delays
         // cutover-ready until final Verification evidence is durable,
-        // version 38 records post-scan destination cursor revalidation, and
-        // version 39 records operator project holds that stop new launches.
+        // version 38 records post-scan destination cursor revalidation,
+        // version 39 records operator project holds that stop new launches,
+        // and version 40 stores stable terminal failure codes on runs.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -561,7 +562,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0), checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT, batch_plan_id TEXT REFERENCES batch_plans(id), row_overrides TEXT);
                  CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL DEFAULT 0 CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL DEFAULT 0 CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), rfc_message_id_matches INTEGER NOT NULL DEFAULT 0 CHECK(rfc_message_id_matches >= 0), synthetic_identity_matches INTEGER NOT NULL DEFAULT 0 CHECK(synthetic_identity_matches >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), rfc_message_id_matches INTEGER NOT NULL DEFAULT 0 CHECK(rfc_message_id_matches >= 0), synthetic_identity_matches INTEGER NOT NULL DEFAULT 0 CHECK(synthetic_identity_matches >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
+                 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '', failure_code TEXT CHECK(failure_code IS NULL OR (length(failure_code) BETWEEN 1 AND 64 AND failure_code NOT GLOB '*[^a-z0-9._-]*')));
                  CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL CHECK(pid >= 0), start_ticks INTEGER CHECK(start_ticks IS NULL OR start_ticks >= 0), process_group INTEGER CHECK(process_group IS NULL OR process_group >= 0), session_id INTEGER CHECK(session_id IS NULL OR session_id >= 0), executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
                  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS webhook_deliveries (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, endpoint_digest TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','delivering','delivered','dead_letter')), last_error TEXT, next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, delivered_at TEXT, lease_owner TEXT, lease_until TEXT);
@@ -833,6 +834,22 @@ impl StateStore {
         if !run_columns.iter().any(|column| column == "phase_at_start") {
             tx.execute(
                 "ALTER TABLE runs ADD COLUMN phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown'",
+                [],
+            )?;
+        }
+        let added_failure_code = !run_columns.iter().any(|column| column == "failure_code");
+        if added_failure_code {
+            tx.execute(
+                "ALTER TABLE runs ADD COLUMN failure_code TEXT CHECK(failure_code IS NULL OR (length(failure_code) BETWEEN 1 AND 64 AND failure_code NOT GLOB '*[^a-z0-9._-]*'))",
+                [],
+            )?;
+        }
+        // Older runs already carry the same stable value as a tagged detail
+        // marker. Promote only that bounded, validated token into its own
+        // column; diagnostic prose remains untouched.
+        if added_failure_code {
+            tx.execute(
+                "UPDATE runs SET failure_code=substr(detail,instr(detail,'[failure_code=')+length('[failure_code='),instr(substr(detail,instr(detail,'[failure_code=')+length('[failure_code=')),']')-1) WHERE failure_code IS NULL AND instr(detail,'[failure_code=')>0 AND instr(substr(detail,instr(detail,'[failure_code=')+length('[failure_code=')),']') BETWEEN 2 AND 65 AND substr(detail,instr(detail,'[failure_code=')+length('[failure_code='),instr(substr(detail,instr(detail,'[failure_code=')+length('[failure_code=')),']')-1) NOT GLOB '*[^a-z0-9._-]*'",
                 [],
             )?;
         }

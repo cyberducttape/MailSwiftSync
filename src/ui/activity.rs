@@ -291,6 +291,7 @@ crate::ui::name_modal(ui, &modal_heading);
                                 run.phase_at_start.as_str(),
                                 run.engine.as_str(),
                                 run.status.as_str(),
+                                run.failure_code.as_deref().unwrap_or_default(),
                                 run.detail.as_str(),
                             ]
                             .iter()
@@ -362,10 +363,17 @@ crate::ui::name_modal(ui, &modal_heading);
                                             .as_deref()
                                             .unwrap_or(self.language.message("ui.in-progress")),
                                     );
-                                    ui.label(if run.detail.is_empty() {
-                                        "—"
-                                    } else {
-                                        &run.detail
+                                    ui.vertical(|ui| {
+                                        if let Some(code) = run.failure_code.as_deref() {
+                                            ui.monospace(code).on_hover_text("Stable failure code");
+                                        }
+                                        if run.detail.is_empty() {
+                                            if run.failure_code.is_none() {
+                                                ui.label("—");
+                                            }
+                                        } else {
+                                            ui.label(&run.detail);
+                                        }
                                     });
                                     ui.end_row();
                                 }
