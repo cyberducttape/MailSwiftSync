@@ -427,9 +427,12 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
         .ok()
         .map(Duration::from_secs)
         .or_else(|| {
-            chrono::DateTime::parse_from_rfc2822(value)
+            jiff::fmt::rfc2822::parse(value).ok().and_then(|date| {
+                std::time::Duration::try_from(
+                    jiff::Timestamp::now().duration_until(date.timestamp()),
+                )
                 .ok()
-                .and_then(|date| date.signed_duration_since(chrono::Utc::now()).to_std().ok())
+            })
         })
         .map(|delay| delay.min(MAX_OAUTH_RETRY_AFTER))
 }

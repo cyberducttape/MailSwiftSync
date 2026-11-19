@@ -103,8 +103,8 @@ pub(super) fn metadata_fingerprint(message: &ExtractedMessage) -> Option<Metadat
 }
 
 pub(super) fn normalize_internal_date(value: &str) -> NormalizedInternalDate<'_> {
-    DateTime::<FixedOffset>::parse_from_str(value.trim(), "%d-%b-%Y %H:%M:%S %z")
-        .map(|date| NormalizedInternalDate::Epoch(date.timestamp()))
+    jiff::Timestamp::strptime("%d-%b-%Y %H:%M:%S %z", value.trim())
+        .map(|date| NormalizedInternalDate::Epoch(date.as_second()))
         .unwrap_or(NormalizedInternalDate::Raw(value))
 }
 

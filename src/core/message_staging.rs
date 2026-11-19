@@ -1574,15 +1574,12 @@ fn staged_message_from_row_at(row: &Row<'_>, offset: usize) -> rusqlite::Result<
 }
 
 fn metadata_date_key(value: Option<&str>) -> Option<String> {
-    value.map(|value| {
-        match chrono::DateTime::<chrono::FixedOffset>::parse_from_str(
-            value.trim(),
-            "%d-%b-%Y %H:%M:%S %z",
-        ) {
-            Ok(date) => format!("e:{}", date.timestamp()),
+    value.map(
+        |value| match jiff::Timestamp::strptime("%d-%b-%Y %H:%M:%S %z", value.trim()) {
+            Ok(date) => format!("e:{}", date.as_second()),
             Err(_) => format!("r:{value}"),
-        }
-    })
+        },
+    )
 }
 
 impl Drop for MessageMetadataStage {

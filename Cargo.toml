@@ -43,10 +43,10 @@ sha2 = "0.11"
 skrifa = "0.50"
 zeroize = "1.8"
 zip = { version = "9.0", default-features = false }
-chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 httparse = "1.10"
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash"] }
+jiff = "1.0.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

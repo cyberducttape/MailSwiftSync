@@ -2,11 +2,17 @@
 
 ## Unreleased
 
-- Corrected the release-readiness dependency inventory to include the direct
-  `chrono` unmaintained advisory alongside the three zbus-family notices. The
-  dated audit now records that all four are maintenance advisories, not
-  vulnerability findings, and scopes GitHub Dependabot-alert status to what
-  the repository API actually exposes.
+- Replace the direct `chrono` dependency with `jiff` for timestamp parsing,
+  formatting, cutover deadlines, and local maintenance-window/DST handling.
+  Preserve the fixed-millisecond UTC format required by durable folder
+  verification records. Remove the chrono advisory exception; CI still needs
+  to qualify the updated timezone behavior across supported platforms.
+
+- Corrected the release-readiness dependency inventory and removed the direct
+  `chrono` unmaintained advisory by migrating date/time handling to `jiff`.
+  The remaining three dependency notices are the zbus-family maintenance
+  advisories, not vulnerability findings. GitHub Dependabot-alert status is
+  scoped to what the repository API actually exposes.
 
 - Terminal run failure codes are now stored in a constrained SQLite column,
   exposed through run queries and reports, and backfilled from legacy tagged

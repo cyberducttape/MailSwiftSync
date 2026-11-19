@@ -2486,7 +2486,9 @@ fn revalidate_source_selected_folders<S: Read + Write>(
         }
         observations.insert(
             mailbox.clone(),
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            jiff::Timestamp::now()
+                .strftime("%Y-%m-%dT%H:%M:%S%.3fZ")
+                .to_string(),
         );
     }
     let _ = stream.write_all(b"r999999 LOGOUT\r\n");

@@ -1048,8 +1048,8 @@ impl App {
                     }
                     Err(error) => result.detail = Some(error),
                 }
-                result.checked_at = chrono::Local::now()
-                    .format("%Y-%m-%d %H:%M:%S %Z")
+                result.checked_at = jiff::ZonedDateTime::now()
+                    .strftime("%Y-%m-%d %H:%M:%S %Z")
                     .to_string();
                 let _ = sender.send(crate::ui::app_state::OAuthAuthorizationMessage::Finished(
                     result,

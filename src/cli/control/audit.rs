@@ -63,7 +63,7 @@ pub(super) fn checkpoint(
     Ok(serde_json::json!({
         "format": crate::cli::CONTROL_AUDIT_CHECKPOINT_FORMAT,
         "format_version": 1,
-        "created_at": chrono::Utc::now().to_rfc3339(),
+        "created_at": jiff::Timestamp::now().to_string(),
         "entries": entries,
         "seq": seq,
         "head_hash": crate::reports::integrity::hex_encode(&hash),

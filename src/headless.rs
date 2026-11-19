@@ -1005,10 +1005,11 @@ pub(crate) fn validate_cutover_run_admission(
         ),
         _ => error,
     })?;
-    let scheduled_at = chrono::DateTime::parse_from_rfc3339(&workflow.scheduled_at)
-        .map_err(|_| "scheduled_at is not RFC 3339".to_owned())?
-        .with_timezone(&chrono::Utc);
-    if scheduled_at > chrono::Utc::now() {
+    let scheduled_at = workflow
+        .scheduled_at
+        .parse::<jiff::Timestamp>()
+        .map_err(|_| "scheduled_at is not RFC 3339".to_owned())?;
+    if scheduled_at > jiff::Timestamp::now() {
         return Err("scheduled time has not arrived".into());
     }
     if let Some(window) = workflow.maintenance_window.as_deref() {
@@ -1601,14 +1602,22 @@ mod tests {
         crate::core::CutoverWorkflow {
             project_id: "project".into(),
             stage,
-            scheduled_at: (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
+            scheduled_at: jiff::Timestamp::now()
+                .checked_add(jiff::SignedDuration::from_mins(-1))
+                .unwrap()
+                .to_string(),
             maintenance_window: None,
             approved_by: Some("operator".into()),
-            approved_at: Some(chrono::Utc::now().to_rfc3339()),
+            approved_at: Some(jiff::Timestamp::now().to_string()),
             external_confirmation: None,
             source_quiescence_operator: Some("operator".into()),
             source_quiescence_evidence: Some("source delivery paused".into()),
-            source_quiescence_at: Some(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+            source_quiescence_at: Some(
+                jiff::Timestamp::now()
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .strftime("%Y-%m-%d %H:%M:%S")
+                    .to_string(),
+            ),
         }
     }
 
@@ -1634,8 +1643,11 @@ mod tests {
     fn final_delta_admission_rejects_stale_source_quiescence_attestation() {
         let mut workflow = approved_cutover(crate::core::CutoverStage::FinalDelta);
         workflow.source_quiescence_at = Some(
-            (chrono::Utc::now() - chrono::Duration::minutes(16))
-                .format("%Y-%m-%d %H:%M:%S")
+            jiff::Timestamp::now()
+                .checked_add(jiff::SignedDuration::from_mins(-16))
+                .unwrap()
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .strftime("%Y-%m-%d %H:%M:%S")
                 .to_string(),
         );
         let error =
@@ -1655,8 +1667,11 @@ mod tests {
         );
 
         workflow.source_quiescence_at = Some(
-            (chrono::Utc::now() + chrono::Duration::minutes(1))
-                .format("%Y-%m-%d %H:%M:%S")
+            jiff::Timestamp::now()
+                .checked_add(jiff::SignedDuration::from_mins(1))
+                .unwrap()
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .strftime("%Y-%m-%d %H:%M:%S")
                 .to_string(),
         );
         assert!(
@@ -1669,7 +1684,10 @@ mod tests {
     #[test]
     fn cutover_admission_rejects_a_future_schedule() {
         let mut workflow = approved_cutover(crate::core::CutoverStage::Seed);
-        workflow.scheduled_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        workflow.scheduled_at = jiff::Timestamp::now()
+            .checked_add(jiff::SignedDuration::from_hours(1))
+            .unwrap()
+            .to_string();
         assert!(
             validate_cutover_run_admission(&workflow, crate::core::CutoverStage::Seed)
                 .expect_err("future cutover must be refused")

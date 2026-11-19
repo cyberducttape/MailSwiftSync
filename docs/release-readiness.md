@@ -894,16 +894,14 @@ Linux Wayland configuration disables winit's default `ab_glyph` renderer and
 the lockfile no longer contains `ttf-parser`. Release qualification must
 recheck the XLSX ZIP/XML path before publishing artifacts.
 
-The 2026-11-19 `cargo audit --deny yanked` run over both `Cargo.lock` and
+On 2026-11-19, `cargo audit --deny yanked` over both `Cargo.lock` and
 `fuzz/Cargo.lock` reported no vulnerable or yanked crates. The application
-lockfile reports four allowed unmaintained-crate warnings: `zvariant 5.15.1`
+lockfile reports three allowed unmaintained-crate warnings: `zvariant 5.15.1`
 ([RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html)),
 `zbus_names 4.3.5`
 ([RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html)),
 `zvariant_derive 5.15.1`
 ([RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)),
-and `chrono 0.4.45`
-([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)).
 These are maintenance notices, not published vulnerability findings. The
 three zbus-family crates remain in the Linux Secret Service and accessibility
 dependency graph. Upstream states that this functionality was merged into
@@ -915,20 +913,20 @@ older crate family; do not claim this exposure is remediated merely because
 then qualify Linux keyring behavior and accessibility before removing these
 exceptions.
 
-`chrono` is a direct dependency used for RFC 3339 and RFC 2822 parsing,
-maintenance-window timezone/DST handling, and timestamp calculations across
-the application. Its migration to `jiff` is a separate maintenance item; it
-must preserve date parsing and timezone transition behavior, and requires the
-full cross-platform runtime suite before its exception is removed. The current
-exception is recorded in `deny.toml` and remains until that migration is
-complete.
+The direct `chrono` dependency has been replaced with `jiff` for RFC 3339 and
+RFC 2822 parsing, maintenance-window timezone/DST handling, and timestamp
+calculations. On 2026-11-19, `cargo check --locked --all-targets --all-features`,
+`cargo deny check`, and both `cargo audit --deny yanked` lockfile scans passed;
+the application audit reports only the three allowed zbus-family maintenance
+notices. `cargo tree -i chrono` confirms that chrono is absent. Cross-platform
+runtime tests, especially maintenance-window transitions, remain required in
+CI before release.
 
 The dependency policy sets `unmaintained = "all"` so newly introduced
 unmaintained crates fail the scheduled and pull-request checks unless a specific
-advisory is explicitly excepted. The three zbus-family notices and the direct
-`chrono` notice are the four current exceptions, each with a reason in
-`deny.toml`; `unused-ignored-advisory = "deny"` makes obsolete exceptions
-fail. Python qualification helpers and the `pip-audit` toolchain use generated
+advisory is explicitly excepted. The three zbus-family notices are the current
+exceptions, each with a reason in `deny.toml`; `unused-ignored-advisory = "deny"`
+makes obsolete exceptions fail. Python qualification helpers and the `pip-audit` toolchain use generated
 hash-locked requirement files, installed with pip's `--require-hashes` mode.
 
 The repository's GitHub security settings were checked through the repository
