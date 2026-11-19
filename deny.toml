@@ -8,6 +8,7 @@ unused-ignored-advisory = "deny"
 ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant 5 is currently required by the Linux accessibility and Secret Service backends; review this exception when updating the desktop/keyring dependency graph" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 is currently required by the Linux accessibility and Secret Service backends; review this exception when updating the desktop/keyring dependency graph" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (no vulnerability); it is a direct dependency used for RFC 3339/2822 parsing, maintenance windows, and cutover timestamps across 14 modules. Migrating to jiff is tracked separately; review this exception when that migration lands" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 is currently required by zvariant 5 in the Linux accessibility and Secret Service backends; review this exception when updating the desktop/keyring dependency graph" },
 ]
 
