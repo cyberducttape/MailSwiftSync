@@ -1,5 +1,77 @@
 use super::*;
 use std::collections::HashMap;
+use std::fmt;
+
+/// Failure from independent IMAP verification. Keep protocol and local-stage
+/// errors typed until the CLI, ledger, or controller event renders a message.
+#[derive(Debug)]
+pub(crate) enum ImapVerificationError {
+    Imap(crate::imap_probe::ImapError),
+    Stage(core::MessageStageError),
+    Context { context: String, source: Box<Self> },
+    Other(String),
+}
+
+impl fmt::Display for ImapVerificationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Imap(error) => error.fmt(formatter),
+            Self::Stage(error) => error.fmt(formatter),
+            Self::Context { context, source } => write!(formatter, "{context}: {source}"),
+            Self::Other(error) => formatter.write_str(error),
+        }
+    }
+}
+
+impl std::error::Error for ImapVerificationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Imap(error) => Some(error),
+            Self::Stage(error) => Some(error),
+            Self::Context { source, .. } => Some(source.as_ref()),
+            Self::Other(_) => None,
+        }
+    }
+}
+
+impl ImapVerificationError {
+    fn context(self, context: impl Into<String>) -> Self {
+        Self::Context {
+            context: context.into(),
+            source: Box::new(self),
+        }
+    }
+}
+
+impl From<crate::imap_probe::ImapError> for ImapVerificationError {
+    fn from(error: crate::imap_probe::ImapError) -> Self {
+        Self::Imap(error)
+    }
+}
+
+impl From<core::MessageStageError> for ImapVerificationError {
+    fn from(error: core::MessageStageError) -> Self {
+        Self::Stage(error)
+    }
+}
+
+impl From<rusqlite::Error> for ImapVerificationError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Stage(core::MessageStageError::from(error))
+    }
+}
+
+impl From<String> for ImapVerificationError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<&str> for ImapVerificationError {
+    fn from(error: &str) -> Self {
+        Self::Other(error.to_owned())
+    }
+}
 
 /// Perform independent, folder-aware IMAP reconciliation after a successful
 /// imapsync transfer. Engine counters remain useful as a fallback, but they
@@ -14,7 +86,7 @@ pub(crate) fn run_imap_message_verification(
     run_id: &str,
     cancel: &AtomicBool,
     durable_stage_path: Option<&Path>,
-) -> Result<MessageVerificationResult, String> {
+) -> Result<MessageVerificationResult, ImapVerificationError> {
     if !message_verification_enabled(form) {
         return Err(
             "message-level verification is unavailable for this migration plan; refusing to claim exact evidence for automap without an immutable engine mapping, justfolders, addheader, disabled internal-date sync, or allowed size mismatches"
@@ -119,7 +191,9 @@ pub(crate) fn run_imap_message_verification(
     // snapshot; the cutover workflow still requires operator quiescence.
     let source_snapshots = stage
         .folder_cursors()
-        .map_err(|error| format!("could not read source verification cursors: {error}"))?
+        .map_err(|error| {
+            ImapVerificationError::from(error).context("could not read source verification cursors")
+        })?
         .into_iter()
         .filter(|cursor| cursor.side == core::StagedMessageSide::Source)
         .map(|cursor| {
@@ -134,7 +208,10 @@ pub(crate) fn run_imap_message_verification(
         .collect::<Result<HashMap<_, _>, String>>()?;
     let destination_snapshots = stage
         .folder_cursors()
-        .map_err(|error| format!("could not read destination verification cursors: {error}"))?
+        .map_err(|error| {
+            ImapVerificationError::from(error)
+                .context("could not read destination verification cursors")
+        })?
         .into_iter()
         .filter(|cursor| cursor.side == core::StagedMessageSide::Destination)
         .map(|cursor| {
@@ -206,16 +283,8 @@ pub(crate) fn run_imap_message_verification(
         },
     )?;
     stage.record_source_revalidation(&final_source_revalidation)?;
-    if (source.total_exists > 0
-        && stage
-            .count(core::StagedMessageSide::Source)
-            .map_err(|e| e.to_string())?
-            == 0)
-        || (destination.total_exists > 0
-            && stage
-                .count(core::StagedMessageSide::Destination)
-                .map_err(|e| e.to_string())?
-                == 0)
+    if (source.total_exists > 0 && stage.count(core::StagedMessageSide::Source)? == 0)
+        || (destination.total_exists > 0 && stage.count(core::StagedMessageSide::Destination)? == 0)
     {
         return Err(
             "message-level verification refused: IMAP FETCH extraction was empty despite non-empty EXISTS evidence"
@@ -274,23 +343,25 @@ pub(crate) fn run_imap_message_verification(
                 core::StagedMessageSide::Source,
                 core::StagedMessageSide::Destination,
             ] {
-                let count = stage.count(side).map_err(|error| error.to_string())?;
+                let count = stage.count(side)?;
                 if count > crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT as u64 {
                     return Err(core::VerificationLimit::BodyHashMessageCount.tag(format!(
                         "body-hash verification refuses to load more than {} messages per endpoint into the ephemeral forensic reconciler (requested {count})",
                         crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
-                    )));
+                    )).into());
                 }
             }
             let source_messages = stage
                 .all_messages(core::StagedMessageSide::Source)
                 .map_err(|error| {
-                    format!("could not load source messages for body verification: {error}")
+                    ImapVerificationError::from(error)
+                        .context("could not load source messages for body verification")
                 })?;
             let destination_messages = stage
                 .all_messages(core::StagedMessageSide::Destination)
                 .map_err(|error| {
-                    format!("could not load destination messages for body verification: {error}")
+                    ImapVerificationError::from(error)
+                        .context("could not load destination messages for body verification")
                 })?;
             let source_fingerprints =
                 stage.try_content_fingerprints(core::StagedMessageSide::Source)?;
@@ -344,12 +415,8 @@ pub(crate) fn run_imap_message_verification(
     // pairings, and it reports how many messages it could compare.
     let flag_verification =
         core::MessageVerification::verify_staged_flags(&stage, &folder_mapping)?;
-    let source_bytes = stage
-        .sum_bytes(core::StagedMessageSide::Source)
-        .map_err(|e| e.to_string())?;
-    let destination_bytes = stage
-        .sum_bytes(core::StagedMessageSide::Destination)
-        .map_err(|e| e.to_string())?;
+    let source_bytes = stage.sum_bytes(core::StagedMessageSide::Source)?;
+    let destination_bytes = stage.sum_bytes(core::StagedMessageSide::Destination)?;
     let (source_folders, destination_folders) = reconciled_folder_counts(
         &source.mailboxes,
         &excluded_source_folders,
@@ -415,9 +482,9 @@ pub(crate) fn run_imap_message_verification(
     };
     // Capture each folder's cursor before a durable stage is removed; the
     // caller records them (by folder digest) as the pass's verified ranges.
-    let folders = stage
-        .folder_cursors()
-        .map_err(|error| format!("could not read verification folder cursors: {error}"))?;
+    let folders = stage.folder_cursors().map_err(|error| {
+        ImapVerificationError::from(error).context("could not read verification folder cursors")
+    })?;
     // Keep the durable stage on disk until the caller commits this result to
     // the project ledger. If the process fails before that commit, a later
     // verification attempt will rescan every folder; staged rows and body
@@ -619,5 +686,30 @@ pub(crate) fn validate_dovecot_checkpoint_context(
         None => Err(
             "Dovecot checkpoint could not be validated because UIDVALIDITY was not present for every mailbox".into(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod verification_error_tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_source_chain_survives_the_verification_runner_boundary() {
+        let error = ImapVerificationError::from(core::MessageStageError::from(
+            rusqlite::Error::InvalidQuery,
+        ))
+        .context("reading verification cursors");
+
+        let inner = std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<ImapVerificationError>())
+            .expect("context retains the typed verification error");
+        let stage_error = std::error::Error::source(inner)
+            .and_then(|source| source.downcast_ref::<core::MessageStageError>())
+            .expect("verification error retains the message-stage error");
+        assert!(
+            std::error::Error::source(stage_error)
+                .and_then(|source| source.downcast_ref::<rusqlite::Error>())
+                .is_some()
+        );
     }
 }

@@ -370,6 +370,7 @@ fn run_reverify_one(
             folders,
         }) => (evidence, mismatches, folders),
         Err(error) => {
+            let error = error.to_string();
             return match store.finish_run(&run_id, "verification_failed", &error) {
                 Ok(()) => Err(format!("Reverification failed: {error}")),
                 Err(persistence_error) => Err(format!(

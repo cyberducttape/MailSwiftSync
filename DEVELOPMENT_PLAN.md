@@ -276,9 +276,9 @@ Stage it as follows:
    unclassified until their producers are typed. Still text: engine (imapsync)
    output, which is external and stays classified at the boundary.
 2. Message staging and SQLite errors keep their `rusqlite::Error` source
-   through the IMAP sink and its local failure classification. The verification
-   runner still converts the final result to a string for operator reporting;
-   carrying the typed error through that runner/controller boundary remains
+   through the IMAP sink and verification runner. The CLI and controller
+   currently render the typed result when recording operator-facing errors;
+   making the durable failure record itself carry stable typed codes remains
    open.
 3. Strings are produced only at the UI, report and automation boundaries.
 

@@ -7,13 +7,14 @@ Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 The durable verification sink now returns typed IMAP errors. SQLite failures
 retain their `MessageStageError`/`rusqlite::Error` source chain, are classified
 as local storage failures, and do not enter provider/session retry handling.
-Non-SQLite stage validation errors remain unclassified. The verification
-runner still converts its final result to a string, so this does not complete
-typed propagation through the controller/report boundary.
+The verification runner also preserves the typed error chain; presentation
+strings are created by CLI/controller reporting. Non-SQLite stage validation
+errors remain unclassified. Durable failure records still lack stable typed
+codes, so this does not complete M7.
 
 Evidence: focused SQLite-related tests and the full
 `cargo +1.92.0 test --locked --all-targets --all-features` suite passed
-(1,530 passed, 14 ignored); formatting and Clippy with `-D warnings` passed.
+(1,531 passed, 14 ignored); formatting and Clippy with `-D warnings` passed.
 
 ## 2026-11-16: Keep unclassified OAuth failures out of text classification (M7)
 

@@ -20,8 +20,8 @@ pub(crate) use folder_policy::{
     reconciled_folder_counts, validate_destination_folder_policy,
 };
 pub(crate) use verification_runner::{
-    MessageVerificationResult, run_dovecot_destination_preflight, run_dovecot_verification,
-    run_imap_message_verification, validate_dovecot_checkpoint_context,
+    ImapVerificationError, MessageVerificationResult, run_dovecot_destination_preflight,
+    run_dovecot_verification, run_imap_message_verification, validate_dovecot_checkpoint_context,
 };
 mod engine_identity;
 mod policy;
