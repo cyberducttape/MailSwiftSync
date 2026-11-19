@@ -433,6 +433,11 @@ impl App {
                 include(job_id);
             }
         }
+        // active_jobs() is ordered by most recent progress, which can change
+        // between frames even when the set of visible jobs does not. Keep the
+        // queue worker request stable so progress events do not cause extra
+        // SQLite label lookups.
+        load_job_ids.sort_unstable();
         crate::ui::queue_model::QueueReadRequest {
             project_id: self.queue.project_id().map(str::to_owned),
             len: self.queue.len(),
