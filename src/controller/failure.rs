@@ -508,6 +508,17 @@ impl ClassifiedFailure {
             Kind::Server | Kind::Unclassified => {
                 return Self::classify(provider, vec![side], error.detail());
             }
+            Kind::Storage => {
+                return Self {
+                    provider: provider.to_owned(),
+                    sides: vec![side],
+                    error: migration_error(FailureClass::Unknown, error.detail().to_owned(), None),
+                    provider_error: Provider::PermanentProviderFailure,
+                    signal: None,
+                    controller_marked: true,
+                    verification_limit: false,
+                };
+            }
             Kind::Cancelled => (
                 FailureClass::Cancellation,
                 Provider::PermanentProviderFailure,
@@ -890,6 +901,26 @@ mod tests {
         assert!(!failure.should_retry(0, 3));
         assert_eq!(failure.error.detail(), detail);
         assert!(failure.signal.is_none());
+        assert!(failure.controller_marked);
+    }
+
+    #[test]
+    fn sqlite_verification_stage_failure_is_terminal_local_infrastructure_error() {
+        let error = crate::imap_probe::ImapError::storage(crate::core::MessageStageError::from(
+            rusqlite::Error::InvalidQuery,
+        ));
+        let failure = super::ClassifiedFailure::imap(
+            &error,
+            crate::controller::rate_domains::Side::Destination,
+            "microsoft365",
+        );
+
+        assert_eq!(failure.class(), super::FailureClass::Unknown);
+        assert_eq!(
+            failure.sides(),
+            &[crate::controller::rate_domains::Side::Destination]
+        );
+        assert!(!failure.should_retry(0, 4));
         assert!(failure.controller_marked);
     }
 

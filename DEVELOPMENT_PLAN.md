@@ -275,7 +275,11 @@ Stage it as follows:
    `Retry-After`; unrelated keyring/rotation-persistence errors remain
    unclassified until their producers are typed. Still text: engine (imapsync)
    output, which is external and stays classified at the boundary.
-2. Message staging and SQLite errors keep their `rusqlite::Error` source.
+2. Message staging and SQLite errors keep their `rusqlite::Error` source
+   through the IMAP sink and verification runner. The CLI and controller
+   currently render the typed result when recording operator-facing errors;
+   making the durable failure record itself carry stable typed codes remains
+   open.
 3. Strings are produced only at the UI, report and automation boundaries.
 
 Done when no retry or attention decision parses formatted text.

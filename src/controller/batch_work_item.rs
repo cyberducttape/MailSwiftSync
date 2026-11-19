@@ -684,7 +684,9 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                         &mut verification_form,
                         oauth_refresh_locks,
                     )
-                    .map_err(|failure| failure.message);
+                    .map_err(|failure| {
+                        crate::runner::ImapVerificationError::from(failure.message)
+                    });
                     let verification_result = refresh_result.and_then(|()| {
                         run_imap_message_verification(
                             &verification_form,
@@ -722,7 +724,8 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                             *verification_evidence_recorded = true;
                         }
                         Err(error) => {
-                            let safe = redact_child_text(form, &error);
+                            let error_detail = error.to_string();
+                            let safe = redact_child_text(form, &error_detail);
                             eprintln!(
                                 "[{}] message-level IMAP verification failed: {safe}",
                                 index + 1

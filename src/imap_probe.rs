@@ -313,16 +313,16 @@ pub(crate) struct FetchedAccountSummary {
 }
 
 trait MessageSink {
-    fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String>;
+    fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), ImapError>;
     fn insert_batch_with_fingerprints(
         &mut self,
         messages: &crate::core::ExtractedMessages,
         fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         if fingerprints.is_empty() {
             self.insert_batch(messages)
         } else {
-            Err("body fingerprints are not supported by this message sink".to_owned())
+            Err("body fingerprints are not supported by this message sink".into())
         }
     }
     fn insert_page_and_checkpoint(
@@ -332,11 +332,11 @@ trait MessageSink {
         last_uid: u64,
         messages: &crate::core::ExtractedMessages,
         fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         self.insert_batch_with_fingerprints(messages, fingerprints)?;
         self.checkpoint_page(mailbox, snapshot, last_uid)
     }
-    fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
+    fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), ImapError>;
     fn len(&self) -> usize;
     /// A durable SQLite stage can reconcile body hashes without constructing
     /// mailbox-sized in-memory indexes. Ephemeral sinks retain the stricter
@@ -347,12 +347,12 @@ trait MessageSink {
     /// Rows currently staged for one folder generation. Compared against the
     /// server's EXISTS after a scan to require complete coverage of the
     /// current SELECT snapshot.
-    fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String>;
+    fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, ImapError>;
     fn begin_mailbox_scan(
         &mut self,
         _mailbox: &str,
         _snapshot: crate::core::FolderSnapshot,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         Ok(())
     }
     /// Reuse a completed folder from a durable stage only when its original
@@ -361,14 +361,14 @@ trait MessageSink {
         &mut self,
         _mailbox: &str,
         _snapshot: crate::core::FolderSnapshot,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ImapError> {
         Ok(false)
     }
     fn resume_mailbox_prefix(
         &mut self,
         _mailbox: &str,
         _snapshot: crate::core::FolderSnapshot,
-    ) -> Result<Option<(u64, u64)>, String> {
+    ) -> Result<Option<(u64, u64)>, ImapError> {
         Ok(None)
     }
     fn checkpoint_page(
@@ -376,7 +376,7 @@ trait MessageSink {
         _mailbox: &str,
         _snapshot: crate::core::FolderSnapshot,
         _last_uid: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         Ok(())
     }
     fn complete_mailbox(
@@ -384,7 +384,7 @@ trait MessageSink {
         _mailbox: &str,
         _snapshot: crate::core::FolderSnapshot,
         _last_uid: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         Ok(())
     }
     /// Record the canonical PERMANENTFLAGS a folder's SELECT advertised
@@ -394,10 +394,10 @@ trait MessageSink {
         &mut self,
         _mailbox: &str,
         _permanent_flags: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         Ok(())
     }
-    fn retain_mailboxes(&mut self, _mailboxes: &HashSet<String>) -> Result<(), String> {
+    fn retain_mailboxes(&mut self, _mailboxes: &HashSet<String>) -> Result<(), ImapError> {
         Ok(())
     }
 }
@@ -411,7 +411,7 @@ struct StageMessageSink<'a> {
 }
 
 impl MessageSink for StageMessageSink<'_> {
-    fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String> {
+    fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), ImapError> {
         self.stage.insert_messages(self.side, messages)?;
         self.add_current_attempt_messages(messages.len())?;
         Ok(())
@@ -421,7 +421,7 @@ impl MessageSink for StageMessageSink<'_> {
         &mut self,
         messages: &crate::core::ExtractedMessages,
         fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         self.stage
             .insert_messages_with_fingerprints(self.side, messages, fingerprints)?;
         self.add_current_attempt_messages(messages.len())?;
@@ -435,17 +435,17 @@ impl MessageSink for StageMessageSink<'_> {
         last_uid: u64,
         messages: &crate::core::ExtractedMessages,
         fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         self.stage.insert_page_with_fingerprints(
             self.side,
             messages,
             fingerprints,
             Some((mailbox, snapshot, last_uid)),
         )?;
-        self.add_current_attempt_messages(messages.len())
+        Ok(self.add_current_attempt_messages(messages.len())?)
     }
 
-    fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String> {
+    fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), ImapError> {
         self.stage.delete_mailbox(self.side, mailbox)?;
         self.reset_mailbox_count(mailbox);
         if self.active_mailbox.as_deref() == Some(mailbox) {
@@ -454,7 +454,7 @@ impl MessageSink for StageMessageSink<'_> {
         Ok(())
     }
 
-    fn retain_mailboxes(&mut self, mailboxes: &HashSet<String>) -> Result<(), String> {
+    fn retain_mailboxes(&mut self, mailboxes: &HashSet<String>) -> Result<(), ImapError> {
         self.stage.retain_mailboxes(self.side, mailboxes)?;
         self.count = 0;
         self.mailbox_counts.clear();
@@ -470,26 +470,27 @@ impl MessageSink for StageMessageSink<'_> {
         self.stage.is_durable()
     }
 
-    fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String> {
+    fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, ImapError> {
         self.stage
             .count_mailbox(self.side, mailbox, uidvalidity)
-            .map_err(|error| error.to_string())
+            .map_err(|error| ImapError::storage(error.into()))
     }
 
     fn record_permanent_flags(
         &mut self,
         mailbox: &str,
         permanent_flags: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         self.stage
             .record_permanent_flags(self.side, mailbox, permanent_flags)
+            .map_err(ImapError::from)
     }
 
     fn begin_mailbox_scan(
         &mut self,
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         self.stage
             .begin_mailbox_scan(self.side, mailbox, snapshot)?;
         self.reset_mailbox_count(mailbox);
@@ -501,7 +502,7 @@ impl MessageSink for StageMessageSink<'_> {
         &mut self,
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ImapError> {
         let Some(count) = self
             .stage
             .reusable_completed_mailbox(self.side, mailbox, snapshot)?
@@ -514,7 +515,7 @@ impl MessageSink for StageMessageSink<'_> {
         if message_fetch_limit_exceeded(self.count, count, limit) {
             return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
                 "account would exceed the {limit}-message verification limit while reusing a completed folder"
-            )));
+            )).into());
         }
         self.reset_mailbox_count(mailbox);
         self.active_mailbox = Some(mailbox.to_owned());
@@ -526,7 +527,7 @@ impl MessageSink for StageMessageSink<'_> {
         &mut self,
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
-    ) -> Result<Option<(u64, u64)>, String> {
+    ) -> Result<Option<(u64, u64)>, ImapError> {
         let Some((count, last_uid)) = self
             .stage
             .resumable_mailbox_prefix(self.side, mailbox, snapshot)?
@@ -539,7 +540,7 @@ impl MessageSink for StageMessageSink<'_> {
         if message_fetch_limit_exceeded(self.count, count, limit) {
             return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
                 "account would exceed the {limit}-message verification limit while resuming a folder"
-            )));
+            )).into());
         }
         self.reset_mailbox_count(mailbox);
         self.active_mailbox = Some(mailbox.to_owned());
@@ -555,9 +556,10 @@ impl MessageSink for StageMessageSink<'_> {
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
         last_uid: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         self.stage
             .checkpoint_page(self.side, mailbox, snapshot, last_uid)
+            .map_err(ImapError::from)
     }
 
     fn complete_mailbox(
@@ -565,9 +567,10 @@ impl MessageSink for StageMessageSink<'_> {
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
         last_uid: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), ImapError> {
         self.stage
             .complete_mailbox(self.side, mailbox, snapshot, last_uid)
+            .map_err(ImapError::from)
     }
 }
 
@@ -1384,6 +1387,7 @@ enum MailboxFetchError {
     Control(String),
     SessionFatal(String),
     Folder(String),
+    Storage(ImapError),
 }
 
 impl From<String> for MailboxFetchError {
@@ -1401,6 +1405,9 @@ impl From<&str> for MailboxFetchError {
 impl From<ImapError> for MailboxFetchError {
     fn from(error: ImapError) -> Self {
         use crate::core::VerificationLimit;
+        if error.kind() == ImapErrorKind::Storage {
+            return Self::Storage(error);
+        }
         match error.kind() {
             // A response cut off at its size bound leaves the rest unread on
             // the stream, so no later folder may use it; the limit also holds
@@ -1413,6 +1420,7 @@ impl From<ImapError> for MailboxFetchError {
             // the next folder needs a new session.
             _ if error.ends_session() => Self::SessionFatal(error.into()),
             ImapErrorKind::Unclassified => classify_mailbox_fetch_error(error.into()),
+            ImapErrorKind::Storage => Self::Storage(error),
             _ => Self::Folder(error.into()),
         }
     }
@@ -1871,7 +1879,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
             Ok(result) => return Ok(result),
             Err(MailboxFetchError::Changed(error)) => {
                 if let Err(rollback) = sink.rollback_mailbox(mailbox) {
-                    return Err(MailboxFetchError::Folder(rollback));
+                    return Err(rollback.into());
                 }
                 last_error = Some(error);
                 if attempt + 1 < MAX_MAILBOX_STABILITY_ATTEMPTS {
@@ -1882,9 +1890,17 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
             | Err(error @ MailboxFetchError::SessionFatal(_))
             | Err(error @ MailboxFetchError::Folder(_)) => {
                 if let Err(rollback) = sink.rollback_mailbox(mailbox) {
-                    return Err(MailboxFetchError::Folder(rollback));
+                    return Err(rollback.into());
                 }
                 return Err(error);
+            }
+            Err(MailboxFetchError::Storage(error)) => {
+                if let Err(rollback) = sink.rollback_mailbox(mailbox) {
+                    return Err(MailboxFetchError::Storage(
+                        error.context(format!("mailbox rollback also failed: {rollback}")),
+                    ));
+                }
+                return Err(MailboxFetchError::Storage(error));
             }
         }
     }
@@ -2060,7 +2076,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     excluded_mailboxes: &HashSet<String>,
     reconnect_credential: &mut dyn FnMut() -> Result<crate::credentials::SecretString, String>,
     sink: &mut C,
-) -> Result<FetchedAccountSummary, String> {
+) -> Result<FetchedAccountSummary, ImapError> {
     budget.check()?;
     if transport == "plain" {
         return Err(
@@ -2106,15 +2122,16 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
         .collect::<Vec<_>>();
     if summary.mailbox_count == 0 || mailboxes.is_empty() {
         let _ = stream.write_all(b"a999 LOGOUT\r\n");
-        return Err(format!(
-            "{host}: folder inventory did not expose selectable mailbox names"
-        ));
+        return Err(
+            format!("{host}: folder inventory did not expose selectable mailbox names").into(),
+        );
     }
     if summary.selectable_mailbox_count != mailboxes.len() {
         let _ = stream.write_all(b"a999 LOGOUT\r\n");
         return Err(format!(
             "{host}: folder inventory included literal or otherwise unparseable mailbox names"
-        ));
+        )
+        .into());
     }
     mailbox_details.retain(|mailbox| !excluded_mailboxes.contains(&mailbox.wire_name));
     mailboxes.retain(|mailbox| !excluded_mailboxes.contains(mailbox));
@@ -2122,7 +2139,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
         let _ = stream.write_all(b"a999 LOGOUT\r\n");
         return Err(format!(
             "{host}: folder mapping excludes every selectable mailbox; independent verification has no source scope"
-        ));
+        ).into());
     }
     mailboxes.sort();
     mailboxes.dedup();
@@ -2184,12 +2201,18 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
                 let limit = message_fetch_limit(sink.has_durable_stage());
                 if sink.len() > limit {
                     let _ = stream.write_all(b"a999 LOGOUT\r\n");
-                    return Err(crate::core::VerificationLimit::MessageCount.tag(format!(
-                        "{host}: account exceeded the {limit}-message verification limit"
-                    )));
+                    return Err(crate::core::VerificationLimit::MessageCount
+                        .tag(format!(
+                            "{host}: account exceeded the {limit}-message verification limit"
+                        ))
+                        .into());
                 }
             }
             Err(MailboxFetchError::Control(error)) => {
+                let _ = stream.write_all(b"a999 LOGOUT\r\n");
+                return Err(error.into());
+            }
+            Err(MailboxFetchError::Storage(error)) => {
                 let _ = stream.write_all(b"a999 LOGOUT\r\n");
                 return Err(error);
             }
@@ -2220,11 +2243,9 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     }
     let _ = stream.write_all(b"a999 LOGOUT\r\n");
     if !incomplete_folders.is_empty() {
-        return Err(format_folder_failures(
-            host,
-            &incomplete_folders,
-            incomplete_folder_count,
-        ));
+        return Err(
+            format_folder_failures(host, &incomplete_folders, incomplete_folder_count).into(),
+        );
     }
     Ok(FetchedAccountSummary {
         mailboxes: mailbox_inventory,
@@ -2249,7 +2270,7 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes_excluding_ref
     reconnect_credential: &mut dyn FnMut() -> Result<crate::credentials::SecretString, String>,
     stage: &mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
-) -> Result<FetchedAccountSummary, String> {
+) -> Result<FetchedAccountSummary, ImapError> {
     let mut sink = StageMessageSink {
         stage,
         side,

@@ -2,6 +2,20 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-18: Preserve SQLite staging errors through IMAP fetch (M7, partial)
+
+The durable verification sink now returns typed IMAP errors. SQLite failures
+retain their `MessageStageError`/`rusqlite::Error` source chain, are classified
+as local storage failures, and do not enter provider/session retry handling.
+The verification runner also preserves the typed error chain; presentation
+strings are created by CLI/controller reporting. Non-SQLite stage validation
+errors remain unclassified. Durable failure records still lack stable typed
+codes, so this does not complete M7.
+
+Evidence: focused SQLite-related tests and the full
+`cargo +1.92.0 test --locked --all-targets --all-features` suite passed
+(1,531 passed, 14 ignored); formatting and Clippy with `-D warnings` passed.
+
 ## 2026-11-16: Keep unclassified OAuth failures out of text classification (M7)
 
 The `Unclassified` OAuth error path previously handed its diagnostic string to
