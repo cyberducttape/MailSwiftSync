@@ -955,3 +955,44 @@ content proof can strengthen evidence only through its separately bounded
 body-hash path. RFC-ID exact matches and synthetic-identity candidates are
 persisted as separate evidence-history counters and included in signed proof
 digests and report JSON. Synthetic candidates do not imply body integrity.
+
+## Current-head synthetic measurements (2026-11-19)
+
+At commit `82e2f24bf11015e927d53e13596ebfeeeeffa93a`,
+`scripts/benchmark-verification-scale.sh` was run with the typical fixture at
+1,000, 10,000, and 100,000 messages per endpoint. The workspace was on an
+AMD Ryzen 7 7735U system (16 logical CPUs, 14,734 MiB reported RAM), Linux
+7.0.0-43-generic, Rust 1.92.0, and ext4 on NVMe. The host was not isolated;
+these numbers are a reproducible local measurement, not a support commitment.
+
+| Messages per endpoint | Staging | Reconciliation | Reconcile rate | Test-process peak RSS | Peak stage directory | Peak journal |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 20 ms | 24 ms | 41,666/s | 15 MiB | 1,011,712 B | 107,216 B |
+| 10,000 | 256 ms | 327 ms | 30,581/s | 19 MiB | 10,124,288 B | 949,248 B |
+| 100,000 | 2.904 s | 3.315 s | 30,165/s | 23 MiB | 105,372,120 B | 9,722,232 B |
+
+All three cases met the script's 64 MiB test-process RSS and 20,000
+messages/second reconciliation thresholds. The 100,000-message case recorded
+98,000 matches and 2,000 intentional changed-ID mismatches; restart
+reconciliation took 1.949 s. The outer `/usr/bin/time` reported 114,860 KiB
+maximum RSS for the complete Cargo command, which includes the test harness and
+is a different scope from the benchmark's per-test process measurement. These
+synthetic results exclude IMAP fetching, transfer, final evidence persistence,
+provider behavior, and the 1,000,000-message case.
+
+The ledger workload was also measured on this commit with 2,000 and 10,000
+mailboxes (20 write batches per mailbox) while two read-only connections
+polled the ledger. That benchmark stored its database on `/run/user/1000`
+(tmpfs), so its storage and latency numbers are not comparable to the ext4
+verification-stage measurements above.
+
+| Mailboxes | Writes | Write p99 | Read-only-open p95 | WAL high-water | Busy errors | Backup |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2,000 | 44,000 | 769 μs | 22.104 ms (101 opens) | 5,214 KiB | 0 | 81 ms |
+| 10,000 | 220,000 | 2.450 ms | 114.864 ms (31 opens) | 11,305 KiB | 0 | 322 ms |
+
+The rising read-only-open time supports reusing a validated read connection in
+long-running polling paths instead of reopening and fully validating the
+ledger on each poll. The unattended supervisor and the GUI mailbox queue
+already retain their read-only connections. The measurements do not establish
+a universal open-latency budget or a 100,000-mailbox fleet result.
