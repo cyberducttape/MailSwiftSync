@@ -4,8 +4,9 @@
 
 - Replace the direct `chrono` dependency with `jiff` for timestamp parsing,
   formatting, cutover deadlines, and local maintenance-window/DST handling.
-  Remove the chrono advisory exception; CI still needs to qualify the updated
-  timezone behavior across supported platforms.
+  Preserve the fixed-millisecond UTC format required by durable folder
+  verification records. Remove the chrono advisory exception; CI still needs
+  to qualify the updated timezone behavior across supported platforms.
 
 - Corrected the release-readiness dependency inventory and removed the direct
   `chrono` unmaintained advisory by migrating date/time handling to `jiff`.
