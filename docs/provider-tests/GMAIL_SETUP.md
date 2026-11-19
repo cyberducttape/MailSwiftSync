@@ -67,9 +67,7 @@ Before migration, add test mailboxes to the source account:
 ```bash
 #!/usr/bin/env bash
 source_user="mailswiftsync-source-test@gmail.com"
-source_secret="$(cat /run/secrets/gmail-source)"
 dest_user="mailswiftsync-dest-test@gmail.com"
-dest_secret="$(cat /run/secrets/gmail-dest)"
 
 # Create a few test mailboxes using imapsync's list/create logic
 # or use Gmail's web UI to create labels:
@@ -79,10 +77,19 @@ dest_secret="$(cat /run/secrets/gmail-dest)"
 #   - Test-Attachments (messages with 2MB+ attachments)
 
 # Verify IMAP can see them:
-imapsync --host1 imap.gmail.com --user1 "$source_user" --password1 "$source_secret" \
-  --host2 imap.gmail.com --user2 "$dest_user" --password2 "$dest_secret" \
+imapsync --host1 imap.gmail.com --user1 "$source_user" \
+  --passfile1 /run/secrets/gmail-source \
+  --host2 imap.gmail.com --user2 "$dest_user" \
+  --passfile2 /run/secrets/gmail-dest \
   --listfolders --nosyncinternaldates --nosyncacls
 ```
+
+This direct command is for the optional app-password test. Keep credentials in
+the protected files: do not read them into shell variables or pass them with
+`--password1` / `--password2`, because command arguments can be visible to
+other processes on the host. For OAuth testing, pass the token-file paths with
+imapsync's `--oauthaccesstoken1` and `--oauthaccesstoken2` options instead;
+OAuth access tokens are not password-file credentials.
 
 ## Setting Up Secret Files
 
@@ -93,14 +100,13 @@ Create owner-only secret files for credentials:
 sudo mkdir -p /run/secrets
 sudo chmod 700 /run/secrets
 
-# Save a current OAuth access token or an eligible app password; never a
-# regular Google/Workspace account password.
-echo -n "oauth-access-token-or-app-password" | sudo tee /run/secrets/gmail-source >/dev/null
-sudo chmod 600 /run/secrets/gmail-source
-
-# Save the corresponding destination OAuth access token or app password.
-echo -n "oauth-access-token-or-app-password" | sudo tee /run/secrets/gmail-dest >/dev/null
-sudo chmod 600 /run/secrets/gmail-dest
+# Create empty, owner-only files. Populate them through your secret manager or
+# another secure local mechanism; do not put credential values in commands,
+# shell history, or environment variables. Use OAuth access tokens for the
+# provider harness, or an eligible app password for the direct imapsync example.
+sudo install -m 600 /dev/null /run/secrets/gmail-source
+sudo install -m 600 /dev/null /run/secrets/gmail-dest
+sudo install -m 600 /dev/null /run/secrets/gmail-recovery
 
 # Verify permissions
 ls -la /run/secrets/gmail-*
