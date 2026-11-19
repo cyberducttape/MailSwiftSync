@@ -465,6 +465,14 @@ impl MailboxQueue {
         self.rows.get(&rowid)
     }
 
+    /// A mailbox row already loaded into the presentation cache. Rendering
+    /// code must use this lookup instead of opening SQLite on the UI thread.
+    pub(crate) fn cached_by_job_id(&self, job_id: &str) -> Option<&QueueRow> {
+        self.rowid_by_id
+            .get(job_id)
+            .and_then(|rowid| self.rows.get(rowid))
+    }
+
     pub(crate) fn cached_visible_page(&self, range: std::ops::Range<usize>) -> Option<Vec<i64>> {
         let start = range.start.min(self.visible_count);
         let end = range.end.min(self.visible_count).max(start);

@@ -68,18 +68,23 @@ pub(crate) struct RunScope {
 
 impl App {
     fn job_label(&self, job_id: &str) -> String {
-        self.queue
-            .project_id()
-            .and_then(|project_id| self.store.queue_row(project_id, job_id).ok().flatten())
-            .map(|job| job.label)
-            .unwrap_or_else(|| {
-                let user = self.form.profile.source_user.trim();
-                if user.is_empty() {
-                    self.language.text("This mailbox").to_owned()
-                } else {
-                    user.to_owned()
-                }
-            })
+        if let Some(job) = self.queue.cached_by_job_id(job_id) {
+            return job.label.clone();
+        }
+
+        // Batch mailbox labels are loaded asynchronously with the queue page.
+        // Never substitute the shared form's source user for an uncached job:
+        // that would present one mailbox's identity as another's.
+        if self.queue.project_id().is_some() {
+            return self.language.text("This mailbox").to_owned();
+        }
+
+        let user = self.form.profile.source_user.trim();
+        if user.is_empty() {
+            self.language.text("This mailbox").to_owned()
+        } else {
+            user.to_owned()
+        }
     }
 
     pub(crate) fn run_scope(&self) -> RunScope {
