@@ -72,7 +72,7 @@ impl App {
             return job.label.clone();
         }
 
-        // Batch mailbox labels are loaded asynchronously with the queue page.
+        // Activity mailbox labels are loaded asynchronously by the queue worker.
         // Never substitute the shared form's source user for an uncached job:
         // that would present one mailbox's identity as another's.
         if self.queue.project_id().is_some() {

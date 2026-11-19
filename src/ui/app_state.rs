@@ -406,6 +406,33 @@ impl App {
             .get(selected_start..selected_end)
             .unwrap_or_default()
             .to_vec();
+        let mut load_job_ids = Vec::new();
+        if self.queue.project_id().is_some()
+            && self.active_view == crate::ui::WorkspaceView::Activity
+        {
+            let mut seen = std::collections::HashSet::new();
+            let mut include = |job_id: &str| {
+                if load_job_ids.len() < crate::ui::queue_model::MAX_ACTIVITY_LABEL_ROWS
+                    && seen.insert(job_id.to_owned())
+                {
+                    load_job_ids.push(job_id.to_owned());
+                }
+            };
+            for (job_id, _) in self.run_telemetry.active_jobs() {
+                include(job_id);
+            }
+            let now = std::time::Instant::now();
+            for (job_id, _) in self.run_telemetry.pending_retries(now) {
+                include(job_id);
+            }
+            if let Some(job_id) = self
+                .run_telemetry
+                .latest_failure()
+                .and_then(|failure| failure.job_id.as_deref())
+            {
+                include(job_id);
+            }
+        }
         crate::ui::queue_model::QueueReadRequest {
             project_id: self.queue.project_id().map(str::to_owned),
             len: self.queue.len(),
@@ -415,6 +442,7 @@ impl App {
             page_matches: self.bulk_selection_is_empty(),
             page_range: start..end,
             load_rowids,
+            load_job_ids,
             transient: self.queue.transient_snapshot(),
             selected_ids,
             all_selected: self.bulk_all_selected,
