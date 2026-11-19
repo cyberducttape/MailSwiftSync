@@ -369,7 +369,9 @@ crate::ui::name_modal(ui, &modal_heading);
                                         }
                                         if run.detail.is_empty() {
                                             if run.failure_code.is_none() {
-                                                ui.label("—");
+                                                ui.label(
+                                                    self.language.message("ui.not-applicable"),
+                                                );
                                             }
                                         } else {
                                             ui.label(&run.detail);
