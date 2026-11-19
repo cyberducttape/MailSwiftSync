@@ -60,12 +60,37 @@ accounts, security-key-only 2-Step Verification, or Advanced Protection.
 3. Save the generated 16-character app password in the secret file. Never use
    the account's ordinary password.
 
+## Setting Up Secret Files
+
+Create owner-only secret files for credentials:
+
+```bash
+# Create a private temporary directory owned by the operator running the test.
+# mktemp creates it with owner-only access; keep this path for the steps below.
+secret_dir="$(mktemp -d)"
+
+# Create empty, owner-only files. Populate them through your secret manager or
+# another secure local mechanism; do not put credential values in commands,
+# shell history, or environment variables. Use OAuth access tokens for the
+# provider harness, or an eligible app password for the direct imapsync example.
+install -m 600 /dev/null "$secret_dir/gmail-source"
+install -m 600 /dev/null "$secret_dir/gmail-dest"
+install -m 600 /dev/null "$secret_dir/gmail-recovery"
+
+# Verify permissions
+ls -la "$secret_dir"/gmail-*
+# Files should be owned by the current operator and have mode -rw-------.
+```
+
+Keep the setup, test, and cleanup snippets in the same shell session so
+`secret_dir` remains defined. The variable contains only the directory path,
+not credential material.
+
 ## Populating Test Data
 
 Before migration, add test mailboxes to the source account:
 
 ```bash
-#!/usr/bin/env bash
 source_user="mailswiftsync-source-test@gmail.com"
 dest_user="mailswiftsync-dest-test@gmail.com"
 
@@ -76,11 +101,11 @@ dest_user="mailswiftsync-dest-test@gmail.com"
 #   - Test-Unicode (测试, тест, etc.)
 #   - Test-Attachments (messages with 2MB+ attachments)
 
-# Verify IMAP can see them:
+# Verify IMAP can see them (optional app-password test):
 imapsync --host1 imap.gmail.com --user1 "$source_user" \
-  --passfile1 /run/secrets/gmail-source \
+  --passfile1 "$secret_dir/gmail-source" \
   --host2 imap.gmail.com --user2 "$dest_user" \
-  --passfile2 /run/secrets/gmail-dest \
+  --passfile2 "$secret_dir/gmail-dest" \
   --listfolders --nosyncinternaldates --nosyncacls
 ```
 
@@ -90,29 +115,6 @@ the protected files: do not read them into shell variables or pass them with
 other processes on the host. For OAuth testing, pass the token-file paths with
 imapsync's `--oauthaccesstoken1` and `--oauthaccesstoken2` options instead;
 OAuth access tokens are not password-file credentials.
-
-## Setting Up Secret Files
-
-Create owner-only secret files for credentials:
-
-```bash
-# Create /run/secrets directory (or use /tmp/mailswiftsync-secrets)
-sudo mkdir -p /run/secrets
-sudo chmod 700 /run/secrets
-
-# Create empty, owner-only files. Populate them through your secret manager or
-# another secure local mechanism; do not put credential values in commands,
-# shell history, or environment variables. Use OAuth access tokens for the
-# provider harness, or an eligible app password for the direct imapsync example.
-sudo install -m 600 /dev/null /run/secrets/gmail-source
-sudo install -m 600 /dev/null /run/secrets/gmail-dest
-sudo install -m 600 /dev/null /run/secrets/gmail-recovery
-
-# Verify permissions
-ls -la /run/secrets/gmail-*
-# Should show: -rw------- 1 root root 16 Sep 17 20:15 gmail-dest
-#              -rw------- 1 root root 16 Sep 17 20:15 gmail-source
-```
 
 ## Running the Provider Integration Test
 
@@ -125,16 +127,16 @@ export MAILSWIFTSYNC_SOURCE_PROVIDER="gmail"
 export MAILSWIFTSYNC_DESTINATION_PROVIDER="gmail"
 export MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT="imap.gmail.com:993"
 export MAILSWIFTSYNC_PROVIDER_SOURCE_USER="mailswiftsync-source-test@gmail.com"
-export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET="/run/secrets/gmail-source"
+export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET="$secret_dir/gmail-source"
 export MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH="oauth2" # use password only for an eligible app-password test
 export MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT="imap.gmail.com:993"
 export MAILSWIFTSYNC_PROVIDER_DEST_USER="mailswiftsync-dest-test@gmail.com"
-export MAILSWIFTSYNC_PROVIDER_DEST_SECRET="/run/secrets/gmail-dest"
+export MAILSWIFTSYNC_PROVIDER_DEST_SECRET="$secret_dir/gmail-dest"
 export MAILSWIFTSYNC_PROVIDER_DEST_AUTH="oauth2" # use password only for an eligible app-password test
 # Recovery must use a separate, empty destination account.
 export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT="imap.gmail.com:993"
 export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER="mailswiftsync-recovery-test@gmail.com"
-export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET="/run/secrets/gmail-recovery"
+export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET="$secret_dir/gmail-recovery"
 export MAILSWIFTSYNC_EVIDENCE_OUTPUT="/tmp/gmail-provider-evidence"
 ```
 
@@ -220,9 +222,15 @@ After testing, **delete the disposable accounts:**
 - Manually delete accounts via https://myaccount.google.com/account
 - Revoke app passwords from the Google Account security page if one was used
 
-# Delete secret files
-shred -u /run/secrets/gmail-source /run/secrets/gmail-dest
+# Remove temporary secret files after revoking test credentials as appropriate.
+rm -f -- "$secret_dir/gmail-source" "$secret_dir/gmail-dest" "$secret_dir/gmail-recovery"
+rmdir -- "$secret_dir"
 ```
+
+Removing a file unlinks it; it does not guarantee that its previous contents
+were overwritten on SSDs, copy-on-write filesystems, snapshots, or backups.
+Revoke or rotate any credential that may have been exposed, and apply the
+storage provider's retention controls where secure deletion is required.
 
 ## Troubleshooting
 

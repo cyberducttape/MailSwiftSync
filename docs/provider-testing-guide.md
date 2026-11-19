@@ -160,13 +160,18 @@ Mark each evidence column with one of:
   eligible for Google app passwords when testing password-based IMAP tooling;
   it is not required for OAuth and is not the preferred modern sign-in path.
 - Ensure accounts have different folder structures (to test namespace)
+- Provision owner-only credential files accessible to the operator running the
+  CLI. Set the following variables to file paths, never credential contents:
+  `MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET` and
+  `MAILSWIFTSYNC_PROVIDER_DEST_SECRET`. Use the provider-specific setup guide
+  for a private temporary-file example.
 
 **Dry pilot:**
 ```bash
-# Configure the source/destination profile and owner-only secret files first.
+# Configure the source/destination profile and credential-file paths first.
 mailswiftsync headless /tmp/gmail-test.db preflight \
-  --source-secret-file /run/secrets/gmail-source \
-  --destination-secret-file /run/secrets/gmail-dest
+  --source-secret-file "$MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET" \
+  --destination-secret-file "$MAILSWIFTSYNC_PROVIDER_DEST_SECRET"
 ```
 
 **Expected:** Connection succeeds, Gmail's SPECIAL-USE folders are discovered (All Mail, Sent Mail, etc.).
@@ -174,8 +179,8 @@ mailswiftsync headless /tmp/gmail-test.db preflight \
 **Live pilot:**
 ```bash
 mailswiftsync headless /tmp/gmail-test.db live \
-  --source-secret-file /run/secrets/gmail-source \
-  --destination-secret-file /run/secrets/gmail-dest
+  --source-secret-file "$MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET" \
+  --destination-secret-file "$MAILSWIFTSYNC_PROVIDER_DEST_SECRET"
 ```
 
 **Expected:** All messages transfer, labels become IMAP folders, evidence shows matching message/byte counts.
