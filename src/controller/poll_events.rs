@@ -716,6 +716,7 @@ impl App {
                         max_retries,
                         delay,
                         failure_class,
+                        failure_code,
                     } => {
                         if let Some(run) = active_run.as_ref()
                             && run.batch_child_index(&job_id, &child_run_id).is_some()
@@ -727,6 +728,7 @@ impl App {
                                     attempt,
                                     max_retries,
                                     failure_class,
+                                    failure_code,
                                     not_before_unix,
                                 ),
                             ));

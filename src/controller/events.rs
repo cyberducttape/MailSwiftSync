@@ -181,6 +181,7 @@ pub(crate) enum Event {
         max_retries: u32,
         delay: std::time::Duration,
         failure_class: &'static str,
+        failure_code: &'static str,
     },
     /// A batch dry run measured whether this mailbox fits message-level
     /// verification limits. `detail` is already redacted and bounded.

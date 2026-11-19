@@ -553,6 +553,7 @@ mod tests {
                         max_retries: 2,
                         delay: std::time::Duration::from_secs(90),
                         failure_class: "capacity",
+                        failure_code: "classified.capacity",
                     })
                     .unwrap();
                 app.poll();

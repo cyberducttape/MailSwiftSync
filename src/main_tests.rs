@@ -1737,7 +1737,7 @@ fn capacity_retries_back_off_longer_than_transport_retries() {
     );
     assert_eq!(
         classified_failure_detail("too many requests"),
-        "[attention_reason=capacity_limited] [class=capacity] too many requests"
+        "[attention_reason=capacity_limited] [class=capacity] [failure_code=classified.capacity] too many requests"
     );
 }
 
@@ -1868,7 +1868,7 @@ fn failure_taxonomy_keeps_operator_actions_distinct() {
     );
     assert_eq!(
         classified_failure_detail("OVERQUOTA"),
-        "[attention_reason=capacity_limited] [class=quota] OVERQUOTA"
+        "[attention_reason=capacity_limited] [class=quota] [failure_code=classified.quota] OVERQUOTA"
     );
     assert_eq!(
         classify_failure(
