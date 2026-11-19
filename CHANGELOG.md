@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Corrected the release-readiness dependency inventory to include the direct
+  `chrono` unmaintained advisory alongside the three zbus-family notices. The
+  dated audit now records that all four are maintenance advisories, not
+  vulnerability findings, and scopes GitHub Dependabot-alert status to what
+  the repository API actually exposes.
+
 - Terminal run failure codes are now stored in a constrained SQLite column,
   exposed through run queries and reports, and backfilled from legacy tagged
   details during schema migration. Operator project reports moved to format
