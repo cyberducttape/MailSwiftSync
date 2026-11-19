@@ -478,8 +478,8 @@
   hold kept from starting keep their state (a pending final catch-up stays
   `delta_required`) and their queued child runs close as cancelled.
   `status --summary` and `fleet-status` gain a `hold` object per project, and
-  `/metrics` gains `mailswiftsync_projects_on_hold`. Ledger schema v39 adds
-  the `project_holds` table.
+  `/metrics` gains `mailswiftsync_projects_on_hold`. The schema-39 release
+  introduced the `project_holds` table.
 - Fix GUI issues found in a full visual audit (dark, light, Windows 95,
   German, 1024×700, and 200% interface size):
   - The keyring, advanced-options, settings, and engine dialogs could run
