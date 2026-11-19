@@ -101,7 +101,7 @@ impl ProjectExportReader<'_> {
     pub fn run(&self, run_id: &str) -> Result<Option<RunSummary>, String> {
         self.tx
             .query_row(
-                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 AND id=?2",
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail,failure_code FROM runs WHERE project_id=?1 AND id=?2",
                 [&self.project.id, run_id],
                 |row| {
                     Ok(RunSummary {
@@ -115,6 +115,7 @@ impl ProjectExportReader<'_> {
                         started_at: row.get(7)?,
                         finished_at: row.get(8)?,
                         detail: row.get(9)?,
+                        failure_code: row.get(10)?,
                     })
                 },
             )
@@ -154,7 +155,7 @@ impl ProjectExportReader<'_> {
         let mut statement = self
             .tx
             .prepare_cached(
-                "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version,(SELECT SUM(CAST(e.detail AS INTEGER)) FROM events e WHERE e.run_id=r.id AND e.kind='diagnostic_lines_dropped'),(SELECT COUNT(*) FROM events e WHERE e.run_id=r.id AND e.kind='transfer_attempt_started'),(SELECT COUNT(*) FROM events s WHERE s.run_id=r.id AND s.kind='transfer_attempt_started' AND NOT EXISTS(SELECT 1 FROM events f WHERE f.run_id=s.run_id AND f.kind='transfer_attempt_finished' AND f.detail LIKE s.detail || ';outcome=%')) FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at,r.rowid",
+                "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version,(SELECT SUM(CAST(e.detail AS INTEGER)) FROM events e WHERE e.run_id=r.id AND e.kind='diagnostic_lines_dropped'),(SELECT COUNT(*) FROM events e WHERE e.run_id=r.id AND e.kind='transfer_attempt_started'),(SELECT COUNT(*) FROM events s WHERE s.run_id=r.id AND s.kind='transfer_attempt_started' AND NOT EXISTS(SELECT 1 FROM events f WHERE f.run_id=s.run_id AND f.kind='transfer_attempt_finished' AND f.detail LIKE s.detail || ';outcome=%')),r.failure_code FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at,r.rowid",
             )
             .map_err(|error| error.to_string())?;
         let mut rows = statement
@@ -215,6 +216,7 @@ pub(super) fn report_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<R
             started_at: row.get(7)?,
             finished_at: row.get(8)?,
             detail: row.get(9)?,
+            failure_code: row.get(14)?,
         },
         engine_version: row.get(10)?,
         diagnostic_lines_dropped: row.get::<_, Option<i64>>(11)?.map(|count| count as u64),

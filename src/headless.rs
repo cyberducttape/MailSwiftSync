@@ -200,6 +200,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
                         .map_err(|error| error.to_string())?,
                     "phase_at_start": run.phase_at_start,
                     "status": run.status,
+                    "failure_code": run.failure_code,
                     "started_at": run.started_at,
                     "finished_at": run.finished_at,
                     "has_detail": !run.detail.is_empty(),

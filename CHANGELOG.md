@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Terminal run failure codes are now stored in a constrained SQLite column,
+  exposed through run queries and reports, and backfilled from legacy tagged
+  details during schema migration. Operator project reports moved to format
+  version 4 and customer proofs to version 8.
+
 - Durable failure details and retry events now include stable failure codes
   for typed IMAP, OAuth, and local SQLite failures.
 
@@ -473,8 +478,8 @@
   hold kept from starting keep their state (a pending final catch-up stays
   `delta_required`) and their queued child runs close as cancelled.
   `status --summary` and `fleet-status` gain a `hold` object per project, and
-  `/metrics` gains `mailswiftsync_projects_on_hold`. Ledger schema v39 adds
-  the `project_holds` table.
+  `/metrics` gains `mailswiftsync_projects_on_hold`. The schema-39 release
+  introduced the `project_holds` table.
 - Fix GUI issues found in a full visual audit (dark, light, Windows 95,
   German, 1024×700, and 200% interface size):
   - The keyring, advanced-options, settings, and engine dialogs could run

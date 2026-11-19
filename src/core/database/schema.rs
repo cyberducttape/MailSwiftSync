@@ -158,6 +158,7 @@ impl StateStore {
                     ("started_at", "TEXT", true, 0),
                     ("finished_at", "TEXT", false, 0),
                     ("detail", "TEXT", true, 0),
+                    ("failure_code", "TEXT", false, 0),
                 ],
             ),
             (

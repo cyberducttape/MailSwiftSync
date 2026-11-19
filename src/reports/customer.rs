@@ -382,6 +382,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
             "engine_version": run.engine_version,
             "phase_at_start": value.phase_at_start,
             "status": value.status,
+            "failure_code": value.failure_code,
             "started_at": value.started_at,
             "finished_at": value.finished_at,
             "diagnostic_stream_complete": run.diagnostic_lines_dropped.map(|count| count == 0),
@@ -394,7 +395,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
     };
     let serde_json::Value::Object(fields) = serde_json::json!({
         "format": "mailswiftsync-customer-proof",
-        "format_version": 7,
+        "format_version": 8,
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
         "migration_id": project.id.clone(),
@@ -873,6 +874,7 @@ mod tests {
                 started_at: "2026-10-17T00:59:00Z".into(),
                 finished_at: Some("2026-10-17T01:05:00Z".into()),
                 detail: String::new(),
+                failure_code: None,
             },
             engine_version: Some("2.314".into()),
             diagnostic_lines_dropped: Some(0),
@@ -1186,7 +1188,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&signed_output).unwrap()).unwrap();
         assert_eq!(certificate["engine"], "imapsync 2.314");
         assert_eq!(certificate["artifact_role"], "signed_migration_certificate");
-        assert_eq!(certificate["format_version"], 7);
+        assert_eq!(certificate["format_version"], 8);
         assert_eq!(
             certificate["cutover_readiness"]["status"],
             "not_established"

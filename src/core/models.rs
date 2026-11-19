@@ -80,6 +80,8 @@ pub struct RunSummary {
     pub started_at: String,
     pub finished_at: Option<String>,
     pub detail: String,
+    /// Stable machine-readable terminal cause, independent of diagnostic prose.
+    pub failure_code: Option<String>,
 }
 
 /// Lightweight run row for activity views and health summaries.
@@ -96,6 +98,8 @@ pub struct RunListItem {
     pub started_at: String,
     pub finished_at: Option<String>,
     pub detail: String,
+    /// Stable machine-readable terminal cause, independent of diagnostic prose.
+    pub failure_code: Option<String>,
 }
 
 /// Immutable per-mailbox metadata supplied when a batch wave is admitted.

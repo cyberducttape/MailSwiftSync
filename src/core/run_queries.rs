@@ -12,7 +12,7 @@ impl StateStore {
     pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail,failure_code FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok(RunSummary {
@@ -26,6 +26,7 @@ impl StateStore {
                         started_at: row.get(7)?,
                         finished_at: row.get(8)?,
                         detail: row.get(9)?,
+                        failure_code: row.get(10)?,
                     })
                 },
             )
@@ -44,7 +45,7 @@ impl StateStore {
         mut is_baseline: impl FnMut(&RunSummary) -> bool,
     ) -> rusqlite::Result<Option<RunSummary>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 AND status='completed' AND engine <> 'imap-verification' ORDER BY finished_at DESC, rowid DESC",
+            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail,failure_code FROM runs WHERE job_id=?1 AND status='completed' AND engine <> 'imap-verification' ORDER BY finished_at DESC, rowid DESC",
         )?;
         let mut rows = statement.query([job_id])?;
         while let Some(row) = rows.next()? {
@@ -59,6 +60,7 @@ impl StateStore {
                 started_at: row.get(7)?,
                 finished_at: row.get(8)?,
                 detail: row.get(9)?,
+                failure_code: row.get(10)?,
             };
             if is_baseline(&run) {
                 return Ok(Some(run));
@@ -77,7 +79,7 @@ impl StateStore {
     ) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1 AND job_id=?2 AND status='completed' AND engine <> 'imap-verification'",
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail,failure_code FROM runs WHERE id=?1 AND job_id=?2 AND status='completed' AND engine <> 'imap-verification'",
                 params![run_id, job_id],
                 |row| {
                     Ok(RunSummary {
@@ -91,6 +93,7 @@ impl StateStore {
                         started_at: row.get(7)?,
                         finished_at: row.get(8)?,
                         detail: row.get(9)?,
+                        failure_code: row.get(10)?,
                     })
                 },
             )
@@ -100,7 +103,7 @@ impl StateStore {
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1",
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail,failure_code FROM runs WHERE id=?1",
                 [run_id],
                 |row| {
                     Ok(RunSummary {
@@ -114,6 +117,7 @@ impl StateStore {
                         started_at: row.get(7)?,
                         finished_at: row.get(8)?,
                         detail: row.get(9)?,
+                        failure_code: row.get(10)?,
                     })
                 },
             )
@@ -122,7 +126,7 @@ impl StateStore {
     #[cfg(test)]
     pub fn recent_runs(&self, project_id: &str, limit: u32) -> rusqlite::Result<Vec<RunSummary>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail,failure_code FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
         )?;
         statement
             .query_map(params![project_id, limit], |row| {
@@ -137,6 +141,7 @@ impl StateStore {
                     started_at: row.get(7)?,
                     finished_at: row.get(8)?,
                     detail: row.get(9)?,
+                    failure_code: row.get(10)?,
                 })
             })?
             .collect()
