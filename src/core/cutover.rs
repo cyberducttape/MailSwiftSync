@@ -55,16 +55,17 @@ fn source_quiescence_error(source_quiescence_at: Option<&str>) -> Option<String>
     // SQLite CURRENT_TIMESTAMP is UTC in `YYYY-MM-DD HH:MM:SS` form.
     // A stale operator assertion must not authorize a later final-delta
     // launch after mail delivery or mailbox edits may have resumed.
-    let attested_at = match chrono::NaiveDateTime::parse_from_str(attested_at, "%Y-%m-%d %H:%M:%S")
+    let attested_at = match jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", attested_at)
+        .and_then(|value| value.to_zoned_datetime(jiff::tz::TimeZone::UTC))
     {
-        Ok(value) => value.and_utc(),
+        Ok(value) => value.timestamp(),
         Err(_) => return Some("source-quiescence attestation timestamp is invalid".into()),
     };
-    let age = chrono::Utc::now().signed_duration_since(attested_at);
-    if age < chrono::Duration::zero() {
+    let age = attested_at.duration_until(jiff::Timestamp::now());
+    if age.is_negative() {
         return Some("source-quiescence attestation timestamp is in the future".into());
     }
-    if age > chrono::Duration::minutes(15) {
+    if age > jiff::SignedDuration::from_mins(15) {
         return Some("source-quiescence attestation is older than 15 minutes".into());
     }
     None
@@ -142,10 +143,14 @@ pub(super) fn maybe_emit_cutover_ready(
     let Some(attested_at) = source_quiescence_at else {
         return Ok(());
     };
-    let attested_at = chrono::NaiveDateTime::parse_from_str(&attested_at, "%Y-%m-%d %H:%M:%S")
+    let attested_at = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", &attested_at)
+        .and_then(|value| value.to_zoned_datetime(jiff::tz::TimeZone::UTC))
         .map_err(|_| rusqlite::Error::InvalidQuery)?
-        .and_utc();
-    let valid_until = (attested_at + chrono::Duration::minutes(15)).to_rfc3339();
+        .timestamp();
+    let valid_until = attested_at
+        .checked_add(jiff::SignedDuration::from_mins(15))
+        .map_err(|_| rusqlite::Error::InvalidQuery)?
+        .to_string();
     let detail = format!(
         "final verification complete; mailboxes={total}; clean_verified={clean_verified}; accepted_exceptions={accepted_exceptions}; independent_cursor_revalidated={independently_revalidated}; engine_or_aggregate_only={engine_or_aggregate_only}; source-quiescence attestation valid until {valid_until}; external cutover approval pending"
     );
@@ -344,12 +349,15 @@ fn cutover_ready_event_is_current(detail: &str) -> bool {
         .split_once("source-quiescence attestation valid until ")
         .and_then(|(_, suffix)| suffix.split_whitespace().next())
         .and_then(|value| {
-            chrono::DateTime::parse_from_rfc3339(value.trim_end_matches([';', ','])).ok()
+            value
+                .trim_end_matches([';', ','])
+                .parse::<jiff::Timestamp>()
+                .ok()
         })
     else {
         return false;
     };
-    expiry > chrono::Utc::now()
+    expiry > jiff::Timestamp::now()
 }
 
 /// Publish the final-verification lifecycle event only after the operator has

@@ -2484,10 +2484,7 @@ fn revalidate_source_selected_folders<S: Read + Write>(
                 "{host}: {endpoint_label} folder {mailbox} changed after its verification scan (changed fields: {changed_fields}); rerun the final delta and verification",
             )));
         }
-        observations.insert(
-            mailbox.clone(),
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        );
+        observations.insert(mailbox.clone(), jiff::Timestamp::now().to_string());
     }
     let _ = stream.write_all(b"r999999 LOGOUT\r\n");
     Ok(observations)

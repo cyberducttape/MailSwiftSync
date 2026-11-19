@@ -53,10 +53,10 @@ pub(crate) fn compact_count(value: u64) -> String {
 
 /// Finish time on the local wall clock for an estimate.
 pub(crate) fn format_finish_clock(eta: Duration) -> String {
-    chrono::TimeDelta::from_std(eta)
+    jiff::SignedDuration::try_from(eta)
         .ok()
-        .and_then(|delta| chrono::Local::now().checked_add_signed(delta))
-        .map(|at| at.format("%H:%M").to_string())
+        .and_then(|delta| jiff::ZonedDateTime::now().checked_add(delta).ok())
+        .map(|at| at.strftime("%H:%M").to_string())
         .unwrap_or_default()
 }
 

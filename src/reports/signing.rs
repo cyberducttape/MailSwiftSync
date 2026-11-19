@@ -356,7 +356,7 @@ pub(crate) fn sign_file_to(
             "certificate",
             &serde_json::json!({
                 "type": "authenticated_durable_migration_evidence",
-                "issued_at": chrono::Utc::now().to_rfc3339(),
+                "issued_at": jiff::Timestamp::now().to_string(),
                 "independent_message_level_attestation": false,
                 "note": "This certificate authenticates the exported durable ledger evidence and signer. It does not replace per-message reconciliation or provider-independent audit review."
             }),

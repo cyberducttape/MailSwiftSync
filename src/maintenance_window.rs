@@ -12,9 +12,10 @@
 //!
 //! Everything except `contains_now`/`closes_in_now` is pure and takes the
 //! instant to evaluate, so boundaries are directly testable.
-use chrono::{
-    DateTime, Datelike, Duration as ChronoDuration, Local, LocalResult, NaiveDate, NaiveDateTime,
-    NaiveTime, TimeZone, Utc, Weekday,
+use jiff::{
+    Span, Timestamp, ZonedDateTime,
+    civil::{Date, DateTime, Weekday},
+    tz::TimeZone,
 };
 
 const USAGE: &str = "maintenance window must be HH:MM-HH:MM (24-hour, may wrap past midnight), optionally followed by @Mon,Tue,... naming the days each window opens";
@@ -52,7 +53,7 @@ impl MaintenanceWindow {
 
     fn opens_on(&self, weekday: Weekday) -> bool {
         self.days
-            .is_none_or(|days| days[weekday.num_days_from_monday() as usize])
+            .is_none_or(|days| days[weekday.to_monday_zero_offset() as usize])
     }
 
     fn length_minutes(&self) -> i64 {
@@ -67,30 +68,34 @@ impl MaintenanceWindow {
     }
 
     /// Wall-clock start and end of the occurrence that opens on `date`.
-    fn occurrence(&self, date: NaiveDate) -> (NaiveDateTime, NaiveDateTime) {
-        let start =
-            date.and_time(NaiveTime::MIN) + ChronoDuration::minutes(i64::from(self.start_minute));
-        (
-            start,
-            start + ChronoDuration::minutes(self.length_minutes()),
-        )
+    fn occurrence(&self, date: Date) -> Option<(DateTime, DateTime)> {
+        let start = date
+            .at(0, 0, 0, 0)
+            .checked_add(Span::new().minutes(i64::from(self.start_minute)))
+            .ok()?;
+        let end = start
+            .checked_add(Span::new().minutes(self.length_minutes()))
+            .ok()?;
+        Some((start, end))
     }
 
     /// Wall-clock close of the occurrence containing `local`: `None` outside
     /// every occurrence, `Some(None)` for a window that never closes. Back-to-
     /// back occurrences (full-day windows on consecutive days) are one span.
-    fn close_at(&self, local: NaiveDateTime) -> Option<Option<NaiveDateTime>> {
+    fn close_at(&self, local: DateTime) -> Option<Option<DateTime>> {
         let today = local.date();
-        let (_, mut end) = [today.pred_opt()?, today]
+        let previous = today.checked_add(Span::new().days(-1)).ok()?;
+        let (_, mut end) = [previous, today]
             .into_iter()
             .filter(|date| self.opens_on(date.weekday()))
-            .map(|date| self.occurrence(date))
-            .find(|(start, end)| *start <= local && local < *end)?;
+            .filter_map(|date| self.occurrence(date).map(|occurrence| (date, occurrence)))
+            .find(|(_, (start, end))| *start <= local && local < *end)?
+            .1;
         // At most a week of chaining; a window that is still continuous after
         // that (every day, full-day) never closes.
         for _ in 0..7 {
             let next_date = end.date();
-            let (next_start, next_end) = self.occurrence(next_date);
+            let (next_start, next_end) = self.occurrence(next_date)?;
             if next_start != end || !self.opens_on(next_date.weekday()) {
                 return Some(Some(end));
             }
@@ -99,7 +104,7 @@ impl MaintenanceWindow {
         Some(None)
     }
 
-    fn contains_at<Tz: TimeZone>(&self, now: &DateTime<Tz>) -> bool {
+    fn contains_at(&self, now: &ZonedDateTime) -> bool {
         self.closes_in_at(now).is_some()
     }
 
@@ -107,26 +112,24 @@ impl MaintenanceWindow {
     /// a window that never closes. An occurrence whose resolved close has
     /// already passed is outside: in a repeated fall-back hour the second
     /// 02:15 reads as before a 02:30 close that happened an hour ago.
-    fn closes_in_at<Tz: TimeZone>(
-        &self,
-        now: &DateTime<Tz>,
-    ) -> Option<Option<std::time::Duration>> {
-        match self.close_at(now.naive_local())? {
+    fn closes_in_at(&self, now: &ZonedDateTime) -> Option<Option<std::time::Duration>> {
+        match self.close_at(now.datetime())? {
             None => Some(None),
             Some(close) => {
-                let close = resolve_local(&now.timezone(), close).with_timezone(&Utc);
-                let remaining = (close - now.with_timezone(&Utc)).to_std().ok()?;
+                let close = resolve_local(now.time_zone(), close)?;
+                let remaining =
+                    std::time::Duration::try_from(now.timestamp().duration_until(close)).ok()?;
                 (!remaining.is_zero()).then_some(Some(remaining))
             }
         }
     }
 
     pub(crate) fn closes_in_now(&self) -> Option<Option<std::time::Duration>> {
-        self.closes_in_at(&Local::now())
+        self.closes_in_at(&ZonedDateTime::now())
     }
 
     pub(crate) fn contains_now(&self) -> bool {
-        self.contains_at(&Local::now())
+        self.contains_at(&ZonedDateTime::now())
     }
 }
 
@@ -134,15 +137,16 @@ impl MaintenanceWindow {
 /// change resolves to its first occurrence (the window closes early rather
 /// than late); a time skipped by a spring-forward change resolves to the
 /// moment the clock jumps past it.
-fn resolve_local<Tz: TimeZone>(zone: &Tz, local: NaiveDateTime) -> DateTime<Tz> {
+fn resolve_local(zone: &TimeZone, local: DateTime) -> Option<Timestamp> {
     let mut candidate = local;
     for _ in 0..=MINUTES_PER_DAY {
-        match zone.from_local_datetime(&candidate) {
-            LocalResult::Single(instant) | LocalResult::Ambiguous(instant, _) => return instant,
-            LocalResult::None => candidate += ChronoDuration::minutes(1),
+        let instant = candidate.to_zoned_datetime(zone.clone()).ok()?;
+        if instant.datetime() == candidate {
+            return Some(instant.timestamp());
         }
+        candidate = candidate.checked_add(Span::new().minutes(1)).ok()?;
     }
-    zone.from_utc_datetime(&local)
+    None
 }
 
 fn parse_clock(value: &str) -> Result<u32, &'static str> {
@@ -163,7 +167,7 @@ fn parse_days(spec: &str) -> Result<[bool; 7], &'static str> {
             return Err(USAGE);
         }
         let weekday = parse_weekday(token)?;
-        days[weekday.num_days_from_monday() as usize] = true;
+        days[weekday.to_monday_zero_offset() as usize] = true;
     }
     if days.iter().all(|&enabled| !enabled) {
         return Err(USAGE);
@@ -175,13 +179,13 @@ fn parse_days(spec: &str) -> Result<[bool; 7], &'static str> {
 /// case; anything else (`Mo`, `MondayXYZ`) is a configuration error.
 fn parse_weekday(token: &str) -> Result<Weekday, &'static str> {
     const NAMES: [(&str, &str, Weekday); 7] = [
-        ("mon", "monday", Weekday::Mon),
-        ("tue", "tuesday", Weekday::Tue),
-        ("wed", "wednesday", Weekday::Wed),
-        ("thu", "thursday", Weekday::Thu),
-        ("fri", "friday", Weekday::Fri),
-        ("sat", "saturday", Weekday::Sat),
-        ("sun", "sunday", Weekday::Sun),
+        ("mon", "monday", Weekday::Monday),
+        ("tue", "tuesday", Weekday::Tuesday),
+        ("wed", "wednesday", Weekday::Wednesday),
+        ("thu", "thursday", Weekday::Thursday),
+        ("fri", "friday", Weekday::Friday),
+        ("sat", "saturday", Weekday::Saturday),
+        ("sun", "sunday", Weekday::Sunday),
     ];
     let lower = token.to_ascii_lowercase();
     NAMES
@@ -194,21 +198,23 @@ fn parse_weekday(token: &str) -> Result<Weekday, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::FixedOffset;
+    use jiff::{SignedDuration, civil::date};
 
     /// 2026-10-23 is a Friday.
-    fn at(day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 10, day, hour, minute, 0)
+    fn at(day: i8, hour: i8, minute: i8) -> ZonedDateTime {
+        date(2026, 10, day)
+            .at(hour, minute, 0, 0)
+            .to_zoned_datetime(TimeZone::UTC)
             .unwrap()
     }
 
-    fn contains(spec: &str, instant: DateTime<Utc>) -> bool {
+    fn contains(spec: &str, instant: ZonedDateTime) -> bool {
         MaintenanceWindow::parse(spec)
             .unwrap()
             .contains_at(&instant)
     }
 
-    fn closes_in_minutes(spec: &str, instant: DateTime<Utc>) -> Option<Option<u64>> {
+    fn closes_in_minutes(spec: &str, instant: ZonedDateTime) -> Option<Option<u64>> {
         MaintenanceWindow::parse(spec)
             .unwrap()
             .closes_in_at(&instant)
@@ -267,21 +273,30 @@ mod tests {
         ] {
             let window = MaintenanceWindow::parse(spec).unwrap();
             let mut instant = at(19, 0, 0);
-            while instant < at(19, 0, 0) + ChronoDuration::days(14) {
+            let end = at(19, 0, 0)
+                .checked_add(SignedDuration::from_hours(14 * 24))
+                .unwrap();
+            while instant < end {
                 let inside = window.contains_at(&instant);
                 let closes = window.closes_in_at(&instant);
                 assert_eq!(inside, closes.is_some(), "{spec} at {instant}");
                 if let Some(Some(remaining)) = closes {
-                    let remaining = ChronoDuration::from_std(remaining).unwrap();
-                    let last = instant + remaining - ChronoDuration::minutes(1);
+                    let remaining = SignedDuration::try_from(remaining).unwrap();
+                    let last = instant
+                        .checked_add(remaining)
+                        .unwrap()
+                        .checked_add(jiff::SignedDuration::from_mins(-1))
+                        .unwrap();
                     assert!(window.contains_at(&last), "{spec}: open until {last}");
                     assert!(
-                        !window.contains_at(&(instant + remaining)),
+                        !window.contains_at(&instant.checked_add(remaining).unwrap()),
                         "{spec}: closed at {}",
-                        instant + remaining
+                        instant.checked_add(remaining).unwrap()
                     );
                 }
-                instant += ChronoDuration::minutes(15);
+                instant = instant
+                    .checked_add(jiff::SignedDuration::from_mins(15))
+                    .unwrap();
             }
         }
     }
@@ -301,65 +316,23 @@ mod tests {
         assert!(!contains("00:00-00:00@Mon,Tue", at(21, 12, 0)));
     }
 
-    /// Central European time with the 2026 transitions: summer time from
-    /// 2026-03-29 01:00 UTC until 2026-10-25 01:00 UTC.
-    #[derive(Clone, Copy, Debug)]
-    struct Cet;
-
-    impl Cet {
-        fn summer(utc: &NaiveDateTime) -> bool {
-            let begins = NaiveDate::from_ymd_opt(2026, 3, 29)
-                .unwrap()
-                .and_hms_opt(1, 0, 0)
-                .unwrap();
-            let ends = NaiveDate::from_ymd_opt(2026, 10, 25)
-                .unwrap()
-                .and_hms_opt(1, 0, 0)
-                .unwrap();
-            begins <= *utc && *utc < ends
-        }
-    }
-
-    impl TimeZone for Cet {
-        type Offset = FixedOffset;
-
-        fn from_offset(_: &FixedOffset) -> Self {
-            Cet
-        }
-
-        fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<FixedOffset> {
-            self.offset_from_local_datetime(&local.and_hms_opt(12, 0, 0).unwrap())
-        }
-
-        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<FixedOffset> {
-            let winter = FixedOffset::east_opt(3600).unwrap();
-            let summer = FixedOffset::east_opt(7200).unwrap();
-            let as_winter = !Self::summer(&(*local - ChronoDuration::hours(1)));
-            let as_summer = Self::summer(&(*local - ChronoDuration::hours(2)));
-            match (as_summer, as_winter) {
-                (true, true) => LocalResult::Ambiguous(summer, winter),
-                (true, false) => LocalResult::Single(summer),
-                (false, true) => LocalResult::Single(winter),
-                (false, false) => LocalResult::None,
-            }
-        }
-
-        fn offset_from_utc_date(&self, utc: &NaiveDate) -> FixedOffset {
-            self.offset_from_utc_datetime(&utc.and_hms_opt(12, 0, 0).unwrap())
-        }
-
-        fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> FixedOffset {
-            FixedOffset::east_opt(if Self::summer(utc) { 7200 } else { 3600 }).unwrap()
-        }
-    }
-
-    fn cet(month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Cet> {
-        Cet.with_ymd_and_hms(2026, month, day, hour, minute, 0)
-            .single()
+    fn cet(month: i8, day: i8, hour: i8, minute: i8) -> ZonedDateTime {
+        date(2026, month, day)
+            .at(hour, minute, 0, 0)
+            .to_zoned_datetime(TimeZone::get("Europe/Amsterdam").unwrap())
             .unwrap()
     }
 
-    fn cet_closes_in(spec: &str, now: DateTime<Cet>) -> Option<Option<u64>> {
+    fn utc_to_cet(month: i8, day: i8, hour: i8, minute: i8) -> ZonedDateTime {
+        date(2026, month, day)
+            .at(hour, minute, 0, 0)
+            .to_zoned_datetime(TimeZone::UTC)
+            .unwrap()
+            .timestamp()
+            .to_zoned_datetime(TimeZone::get("Europe/Amsterdam").unwrap())
+    }
+
+    fn cet_closes_in(spec: &str, now: &ZonedDateTime) -> Option<Option<u64>> {
         MaintenanceWindow::parse(spec)
             .unwrap()
             .closes_in_at(&now)
@@ -370,23 +343,23 @@ mod tests {
     fn a_window_across_a_daylight_saving_change_lasts_its_real_length() {
         // Spring forward: 22:00-06:00 on 28/29 March is only seven hours.
         assert_eq!(
-            cet_closes_in("22:00-06:00", cet(3, 28, 23, 0)),
+            cet_closes_in("22:00-06:00", &cet(3, 28, 23, 0)),
             Some(Some(6 * 60))
         );
         // Fall back: 22:00-06:00 on 24/25 October is nine hours.
         assert_eq!(
-            cet_closes_in("22:00-06:00", cet(10, 24, 23, 0)),
+            cet_closes_in("22:00-06:00", &cet(10, 24, 23, 0)),
             Some(Some(8 * 60))
         );
         // A close time that does not exist (02:30 is skipped) closes when the
         // clock jumps past it.
         assert_eq!(
-            cet_closes_in("22:00-02:30", cet(3, 28, 23, 0)),
+            cet_closes_in("22:00-02:30", &cet(3, 28, 23, 0)),
             Some(Some(3 * 60))
         );
         // A close time that occurs twice closes at its first occurrence.
         assert_eq!(
-            cet_closes_in("22:00-02:30", cet(10, 24, 23, 0)),
+            cet_closes_in("22:00-02:30", &cet(10, 24, 23, 0)),
             Some(Some(3 * 60 + 30))
         );
     }
@@ -395,21 +368,15 @@ mod tests {
     fn the_repeated_fall_back_hour_after_the_close_is_outside_the_window() {
         let window = MaintenanceWindow::parse("22:00-02:30").unwrap();
         // 00:15 UTC is the first 02:15 (summer time), before the close.
-        let first = Utc
-            .with_ymd_and_hms(2026, 10, 25, 0, 15, 0)
-            .unwrap()
-            .with_timezone(&Cet);
+        let first = utc_to_cet(10, 25, 0, 15);
         assert!(window.contains_at(&first));
-        assert_eq!(cet_closes_in("22:00-02:30", first), Some(Some(15)));
+        assert_eq!(cet_closes_in("22:00-02:30", &first), Some(Some(15)));
         // 01:15 UTC is the second 02:15 (winter time), after the close at
         // the first 02:30: membership and time-to-close both say closed.
-        let second = Utc
-            .with_ymd_and_hms(2026, 10, 25, 1, 15, 0)
-            .unwrap()
-            .with_timezone(&Cet);
-        assert_eq!(second.naive_local(), first.naive_local());
+        let second = utc_to_cet(10, 25, 1, 15);
+        assert_eq!(second.datetime(), first.datetime());
         assert!(!window.contains_at(&second));
-        assert_eq!(cet_closes_in("22:00-02:30", second), None);
+        assert_eq!(cet_closes_in("22:00-02:30", &second), None);
     }
 
     #[test]

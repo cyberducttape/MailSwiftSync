@@ -255,24 +255,23 @@ mod tests {
 
     #[test]
     fn live_wave_outside_its_maintenance_window_is_refused() {
-        use chrono::Datelike;
         let mut test = app_with_rows(2);
         let app = &mut test.app;
         // Every day except today and tomorrow, so a midnight rollover during
         // the test cannot move "now" into the window.
-        let today = chrono::Local::now().weekday();
+        let today = jiff::ZonedDateTime::now().weekday();
         let days = [
-            chrono::Weekday::Mon,
-            chrono::Weekday::Tue,
-            chrono::Weekday::Wed,
-            chrono::Weekday::Thu,
-            chrono::Weekday::Fri,
-            chrono::Weekday::Sat,
-            chrono::Weekday::Sun,
+            jiff::civil::Weekday::Monday,
+            jiff::civil::Weekday::Tuesday,
+            jiff::civil::Weekday::Wednesday,
+            jiff::civil::Weekday::Thursday,
+            jiff::civil::Weekday::Friday,
+            jiff::civil::Weekday::Saturday,
+            jiff::civil::Weekday::Sunday,
         ]
         .into_iter()
-        .filter(|day| *day != today && *day != today.succ())
-        .map(|day| day.to_string())
+        .filter(|day| *day != today && *day != today.next())
+        .map(|day| format!("{day:?}"))
         .collect::<Vec<_>>()
         .join(",");
         let window = format!("00:00-00:00@{days}");

@@ -541,13 +541,13 @@ impl OrganizationPolicy {
     /// The transport rule alone. It applies to every authenticated
     /// connection, dry preflight included, because a dry run logs in too.
     pub(crate) fn check_transport(&self, profile: &Profile) -> Result<(), String> {
-        self.check_transport_on(profile, chrono::Utc::now().date_naive())
+        self.check_transport_on(profile, jiff::ZonedDateTime::now().date())
     }
 
     fn check_transport_on(
         &self,
         profile: &Profile,
-        today: chrono::NaiveDate,
+        today: jiff::civil::Date,
     ) -> Result<(), String> {
         for (side, transport, host) in [
             ("source", &profile.source_tls, &profile.source_host),
@@ -572,7 +572,7 @@ impl OrganizationPolicy {
                         .into(),
                 );
             };
-            let expires = expires.trim().parse::<chrono::NaiveDate>().map_err(|_| {
+            let expires = expires.trim().parse::<jiff::civil::Date>().map_err(|_| {
                 format!(
                     "Organization policy plain_imap_expires {expires:?} is not a YYYY-MM-DD date."
                 )
@@ -731,7 +731,7 @@ mod tests {
         profile.source_tls = "plain".into();
         profile.source_host = "Legacy.Example.Test:143".into();
         profile.destination_tls = "imaps".into();
-        let day = |text: &str| text.parse::<chrono::NaiveDate>().unwrap();
+        let day = |text: &str| text.parse::<jiff::civil::Date>().unwrap();
         let exception = OrganizationPolicy {
             profile: "compatibility".into(),
             require_tls: false,

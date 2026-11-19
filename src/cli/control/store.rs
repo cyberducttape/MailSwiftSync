@@ -126,7 +126,7 @@ CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
 ";
 
 pub(super) fn now() -> i64 {
-    chrono::Utc::now().timestamp()
+    jiff::Timestamp::now().as_second()
 }
 
 /// Who is acting, for audit entries written alongside a mutation.

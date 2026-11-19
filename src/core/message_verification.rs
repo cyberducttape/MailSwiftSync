@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
 
-use chrono::{DateTime, FixedOffset};
 use rusqlite::{OptionalExtension, params};
 
 use super::message_extraction::ExtractedMessages;
