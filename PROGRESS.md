@@ -2,6 +2,22 @@
 
 Work log for [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md). Newest first.
 
+## 2026-11-19: Persist stable failure codes (M7, partial)
+
+Controller failures now carry stable identifiers independent of diagnostic
+prose. Terminal run details include a `failure_code` tag, and retry-scheduled
+events persist the same code while retaining the existing retry-deadline
+suffix. Typed IMAP, OAuth and local SQLite failures have source-specific
+codes; remaining legacy/text-classified outcomes use `classified.<class>`.
+Existing attention-class parsing and retry-deadline recovery remain compatible.
+
+Evidence: focused failure-classification and retry-transition tests passed;
+`cargo +1.92.0 fmt --check`, `cargo +1.92.0 check --locked --all-targets
+--all-features`, Clippy with `-D warnings`, and the full all-target/all-feature
+suite passed (1,533 unit tests passed, 14 ignored; 105 integration and
+documentation tests passed). Codes are currently stored in durable detail
+strings rather than dedicated schema/API fields, so M7 remains partial.
+
 ## 2026-11-18: Preserve SQLite staging errors through IMAP fetch (M7, partial)
 
 The durable verification sink now returns typed IMAP errors. SQLite failures

@@ -1266,10 +1266,11 @@ pub(crate) fn retry_scheduled_detail(
     attempt: u32,
     max_retries: u32,
     failure_class: &str,
+    failure_code: &str,
     not_before_unix: u64,
 ) -> String {
     format!(
-        "retry {attempt} of {max_retries} after {failure_class}{NOT_BEFORE_FIELD}{not_before_unix}"
+        "retry {attempt} of {max_retries} after {failure_class}; failure_code={failure_code}{NOT_BEFORE_FIELD}{not_before_unix}"
     )
 }
 

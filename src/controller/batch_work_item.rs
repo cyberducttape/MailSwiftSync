@@ -1040,6 +1040,7 @@ impl BatchAttemptRunner {
                 max_retries: u32::try_from(self.retry_count).unwrap_or(u32::MAX),
                 delay,
                 failure_class: failure.class().label(),
+                failure_code: failure.code().as_str(),
             },
         );
         task.attempt += 1;
@@ -1716,6 +1717,7 @@ mod tests {
             attempt,
             max_retries,
             failure_class,
+            failure_code,
             delay,
             ..
         } = rx.recv().unwrap()
@@ -1725,6 +1727,7 @@ mod tests {
         assert_eq!(attempt, 1);
         assert_eq!(max_retries, 2);
         assert_eq!(failure_class, "capacity");
+        assert_eq!(failure_code, "classified.capacity");
         assert!(!delay.is_zero());
         let AttemptOutcome::Retry { task, .. } = worker.join().unwrap() else {
             panic!("transient failure must return the task to the scheduler");

@@ -46,6 +46,86 @@ pub(crate) enum FailureClass {
     Unknown,
 }
 
+/// Stable, provider-neutral identifiers persisted with controller failures.
+/// These are an automation contract; diagnostics remain separate and may
+/// change as providers revise their response text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FailureCode {
+    ClassifiedCancellation,
+    ClassifiedAuthentication,
+    ClassifiedQuota,
+    ClassifiedCapacity,
+    ClassifiedTransport,
+    ClassifiedConfiguration,
+    ClassifiedMessage,
+    ClassifiedVerification,
+    ClassifiedUnknown,
+    ImapTimeout,
+    ImapConnection,
+    ImapCancelled,
+    ImapTls,
+    ImapCertificate,
+    ImapConfiguration,
+    ImapProtocol,
+    ImapVerificationLimit,
+    ImapQuota,
+    ImapStorage,
+    OAuthAuthentication,
+    OAuthCapacity,
+    OAuthTransport,
+    OAuthConfiguration,
+    OAuthProvider,
+    OAuthInvalidResponse,
+    OAuthUnclassified,
+}
+
+impl FailureCode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ClassifiedCancellation => "classified.cancellation",
+            Self::ClassifiedAuthentication => "classified.authentication",
+            Self::ClassifiedQuota => "classified.quota",
+            Self::ClassifiedCapacity => "classified.capacity",
+            Self::ClassifiedTransport => "classified.transport",
+            Self::ClassifiedConfiguration => "classified.configuration",
+            Self::ClassifiedMessage => "classified.message",
+            Self::ClassifiedVerification => "classified.verification",
+            Self::ClassifiedUnknown => "classified.unknown",
+            Self::ImapTimeout => "imap.timeout",
+            Self::ImapConnection => "imap.connection",
+            Self::ImapCancelled => "imap.cancelled",
+            Self::ImapTls => "imap.tls",
+            Self::ImapCertificate => "imap.certificate",
+            Self::ImapConfiguration => "imap.configuration",
+            Self::ImapProtocol => "imap.protocol",
+            Self::ImapVerificationLimit => "imap.verification_limit",
+            Self::ImapQuota => "imap.quota",
+            Self::ImapStorage => "local.sqlite_storage",
+            Self::OAuthAuthentication => "oauth.authentication",
+            Self::OAuthCapacity => "oauth.capacity",
+            Self::OAuthTransport => "oauth.transport",
+            Self::OAuthConfiguration => "oauth.configuration",
+            Self::OAuthProvider => "oauth.provider",
+            Self::OAuthInvalidResponse => "oauth.invalid_response",
+            Self::OAuthUnclassified => "oauth.unclassified",
+        }
+    }
+
+    fn classified(class: FailureClass) -> Self {
+        match class {
+            FailureClass::Cancellation => Self::ClassifiedCancellation,
+            FailureClass::Authentication => Self::ClassifiedAuthentication,
+            FailureClass::Quota => Self::ClassifiedQuota,
+            FailureClass::Capacity => Self::ClassifiedCapacity,
+            FailureClass::Transport => Self::ClassifiedTransport,
+            FailureClass::Configuration => Self::ClassifiedConfiguration,
+            FailureClass::Message => Self::ClassifiedMessage,
+            FailureClass::Verification => Self::ClassifiedVerification,
+            FailureClass::Unknown => Self::ClassifiedUnknown,
+        }
+    }
+}
+
 impl FailureClass {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -458,6 +538,7 @@ pub(crate) struct ClassifiedFailure {
     signal: Option<crate::core::provider_intelligence::ProviderSignal>,
     controller_marked: bool,
     verification_limit: bool,
+    code: FailureCode,
 }
 
 impl ClassifiedFailure {
@@ -504,7 +585,7 @@ impl ClassifiedFailure {
     ) -> Self {
         use crate::core::provider_intelligence::ProviderErrorType as Provider;
         use crate::imap_probe::ImapErrorKind as Kind;
-        let (class, provider_error) = match error.kind() {
+        let (class, provider_error, code) = match error.kind() {
             Kind::Server | Kind::Unclassified => {
                 return Self::classify(provider, vec![side], error.detail());
             }
@@ -517,24 +598,57 @@ impl ClassifiedFailure {
                     signal: None,
                     controller_marked: true,
                     verification_limit: false,
+                    code: FailureCode::ImapStorage,
                 };
             }
             Kind::Cancelled => (
                 FailureClass::Cancellation,
                 Provider::PermanentProviderFailure,
+                FailureCode::ImapCancelled,
             ),
             // The provider type gives the documented transport backoff.
-            Kind::Timeout | Kind::Connection => (FailureClass::Transport, Provider::Network),
+            Kind::Timeout => (
+                FailureClass::Transport,
+                Provider::Network,
+                FailureCode::ImapTimeout,
+            ),
+            Kind::Connection => (
+                FailureClass::Transport,
+                Provider::Network,
+                FailureCode::ImapConnection,
+            ),
             // Negotiation failures repeat until the server or the plan
             // changes, so neither is retried.
-            Kind::Tls => (FailureClass::Transport, Provider::TlsError),
-            Kind::Protocol => (FailureClass::Transport, Provider::ImapBad),
-            Kind::Certificate | Kind::Configuration => (
+            Kind::Tls => (
+                FailureClass::Transport,
+                Provider::TlsError,
+                FailureCode::ImapTls,
+            ),
+            Kind::Protocol => (
+                FailureClass::Transport,
+                Provider::ImapBad,
+                FailureCode::ImapProtocol,
+            ),
+            Kind::Certificate => (
                 FailureClass::Configuration,
                 Provider::PermanentProviderFailure,
+                FailureCode::ImapCertificate,
             ),
-            Kind::Limit(_) => (FailureClass::Verification, Provider::VerificationError),
-            Kind::QuotaExhausted => (FailureClass::Quota, Provider::StorageQuotaExceeded),
+            Kind::Configuration => (
+                FailureClass::Configuration,
+                Provider::PermanentProviderFailure,
+                FailureCode::ImapConfiguration,
+            ),
+            Kind::Limit(_) => (
+                FailureClass::Verification,
+                Provider::VerificationError,
+                FailureCode::ImapVerificationLimit,
+            ),
+            Kind::QuotaExhausted => (
+                FailureClass::Quota,
+                Provider::StorageQuotaExceeded,
+                FailureCode::ImapQuota,
+            ),
         };
         Self {
             provider: provider.to_owned(),
@@ -544,6 +658,7 @@ impl ClassifiedFailure {
             signal: None,
             controller_marked: false,
             verification_limit: matches!(error.kind(), Kind::Limit(_)),
+            code,
         }
     }
 
@@ -557,21 +672,41 @@ impl ClassifiedFailure {
         use crate::core::provider_intelligence::ProviderErrorType as Provider;
         use crate::oauth_refresh::OAuthRefreshErrorKind as Kind;
         let detail = error.to_string();
-        let (class, provider_error) = match error.kind {
-            Kind::Authentication => (FailureClass::Authentication, Provider::Authentication),
-            Kind::Capacity => (FailureClass::Capacity, Provider::RateLimited),
-            Kind::Transport => (FailureClass::Transport, Provider::Network),
-            Kind::Provider if error.retry_after.is_some() => {
-                (FailureClass::Capacity, Provider::TemporaryProviderFailure)
-            }
-            Kind::Provider => (FailureClass::Transport, Provider::TemporaryProviderFailure),
+        let (class, provider_error, code) = match error.kind {
+            Kind::Authentication => (
+                FailureClass::Authentication,
+                Provider::Authentication,
+                FailureCode::OAuthAuthentication,
+            ),
+            Kind::Capacity => (
+                FailureClass::Capacity,
+                Provider::RateLimited,
+                FailureCode::OAuthCapacity,
+            ),
+            Kind::Transport => (
+                FailureClass::Transport,
+                Provider::Network,
+                FailureCode::OAuthTransport,
+            ),
+            Kind::Provider if error.retry_after.is_some() => (
+                FailureClass::Capacity,
+                Provider::TemporaryProviderFailure,
+                FailureCode::OAuthProvider,
+            ),
+            Kind::Provider => (
+                FailureClass::Transport,
+                Provider::TemporaryProviderFailure,
+                FailureCode::OAuthProvider,
+            ),
             Kind::Configuration => (
                 FailureClass::Configuration,
                 Provider::PermanentProviderFailure,
+                FailureCode::OAuthConfiguration,
             ),
             Kind::InvalidResponse => (
                 FailureClass::Configuration,
                 Provider::PermanentProviderFailure,
+                FailureCode::OAuthInvalidResponse,
             ),
             // This producer explicitly could not classify the failure (for
             // example, keyring persistence after token rotation). Keep it
@@ -586,6 +721,7 @@ impl ClassifiedFailure {
                     signal: None,
                     controller_marked: true,
                     verification_limit: false,
+                    code: FailureCode::OAuthUnclassified,
                 };
             }
         };
@@ -597,6 +733,7 @@ impl ClassifiedFailure {
             signal: None,
             controller_marked: true,
             verification_limit: false,
+            code,
         }
     }
 
@@ -606,23 +743,32 @@ impl ClassifiedFailure {
         error: &str,
     ) -> Self {
         let text = control_error_text(error);
+        let controller_marked = controller_failure_class(error).is_some();
+        let verification_limit = core::VerificationLimit::from_detail(error).is_some();
+        let classified = classify_error_for_provider(provider, error);
+        let code = FailureCode::classified(classified.class());
         Self {
             provider: provider.to_owned(),
             sides,
-            error: classify_error_for_provider(provider, error),
+            error: classified,
             provider_error: crate::core::provider_intelligence::ProviderErrorClassifier::classify(
                 provider, text,
             ),
             signal: crate::core::provider_intelligence::provider_signal_for_provider(
                 provider, text,
             ),
-            controller_marked: controller_failure_class(error).is_some(),
-            verification_limit: core::VerificationLimit::from_detail(error).is_some(),
+            controller_marked,
+            verification_limit,
+            code,
         }
     }
 
     pub(crate) fn class(&self) -> FailureClass {
         self.error.class()
+    }
+
+    pub(crate) fn code(&self) -> FailureCode {
+        self.code
     }
 
     /// Provider whose vocabulary classified this failure.
@@ -741,9 +887,10 @@ impl ClassifiedFailure {
             class.attention_reason()
         };
         format!(
-            "[attention_reason={}] [class={}] {provider_context}{signal}{presented}{remediation}",
+            "[attention_reason={}] [class={}] [failure_code={}] {provider_context}{signal}{presented}{remediation}",
             attention_reason.as_str(),
             class.label(),
+            self.code.as_str(),
         )
     }
 }
@@ -857,6 +1004,7 @@ mod tests {
             "microsoft365",
         );
         assert_eq!(failure.class(), super::FailureClass::Capacity);
+        assert_eq!(failure.code().as_str(), "oauth.capacity");
         assert_eq!(
             failure.retry_after(),
             Some(std::time::Duration::from_secs(37))
@@ -866,6 +1014,11 @@ mod tests {
             &[crate::controller::rate_domains::Side::Destination]
         );
         assert!(failure.should_retry(0, 2));
+        assert!(
+            failure
+                .durable_detail("throttled")
+                .contains("[failure_code=oauth.capacity]")
+        );
     }
 
     #[test]
@@ -898,10 +1051,16 @@ mod tests {
         );
 
         assert_eq!(failure.class(), super::FailureClass::Unknown);
+        assert_eq!(failure.code().as_str(), "oauth.unclassified");
         assert!(!failure.should_retry(0, 3));
         assert_eq!(failure.error.detail(), detail);
         assert!(failure.signal.is_none());
         assert!(failure.controller_marked);
+        assert!(
+            failure
+                .durable_detail(detail)
+                .contains("[failure_code=oauth.unclassified]")
+        );
     }
 
     #[test]
@@ -922,6 +1081,39 @@ mod tests {
         );
         assert!(!failure.should_retry(0, 4));
         assert!(failure.controller_marked);
+        assert_eq!(failure.code().as_str(), "local.sqlite_storage");
+        assert!(
+            failure
+                .durable_detail("stage write failed")
+                .contains("[failure_code=local.sqlite_storage]")
+        );
+    }
+
+    #[test]
+    fn typed_imap_failures_persist_source_specific_stable_codes() {
+        let error = crate::imap_probe::ImapError::new(
+            crate::imap_probe::ImapErrorKind::Timeout,
+            "probe deadline elapsed",
+        );
+        let failure = super::ClassifiedFailure::imap(
+            &error,
+            crate::controller::rate_domains::Side::Source,
+            "generic",
+        );
+        assert_eq!(failure.code().as_str(), "imap.timeout");
+        assert!(
+            failure
+                .durable_detail("probe deadline elapsed")
+                .contains("[failure_code=imap.timeout]")
+        );
+    }
+
+    #[test]
+    fn retry_event_detail_carries_stable_failure_code_and_deadline_suffix() {
+        let detail =
+            crate::core::retry_scheduled_detail(2, 4, "capacity", "oauth.capacity", 1_800_000_123);
+        assert!(detail.contains("failure_code=oauth.capacity"));
+        assert!(detail.ends_with("; not_before_unix=1800000123"));
     }
 
     #[test]
@@ -985,7 +1177,7 @@ mod tests {
         assert_eq!(
             failure.durable_detail(&presented),
             format!(
-                "[attention_reason=capacity_limited] [class=capacity] [provider=generic] {presented}"
+                "[attention_reason=capacity_limited] [class=capacity] [failure_code=classified.capacity] [provider=generic] {presented}"
             )
         );
     }
@@ -1051,7 +1243,7 @@ mod tests {
         let detail =
             super::classified_failure_detail("BAD User is authenticated but not connected.");
         assert!(
-            detail.starts_with("[attention_reason=authentication_failed] [class=authentication] [signal=microsoft365:authenticated_not_connected] "),
+            detail.starts_with("[attention_reason=authentication_failed] [class=authentication] [failure_code=classified.authentication] [signal=microsoft365:authenticated_not_connected] "),
             "{detail}"
         );
         assert!(detail.contains("Next step: Enable IMAP"), "{detail}");
@@ -1062,7 +1254,7 @@ mod tests {
         // Unrecognized failures keep the existing format.
         assert_eq!(
             super::classified_failure_detail("too many requests"),
-            "[attention_reason=capacity_limited] [class=capacity] too many requests"
+            "[attention_reason=capacity_limited] [class=capacity] [failure_code=classified.capacity] too many requests"
         );
     }
 
@@ -1094,7 +1286,7 @@ mod tests {
         );
         assert!(
             detail.starts_with(
-                "[attention_reason=capacity_limited] [class=capacity] [provider=gmail]"
+                "[attention_reason=capacity_limited] [class=capacity] [failure_code=classified.capacity] [provider=gmail]"
             ),
             "{detail}"
         );

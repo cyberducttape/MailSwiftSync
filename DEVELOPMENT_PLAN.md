@@ -276,10 +276,12 @@ Stage it as follows:
    unclassified until their producers are typed. Still text: engine (imapsync)
    output, which is external and stays classified at the boundary.
 2. Message staging and SQLite errors keep their `rusqlite::Error` source
-   through the IMAP sink and verification runner. The CLI and controller
-   currently render the typed result when recording operator-facing errors;
-   making the durable failure record itself carry stable typed codes remains
-   open.
+   through the IMAP sink and verification runner. Durable terminal run details
+   and retry events now carry a stable `failure_code` tag alongside the broad
+   failure class. Typed IMAP and OAuth causes use source-specific codes; older
+   and text-classified paths use `classified.<class>`. Diagnostics remain
+   separate operator context. A dedicated structured database/API field is
+   still open.
 3. Strings are produced only at the UI, report and automation boundaries.
 
 Done when no retry or attention decision parses formatted text.

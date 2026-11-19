@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Durable failure details and retry events now include stable failure codes
+  for typed IMAP, OAuth, and local SQLite failures.
+
 - OAuth token refresh no longer ends a run on transient conditions that the
   typed classification had marked as configuration: a DNS failure or empty
   answer for the token endpoint is now a transport failure, and HTTP 400
