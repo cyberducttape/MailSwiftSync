@@ -74,7 +74,8 @@ pub(crate) use message_extraction::{
     ExtractedMessage, ExtractedMessages, MailboxMessageKey, MessageIdentityProvenance,
 };
 pub(crate) use message_staging::{
-    FolderCursor, FolderSnapshot, MessageMetadataStage, StagedMessageSide, durable_stage_path,
+    FolderCursor, FolderSnapshot, MessageMetadataStage, MessageStageError, StagedMessageSide,
+    durable_stage_path,
 };
 pub(crate) use message_verification::{
     MessageMismatch, MessageVerification, MismatchSet, MismatchSource, MismatchType,

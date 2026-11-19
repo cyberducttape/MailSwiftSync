@@ -49,8 +49,8 @@ impl From<String> for MessageStageError {
     }
 }
 
-// The IMAP sink still has a string error contract. Its typed propagation is
-// the next M7 step; the staging API itself no longer discards SQLite codes.
+// Retained for older API/report boundaries. The IMAP message sink keeps this
+// error typed until it reaches the verification runner's presentation layer.
 impl From<MessageStageError> for String {
     fn from(error: MessageStageError) -> Self {
         error.to_string()

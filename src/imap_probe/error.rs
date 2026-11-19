@@ -33,6 +33,10 @@ pub(crate) enum ImapErrorKind {
     Limit(VerificationLimit),
     /// The destination reports its quota exhausted.
     QuotaExhausted,
+    /// Verification staging or durable-state storage failed. This is local
+    /// infrastructure failure and must never be reclassified from provider
+    /// response text or retried as a network event.
+    Storage,
     /// The server completed a command with NO or BAD. The detail carries
     /// its reply, which is classified with the provider's vocabulary.
     Server,
@@ -44,17 +48,40 @@ pub(crate) enum ImapErrorKind {
 /// An IMAP client failure: what kind it is and the operator-facing detail.
 /// The detail is exactly the text the client reported before errors were
 /// typed, so durable run details and transcripts are unchanged.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct ImapError {
     kind: ImapErrorKind,
     detail: String,
+    source: Option<std::sync::Arc<dyn std::error::Error>>,
 }
+
+impl PartialEq for ImapError {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.detail == other.detail
+    }
+}
+
+impl Eq for ImapError {}
 
 impl ImapError {
     pub(crate) fn new(kind: ImapErrorKind, detail: impl Into<String>) -> Self {
         Self {
             kind,
             detail: detail.into(),
+            source: None,
+        }
+    }
+
+    pub(crate) fn storage(error: crate::core::MessageStageError) -> Self {
+        match error {
+            sqlite @ crate::core::MessageStageError::Sqlite(_) => Self {
+                kind: ImapErrorKind::Storage,
+                detail: format!("verification staging failed: {sqlite}"),
+                source: Some(std::sync::Arc::new(sqlite)),
+            },
+            crate::core::MessageStageError::Other(detail) => {
+                Self::new(ImapErrorKind::Unclassified, detail)
+            }
         }
     }
 
@@ -128,6 +155,12 @@ impl fmt::Display for ImapError {
     }
 }
 
+impl std::error::Error for ImapError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_deref()
+    }
+}
+
 impl From<ImapError> for String {
     fn from(error: ImapError) -> Self {
         error.detail
@@ -137,6 +170,12 @@ impl From<ImapError> for String {
 impl From<String> for ImapError {
     fn from(detail: String) -> Self {
         Self::new(ImapErrorKind::Unclassified, detail)
+    }
+}
+
+impl From<crate::core::MessageStageError> for ImapError {
+    fn from(error: crate::core::MessageStageError) -> Self {
+        Self::storage(error)
     }
 }
 
@@ -187,5 +226,28 @@ mod tests {
             String::from(error),
             "mail.example.com: IMAP read deadline exceeded"
         );
+    }
+
+    #[test]
+    fn sqlite_stage_failures_keep_their_source_chain_and_storage_kind() {
+        let stage_error = crate::core::MessageStageError::from(rusqlite::Error::InvalidQuery);
+        let error = ImapError::from(stage_error);
+
+        assert_eq!(error.kind(), ImapErrorKind::Storage);
+        let stage_error = std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<crate::core::MessageStageError>())
+            .expect("the typed IMAP failure retains its staging error source");
+        assert!(std::error::Error::source(stage_error).is_some());
+    }
+
+    #[test]
+    fn non_sqlite_stage_failures_are_not_mislabeled_as_storage_errors() {
+        let error = ImapError::from(crate::core::MessageStageError::Other(
+            "verification limit reached".into(),
+        ));
+
+        assert_eq!(error.kind(), ImapErrorKind::Unclassified);
+        assert_eq!(error.detail(), "verification limit reached");
+        assert!(std::error::Error::source(&error).is_none());
     }
 }
