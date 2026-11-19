@@ -1,3 +1,0 @@
-HEAD /healthz HTTP/1.0
-Host: lo0
-Host: l

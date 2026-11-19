@@ -1,0 +1,6 @@
+GGET /v1/fet HTTP/1.1
+fffon: B*
+ffffffff:fffb,
+ffffffff:t:ilo0
+Hosrtion:33
+Hozation: ,Bearer

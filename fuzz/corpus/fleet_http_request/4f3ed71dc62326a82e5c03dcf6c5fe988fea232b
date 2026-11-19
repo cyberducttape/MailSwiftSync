@@ -1,0 +1,17 @@
+POST --rd HTTP/1.1
+&C:󚛜q.1
+&C:󚛜r
+&C:󚛜q.1
+&:C:󚛜rd TTT --rdq.1
+&C:󚛜rd TT/1.$`
+&C: TT/1TP/0.1
+&C:󚛜q.1
+&:C:󚛜rd TTT --rd HTTP/1.1
+&C:󚛜q.1
+&C:󚛜rd TT󚛜q.1
+&:C:󚛜rd TT/1.1
+&C: TT/1.1
+&C: TT/1.1
+&C:򚛜 HTTP/1.1
+&C:󚛜q��
+
