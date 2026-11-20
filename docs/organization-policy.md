@@ -130,11 +130,11 @@ re-resolved to bypass the check during the request. Set
 receiver. When `allowed_domains` is non-empty, the webhook host must match an
 exact entry or a `*.example.com` subdomain pattern. Keep this file owner-only;
 it is read and enforced when the endpoint is validated and before delivery.
-Webhook and OAuth token HTTP clients disable implicit system/environment proxy
-discovery. A configured `HTTPS_PROXY`, `ALL_PROXY`, or similar variable does
-not override this direct-address policy. Enterprise proxy routing is not
-currently a supported policy mode; do not rely on ambient proxy variables to
-reach these endpoints.
+Webhook, OAuth token, and control-plane OIDC HTTP clients disable implicit
+system/environment proxy discovery. A configured `HTTPS_PROXY`, `ALL_PROXY`,
+or similar variable does not override this no-implicit-proxy policy. Enterprise
+proxy routing is not currently a supported policy mode; do not rely on ambient
+proxy variables to reach these endpoints.
 Production also requires `require_signing = true` and refuses delivery unless
 an HMAC-SHA256 signing secret is supplied through an owner-only secret file or
 environment variable. Rotate that secret by provisioning the replacement at

@@ -90,6 +90,11 @@ impl HttpsFetch {
     pub(super) fn new() -> Result<Self, String> {
         let client = reqwest::blocking::Client::builder()
             .https_only(true)
+            // Identity-provider discovery, JWKS, and token requests must not
+            // silently inherit routing from HTTPS_PROXY/ALL_PROXY. Proxy
+            // support needs an explicit policy that preserves the configured
+            // issuer and endpoint trust boundary.
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(10))
             .build()
