@@ -229,9 +229,14 @@ impl From<StoreError> for OidcError {
 
 fn https_url(value: &str, what: &str) -> Result<String, String> {
     let url = url::Url::parse(value).map_err(|_| format!("{what} {value:?} is not a URL"))?;
-    if url.scheme() != "https" || url.host_str().is_none() || url.fragment().is_some() {
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
         return Err(format!(
-            "{what} {value:?} must be an https:// URL without a fragment"
+            "{what} {value:?} must be an https:// URL without embedded credentials or a fragment"
         ));
     }
     Ok(value.trim_end_matches('/').to_owned())
@@ -1013,6 +1018,7 @@ pub(super) mod tests {
     fn configuration_requires_https_and_unique_names() {
         assert!(https_url("http://idp.example", "issuer").is_err());
         assert!(https_url("https://idp.example/#x", "issuer").is_err());
+        assert!(https_url("https://user:secret@idp.example", "issuer").is_err());
         assert_eq!(
             https_url("https://idp.example/", "issuer").unwrap(),
             "https://idp.example"
