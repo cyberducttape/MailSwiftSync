@@ -114,6 +114,12 @@ allowed_email_domains = ["msp.example"]       # optional
 Register `https://control.msp.example/v1/auth/oidc/<name>/callback` as the
 redirect URI at the provider.
 
+The service fetches the provider's discovery document, JWKS, and token endpoint
+directly over HTTPS. It ignores ambient `HTTPS_PROXY` and `ALL_PROXY` settings
+and does not follow redirects. Deployments that require outbound proxy routing
+need an explicitly configured, policy-checked proxy mode; environment proxy
+variables do not enable one.
+
 **Sign-in flow:**
 1. A browser opens `GET /v1/auth/oidc/<name>/start`, which redirects to the
    provider (authorization code with PKCE S256, plus a random `state` and
