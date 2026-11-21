@@ -117,6 +117,19 @@ printf '[{"assets":[{"browser_download_url":"https://x/y.tar.gz"}]}]' >"$work/no
 [ -z "$( load; published_asset_urls <"$work/nodraft.json" )" ] ||
   fail "an asset without a draft field was selected"
 
+# The newest release wins regardless of archive format (macOS moved from
+# .tar.gz to .zip), and names are matched exactly.
+cat >"$work/formats.json" <<'JSON'
+[{"draft":false,"assets":[{"browser_download_url":"https://github.com/o/r/releases/download/v3/mailswiftsync-aarch64-apple-darwin.zip"},{"browser_download_url":"https://github.com/o/r/releases/download/v3/mailswiftsync-aarch64-apple-darwin.zip.sha256"}]},
+ {"draft":false,"assets":[{"browser_download_url":"https://github.com/o/r/releases/download/v1/mailswiftsync-aarch64-apple-darwin.tar.gz"}]}]
+JSON
+selected="$( load; published_asset_urls <"$work/formats.json" | select_archive mailswiftsync-aarch64-apple-darwin )"
+[ "$selected" = "https://github.com/o/r/releases/download/v3/mailswiftsync-aarch64-apple-darwin.zip" ] ||
+  fail "archive selection picked '$selected' instead of the newest release's .zip"
+if ( load; printf 'https://x/v1/mailswiftsync-x86_64-apple-darwinXzip\n' | select_archive mailswiftsync-x86_64-apple-darwin ) >/dev/null; then
+  fail "archive names are not matched literally"
+fi
+
 # --- token handling --------------------------------------------------------
 # shellcheck disable=SC2034 # read by github_token_usable
 ( load; GITHUB_TOKEN='ghs_abc.DEF-123_x'; github_token_usable ) 2>/dev/null ||
