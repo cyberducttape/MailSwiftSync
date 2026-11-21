@@ -479,6 +479,10 @@ impl App {
         {
             return;
         }
+        let lookup_domain = match &suggestion {
+            EndpointSuggestion::Host(host) => host.strip_prefix("imap.").map(str::to_owned),
+            EndpointSuggestion::Preset(_) => None,
+        };
         let label = match &suggestion {
             EndpointSuggestion::Preset(preset) => self
                 .language
@@ -510,12 +514,87 @@ impl App {
                     }
                 }
             }
+            if let Some(domain) = lookup_domain {
+                let pending = self.autoconfig_pending == Some(source);
+                let label = self
+                    .language
+                    .message("ui.autoconfig-look-up")
+                    .replace("{}", &domain);
+                let response = ui
+                    .add_enabled(self.autoconfig_receiver.is_none(), egui::Button::new(label))
+                    .on_hover_text(
+                        self.language
+                            .message("ui.autoconfig-look-up-hint")
+                            .replace("{}", &domain),
+                    );
+                if response.clicked() {
+                    self.start_autoconfig_lookup(source, domain);
+                }
+                if pending {
+                    ui.spinner();
+                }
+            }
             ui.label(
                 RichText::new(self.language.message("ui.suggested-from-address"))
                     .size(12.0)
                     .color(self.theme_colors().text_secondary),
             );
         });
+    }
+
+    /// Ask the domain's own autoconfig endpoints for its IMAP settings on a
+    /// worker thread. Runs only on the operator's click.
+    fn start_autoconfig_lookup(&mut self, source: bool, domain: String) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.autoconfig_receiver = Some(rx);
+        self.autoconfig_pending = Some(source);
+        std::thread::spawn(move || {
+            let result = crate::mail_autoconfig::discover(&domain);
+            let _ = tx.send((source, domain, result));
+        });
+    }
+
+    pub(crate) fn complete_autoconfig_lookup(
+        &mut self,
+        source: bool,
+        domain: &str,
+        result: Result<crate::mail_autoconfig::DiscoveredImap, String>,
+    ) {
+        match result {
+            Ok(found) => {
+                let profile = &mut self.form.profile;
+                let (host, port, tls, auth) = if source {
+                    (
+                        &mut profile.source_host,
+                        &mut profile.source_port,
+                        &mut profile.source_tls,
+                        &mut profile.source_auth,
+                    )
+                } else {
+                    (
+                        &mut profile.destination_host,
+                        &mut profile.destination_port,
+                        &mut profile.destination_tls,
+                        &mut profile.destination_auth,
+                    )
+                };
+                // Never overwrite a server the operator typed meanwhile.
+                if !host.trim().is_empty() {
+                    return;
+                }
+                *host = found.host.clone();
+                *port = found.port.clone();
+                *tls = found.tls.into();
+                *auth = found.auth.into();
+                let text = self
+                    .language
+                    .message("ui.autoconfig-found")
+                    .replace("{domain}", domain)
+                    .replace("{server}", &format!("{}:{}", found.host, found.port));
+                self.set_status(text, StatusSeverity::Success);
+            }
+            Err(error) => self.set_status(error, StatusSeverity::Warning),
+        }
     }
 
     pub(crate) fn effective_provider(&self, source: bool) -> crate::ProviderPreset {

@@ -49,3 +49,11 @@ derived from the address typed as the user (`src/provider.rs`,
 - The hint is computed offline from the address alone. Nothing is looked up
   over the network, nothing changes until the operator clicks, and preflight
   still verifies the endpoint.
+- For an `imap.<domain>` guess, an optional **Look up settings for
+  <domain>** button asks only that domain's own servers, over HTTPS, for
+  their published Mozilla-format autoconfig
+  (`https://autoconfig.<domain>/mail/config-v1.1.xml`, then
+  `https://<domain>/.well-known/autoconfig/mail/config-v1.1.xml`;
+  `src/mail_autoconfig.rs`). No third-party database is contacted and the
+  address is not sent. Only implicit-TLS or STARTTLS IMAP servers are
+  accepted, and the result fills an empty Server field only.

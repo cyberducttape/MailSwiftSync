@@ -195,6 +195,11 @@ pub(crate) struct App {
     /// A streamed report export running on its own read-only connection:
     /// the artifact name and the export result.
     pub(crate) report_export_receiver: Option<Receiver<(&'static str, Result<(), String>)>>,
+    /// Opt-in lookup of a domain's published IMAP settings: which account
+    /// (source?), the domain, and the result.
+    pub(crate) autoconfig_receiver: Option<Receiver<AutoconfigLookup>>,
+    /// Which account a pending lookup is for, so its card shows progress.
+    pub(crate) autoconfig_pending: Option<bool>,
     /// Engine install/check worker for the engine dialog.
     pub(crate) engine_setup_receiver: Option<Receiver<crate::ui::engine::EngineSetupMessage>>,
     pub(crate) engine_setup_progress: Option<crate::engine_install::InstallProgress>,
@@ -760,6 +765,7 @@ impl App {
                 .is_some_and(crate::ui::queue_read_worker::QueueReadWorker::in_flight)
             || self.keyring_operation_receiver.is_some()
             || self.engine_setup_receiver.is_some()
+            || self.autoconfig_receiver.is_some()
             || self
                 .run_telemetry
                 .has_live_countdowns(std::time::Instant::now())
@@ -839,3 +845,10 @@ impl App {
         )
     }
 }
+
+/// A finished autoconfig lookup: which account it fills and what was found.
+pub(crate) type AutoconfigLookup = (
+    bool,
+    String,
+    Result<crate::mail_autoconfig::DiscoveredImap, String>,
+);
