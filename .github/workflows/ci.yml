@@ -90,6 +90,8 @@ jobs:
       - run: bash -n scripts/*.sh
       - name: Test release-channel classification
         run: bash tests/release-channel.sh
+      - name: Test release checksum verification
+        run: bash tests/verify-release.sh
       - name: Verify release archive root layout
         run: python3 tests/release_bundle_layout_test.py
       - name: Verify prerelease compatibility policy

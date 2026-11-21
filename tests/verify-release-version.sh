@@ -4,7 +4,7 @@ set -euo pipefail
 script="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/verify-release-version.sh"
 
 for tag in \
-  v0.1.0-alpha.2
+  v0.1.0-alpha.3
 do
   "$script" "$tag" >/dev/null
 done
@@ -12,8 +12,8 @@ done
 for tag in \
   v0.1.0-garbage \
   v0.1.0-alpha \
-  v0.1.0-alpha.1 \
-  v0.1.0-alpha.3 \
+  v0.1.0-alpha.2 \
+  v0.1.0-alpha.4 \
   v0.1.0 \
   v0.1.0-beta.1 \
   v0.1.0-rc.1 \
