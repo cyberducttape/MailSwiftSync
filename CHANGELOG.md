@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `mailswiftsync install-engine` (and **Install qualified imapsync 2.314** in
+  the desktop app) now works on Fedora/RHEL, Arch and macOS too. On Fedora
+  and Arch it installs imapsync's Perl modules with `dnf` or `pacman` and
+  places the verified official 2.314 script in the private `engines`
+  directory, without installing the distribution's own imapsync package; on
+  macOS it uses Homebrew's `imapsync` formula. The one-line `install.sh`
+  offers the engine on macOS when Homebrew is present.
+- The desktop app no longer leaves an empty console window open on Windows.
+- The account card offers server settings derived from the account address
+  while the Server field is empty, computed offline.
+
 ## [0.1.0-alpha.3] - 2026-11-21
 
 Republishes the 0.1.0-alpha.2 content. The `v0.1.0-alpha.2` release run

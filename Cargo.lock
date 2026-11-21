@@ -2362,6 +2362,7 @@ dependencies = [
  "dirs-next",
  "eframe",
  "egui_extras",
+ "flate2",
  "fs2",
  "httparse",
  "jiff",
