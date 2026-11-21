@@ -92,6 +92,10 @@ jobs:
         run: bash tests/release-channel.sh
       - name: Test release checksum verification
         run: bash tests/verify-release.sh
+      - name: Test the one-line installer's install, PATH, and release selection logic
+        run: |
+          shellcheck install.sh tests/install-sh.sh
+          bash tests/install-sh.sh
       - name: Verify release archive root layout
         run: python3 tests/release_bundle_layout_test.py
       - name: Verify prerelease compatibility policy
