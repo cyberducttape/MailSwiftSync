@@ -180,6 +180,14 @@ impl App {
                 ui.add(crate::ui::field(user).desired_width(f32::INFINITY))
             });
             inline_field_error(ui, language, language.message("ui.user"), user, true);
+            if !local_dovecot && !fixed_endpoint && host.trim().is_empty() {
+                let selected = if source {
+                    self.source_provider
+                } else {
+                    self.destination_provider
+                };
+                self.endpoint_suggestion(ui, source, selected);
+            }
             if !local_dovecot {
                 ui.add_space(6.0);
                 self.account_sign_in(ui, source, preset);
@@ -444,6 +452,70 @@ impl App {
                     });
                 }
             });
+    }
+
+    /// Offer the server settings implied by the account address while the
+    /// Server field is still empty. One click fills them in; nothing changes
+    /// until then, and preflight still verifies the endpoint.
+    fn endpoint_suggestion(
+        &mut self,
+        ui: &mut egui::Ui,
+        source: bool,
+        selected: crate::ProviderPreset,
+    ) {
+        use crate::provider::{EndpointSuggestion, suggest_endpoint_for_address};
+        let user = if source {
+            &self.form.profile.source_user
+        } else {
+            &self.form.profile.destination_user
+        };
+        let Some(suggestion) = suggest_endpoint_for_address(user) else {
+            return;
+        };
+        // An explicit cPanel choice means a self-hosted server, so a hosted
+        // provider preset would contradict it.
+        if matches!(suggestion, EndpointSuggestion::Preset(_))
+            && selected != crate::ProviderPreset::GenericImap
+        {
+            return;
+        }
+        let label = match &suggestion {
+            EndpointSuggestion::Preset(preset) => self
+                .language
+                .message("ui.suggest-provider-settings")
+                .replace("{}", self.language.text(preset.display_name())),
+            EndpointSuggestion::Host(host) => self
+                .language
+                .message("ui.suggest-server")
+                .replace("{}", host),
+        };
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(label).clicked() {
+                match suggestion {
+                    EndpointSuggestion::Preset(preset) => {
+                        if source {
+                            self.source_provider = preset;
+                        } else {
+                            self.destination_provider = preset;
+                        }
+                        self.apply_provider_preset(source, preset);
+                    }
+                    EndpointSuggestion::Host(host) => {
+                        let field = if source {
+                            &mut self.form.profile.source_host
+                        } else {
+                            &mut self.form.profile.destination_host
+                        };
+                        *field = host;
+                    }
+                }
+            }
+            ui.label(
+                RichText::new(self.language.message("ui.suggested-from-address"))
+                    .size(12.0)
+                    .color(self.theme_colors().text_secondary),
+            );
+        });
     }
 
     pub(crate) fn effective_provider(&self, source: bool) -> crate::ProviderPreset {

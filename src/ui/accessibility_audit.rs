@@ -613,3 +613,32 @@ fn live_batch_confirmation_shows_cutover_readiness() {
         "the confirmation does not state the capacity boundary:\n{text}"
     );
 }
+
+#[test]
+fn account_address_offers_server_settings_while_the_server_is_empty() {
+    let mut harness = Harness::new(1.0, false);
+    harness.app.active_view = WorkspaceView::Plan;
+    harness.app.source_provider = crate::provider::ProviderPreset::GenericImap;
+    harness.app.destination_provider = crate::provider::ProviderPreset::GenericImap;
+    harness.app.form.profile.source_host.clear();
+    harness.app.form.profile.source_user = "ana@gmail.com".into();
+    harness.app.form.profile.destination_host.clear();
+    harness.app.form.profile.destination_user = "ops@example.org".into();
+
+    let text = |harness: &mut Harness| {
+        harness
+            .tree()
+            .values()
+            .filter_map(|node| node.label().or_else(|| node.value()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let shown = text(&mut harness);
+    assert!(shown.contains("Use Google Workspace settings"), "{shown}");
+    assert!(shown.contains("Use server imap.example.org"), "{shown}");
+
+    // A filled-in server wins: the hint never second-guesses it.
+    harness.app.form.profile.destination_host = "mail.example.org".into();
+    let shown = text(&mut harness);
+    assert!(!shown.contains("Use server imap.example.org"), "{shown}");
+}
