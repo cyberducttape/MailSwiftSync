@@ -304,10 +304,12 @@ offer_engine() {
   fi
   case "$(uname -s)" in
     Darwin)
-      say "    imapsync is not installed. On macOS it needs Perl modules from CPAN;"
-      say "    follow INSTALL.OnMac.txt from https://imapsync.lamiral.info/#install"
-      say "    (MailSwiftSync is qualified with imapsync 2.314)."
-      return 0
+      if [ ! -x /opt/homebrew/bin/brew ] && [ ! -x /usr/local/bin/brew ]; then
+        say "    imapsync is not installed. On macOS, MailSwiftSync installs it with"
+        say "    Homebrew: install Homebrew from https://brew.sh, then run"
+        say "    mailswiftsync install-engine (qualified version: imapsync 2.314)."
+        return 0
+      fi
       ;;
   esac
   if ! confirm "imapsync (the engine that copies the mail) is not installed. Install the qualified version now?"; then

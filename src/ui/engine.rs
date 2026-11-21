@@ -130,8 +130,9 @@ impl App {
                         .color(colors.text_secondary),
                 );
             }
-            InstallPlan::Automatic(crate::engine_install::InstallMethod::DebianPackage)
-                if !crate::engine_install::desktop_elevation_available() =>
+            InstallPlan::Automatic(method)
+                if method.needs_elevation()
+                    && !crate::engine_install::desktop_elevation_available() =>
             {
                 ui.label(
                     RichText::new(self.language.text(
@@ -379,11 +380,12 @@ impl App {
     }
 }
 
-/// Whether the desktop can install the qualified engine itself: Windows
-/// always, Debian/Ubuntu only when a graphical elevation prompt exists.
+/// Whether the desktop can install the qualified engine itself: always when
+/// no root is needed (Windows, Homebrew), and through the system package
+/// manager only when a graphical elevation prompt exists.
 fn desktop_install_available(plan: InstallPlan) -> bool {
     match plan {
-        InstallPlan::Automatic(crate::engine_install::InstallMethod::DebianPackage) => {
+        InstallPlan::Automatic(method) if method.needs_elevation() => {
             crate::engine_install::desktop_elevation_available()
         }
         InstallPlan::Automatic(_) => true,
