@@ -74,6 +74,8 @@ distribution_documents=(
   docs/production-qualification-environment.md
   docs/msp-rbac-and-tenant-isolation.md
   docs/psa-event-contract.md
+  docs/control-plane.md
+  docs/migration-audit-benchmark.md
 )
 for document in "${distribution_documents[@]}"; do
   if [[ ! -f "$document" ]]; then

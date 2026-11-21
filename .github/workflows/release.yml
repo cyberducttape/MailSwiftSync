@@ -385,11 +385,15 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Build distributed runtime image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:release-integration .
+      # The fixture provisions Dovecot accounts and Maildir ownership, so it
+      # runs as root, as in the integration lab; the image's default USER
+      # stays the unprivileged mailswiftsync account.
       - name: Run packaged IMAP transfer fixture
-        run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+        run: docker run --rm --user 0:0 --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
       - name: Run packaged native Dovecot engine fixture
         run: >-
           docker run --rm
+          --user 0:0
           --env MAILSWIFTSYNC_TEST_ENGINE=Dovecot
           --entrypoint /bin/bash
           mailswiftsync:release-integration
