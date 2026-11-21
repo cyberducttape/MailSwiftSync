@@ -278,6 +278,7 @@ GenericName=Mailbox migration
 Comment=Plan, run, and verify IMAP mailbox migrations
 Exec="$install_dir/mailswiftsync"
 Icon=mailswiftsync
+StartupWMClass=mailswiftsync
 Terminal=false
 Categories=Network;Email;
 Keywords=imap;imapsync;email;migration;mailbox;
