@@ -287,13 +287,20 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                             send_reliable_event(&tx, Event::Evidence(evidence))?;
                         }
                         Err(error) => {
+                            // Redact plan credentials before the detail
+                            // reaches the log or the durable run record,
+                            // as the batch path does.
+                            let safe = crate::controller::batch_work_item::redact_child_text(
+                                &verification_form,
+                                &error.to_string(),
+                            );
                             eprintln!(
-                                "[verification] message-level IMAP verification failed: {error}"
+                                "[verification] message-level IMAP verification failed: {safe}"
                             );
                             send_reliable_event(
                                 &tx,
                                 Event::VerificationFailed(format!(
-                                    "message-level IMAP verification unavailable: {error}"
+                                    "message-level IMAP verification unavailable: {safe}"
                                 )),
                             )?;
                             // The transfer already succeeded. Missing
