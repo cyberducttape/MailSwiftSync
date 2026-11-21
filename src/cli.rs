@@ -72,6 +72,8 @@ pub(crate) fn run() -> eframe::Result<()> {
     let mut arguments = std::env::args_os();
     let _program = arguments.next();
     let Some(mut command) = arguments.next() else {
+        #[cfg(windows)]
+        crate::windows_private::release_console_owned_by_gui();
         #[allow(unused_mut)]
         let mut inner_size = [1200.0, 820.0];
         #[cfg(debug_assertions)]
