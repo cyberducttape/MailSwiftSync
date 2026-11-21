@@ -11,6 +11,9 @@ if ((${#checksums[@]} == 0)); then
 fi
 for manifest in "${checksums[@]}"; do
   while read -r expected file extra; do
+    # Tolerate CRLF manifests written on Windows.
+    file="${file%$'\r'}"
+    extra="${extra%$'\r'}"
     [[ -n "$expected" && -n "$file" && -z "${extra:-}" ]] || {
       echo "Malformed checksum entry in $manifest" >&2
       exit 1

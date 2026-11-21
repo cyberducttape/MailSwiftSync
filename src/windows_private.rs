@@ -471,6 +471,29 @@ fn well_known_sid(kind: WELL_KNOWN_SID_TYPE) -> io::Result<Vec<u8>> {
     Ok(buffer)
 }
 
+/// Closes the console window Windows opens for this console-subsystem binary
+/// when the desktop app is started from Explorer or the Start menu.
+///
+/// The binary stays a console program so every CLI command keeps working in
+/// shells and scripts (they wait for it and capture its output). When the
+/// only process attached to the console is this one, nobody launched it from
+/// a terminal, so the window is an empty leftover and is released. A console
+/// shared with a parent shell is left alone, so `eprintln!` output from the
+/// GUI still reaches that terminal.
+pub(crate) fn release_console_owned_by_gui() {
+    use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+    let mut processes = [0u32; 2];
+    // SAFETY: the buffer is valid for `processes.len()` entries.
+    let attached = unsafe { GetConsoleProcessList(processes.as_mut_ptr(), processes.len() as u32) };
+    if attached == 1 {
+        // SAFETY: detaching from a console this process alone owns has no
+        // preconditions; failure only leaves the window open.
+        unsafe {
+            FreeConsole();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

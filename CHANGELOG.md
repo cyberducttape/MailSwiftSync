@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.1.0-alpha.3] - 2026-11-21
+
+Republishes the 0.1.0-alpha.2 content. The `v0.1.0-alpha.2` release run
+built, tested, and packaged every target but stopped at publication: the
+Windows checksum file was written with a CRLF line ending, so the release
+verifier looked for a file name ending in a carriage return. Windows now
+writes an LF-terminated checksum, and the verifier accepts CRLF manifests.
+
 ## [0.1.0-alpha.2] - 2026-11-21
 
 Second technical preview, and the first published build with the one-line
