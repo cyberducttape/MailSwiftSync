@@ -99,11 +99,11 @@ impl App {
                 ui.label(self.language.message("ui.hold-dialog-body"));
                 ui.add_space(8.0);
                 crate::ui::form_row(ui, self.language.message("ui.operator"), |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut operator).desired_width(260.0))
+                    ui.add(crate::ui::field(&mut operator).desired_width(260.0))
                 });
                 crate::ui::form_row(ui, self.language.message("ui.hold-reason"), |ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut reason)
+                        crate::ui::field(&mut reason)
                             .hint_text(self.language.message("ui.hold-reason-hint"))
                             .desired_width(260.0),
                     )

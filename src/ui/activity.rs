@@ -222,7 +222,7 @@ crate::ui::name_modal(ui, &modal_heading);
             let field_label = ui.label(self.language.message("ui.filter-history"));
             crate::ui::LabelledField::link_label(
                 &ui.add(
-                    egui::TextEdit::singleline(&mut self.activity_search)
+                    crate::ui::field(&mut self.activity_search)
                         .hint_text(
                             self.language
                                 .text("mailbox, phase, engine, run ID, or detail"),

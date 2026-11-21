@@ -37,10 +37,9 @@ pub(crate) fn show(
     let mut close_requested = false;
     let mut action = None;
     let mut error = None;
-    egui::Window::new(language.message("ui.settings"))
+    crate::ui::dialog_window(ctx, language.message("ui.settings"), 560.0)
         .open(&mut window_open)
         .collapsible(false)
-        .resizable(false)
         .show(ctx, |ui| {
  crate::ui::dialog_body(ui, |ui| {
             ui.heading(language.message("ui.operator-settings"));
@@ -161,11 +160,11 @@ pub(crate) fn show(
                 ui.label(RichText::new(language.message("ui.optional-applied-to-customer-proof-exports-as-an-issued-by-line-independent-90154a5591")).size(12.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                 ui.horizontal(|ui| {
                     let field_label = ui.label(language.message("ui.agency-operator-name"));
-                    crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut branding.name), &field_label);
+                    crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut branding.name), &field_label);
                 });
                 ui.horizontal(|ui| {
                     let field_label = ui.label(language.message("ui.contact"));
-                    crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut branding.contact), &field_label);
+                    crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut branding.contact), &field_label);
                 });
                 if ui.button(language.message("ui.save-report-branding")).clicked()
                     && let Err(value) = branding.save()

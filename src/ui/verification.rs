@@ -151,7 +151,7 @@ impl App {
                         let field_label = ui.label(self.language.message("ui.search"));
                         crate::ui::LabelledField::link_label(
                             &ui.add(
-                                egui::TextEdit::singleline(&mut self.verification_search)
+                                crate::ui::field(&mut self.verification_search)
                                     .hint_text(self.language.message("ui.mailbox-or-destination"))
                                     .desired_width(220.0),
                             ),
@@ -272,9 +272,14 @@ impl App {
                         .id_salt("verification_mailbox_list")
                         .max_height(360.0)
                         .show_rows(ui, 32.0, visible.len(), |ui, visible_rows| {
+                            // Share the card's width between the three
+                            // columns so the striped rows span the card.
+                            let spacing = ui.spacing().item_spacing.x;
+                            let column = ((ui.available_width() - 2.0 * spacing) / 3.0).max(140.0);
                             egui::Grid::new("verification_mailboxes")
                                 .striped(true)
-                                .min_col_width(140.0)
+                                .num_columns(3)
+                                .min_col_width(column)
                                 .show(ui, |ui| {
                                     if visible_rows.start == 0 {
                                         crate::ui::table_header(
@@ -682,10 +687,8 @@ impl App {
                             let field_label = ui.label(self.language.message("ui.operator"));
                             crate::ui::LabelledField::link_label(
                                 &ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.verification_exception_operator,
-                                    )
-                                    .desired_width(220.0),
+                                    crate::ui::field(&mut self.verification_exception_operator)
+                                        .desired_width(220.0),
                                 ),
                                 &field_label,
                             );

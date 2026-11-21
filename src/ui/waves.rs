@@ -193,7 +193,7 @@ impl App {
                     }
                     if wave.approved_by.is_none() {
                         let approver = ui.add(
-                            egui::TextEdit::singleline(&mut self.waves.approver)
+                            crate::ui::field(&mut self.waves.approver)
                                 .desired_width(140.0)
                                 .hint_text(self.language.message("ui.wave-approver")),
                         );
@@ -346,7 +346,7 @@ impl App {
                         let label = self.language.message(label_key);
                         ui.label(label);
                         let field = ui.add(
-                            egui::TextEdit::singleline(value)
+                            crate::ui::field(value)
                                 .desired_width(260.0)
                                 .hint_text(self.language.message(hint_key)),
                         );
