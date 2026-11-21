@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- One-line installers: `curl -fsSL …/install.sh | sh` on Linux and macOS and
+  `irm …/install.ps1 | iex` on Windows download the newest published build,
+  refuse it unless its SHA-256 matches the release checksum, install it for
+  the current user without sudo or administrator rights, add a PATH entry
+  (asking first) and an applications/Start menu entry, and offer to install
+  the qualified imapsync. Where no build is published for the host, the shell
+  installer builds from source with Cargo. A new Installer smoke workflow runs
+  both installers against the published releases on Linux, macOS, and Windows.
+- The desktop now checks for imapsync at startup and shows an
+  "imapsync isn't installed yet" (or "not the qualified version") card with a
+  one-click install on Overview and Plan, instead of first failing at
+  preflight.
+- `mailswiftsync doctor` prints a readable checklist with what to do for each
+  item when run in a terminal; piped output and `--json` keep the JSON report.
+  Without an argument it now checks the desktop app's own ledger once it
+  exists.
+- The Debian and RPM packages install a desktop menu entry and an icon.
+
 - Replace the direct `chrono` dependency with `jiff` for timestamp parsing,
   formatting, cutover deadlines, and local maintenance-window/DST handling.
   Preserve the fixed-millisecond UTC format required by durable folder

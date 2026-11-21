@@ -1,0 +1,88 @@
+name: Installer smoke
+
+# Runs the one-line installers against the published releases on each
+# desktop platform, so a change to an installer or to the release asset
+# layout cannot silently break first-time installation.
+on:
+  pull_request:
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - ".github/workflows/installer-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - ".github/workflows/installer-smoke.yml"
+  release:
+    types: [published]
+  schedule:
+    - cron: "41 6 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: install.sh (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint
+        if: runner.os == 'Linux'
+        run: shellcheck install.sh
+      - name: The installer's embedded icon matches the packaged icon
+        if: runner.os == 'Linux'
+        run: |
+          sed -n "/<<'SVG'$/,/^SVG$/p" install.sh | sed '1d;$d' > "$RUNNER_TEMP/installer-icon.svg"
+          diff -u assets/icons/mailswiftsync.svg "$RUNNER_TEMP/installer-icon.svg"
+      - name: Install into a fresh home through stdin, as curl | sh does
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          home="$RUNNER_TEMP/home"
+          mkdir -p "$home"
+          HOME="$home" SHELL=/bin/bash sh -s -- --yes --no-engine < install.sh
+          test -x "$home/.local/bin/mailswiftsync"
+          grep -qF "$home/.local/bin" "$home/.bashrc"
+          if [ "$RUNNER_OS" = Linux ]; then
+            test -f "$home/.local/share/applications/mailswiftsync.desktop"
+            test -f "$home/.local/share/icons/hicolor/scalable/apps/mailswiftsync.svg"
+          fi
+      - name: Reinstalling is safe and does not duplicate the PATH line
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          home="$RUNNER_TEMP/home"
+          HOME="$home" SHELL=/bin/bash sh -s -- --yes --no-engine < install.sh
+          test "$(grep -cF "$home/.local/bin" "$home/.bashrc")" -eq 1
+
+  windows:
+    name: install.ps1 (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install into a temporary directory
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'MailSwiftSync'
+          & ./install.ps1 -InstallDir $dir -NoEngine -NoShortcut -Yes
+          if (-not (Test-Path (Join-Path $dir 'mailswiftsync.exe'))) { throw 'mailswiftsync.exe was not installed' }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -notcontains $dir) { throw 'install directory was not added to the user PATH' }

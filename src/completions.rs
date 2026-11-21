@@ -72,7 +72,7 @@ _mailswiftsync() {{
             ;;
         doctor)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=($(compgen -W "--strict" -- "$cur"))
+                COMPREPLY=($(compgen -W "--strict --connect --json" -- "$cur"))
                 return
             fi
             ;;
@@ -98,7 +98,7 @@ _mailswiftsync() {{
             (( CURRENT == 4 )) && {{ compadd -- {modes}; return; }}
             ;;
         doctor)
-            [[ "$PREFIX" == -* ]] && {{ compadd -- --strict; return; }}
+            [[ "$PREFIX" == -* ]] && {{ compadd -- --strict --connect --json; return; }}
             ;;
         completions)
             compadd -- {shells}
@@ -115,6 +115,8 @@ _mailswiftsync "$@"
 complete -c mailswiftsync -n __fish_use_subcommand -f -a "{commands}"
 complete -c mailswiftsync -n "__fish_seen_subcommand_from headless; and test (count (commandline -opc)) -eq 3" -f -a "{modes}"
 complete -c mailswiftsync -n "__fish_seen_subcommand_from doctor" -l strict -d "Set the exit status from the checks"
+complete -c mailswiftsync -n "__fish_seen_subcommand_from doctor" -l connect -d "Also test TLS to the saved plan's servers"
+complete -c mailswiftsync -n "__fish_seen_subcommand_from doctor" -l json -d "Print the machine-readable report"
 complete -c mailswiftsync -n "__fish_seen_subcommand_from completions" -f -a "{shells}"
 "#
         )),

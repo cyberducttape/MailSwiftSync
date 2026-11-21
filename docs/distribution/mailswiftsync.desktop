@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MailSwiftSync
+GenericName=Mailbox migration
+Comment=Plan, run, and verify IMAP mailbox migrations
+Exec=mailswiftsync
+Icon=mailswiftsync
+Terminal=false
+Categories=Network;Email;
+Keywords=imap;imapsync;email;migration;mailbox;

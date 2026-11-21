@@ -198,6 +198,15 @@ fn scenes() -> Vec<(&'static str, Setup)> {
         ("overview first run", |app| {
             view(app, WorkspaceView::Overview)
         }),
+        ("overview engine missing", |app| {
+            app.engine_presence = crate::ui::engine::EnginePresence::Missing;
+            view(app, WorkspaceView::Overview)
+        }),
+        ("plan engine unqualified", |app| {
+            app.engine_presence =
+                crate::ui::engine::EnginePresence::Unqualified("2.229".to_owned());
+            view(app, WorkspaceView::Plan)
+        }),
         ("overview batch", |app| {
             crate::ui::debug_scene::demo_data(app);
             view(app, WorkspaceView::Overview);

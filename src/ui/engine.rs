@@ -7,6 +7,18 @@ use crate::{App, StatusSeverity, core};
 use eframe::egui::{self, RichText};
 use std::sync::mpsc;
 
+/// What MailSwiftSync knows about the configured imapsync.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EnginePresence {
+    /// Not checked yet (or the plan uses Dovecot, which needs no imapsync).
+    Unchecked,
+    Checking,
+    Qualified,
+    /// Installed, but not the qualified version; carries what it reported.
+    Unqualified(String),
+    Missing,
+}
+
 /// Messages from the engine install/check worker.
 pub(crate) enum EngineSetupMessage {
     Progress(InstallProgress),
@@ -96,14 +108,7 @@ impl App {
             {
                 self.start_engine_check();
             }
-            let can_install = match plan {
-                InstallPlan::Automatic(crate::engine_install::InstallMethod::DebianPackage) => {
-                    crate::engine_install::desktop_elevation_available()
-                }
-                InstallPlan::Automatic(_) => true,
-                InstallPlan::Manual(_) => false,
-            };
-            if can_install {
+            if desktop_install_available(plan) {
                 let label = self
                     .language
                     .text("Install qualified imapsync {}")
@@ -147,6 +152,13 @@ impl App {
                 );
             }
         }
+        self.engine_setup_feedback(ui, true);
+    }
+
+    /// Install progress and the latest check/install result. The banner
+    /// already states what the check found, so it omits check warnings.
+    fn engine_setup_feedback(&self, ui: &mut egui::Ui, include_check_warnings: bool) {
+        let colors = self.theme_colors();
         if let Some(progress) = &self.engine_setup_progress {
             let text = match progress {
                 InstallProgress::Downloading {
@@ -171,9 +183,84 @@ impl App {
             };
             ui.label(RichText::new(text).color(colors.info));
         }
-        if let Some((text, severity)) = &self.engine_setup_status {
+        if let Some((text, severity)) = &self.engine_setup_status
+            && (include_check_warnings || *severity != StatusSeverity::Warning)
+        {
             ui.label(RichText::new(text).color(crate::ui::status_color(*severity, colors)));
         }
+    }
+
+    /// Check the configured imapsync once, in the background, so the setup
+    /// banner can say whether it is installed before the first preflight.
+    pub(crate) fn start_engine_presence_check(&mut self) {
+        if self.engine_presence == EnginePresence::Unchecked
+            && self.engine_setup_receiver.is_none()
+            && self.form.profile.engine != core::Engine::Dovecot
+        {
+            self.start_engine_check();
+        }
+    }
+
+    /// A prominent card on Overview and Plan while imapsync is missing or
+    /// unqualified, with the one-click install where the host supports it.
+    pub(crate) fn engine_setup_banner(&mut self, ui: &mut egui::Ui) {
+        if self.form.profile.engine == core::Engine::Dovecot {
+            return;
+        }
+        let (title, detail) = match &self.engine_presence {
+            EnginePresence::Missing => (
+                self.language
+                    .message("ui.engine-banner-missing-title")
+                    .to_owned(),
+                self.language.message("ui.engine-banner-missing-detail"),
+            ),
+            EnginePresence::Unqualified(version) => (
+                self.language
+                    .message("ui.engine-banner-unqualified-title")
+                    .replace("{}", version),
+                self.language.message("ui.engine-banner-unqualified-detail"),
+            ),
+            EnginePresence::Unchecked | EnginePresence::Checking | EnginePresence::Qualified => {
+                return;
+            }
+        };
+        let colors = self.theme_colors();
+        let busy = self.engine_setup_receiver.is_some();
+        let editable = !self.running();
+        crate::ui::card(ui, |ui| {
+            ui.label(
+                RichText::new(title)
+                    .strong()
+                    .family(crate::ui::fonts::medium())
+                    .color(colors.warning),
+            );
+            ui.label(RichText::new(detail).color(colors.text_secondary));
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                if desktop_install_available(crate::engine_install::plan_for_host()) {
+                    let label = self
+                        .language
+                        .text("Install qualified imapsync {}")
+                        .replace("{}", QUALIFIED_IMAPSYNC_VERSION);
+                    let clicked = if busy || !editable {
+                        ui.add_enabled(false, egui::Button::new(label)).clicked()
+                    } else {
+                        crate::ui::primary_button(ui, &label).clicked()
+                    };
+                    if clicked {
+                        self.start_engine_install();
+                    }
+                }
+                if ui
+                    .button(self.language.message("ui.engine-banner-open-setup"))
+                    .clicked()
+                {
+                    self.engine_open = true;
+                }
+            });
+            self.engine_setup_feedback(ui, false);
+        });
+        ui.add_space(12.0);
     }
 
     pub(crate) fn start_engine_check(&mut self) {
@@ -184,6 +271,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.engine_setup_receiver = Some(rx);
         self.engine_setup_status = None;
+        self.engine_presence = EnginePresence::Checking;
         std::thread::spawn(move || {
             let identity = crate::runner::resolve_imapsync_identity(&path);
             let _ = tx.send(EngineSetupMessage::Checked {
@@ -224,6 +312,13 @@ impl App {
                 }
                 Some(Ok(EngineSetupMessage::Checked { version, qualified })) => {
                     self.engine_setup_receiver = None;
+                    self.engine_presence = if qualified {
+                        EnginePresence::Qualified
+                    } else if version == "unknown" {
+                        EnginePresence::Missing
+                    } else {
+                        EnginePresence::Unqualified(version.clone())
+                    };
                     self.engine_setup_status = Some(if qualified {
                         (
                             self.language
@@ -252,6 +347,7 @@ impl App {
                     self.engine_setup_progress = None;
                     match result {
                         Ok(engine) => {
+                            self.engine_presence = EnginePresence::Qualified;
                             self.form.profile.imapsync_path =
                                 engine.executable.to_string_lossy().into_owned();
                             let text = self
@@ -281,5 +377,17 @@ impl App {
                 Some(Err(mpsc::TryRecvError::Empty)) | None => break,
             }
         }
+    }
+}
+
+/// Whether the desktop can install the qualified engine itself: Windows
+/// always, Debian/Ubuntu only when a graphical elevation prompt exists.
+fn desktop_install_available(plan: InstallPlan) -> bool {
+    match plan {
+        InstallPlan::Automatic(crate::engine_install::InstallMethod::DebianPackage) => {
+            crate::engine_install::desktop_elevation_available()
+        }
+        InstallPlan::Automatic(_) => true,
+        InstallPlan::Manual(_) => false,
     }
 }
