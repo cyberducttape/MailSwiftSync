@@ -545,7 +545,10 @@ mod tests {
         );
         // ...but no longer matches what was published.
         let error = verify(&public_key).unwrap_err();
-        assert!(error.contains("rewritten after the checkpoint"), "{error}");
+        assert!(
+            error.contains("rewritten after the checkpoint"),
+            "verification must report the rewritten checkpoint"
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 }

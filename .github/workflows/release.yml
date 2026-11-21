@@ -273,7 +273,10 @@ jobs:
           bash scripts/stage-release-docs.sh bundle
           Compress-Archive -Path bundle/* -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
           bash scripts/verify-release-bundle.sh dist/mailswiftsync-${{ matrix.target }}.zip
-          (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
+          # Write an LF-terminated line: Out-File appends CRLF, and the
+          # release verifier then looked for a file name ending in CR.
+          $hash = (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/mailswiftsync-${{ matrix.target }}.zip.sha256'), "$hash  mailswiftsync-${{ matrix.target }}.zip`n")
       - name: Verify Windows signature remains present
         if: runner.os == 'Windows'
         shell: pwsh

@@ -1,6 +1,6 @@
 # Development plan
 
-Working plan for taking MailSwiftSync from Technical Preview (`0.1.0-alpha.2`)
+Working plan for taking MailSwiftSync from Technical Preview (`0.1.0-alpha.3`)
 to a stable release. The release bar itself is defined in
 [docs/release-readiness.md](docs/release-readiness.md) and the capability
 inventory in [capabilities.toml](capabilities.toml); this file orders the work
