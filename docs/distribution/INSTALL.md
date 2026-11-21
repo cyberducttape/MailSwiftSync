@@ -3,6 +3,32 @@
 MailSwiftSync is the migration control plane. It does not bundle an IMAP
 engine or configure a mail server.
 
+## One-line install (recommended)
+
+```bash
+# Linux and macOS: installs to ~/.local/bin, no sudo
+curl -fsSL https://raw.githubusercontent.com/cyberducttape/MailSwiftSync/main/install.sh | sh
+```
+
+```powershell
+# Windows: installs to %LOCALAPPDATA%\Programs\MailSwiftSync, no administrator rights
+irm https://raw.githubusercontent.com/cyberducttape/MailSwiftSync/main/install.ps1 | iex
+```
+
+The installer picks the newest published build for the host, refuses it
+unless its SHA-256 matches the release's `.sha256` file, installs it for the
+current user, adds a menu or Start menu entry and a PATH entry (asking first),
+and offers to run `mailswiftsync install-engine` for the qualified imapsync.
+Where no build is published for the host it builds from source with Cargo.
+Options: `--dir`, `--version TAG`, `--no-engine`, `--no-desktop`,
+`--from-source`, and `--yes` for unattended installs (`sh -s -- --yes` when
+piping); the Windows script takes `-InstallDir`, `-Version`, `-NoEngine`,
+`-NoShortcut`, and `-Yes`. Rerun it to update.
+
+The checksum protects against a corrupted or truncated download, not against
+a compromised release. When you need signer verification, use the manual
+steps below.
+
 ## Install a release archive
 
 1. Download the archive and its adjacent `.sha256` file from the same GitHub

@@ -35,6 +35,8 @@ workflows:
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
         - 'actions/upload-artifact@v7.0.2'
+    '.github/workflows/installer-smoke.yml':
+        - 'actions/checkout@v7.0.1'
     '.github/workflows/integration.yml':
         - 'actions/checkout@v7.0.1'
         - 'actions/upload-artifact@v7.0.2'

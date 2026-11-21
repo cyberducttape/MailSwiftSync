@@ -891,9 +891,46 @@ mod tests {
                     qualified,
                     "{text}"
                 );
+                use crate::ui::engine::EnginePresence;
+                let expected = if qualified {
+                    EnginePresence::Qualified
+                } else {
+                    EnginePresence::Unqualified(version.to_owned())
+                };
+                assert_eq!(app.engine_presence, expected);
                 let _ = std::fs::remove_file(script);
             });
         }
+    }
+
+    #[test]
+    fn startup_engine_check_marks_a_missing_engine_once() {
+        use crate::ui::engine::EnginePresence;
+        with_app(|app| {
+            app.form.profile.engine = crate::core::Engine::ImapSync;
+            app.form.profile.imapsync_path = std::env::temp_dir()
+                .join(format!("mailswiftsync-no-engine-{}", uuid::Uuid::new_v4()))
+                .to_string_lossy()
+                .into_owned();
+            app.start_engine_presence_check();
+            assert_eq!(app.engine_presence, EnginePresence::Checking);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while app.engine_setup_receiver.is_some() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                app.poll();
+            }
+            assert_eq!(app.engine_presence, EnginePresence::Missing);
+            // A known result is not re-checked on every frame.
+            app.start_engine_presence_check();
+            assert!(app.engine_setup_receiver.is_none());
+        });
+        with_app(|app| {
+            app.form.profile.engine = crate::core::Engine::Dovecot;
+            app.start_engine_presence_check();
+            assert!(app.engine_setup_receiver.is_none());
+            assert_eq!(app.engine_presence, EnginePresence::Unchecked);
+        });
     }
 
     fn stop_worker_sync<T: Send + 'static>(sender: std::sync::mpsc::SyncSender<T>, panic: bool) {

@@ -199,6 +199,9 @@ pub(crate) struct App {
     pub(crate) engine_setup_receiver: Option<Receiver<crate::ui::engine::EngineSetupMessage>>,
     pub(crate) engine_setup_progress: Option<crate::engine_install::InstallProgress>,
     pub(crate) engine_setup_status: Option<(String, StatusSeverity)>,
+    /// What the automatic engine check found; drives the setup banner on
+    /// Overview and Plan so a missing engine is visible before preflight.
+    pub(crate) engine_presence: crate::ui::engine::EnginePresence,
     pub(crate) keyring_operation_receiver:
         Option<Receiver<crate::ui::keyring_ops::KeyringOperationResult>>,
     pub(crate) oauth_authorization_receiver: Option<Receiver<OAuthAuthorizationMessage>>,

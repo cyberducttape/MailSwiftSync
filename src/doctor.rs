@@ -59,7 +59,7 @@ fn remediation(name: &str, status: &str) -> Option<&'static str> {
             "Save a migration plan in the desktop app, or pass one to the headless commands."
         }
         "database" => {
-            "Pass the path of a MailSwiftSync ledger, or run a command that creates one; if the file is damaged, restore it with `mailswiftsync restore`."
+            "Open MailSwiftSync once to create its ledger, or pass the path of an existing one; if the file is damaged, restore it with `mailswiftsync restore`."
         }
         "state directory permissions" | "secret runtime directory" => {
             "Create the directory, owned by the account running MailSwiftSync and accessible only to it (mode 0700 on Unix)."
@@ -72,6 +72,9 @@ fn remediation(name: &str, status: &str) -> Option<&'static str> {
         }
         "source OAuth refresh" | "destination OAuth refresh" => {
             "Authorize the account again with `mailswiftsync oauth-authorize`, which stores a new refresh token."
+        }
+        "provider-pair qualification" => {
+            "Enter the source and destination servers on the Plan page; MailSwiftSync then shows how well that provider pair has been tested."
         }
         _ => "Review this check's detail before starting a migration.",
     })
@@ -143,7 +146,16 @@ pub(crate) fn run(state_path: Option<&Path>, connect: bool) -> DoctorReport {
     if connect && let Some(form) = &profile {
         checks.extend(connection_checks(form));
     }
-    if let Some(form) = profile.as_ref() {
+    if profile.as_ref().is_some_and(|form| {
+        form.profile.source_host.trim().is_empty()
+            && form.profile.destination_host.trim().is_empty()
+    }) {
+        checks.push(DoctorCheck {
+            name: "provider-pair qualification",
+            status: "review",
+            detail: "no source or destination server saved yet".into(),
+        });
+    } else if let Some(form) = profile.as_ref() {
         let qualification = crate::provider_qualification::for_endpoints(
             &form.profile.source_host,
             &form.profile.destination_host,
@@ -510,7 +522,7 @@ fn check_state_path(path: Option<&Path>) -> DoctorCheck {
         return DoctorCheck {
             name: "database",
             status: "review",
-            detail: "no state database supplied".into(),
+            detail: "no ledger yet: MailSwiftSync creates one the first time it opens, or pass the path of an existing ledger".into(),
         };
     };
     match std::fs::metadata(path) {
@@ -566,6 +578,34 @@ fn check_private_directory(
 
 /// Process exit status for `doctor --strict`: 1 when a check is blocked, 3
 /// when the transfer engine is present but not the qualified version, else 0.
+/// A short checklist for a person at a terminal: one line per check, what
+/// to do under each check that is not ready, and an overall verdict.
+pub(crate) fn render_text(report: &DoctorReport) -> String {
+    use std::fmt::Write as _;
+    let mut text = format!("MailSwiftSync {} setup check\n\n", report.product_version);
+    for check in &report.checks {
+        let mark = match check.status {
+            "blocked" => "✗",
+            "review" => "!",
+            _ => "✓",
+        };
+        let _ = writeln!(text, "  {mark} {}: {}", check.name, check.detail);
+        if let Some(remediation) = remediation(check.name, check.status) {
+            let _ = writeln!(text, "      → {remediation}");
+        }
+    }
+    let verdict = match report.overall {
+        "blocked" => "Blocked: fix the ✗ items before migrating.",
+        "review" => "Usable, with items to review (!) before a live migration.",
+        _ => "Ready.",
+    };
+    let _ = write!(
+        text,
+        "\n{verdict}\nFor scripts, run `mailswiftsync doctor --json`."
+    );
+    text
+}
+
 pub(crate) fn strict_exit_code(report: &DoctorReport) -> i32 {
     if report.overall == "blocked" {
         1
@@ -626,6 +666,48 @@ fn operating_system() -> String {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn terminal_checklist_marks_each_check_and_says_what_to_do() {
+        let report = DoctorReport {
+            product_version: "9.9.9",
+            git_revision: "unknown",
+            operating_system: "test".into(),
+            state_path: None,
+            checks: vec![
+                DoctorCheck {
+                    name: "verification parser",
+                    status: "ready",
+                    detail: "ok".into(),
+                },
+                DoctorCheck {
+                    name: "imapsync executable",
+                    status: "review",
+                    detail: "imapsync: 2.229".into(),
+                },
+                DoctorCheck {
+                    name: "database",
+                    status: "blocked",
+                    detail: "damaged".into(),
+                },
+            ],
+            overall: "blocked",
+        };
+        let text = render_text(&report);
+        assert!(
+            text.starts_with("MailSwiftSync 9.9.9 setup check"),
+            "{text}"
+        );
+        assert!(text.contains("  ✓ verification parser: ok"), "{text}");
+        assert!(
+            text.contains("  ! imapsync executable: imapsync: 2.229"),
+            "{text}"
+        );
+        assert!(text.contains("  ✗ database: damaged"), "{text}");
+        assert!(text.contains("→ Install imapsync 2.314"), "{text}");
+        assert!(text.contains("Blocked: fix the ✗ items"), "{text}");
+        assert!(text.contains("doctor --json"), "{text}");
+    }
 
     #[test]
     fn doctor_output_capture_is_bounded_and_keeps_the_version_line() {

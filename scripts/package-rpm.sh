@@ -72,6 +72,11 @@ install -m 0644 docs/distribution/mailswiftsync.1 \
   "$payload/usr/share/man/man1/mailswiftsync.1"
 gzip -n -9 "$payload/usr/share/man/man1/mailswiftsync.1"
 # Completions come from the shipped binary so they list its exact commands.
+# Desktop menu entry and icon, so the application appears in menus.
+install -D -m 0644 docs/distribution/mailswiftsync.desktop \
+  "$payload/usr/share/applications/mailswiftsync.desktop"
+install -D -m 0644 assets/icons/mailswiftsync.svg \
+  "$payload/usr/share/icons/hicolor/scalable/apps/mailswiftsync.svg"
 "$binary" completions bash > "$payload/usr/share/bash-completion/completions/mailswiftsync"
 "$binary" completions zsh > "$payload/usr/share/zsh/site-functions/_mailswiftsync"
 "$binary" completions fish > "$payload/usr/share/fish/vendor_completions.d/mailswiftsync.fish"
@@ -121,6 +126,8 @@ cp -a "$payload/." %{buildroot}/
 /usr/share/bash-completion/completions/mailswiftsync
 /usr/share/zsh/site-functions/_mailswiftsync
 /usr/share/fish/vendor_completions.d/mailswiftsync.fish
+/usr/share/applications/mailswiftsync.desktop
+/usr/share/icons/hicolor/scalable/apps/mailswiftsync.svg
 EOF
 
 rpmbuild -bb "$work/mailswiftsync.spec" \
