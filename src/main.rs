@@ -17,6 +17,7 @@ mod extra_options;
 mod headless;
 mod imap_probe;
 mod imap_protocol;
+mod mail_autoconfig;
 mod maintenance_window;
 mod migrate_audit;
 mod migration_plan;

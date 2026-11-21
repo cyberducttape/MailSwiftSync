@@ -636,6 +636,12 @@ fn account_address_offers_server_settings_while_the_server_is_empty() {
     let shown = text(&mut harness);
     assert!(shown.contains("Use Google Workspace settings"), "{shown}");
     assert!(shown.contains("Use server imap.example.org"), "{shown}");
+    // Custom domains also get the opt-in lookup; known providers do not.
+    assert!(
+        shown.contains("Look up settings for example.org"),
+        "{shown}"
+    );
+    assert!(!shown.contains("Look up settings for gmail.com"), "{shown}");
 
     // A filled-in server wins: the hint never second-guesses it.
     harness.app.form.profile.destination_host = "mail.example.org".into();
