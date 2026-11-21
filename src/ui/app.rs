@@ -480,7 +480,7 @@ crate::ui::name_modal(ui, &modal_heading);
         ui.add_enabled_ui(plan_configuration_enabled(self.running()), |ui| {
         crate::ui::card(ui, |ui| {
             crate::ui::form_row(ui, self.language.message("ui.plan-name"), |ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.form.profile.name).desired_width(360.0))
+                ui.add(crate::ui::field(&mut self.form.profile.name).desired_width(360.0))
             });
             if dovecot {
                 // The expert method lives under Advanced; never leave it as
@@ -730,12 +730,12 @@ crate::ui::name_modal(ui, &modal_heading);
                         }
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::TextEdit::singleline(&mut self.folder_mapping_source)
+                                crate::ui::field(&mut self.folder_mapping_source)
                                     .hint_text(self.language.message("ui.source-folder")),
                             );
                             ui.label("→");
                             ui.add(
-                                egui::TextEdit::singleline(&mut self.folder_mapping_destination)
+                                crate::ui::field(&mut self.folder_mapping_destination)
                                     .hint_text(self.language.message("ui.destination-folder")),
                             );
                             ui.checkbox(
@@ -776,7 +776,7 @@ crate::ui::name_modal(ui, &modal_heading);
                             self.language.message("ui.imapsync-executable"),
                             |ui| {
                                 ui.add(
-                                    egui::TextEdit::singleline(
+                                    crate::ui::field(
                                         &mut self.form.profile.imapsync_path,
                                     )
                                     .hint_text(
@@ -1090,7 +1090,7 @@ crate::ui::name_modal(ui, &modal_heading);
 
     fn text_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
         crate::ui::form_row(ui, label, |ui| {
-            ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY))
+            ui.add(crate::ui::field(value).desired_width(f32::INFINITY))
         });
     }
 

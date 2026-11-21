@@ -405,9 +405,8 @@ impl App {
             return;
         }
         let colors = self.theme_colors();
-        egui::Window::new(self.language.message("ui.execution-plan"))
+        crate::ui::dialog_window(ctx, self.language.message("ui.execution-plan"), 670.0)
             .open(&mut self.preview)
-            .default_width(670.0)
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new(
@@ -466,9 +465,8 @@ impl App {
             return;
         }
         let mut open = self.advanced_open;
-        egui::Window::new(self.language.message("ui.advanced-migration-options"))
+        crate::ui::dialog_window(ctx, self.language.message("ui.advanced-migration-options"), 620.0)
             .open(&mut open)
-            .default_width(620.0)
             .show(ctx, |ui| {
  crate::ui::dialog_body(ui, |ui| {
                 ui.label(RichText::new(self.language.message("ui.these-controls-affect-the-imapsync-fallback-dovecot-native-migrations-use-d-1e32325d23")).color(self.theme_colors().text_secondary));
@@ -529,7 +527,7 @@ impl App {
                         ui.horizontal(|ui| {
                             let label = ui.label(self.language.message("ui.source-rate-tenant-scope"));
                             crate::ui::LabelledField::link_label(
-                                &ui.add(egui::TextEdit::singleline(
+                                &ui.add(crate::ui::field(
                                     &mut self.form.profile.source_rate_tenant,
                                 ).desired_width(f32::INFINITY)),
                                 &label,
@@ -538,7 +536,7 @@ impl App {
                         ui.horizontal(|ui| {
                             let label = ui.label(self.language.message("ui.destination-rate-tenant-scope"));
                             crate::ui::LabelledField::link_label(
-                                &ui.add(egui::TextEdit::singleline(
+                                &ui.add(crate::ui::field(
                                     &mut self.form.profile.destination_rate_tenant,
                                 ).desired_width(f32::INFINITY)),
                                 &label,

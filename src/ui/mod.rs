@@ -98,6 +98,20 @@ pub(crate) fn dialog_body<R>(
         .inner
 }
 
+/// A dialog window that opens centred near the top of the app at a readable
+/// width, instead of egui's default of the top-left corner at content width.
+pub(crate) fn dialog_window<'open>(
+    ctx: &egui::Context,
+    title: impl Into<egui::WidgetText>,
+    width: f32,
+) -> egui::Window<'open> {
+    let screen = ctx.content_rect();
+    egui::Window::new(title)
+        .pivot(egui::Align2::CENTER_TOP)
+        .default_pos(egui::pos2(screen.center().x, screen.top() + 64.0))
+        .default_width(width.min(screen.width() - 48.0))
+}
+
 /// Grouped content on a raised, softly bordered surface. Every page and
 /// dialog uses this instead of `Ui::group`, so the palette decides whether
 /// cards are rounded and filled (modern) or square and outlined (retro).
@@ -670,6 +684,20 @@ pub(crate) fn stepper(
 }
 
 /// Page title with a secondary description line.
+/// Inner margin that gives a single-line field the same height as a button
+/// or combo box beside it (egui's default is 4×2, a visibly shorter box).
+pub(crate) const FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(8, 5);
+
+/// A single-line text field styled to line up with buttons in the same row.
+pub(crate) fn field(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).margin(FIELD_MARGIN)
+}
+
+/// Add a default single-line text field (see [`field`]).
+pub(crate) fn text_field(ui: &mut egui::Ui, text: &mut dyn egui::TextBuffer) -> egui::Response {
+    ui.add(field(text))
+}
+
 pub(crate) fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.label(
         egui::RichText::new(title)
