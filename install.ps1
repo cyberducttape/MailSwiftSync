@@ -50,6 +50,9 @@ function Find-AssetUrl([string]$Asset) {
         $releases = @(Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases?per_page=30")
     }
     foreach ($release in $releases) {
+        # Never install from a draft (visible to authenticated callers);
+        # prereleases stay eligible because preview builds are published so.
+        if ($release.draft -ne $false) { continue }
         foreach ($item in $release.assets) {
             if ($item.name -eq $Asset) {
                 return [pscustomobject]@{ Url = $item.browser_download_url; Tag = $release.tag_name }
@@ -98,7 +101,41 @@ try {
 
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
     $exe = Join-Path $InstallDir 'mailswiftsync.exe'
-    Copy-Item -Force $binary.FullName $exe
+    if (Test-Path -LiteralPath $exe -PathType Container) {
+        throw "$exe is a folder; move it away or choose another -InstallDir."
+    }
+    # Stage beside the target, verify, then swap. Windows lets a running
+    # program be renamed but not overwritten, so the old copy is moved
+    # aside first and restored if the new one cannot be put in place.
+    $staged = "$exe.new"
+    $previous = "$exe.old"
+    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $binary.FullName -Destination $staged
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $binary.FullName).Hash
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $staged).Hash -ne $sourceHash) {
+        Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+        throw 'The staged copy of MailSwiftSync does not match the download; nothing was changed.'
+    }
+    Remove-Item -LiteralPath $previous -Force -ErrorAction SilentlyContinue
+    $hadPrevious = Test-Path -LiteralPath $exe -PathType Leaf
+    if ($hadPrevious) {
+        try {
+            Move-Item -LiteralPath $exe -Destination $previous -Force
+        } catch {
+            Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+            throw "Could not move the installed MailSwiftSync aside ($($_.Exception.Message)); the existing installation was left unchanged."
+        }
+    }
+    try {
+        Move-Item -LiteralPath $staged -Destination $exe -Force
+    } catch {
+        if ($hadPrevious) { Move-Item -LiteralPath $previous -Destination $exe -Force -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+        throw "Could not install the new MailSwiftSync ($($_.Exception.Message)); the previous version was restored."
+    }
+    # A still-running old version keeps its file locked; it is removed on
+    # the next install instead.
+    Remove-Item -LiteralPath $previous -Force -ErrorAction SilentlyContinue
     foreach ($document in @('README.md', 'LICENSE', 'OFL-IBM-Plex.txt')) {
         $path = Join-Path $bundle $document
         if (Test-Path $path) { Copy-Item -Force $path $InstallDir }
@@ -139,7 +176,18 @@ if (-not $NoEngine) {
     if (-not $probe.WaitForExit(15000)) { $probe.Kill() }
     $help = if (Test-Path $helpFile) { Get-Content -Raw $helpFile } else { '' }
     Remove-Item -Force $helpFile -ErrorAction SilentlyContinue
-    if ($help -notmatch 'install-engine') {
+    # The installed build resolves the engine as the app does (saved engine
+    # path, then PATH), so an engine installed earlier is not offered again.
+    $engineQualified = $false
+    if ($help -match 'install-engine') {
+        try {
+            $report = (& $exe doctor --json 2>$null | Out-String) | ConvertFrom-Json
+            $engineQualified = @($report.checks | Where-Object { $_.name -eq 'imapsync executable' -and $_.status -eq 'qualified' }).Count -gt 0
+        } catch { $engineQualified = $false }
+    }
+    if ($engineQualified) {
+        Write-Host '    imapsync 2.314 is already installed.'
+    } elseif ($help -notmatch 'install-engine') {
         Write-Warning 'This MailSwiftSync build cannot install the engine itself; install imapsync 2.314 from https://imapsync.lamiral.info/#install.'
     } elseif (Confirm-Step 'Install imapsync 2.314, the engine that copies the mail?') {
         & $exe install-engine --yes

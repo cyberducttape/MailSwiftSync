@@ -79,6 +79,18 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# The install directory ends up in shell startup files and messages, so it
+# must be one plain line of text.
+case "$install_dir" in
+  "") die "the install directory must not be empty" ;;
+  *[[:cntrl:]]*) die "the install directory must not contain control characters or newlines" ;;
+esac
+
+# Quote $1 for a POSIX shell: wrap in single quotes, escaping embedded ones.
+sh_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 # Questions read from the terminal even when this script arrives on stdin
 # through `curl | sh`.
 has_tty() { [ -r /dev/tty ] && (exec </dev/tty) 2>/dev/null; }
@@ -163,26 +175,80 @@ find_asset_url() {
   else
     api="https://api.github.com/repos/$REPO/releases?per_page=30"
   fi
-  if [ -n "${GITHUB_TOKEN:-}" ] && need curl; then
+  if github_token_usable && need curl; then
     # Optional; avoids the anonymous API rate limit on shared CI runners.
-    curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" \
-      -o "$work/releases.json" "$api" 2>/dev/null || return 1
+    # The header goes to curl as a config on stdin (printf is a shell
+    # builtin), so the token never appears in any process's arguments.
+    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
+      curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --config - \
+        -o "$work/releases.json" "$api" 2>/dev/null || return 1
   else
     download "$api" "$work/releases.json" 2>/dev/null || return 1
   fi
-  grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$work/releases.json" |
-    sed 's/.*"\(https:[^"]*\)"$/\1/' |
-    grep "/$asset\$" |
-    head -n 1
+  published_asset_urls <"$work/releases.json" | grep "/$asset\$" | head -n 1
+}
+
+# A token is used only if it is a plain token string, so it cannot break out
+# of the quoted curl config line.
+github_token_usable() {
+  [ -n "${GITHUB_TOKEN:-}" ] || return 1
+  case "$GITHUB_TOKEN" in
+    *[!A-Za-z0-9_.-]*) warn "ignoring GITHUB_TOKEN: unexpected characters"; return 1 ;;
+  esac
+  return 0
+}
+
+# Print the asset download URLs of published (non-draft) releases, in order,
+# from a GitHub releases API response. Each release object carries one
+# "draft" field before its "assets"; only assets after "draft": false are
+# printed, so a draft (or a response without the field) is never selected.
+# Prereleases stay eligible: preview builds are published as prereleases.
+published_asset_urls() {
+  awk '{
+      gsub(/"draft"[[:space:]]*:/, "\n&")
+      gsub(/"browser_download_url"[[:space:]]*:/, "\n&")
+      print
+    }' |
+    awk '
+      /^"draft"[[:space:]]*:/ {
+        published = ($0 ~ /^"draft"[[:space:]]*:[[:space:]]*false/)
+        next
+      }
+      /^"browser_download_url"[[:space:]]*:/ {
+        if (published && match($0, /"https:[^"]*"/)) {
+          print substr($0, RSTART + 1, RLENGTH - 2)
+        }
+      }'
 }
 
 install_binary() {
   # install_binary SOURCE
-  mkdir -p "$install_dir"
+  final="$install_dir/mailswiftsync"
+  mkdir -p "$install_dir" || die "could not create $install_dir"
+  [ -d "$install_dir" ] || die "$install_dir is not a directory"
+  # `mv` onto a directory (or a link to one) would move the program inside
+  # it and still succeed, so refuse that instead of reporting success.
+  if [ -d "$final" ] && [ ! -L "$final" ]; then
+    die "$final is a directory; move it away or choose another --dir"
+  fi
   tmp_target="$install_dir/.mailswiftsync.new.$$"
-  cp "$1" "$tmp_target"
-  chmod 0755 "$tmp_target"
-  mv -f "$tmp_target" "$install_dir/mailswiftsync"
+  rm -f "$tmp_target"
+  if ! cp "$1" "$tmp_target" || ! chmod 0755 "$tmp_target"; then
+    rm -f "$tmp_target"
+    die "could not write $tmp_target"
+  fi
+  # A symlink at the destination is replaced by the program itself rather
+  # than followed.
+  if [ -L "$final" ]; then
+    rm -f "$final" || { rm -f "$tmp_target"; die "could not replace the link $final"; }
+  fi
+  if ! mv -f "$tmp_target" "$final"; then
+    rm -f "$tmp_target"
+    die "could not install $final"
+  fi
+  if [ ! -f "$final" ] || [ -L "$final" ] || [ ! -x "$final" ]; then
+    die "$final is not an executable file after installation"
+  fi
 }
 
 # Set url and archive_name to the newest published build for $1.
@@ -290,11 +356,15 @@ EOF
 }
 
 engine_ready() {
-  # The qualified engine reports exactly 2.314.
-  if ! need imapsync; then
-    return 1
+  # Ask the installed build first: `doctor` resolves the engine exactly as
+  # the app does (the saved engine path, such as a private install from
+  # `install-engine`, then PATH) and checks for the qualified 2.314.
+  if run_cli doctor --json </dev/null 2>/dev/null | tr -d '\n' |
+    grep -Eq '"name":[[:space:]]*"imapsync executable",[[:space:]]*"status":[[:space:]]*"qualified"'; then
+    return 0
   fi
-  imapsync --version 2>/dev/null | grep -q '^2\.314'
+  # Older builds without `doctor --json`: imapsync 2.314 on PATH.
+  need imapsync && imapsync --version 2>/dev/null | grep -q '^2\.314'
 }
 
 offer_engine() {
@@ -328,6 +398,13 @@ offer_engine() {
   warn "or follow the manual steps in docs/distribution/INSTALL.md."
 }
 
+# The PATH line for shell startup files, with the directory shell-quoted so
+# no character in it is ever executed.
+path_line() {
+  # shellcheck disable=SC2016 # $PATH is meant literally, for the profile.
+  printf 'export PATH=%s:"$PATH"\n' "$(sh_quote "$install_dir")"
+}
+
 # Offer to put the install directory on PATH for future terminals.
 add_to_path() {
   case "${SHELL:-}" in
@@ -337,8 +414,10 @@ add_to_path() {
     *) profile="$HOME/.profile" ;;
   esac
   [ -n "$profile" ] || return 1
-  line="export PATH=\"$install_dir:\$PATH\""
-  if [ -f "$profile" ] && grep -qF "$line" "$profile"; then
+  line="$(path_line)"
+  # Also recognize the unquoted line older installers wrote.
+  legacy="export PATH=\"$install_dir:\$PATH\""
+  if [ -f "$profile" ] && { grep -qxF "$line" "$profile" || grep -qxF "$legacy" "$profile"; }; then
     return 0
   fi
   confirm "Add $install_dir to your PATH in $profile so 'mailswiftsync' works in new terminals?" ||
@@ -397,9 +476,10 @@ main() {
     say ""
     say "To run it as just 'mailswiftsync', add this line to your shell profile"
     say "(~/.bashrc, ~/.zshrc, or ~/.profile) and open a new terminal:"
-    say "    export PATH=\"$install_dir:\$PATH\""
+    say "    $(path_line)"
   fi
   say "Check your setup at any time with:  mailswiftsync doctor"
 }
 
-main
+# Tests source the functions without running the installer.
+[ "${MAILSWIFTSYNC_INSTALLER_TEST:-0}" = 1 ] || main

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Installer hardening (audit findings MSS-01, 02, 03, 05, 06, 07):
+  `install.sh` refuses to "install" over a directory and verifies the final
+  program is an executable file, replaces a symlink instead of following it,
+  and cleans up its staging file on failure; the PATH line it writes
+  shell-quotes the install directory (control characters are rejected), so
+  no part of a path is ever executed; `GITHUB_TOKEN` reaches curl through a
+  config on stdin instead of the command line; draft releases are never
+  selected by either installer. `install.ps1` stages, verifies, and swaps
+  the program with rollback, so an interrupted or in-use upgrade keeps the
+  previous version. Both installers ask the installed build's `doctor`
+  whether the engine is already qualified, so an engine installed into the
+  private engines directory is not offered again.
+
 - `mailswiftsync install-engine` (and **Install qualified imapsync 2.314** in
   the desktop app) now works on Fedora/RHEL, Arch and macOS too. On Fedora
   and Arch it installs imapsync's Perl modules with `dnf` or `pacman` and
