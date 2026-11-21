@@ -15,6 +15,11 @@ on:
       - "install.sh"
       - "install.ps1"
       - ".github/workflows/installer-smoke.yml"
+  # A release published by the release workflow's GITHUB_TOKEN does not
+  # trigger `release` events, so run after that workflow finishes instead.
+  workflow_run:
+    workflows: ["Release binaries"]
+    types: [completed]
   release:
     types: [published]
   schedule:
@@ -32,6 +37,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
@@ -67,10 +73,23 @@ jobs:
           home="$RUNNER_TEMP/home"
           HOME="$home" SHELL=/bin/bash sh -s -- --yes --no-engine < install.sh
           test "$(grep -cF "$home/.local/bin" "$home/.bashrc")" -eq 1
+      - name: The installed build is the release that just published
+        if: github.event_name == 'workflow_run'
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -eu
+          out="$(env -u DISPLAY -u WAYLAND_DISPLAY "$RUNNER_TEMP/home/.local/bin/mailswiftsync" --version)"
+          echo "$out"
+          case "$out" in
+            "MailSwiftSync ${TAG#v} "*) ;;
+            *) echo "::error::installed '$out', expected release $TAG"; exit 1 ;;
+          esac
 
   windows:
     name: install.ps1 (windows-latest)
     runs-on: windows-latest
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
@@ -86,3 +105,14 @@ jobs:
           if (-not (Test-Path (Join-Path $dir 'mailswiftsync.exe'))) { throw 'mailswiftsync.exe was not installed' }
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (($userPath -split ';') -notcontains $dir) { throw 'install directory was not added to the user PATH' }
+      - name: The installed build is the release that just published
+        if: github.event_name == 'workflow_run'
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'MailSwiftSync\mailswiftsync.exe'
+          $out = (& $exe --version | Out-String).Trim()
+          Write-Host $out
+          $expected = 'MailSwiftSync ' + $env:TAG.TrimStart('v') + ' '
+          if (-not $out.StartsWith($expected)) { throw "installed '$out', expected release $env:TAG" }
