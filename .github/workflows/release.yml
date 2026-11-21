@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
       - name: Classify release channel
         id: release-channel
-        run: echo "value=$(scripts/release-channel.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+        run: echo "value=$(bash scripts/release-channel.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.92.0
@@ -168,6 +168,12 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_BASE64) -or
               [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_PASSWORD) -or
               [string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+            # Preview releases may ship unsigned while no signing identity is
+            # configured; stable releases must be signed.
+            if ((bash scripts/release-channel.sh $env:GITHUB_REF_NAME) -eq 'preview') {
+              Write-Host '::notice::Windows signing is not configured; this preview binary is unsigned.'
+              exit 0
+            }
             throw 'Windows release signing secrets/vars are not configured'
           }
           $cert = Join-Path $env:RUNNER_TEMP 'mailswiftsync-signing.pfx'
@@ -188,6 +194,10 @@ jobs:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
+          if [[ -z "${MACOS_SIGNING_CERT_BASE64:-}" && "$(bash scripts/release-channel.sh "$GITHUB_REF_NAME")" == preview ]]; then
+            echo "::notice::macOS signing is not configured; this preview binary is unsigned."
+            exit 0
+          fi
           : "${MACOS_SIGNING_CERT_BASE64:?MACOS_SIGNING_CERT_BASE64 is not configured}"
           : "${MACOS_SIGNING_CERT_PASSWORD:?MACOS_SIGNING_CERT_PASSWORD is not configured}"
           : "${MACOS_SIGNING_IDENTITY:?MACOS_SIGNING_IDENTITY is not configured}"
@@ -243,6 +253,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          if [[ -z "${APPLE_ID:-}" && "$(bash scripts/release-channel.sh "$GITHUB_REF_NAME")" == preview ]]; then
+            echo "::notice::Notarization is not configured; this preview archive is not notarized."
+            exit 0
+          fi
           : "${APPLE_ID:?APPLE_ID is not configured}"
           : "${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD is not configured}"
           : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is not configured}"
@@ -263,7 +277,14 @@ jobs:
       - name: Verify Windows signature remains present
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_BASE64) -and
+              (bash scripts/release-channel.sh $env:GITHUB_REF_NAME) -eq 'preview') {
+            Write-Host '::notice::Unsigned preview binary; no signature to verify.'
+            exit 0
+          }
           & signtool verify /pa /all "bundle/mailswiftsync-${{ matrix.target }}.exe"
           if ($LASTEXITCODE -ne 0) { throw 'packaged Windows binary is not Authenticode signed' }
       - name: Sign Linux checksum with release GPG key
@@ -274,6 +295,10 @@ jobs:
           RELEASE_GPG_KEY_ID: ${{ secrets.RELEASE_GPG_KEY_ID }}
         run: |
           set -euo pipefail
+          if [[ -z "${RELEASE_GPG_PRIVATE_KEY_BASE64:-}" && "$(bash scripts/release-channel.sh "$GITHUB_REF_NAME")" == preview ]]; then
+            echo "::notice::Release GPG key is not configured; preview checksums are not signed."
+            exit 0
+          fi
           : "${RELEASE_GPG_PRIVATE_KEY_BASE64:?RELEASE_GPG_PRIVATE_KEY_BASE64 is not configured}"
           : "${RELEASE_GPG_KEY_ID:?RELEASE_GPG_KEY_ID is not configured}"
           archive="dist/mailswiftsync-${{ matrix.target }}.tar.gz"
