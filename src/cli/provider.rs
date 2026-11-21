@@ -94,27 +94,25 @@ pub(super) fn oauth_authorize_command(
 /// Download, verify, and install the qualified imapsync engine.
 pub(super) fn install_engine_command(confirmed: bool) -> Result<String, (i32, String)> {
     use crate::engine_install::{
-        Elevation, InstallMethod, InstallPlan, InstallProgress, QUALIFIED_IMAPSYNC_VERSION,
+        Elevation, InstallPlan, InstallProgress, QUALIFIED_IMAPSYNC_VERSION,
     };
     use std::io::{BufRead, IsTerminal, Write};
     let method = match crate::engine_install::plan_for_host() {
         InstallPlan::Automatic(method) => method,
         InstallPlan::Manual(guidance) => return Err((1, guidance.to_owned())),
     };
-    let (artifact, how) = match method {
-        InstallMethod::DebianPackage => (
-            crate::engine_install::DEBIAN_PACKAGE,
-            "install it with apt-get (sudo will ask for your password)",
+    match method.artifact() {
+        Some(artifact) => eprintln!(
+            "MailSwiftSync will download imapsync {QUALIFIED_IMAPSYNC_VERSION} from {}\nverify SHA-256 {}\nand {}.",
+            artifact.url,
+            artifact.sha256,
+            method.description()
         ),
-        InstallMethod::WindowsPortable => (
-            crate::engine_install::WINDOWS_PORTABLE,
-            "unpack it into MailSwiftSync's private engines directory",
+        None => eprintln!(
+            "MailSwiftSync will {} for imapsync {QUALIFIED_IMAPSYNC_VERSION}\nand confirm the installed version.",
+            method.description()
         ),
-    };
-    eprintln!(
-        "MailSwiftSync will download imapsync {QUALIFIED_IMAPSYNC_VERSION} from {}\nverify SHA-256 {}\nand {how}.",
-        artifact.url, artifact.sha256
-    );
+    }
     if !confirmed {
         if !std::io::stdin().is_terminal() {
             return Err((
@@ -154,7 +152,7 @@ pub(super) fn install_engine_command(confirmed: bool) -> Result<String, (i32, St
         installed.version,
         installed.executable.display()
     );
-    if method == InstallMethod::WindowsPortable {
+    if method.saves_engine_path() {
         let saved = crate::Form::load().and_then(|mut form| {
             form.profile.imapsync_path = installed.executable.to_string_lossy().into_owned();
             form.save()
