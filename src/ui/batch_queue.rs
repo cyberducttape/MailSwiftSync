@@ -49,10 +49,11 @@ impl App {
         }
         self.bulk_selection_view_dirty = true;
         self.bulk_state_filter = "all".into();
-        self.bulk_message = self
-            .language
-            .text("Selected {} mailbox row(s) for focused review.")
-            .replace("{}", &self.bulk_selection_count().to_string());
+        self.bulk_message = self.language.count_message(
+            self.bulk_selection_count() as u64,
+            "ui.selected-mailbox-row-s-for-focused-review",
+            "ui.selected-mailbox-row-s-for-focused-review-one",
+        );
     }
 
     pub(crate) fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {

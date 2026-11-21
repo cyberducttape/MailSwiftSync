@@ -313,11 +313,11 @@ impl App {
             ui.set_min_width(ui.available_width());
             crate::ui::section_label(ui, self.language.message("ui.wave-new"));
             ui.label(
-                RichText::new(
-                    self.language
-                        .message("ui.wave-new-from")
-                        .replace("{}", &selected.to_string()),
-                )
+                RichText::new(self.language.count_message(
+                    selected as u64,
+                    "ui.wave-new-from",
+                    "ui.wave-new-from-one",
+                ))
                 .color(colors.text_secondary),
             );
             egui::Grid::new("wave_create_form")

@@ -127,6 +127,20 @@ impl App {
             WorkerPoll::Pending => {}
         }
         self.poll_engine_setup();
+        match poll_worker(&mut self.autoconfig_receiver) {
+            WorkerPoll::Ready((source, domain, result)) => {
+                self.autoconfig_pending = None;
+                self.complete_autoconfig_lookup(source, &domain, result);
+            }
+            WorkerPoll::Stopped => {
+                self.autoconfig_pending = None;
+                self.set_status(
+                    format!("Mail settings lookup {WORKER_STOPPED_UNEXPECTEDLY}."),
+                    StatusSeverity::Error,
+                );
+            }
+            WorkerPoll::Pending => {}
+        }
         match poll_worker(&mut self.keyring_operation_receiver) {
             WorkerPoll::Ready(result) => self.complete_keyring_operation(result),
             WorkerPoll::Stopped => self.set_status(

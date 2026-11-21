@@ -61,57 +61,79 @@ impl App {
                         self.ui_snapshot.is_stale(),
                     )
                 });
-                // One wrapping row of export actions instead of a column.
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .button(self.language.message("ui.export-project-report"))
-                        .clicked()
-                    {
-                        self.export_project_report();
-                    }
-                    if ui
-                        .button(self.language.message("ui.export-project-json"))
-                        .clicked()
-                    {
-                        self.export_project_json();
-                    }
-                    if ui
-                        .button(self.language.message("ui.export-post-migration-report"))
-                        .clicked()
-                    {
-                        self.report_export_result(
-                            "Post-migration report",
-                            self.export_post_migration_report(),
+                // Exports grouped by audience: readable reports, then
+                // machine-readable data and support material.
+                egui::Grid::new("verification_exports")
+                    .striped(false)
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        let weak = self.theme_colors().text_secondary;
+                        ui.label(
+                            RichText::new(self.language.message("ui.export-group-reports"))
+                                .color(weak),
                         );
-                    }
-                    if ui
-                        .add_enabled(
-                            proof_ready,
-                            egui::Button::new(self.language.message("ui.export-customer-proof-json")),
-                        )
-                        .on_disabled_hover_text(
-                            self.language.message("ui.customer-proof-becomes-available-after-the-durable-project-is-complete-ever-891f123df0"),
-                        )
-                        .clicked()
-                    {
-                        self.export_customer_proof();
-                    }
-                    if ui
-                        .button(self.language.message("ui.export-support-bundle"))
-                        .clicked()
-                    {
-                        self.report_export_result(
-                            "Support bundle",
-                            self.export_support_bundle_dialog(),
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .button(self.language.message("ui.export-project-report"))
+                                .clicked()
+                            {
+                                self.export_project_report();
+                            }
+                            if ui
+                                .button(self.language.message("ui.export-post-migration-report"))
+                                .clicked()
+                            {
+                                self.report_export_result(
+                                    "Post-migration report",
+                                    self.export_post_migration_report(),
+                                );
+                            }
+                            if ui
+                                .button(self.language.message("ui.export-project-health"))
+                                .clicked()
+                            {
+                                self.export_project_health();
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(
+                            RichText::new(self.language.message("ui.export-group-data"))
+                                .color(weak),
                         );
-                    }
-                    if ui
-                        .button(self.language.message("ui.export-project-health"))
-                        .clicked()
-                    {
-                        self.export_project_health();
-                    }
-                });
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .button(self.language.message("ui.export-project-json"))
+                                .clicked()
+                            {
+                                self.export_project_json();
+                            }
+                            if ui
+                                .add_enabled(
+                                    proof_ready,
+                                    egui::Button::new(
+                                        self.language.message("ui.export-customer-proof-json"),
+                                    ),
+                                )
+                                .on_disabled_hover_text(
+                                    self.language.message("ui.customer-proof-becomes-available-after-the-durable-project-is-complete-ever-891f123df0"),
+                                )
+                                .clicked()
+                            {
+                                self.export_customer_proof();
+                            }
+                            if ui
+                                .button(self.language.message("ui.export-support-bundle"))
+                                .clicked()
+                            {
+                                self.report_export_result(
+                                    "Support bundle",
+                                    self.export_support_bundle_dialog(),
+                                );
+                            }
+                        });
+                        ui.end_row();
+                    });
                 if let Some(project) = self.ui_snapshot.project.as_ref() {
                     if customer_proof_ready(
                         project.phase,
