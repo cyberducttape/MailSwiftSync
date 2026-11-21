@@ -468,7 +468,7 @@ impl App {
                 let field_label = ui.label(self.language.message("ui.search"));
                 crate::ui::LabelledField::link_label(
                     &ui.add(
-                        egui::TextEdit::singleline(&mut self.bulk_search)
+                        crate::ui::field(&mut self.bulk_search)
                             .hint_text(self.language.message("ui.mailbox-host-or-user"))
                             .desired_width(220.0),
                     ),
@@ -1239,7 +1239,7 @@ impl App {
                     crate::ui::form_row(ui, self.language.text(label), |ui| {
                         let field = ui.add_enabled(
                             editable,
-                            egui::TextEdit::singleline(value).desired_width(180.0),
+                            crate::ui::field(value).desired_width(180.0),
                         );
                         if ui
                             .add_enabled(editable, egui::Button::new(self.language.text(button)))

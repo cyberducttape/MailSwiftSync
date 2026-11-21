@@ -19,10 +19,9 @@ impl App {
         let mut open = true;
         let mut cancel = false;
         let mut import = false;
-        egui::Window::new(self.language.message("ui.choose-worksheet"))
+        crate::ui::dialog_window(ctx, self.language.message("ui.choose-worksheet"), 480.0)
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(self.language.message("ui.select-the-migration-worksheet"));
                 let worksheet_summary = self

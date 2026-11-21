@@ -576,9 +576,8 @@ impl App {
         let mut open = self.projects_open;
         let mut selected_project = None;
         let mut new_migration_requested = false;
-        egui::Window::new(self.language.message("ui.projects"))
+        crate::ui::dialog_window(ctx, self.language.message("ui.projects"), 760.0)
             .open(&mut open)
-            .default_width(760.0)
             .default_height(520.0)
             .collapsible(false)
             .show(ctx, |ui| {
@@ -587,7 +586,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let field_label = ui.label(self.language.message("ui.search"));
-                    crate::ui::LabelledField::link_label(&ui.add(egui::TextEdit::singleline(&mut self.project_search)
+                    crate::ui::LabelledField::link_label(&ui.add(crate::ui::field(&mut self.project_search)
                         .hint_text(self.language.message("ui.project-name-source-or-destination"))
                         .desired_width(320.0)), &field_label);
                 });

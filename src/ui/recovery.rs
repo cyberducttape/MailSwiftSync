@@ -339,10 +339,15 @@ impl App {
                     ui.heading(title);
                     crate::ui::pill(
                         ui,
-                        &self
-                            .language
-                            .message("ui.recovery-mailboxes-count")
-                            .replace("{}", &group.count.to_string()),
+                        &if group.count == 1 {
+                            self.language
+                                .message("ui.recovery-mailboxes-count-one")
+                                .to_owned()
+                        } else {
+                            self.language
+                                .message("ui.recovery-mailboxes-count")
+                                .replace("{}", &group.count.to_string())
+                        },
                         colors.warning,
                     );
                 });
