@@ -208,8 +208,9 @@ install_published() {
     die "the release has no checksum for $archive_name; refusing to install it"
   expected="$(cut -d ' ' -f 1 <"$work/$archive_name.sha256" | tr -d '\r\n')"
   actual="$(sha256_of "$work/$archive_name")"
-  [ -n "$expected" ] && [ "$expected" = "$actual" ] ||
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
     die "checksum mismatch for $archive_name (expected $expected, got $actual); nothing was installed"
+  fi
   say "    SHA-256 verified: $actual"
 
   mkdir -p "$work/bundle"
