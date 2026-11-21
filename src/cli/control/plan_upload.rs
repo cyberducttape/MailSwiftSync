@@ -402,7 +402,10 @@ mod tests {
         assert!(!stored.approved);
         // A stale revision is refused before anything is sent.
         let error = run(command(1)).unwrap_err();
-        assert!(error.contains("409"), "{error}");
+        assert!(
+            error.contains("409"),
+            "a stale revision must be refused with HTTP 409"
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 }
