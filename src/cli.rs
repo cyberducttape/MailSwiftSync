@@ -68,6 +68,17 @@ const ACKNOWLEDGE_DESTINATION_LOSS: &str = "--acknowledge-destination-loss";
 /// signature like a proof's.
 pub(crate) const CONTROL_AUDIT_CHECKPOINT_FORMAT: &str = "mailswiftsync-control-audit-checkpoint";
 
+/// The window and taskbar icon, rendered from `assets/icons/mailswiftsync.svg`.
+const APP_ICON_PNG: &[u8] = include_bytes!("../assets/icons/mailswiftsync-256.png");
+
+fn with_app_icon(viewport: egui::ViewportBuilder) -> egui::ViewportBuilder {
+    match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
+        Ok(icon) => viewport.with_icon(icon),
+        // A broken icon must never stop the app from starting.
+        Err(_) => viewport,
+    }
+}
+
 pub(crate) fn run() -> eframe::Result<()> {
     let mut arguments = std::env::args_os();
     let _program = arguments.next();
@@ -83,9 +94,14 @@ pub(crate) fn run() -> eframe::Result<()> {
         return eframe::run_native(
             "MailSwiftSync",
             eframe::NativeOptions {
-                viewport: egui::ViewportBuilder::default()
-                    .with_inner_size(inner_size)
-                    .with_min_inner_size([900.0, 640.0]),
+                viewport: with_app_icon(
+                    egui::ViewportBuilder::default()
+                        // Matches the installed mailswiftsync.desktop entry so
+                        // Wayland docks and task switchers show its icon.
+                        .with_app_id("mailswiftsync")
+                        .with_inner_size(inner_size)
+                        .with_min_inner_size([900.0, 640.0]),
+                ),
                 ..Default::default()
             },
             Box::new(|creation| {
@@ -558,5 +574,17 @@ mod tests {
             HeadlessMode::parse(OsString::from("unknown").as_os_str()),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod app_icon_tests {
+    #[test]
+    fn bundled_window_icon_decodes_at_full_size() {
+        let icon = eframe::icon_data::from_png_bytes(super::APP_ICON_PNG).unwrap();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+        // Rounded corners stay transparent.
+        assert_eq!(icon.rgba[3], 0);
     }
 }
