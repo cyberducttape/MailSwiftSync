@@ -1179,7 +1179,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let field_label = ui.label(self.language.message("ui.reason"));
                     crate::ui::LabelledField::link_label(
-                        &ui.text_edit_singleline(&mut self.reopen_reason),
+                        &crate::ui::text_field(ui, &mut self.reopen_reason),
                         &field_label,
                     );
                     if ui

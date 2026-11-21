@@ -56,7 +56,7 @@ fn secret_row(
             + 2.0 * ui.spacing().button_padding.x
             + ui.spacing().item_spacing.x;
         let field = ui.add(
-            egui::TextEdit::singleline(password.as_mut_string())
+            crate::ui::field(password.as_mut_string())
                 .password(!visible)
                 .desired_width((ui.available_width() - toggle_width).max(80.0)),
         );
@@ -172,12 +172,12 @@ impl App {
                 );
             } else {
                 crate::ui::form_row(ui, language.message("ui.server"), |ui| {
-                    ui.add(egui::TextEdit::singleline(host).desired_width(f32::INFINITY))
+                    ui.add(crate::ui::field(host).desired_width(f32::INFINITY))
                 });
                 inline_field_error(ui, language, language.message("ui.server"), host, true);
             }
             crate::ui::form_row(ui, language.message("ui.user"), |ui| {
-                ui.add(egui::TextEdit::singleline(user).desired_width(f32::INFINITY))
+                ui.add(crate::ui::field(user).desired_width(f32::INFINITY))
             });
             inline_field_error(ui, language, language.message("ui.user"), user, true);
             if !local_dovecot {
@@ -468,7 +468,8 @@ impl App {
         crate::ui::form_row(ui, self.language.message("ui.provider"), |ui| {
             egui::ComboBox::from_id_salt(("provider_preset", source))
                 .selected_text(self.language.text(current.display_name()))
-                .width(ui.available_width().min(260.0))
+                // Span the field column like Server and User below.
+                .width(ui.available_width())
                 .show_ui(ui, |ui| {
                     for preset in crate::ProviderPreset::ALL {
                         ui.selectable_value(
@@ -501,9 +502,8 @@ impl App {
             return;
         }
         let mut open = self.keyring_open;
-        egui::Window::new(self.language.message("ui.os-keyring-credentials"))
+        crate::ui::dialog_window(ctx, self.language.message("ui.os-keyring-credentials"), 620.0)
             .open(&mut open)
-            .default_width(620.0)
             .show(ctx, |ui| {
  crate::ui::dialog_body(ui, |ui| {
                 ui.label(
@@ -520,11 +520,11 @@ impl App {
                 ui.add_enabled_ui(editable, |ui| {
                     ui.horizontal(|ui| {
                         let field_label = ui.label(self.language.message("ui.source-id"));
-                        crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.source_credential_id), &field_label);
+                        crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut self.form.profile.source_credential_id), &field_label);
                     });
                     ui.horizontal(|ui| {
                         let field_label = ui.label(self.language.message("ui.destination-id"));
-                        crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.destination_credential_id), &field_label);
+                        crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut self.form.profile.destination_credential_id), &field_label);
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -650,7 +650,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let field_label = ui.label(self.language.message("ui.microsoft-tenant"));
                     crate::ui::LabelledField::link_label(
-                        &ui.text_edit_singleline(&mut self.oauth_authorization_tenant),
+                        &crate::ui::text_field(ui, &mut self.oauth_authorization_tenant),
                         &field_label,
                     );
                 });
@@ -667,7 +667,7 @@ impl App {
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.oauth-client-id"));
                 crate::ui::LabelledField::link_label(
-                    &ui.text_edit_singleline(&mut self.oauth_authorization_client_id),
+                    &crate::ui::text_field(ui, &mut self.oauth_authorization_client_id),
                     &field_label,
                 );
             });
@@ -686,10 +686,8 @@ impl App {
                     ui.label(self.language.message("ui.oauth-client-secret-optional"));
                 crate::ui::LabelledField::link_label(
                     &ui.add(
-                        egui::TextEdit::singleline(
-                            self.oauth_authorization_client_secret.as_mut_string(),
-                        )
-                        .password(true),
+                        crate::ui::field(self.oauth_authorization_client_secret.as_mut_string())
+                            .password(true),
                     ),
                     &field_label,
                 );
@@ -697,7 +695,7 @@ impl App {
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.sign-in-hint-optional"));
                 crate::ui::LabelledField::link_label(
-                    &ui.text_edit_singleline(&mut self.oauth_authorization_login_hint),
+                    &crate::ui::text_field(ui, &mut self.oauth_authorization_login_hint),
                     &field_label,
                 );
             });
@@ -709,7 +707,7 @@ impl App {
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.os-keyring-id"));
                 crate::ui::LabelledField::link_label(
-                    &ui.text_edit_singleline(keyring_id),
+                    &crate::ui::text_field(ui, keyring_id),
                     &field_label,
                 );
             });
@@ -1161,27 +1159,27 @@ impl App {
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.source-refresh-id"));
-                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.source_oauth_refresh_credential_id), &field_label);
+                crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut self.form.profile.source_oauth_refresh_credential_id), &field_label);
             });
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.destination-refresh-id"));
-                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(
+                crate::ui::LabelledField::link_label(&crate::ui::text_field(ui,
                     &mut self.form.profile.destination_oauth_refresh_credential_id,
                 ), &field_label);
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.token-endpoint"));
-                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.oauth_refresh_editor_endpoint), &field_label);
+                crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut self.oauth_refresh_editor_endpoint), &field_label);
             });
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.client-id"));
-                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.oauth_refresh_editor_client_id), &field_label);
+                crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut self.oauth_refresh_editor_client_id), &field_label);
             });
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.client-secret-if-required"));
                 crate::ui::LabelledField::link_label(&ui.add(
-                    egui::TextEdit::singleline(
+                    crate::ui::field(
                         self.oauth_refresh_editor_client_secret.as_mut_string(),
                     )
                     .password(true),
@@ -1190,7 +1188,7 @@ impl App {
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.refresh-token"));
                 crate::ui::LabelledField::link_label(&ui.add(
-                    egui::TextEdit::singleline(
+                    crate::ui::field(
                         self.oauth_refresh_editor_refresh_token.as_mut_string(),
                     )
                     .password(true),

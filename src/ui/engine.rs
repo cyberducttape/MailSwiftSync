@@ -33,10 +33,9 @@ impl App {
         }
         let mut open = self.engine_open;
         let mut close_requested = false;
-        egui::Window::new(self.language.message("ui.choose-migration-engine"))
+        crate::ui::dialog_window(ctx, self.language.message("ui.choose-migration-engine"), 520.0)
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
             .show(ctx, |ui| {
  crate::ui::dialog_body(ui, |ui| {
                 ui.heading(self.language.message("ui.how-should-this-migration-run"));
@@ -58,11 +57,11 @@ impl App {
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             let field_label = ui.label("doveadm");
-                            crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.doveadm_path), &field_label);
+                            crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut self.form.profile.doveadm_path), &field_label);
                         });
                         ui.horizontal(|ui| {
                             let field_label = ui.label(self.language.message("ui.config"));
-                            crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.dovecot_config), &field_label);
+                            crate::ui::LabelledField::link_label(&crate::ui::text_field(ui, &mut self.form.profile.dovecot_config), &field_label);
                         });
                         ui.label(RichText::new(self.language.message("ui.native-dovecot-execution-is-local-only-until-a-secret-safe-broker-is-implemented")).size(12.0).color(self.theme_colors().text_secondary));
                         ui.label(RichText::new(self.language.message("ui.dry-mode-only-lists-the-destination-mailbox-native-dovecot-uses-the-selecte-338016b9c5")).size(12.0).color(self.theme_colors().text_secondary));
