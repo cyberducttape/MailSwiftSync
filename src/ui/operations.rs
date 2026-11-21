@@ -274,7 +274,7 @@ impl App {
             let field_label = ui.label(self.language.text("Maintenance window"));
             crate::ui::LabelledField::link_label(
                 &ui.add(
-                    egui::TextEdit::singleline(&mut self.activity_window_spec)
+                    crate::ui::field(&mut self.activity_window_spec)
                         .hint_text("22:00-06:00")
                         .desired_width(150.0),
                 ),
