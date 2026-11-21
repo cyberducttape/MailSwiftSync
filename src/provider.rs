@@ -155,9 +155,108 @@ impl ProviderPreset {
     }
 }
 
+/// A one-click endpoint hint derived from the account address the operator
+/// typed. It is computed offline from the address alone: nothing is looked up
+/// over the network and nothing leaves the machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum EndpointSuggestion {
+    /// The address belongs to a hosted provider with a preset.
+    Preset(ProviderPreset),
+    /// A conventional `imap.<domain>` guess for any other domain. Preflight
+    /// still decides whether it is right.
+    Host(String),
+}
+
+/// Consumer and hosted domains whose IMAP endpoint is the preset's. Custom
+/// domains hosted by these providers cannot be recognized offline and get the
+/// `imap.<domain>` guess instead.
+const PROVIDER_DOMAINS: &[(&str, ProviderPreset)] = &[
+    ("gmail.com", ProviderPreset::GoogleWorkspace),
+    ("googlemail.com", ProviderPreset::GoogleWorkspace),
+    ("outlook.com", ProviderPreset::Microsoft365),
+    ("hotmail.com", ProviderPreset::Microsoft365),
+    ("live.com", ProviderPreset::Microsoft365),
+    ("msn.com", ProviderPreset::Microsoft365),
+    ("fastmail.com", ProviderPreset::Fastmail),
+    ("fastmail.fm", ProviderPreset::Fastmail),
+    ("zoho.com", ProviderPreset::ZohoMail),
+    ("zohomail.com", ProviderPreset::ZohoMail),
+];
+
+/// Suggest server settings for an account address such as `ana@example.com`.
+/// Returns `None` unless the text is a plausible address with a dotted DNS
+/// domain, so plain user names (common for cPanel and Dovecot) get no hint.
+pub(crate) fn suggest_endpoint_for_address(address: &str) -> Option<EndpointSuggestion> {
+    let (local, domain) = address.trim().split_once('@')?;
+    let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+    if local.is_empty() || !valid_dns_domain(&domain) {
+        return None;
+    }
+    if let Some((_, preset)) = PROVIDER_DOMAINS.iter().find(|(known, _)| *known == domain) {
+        return Some(EndpointSuggestion::Preset(*preset));
+    }
+    Some(EndpointSuggestion::Host(format!("imap.{domain}")))
+}
+
+fn valid_dns_domain(domain: &str) -> bool {
+    let labels: Vec<&str> = domain.split('.').collect();
+    domain.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        && labels
+            .last()
+            .is_some_and(|tld| !tld.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ProviderPreset;
+    use super::{EndpointSuggestion, ProviderPreset, suggest_endpoint_for_address};
+
+    #[test]
+    fn account_addresses_suggest_presets_or_a_conventional_imap_host() {
+        assert_eq!(
+            suggest_endpoint_for_address(" Ana@GMail.com "),
+            Some(EndpointSuggestion::Preset(ProviderPreset::GoogleWorkspace))
+        );
+        assert_eq!(
+            suggest_endpoint_for_address("bo@hotmail.com"),
+            Some(EndpointSuggestion::Preset(ProviderPreset::Microsoft365))
+        );
+        assert_eq!(
+            suggest_endpoint_for_address("cy@fastmail.fm."),
+            Some(EndpointSuggestion::Preset(ProviderPreset::Fastmail))
+        );
+        assert_eq!(
+            suggest_endpoint_for_address("dee@zohomail.com"),
+            Some(EndpointSuggestion::Preset(ProviderPreset::ZohoMail))
+        );
+        assert_eq!(
+            suggest_endpoint_for_address("info@Example.co.uk"),
+            Some(EndpointSuggestion::Host("imap.example.co.uk".into()))
+        );
+        for no_hint in [
+            "",
+            "ana",
+            "@example.com",
+            "ana@",
+            "ana@localhost",
+            "ana@exa mple.com",
+            "ana@-example.com",
+            "ana@example..com",
+            "ana@10.0.0.1",
+            "a@b@example.com",
+        ] {
+            assert_eq!(suggest_endpoint_for_address(no_hint), None, "{no_hint}");
+        }
+    }
 
     #[test]
     fn hosted_provider_endpoints_are_recognized_for_loaded_profiles() {
