@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Status | Technical Preview |
-| Package version | `0.1.0-alpha.2` |
+| Package version | `0.1.0-alpha.3` |
 | SQLite schema version | `40` |
 | Last reviewed | 2026-11-15 |
 | Qualified engine | `imapsync 2.314` |
