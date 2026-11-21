@@ -1119,6 +1119,9 @@ mod tests {
         renewals: AtomicUsize,
         completions: Mutex<Vec<(String, Value)>>,
         failing_completions: AtomicUsize,
+        /// Hold the successful report until this many renewals happened,
+        /// so a renewal test does not depend on scheduler timing.
+        renewals_before_success: AtomicUsize,
     }
 
     impl Control for FakeControl {
@@ -1147,6 +1150,13 @@ mod tests {
                 .is_ok()
             {
                 return Err(ControlError::Other("connection reset".into()));
+            }
+            let wanted = self.renewals_before_success.load(Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while self.renewals.load(Ordering::SeqCst) < wanted
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(5));
             }
             self.completions
                 .lock()
@@ -1262,9 +1272,12 @@ mod tests {
     fn the_lease_is_renewed_until_the_completion_is_acknowledged() {
         let control = FakeControl::default();
         *control.lease.lock().unwrap() = Some(leased("d1"));
-        // Two refused reports with 40 ms and 80 ms backoffs: 120 ms of
-        // retrying after the run ends, many renewal periods.
+        // Two refused reports with 40 ms and 80 ms backoffs, then a report
+        // that is accepted only once three renewals have happened (bounded
+        // at 10 s). A slow CI scheduler can stretch the backoffs but cannot
+        // make renewal stop while the agent is still reporting.
         control.failing_completions.store(2, Ordering::SeqCst);
+        control.renewals_before_success.store(3, Ordering::SeqCst);
         let executor = FakeExecutor {
             digest: Some("d1".into()),
             runs: AtomicUsize::new(0),

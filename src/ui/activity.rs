@@ -137,35 +137,40 @@ crate::ui::name_modal(ui, &modal_heading);
                     RichText::new(&self.status.text)
                         .color(status_color(self.status.severity, self.theme_colors())),
                 );
-                if ui
-                    .button(self.language.message("ui.copy-support-summary"))
-                    .clicked()
-                {
-                    ui.ctx().copy_text(self.support_summary());
-                }
-                ui.menu_button(self.language.message("ui.raw-output"), |ui| {
-                    ui.label(
-                        RichText::new(self.language.message("ui.may-contain-mailbox-metadata"))
-                            .color(self.theme_colors().warning),
-                    );
+                // Actions sit at the card's right edge, apart from the run
+                // status; right-to-left layout adds them last to first.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.hold_button(ui);
+                    if running
+                        && ui
+                            .button(self.language.message("ui.stop-migration"))
+                            .clicked()
+                    {
+                        self.stop_confirm_open = true;
+                        self.stop_confirm_focus_requested = false;
+                    }
+                    ui.menu_button(self.language.message("ui.raw-output"), |ui| {
+                        ui.label(
+                            RichText::new(self.language.message("ui.may-contain-mailbox-metadata"))
+                                .color(self.theme_colors().warning),
+                        );
+                        if ui
+                            .button(self.language.message("ui.copy-redacted-engine-output"))
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(
+                                self.output.iter().cloned().collect::<Vec<_>>().join("\n"),
+                            );
+                            ui.close();
+                        }
+                    });
                     if ui
-                        .button(self.language.message("ui.copy-redacted-engine-output"))
+                        .button(self.language.message("ui.copy-support-summary"))
                         .clicked()
                     {
-                        ui.ctx()
-                            .copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
-                        ui.close();
+                        ui.ctx().copy_text(self.support_summary());
                     }
                 });
-                if running
-                    && ui
-                        .button(self.language.message("ui.stop-migration"))
-                        .clicked()
-                {
-                    self.stop_confirm_open = true;
-                    self.stop_confirm_focus_requested = false;
-                }
-                self.hold_button(ui);
             });
             ui.add_space(8.0);
             let console = ui.visuals().extreme_bg_color;

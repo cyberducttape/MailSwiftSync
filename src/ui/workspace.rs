@@ -594,8 +594,7 @@ impl App {
                 ui.label(
                     RichText::new(
                         self.language
-                            .text("{} project(s)")
-                            .replace("{}", &self.project_visible_indices.len().to_string()),
+                            .count_message(self.project_visible_indices.len() as u64, "ui.project-s", "ui.project-s-one"),
                     )
                     .color(self.theme_colors().text_secondary),
                 );

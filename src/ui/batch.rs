@@ -662,8 +662,7 @@ impl App {
                 ui.label(
                     RichText::new(
                         self.language
-                            .text("⚠ {} mailbox(es) are selected but hidden by the current filter. They will still be included in batch operations.")
-                            .replace("{}", &hidden_selected.to_string()),
+                            .count_message(hidden_selected as u64, "ui.mailbox-es-are-selected-but-hidden-by-the-current-filter-they-will-still-be-c678bb6765", "ui.mailbox-es-are-selected-but-hidden-by-the-current-filter-they-will-still-be-c678bb6765-one"),
                     )
                     .color(self.theme_colors().warning),
                 );
@@ -740,22 +739,22 @@ impl App {
             if has_selection && self.bulk_inspector_open && live_count < selected_count {
                 let ineligible = selected_count - live_count;
                 ui.label(
-                    RichText::new(
-                        self.language
-                            .text("{} selected mailbox(es) are unavailable for live migration.")
-                            .replace("{}", &ineligible.to_string()),
-                    )
+                    RichText::new(self.language.count_message(
+                        ineligible as u64,
+                        "ui.selected-mailbox-es-are-unavailable-for-live-migration",
+                        "ui.selected-mailbox-es-are-unavailable-for-live-migration-one",
+                    ))
                     .color(self.theme_colors().text_secondary),
                 );
             }
             if has_selection && self.bulk_inspector_open && delta_count < selected_count {
                 let ineligible = selected_count - delta_count;
                 ui.label(
-                    RichText::new(
-                        self.language
-                            .text("{} selected mailbox(es) are not marked as requiring a final delta.")
-                            .replace("{}", &ineligible.to_string()),
-                    )
+                    RichText::new(self.language.count_message(
+                        ineligible as u64,
+                        "ui.selected-mailbox-es-are-not-marked-as-requiring-a-final-delta",
+                        "ui.selected-mailbox-es-are-not-marked-as-requiring-a-final-delta-one",
+                    ))
                     .color(self.theme_colors().text_secondary),
                 );
             }
