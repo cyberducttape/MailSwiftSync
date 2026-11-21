@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## [0.1.0-alpha.2] - 2026-11-21
+
+Second technical preview, and the first published build with the one-line
+installers, `install-engine`, the startup engine check, and the readable
+`doctor` checklist. Preview binaries are checksummed and carry build
+provenance attestations but are not platform-signed while no signing
+identity is configured. The `v0.1.0-alpha.1` tag never published binaries;
+its release run stopped on packaging problems fixed in this release.
+
 - One-line installers: `curl -fsSL …/install.sh | sh` on Linux and macOS and
   `irm …/install.ps1 | iex` on Windows download the newest published build,
   refuse it unless its SHA-256 matches the release checksum, install it for
