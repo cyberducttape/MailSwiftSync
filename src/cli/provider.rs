@@ -232,24 +232,45 @@ pub(super) fn provider_qualification_command(
 }
 
 pub(super) fn doctor_command(mut arguments: std::env::ArgsOs) -> eframe::Result<()> {
+    use std::io::IsTerminal as _;
     let mut state = None;
     let mut strict = false;
     let mut connect = false;
+    let mut json = false;
     for argument in arguments.by_ref() {
         let flag = argument == std::ffi::OsStr::new("--strict")
-            || argument == std::ffi::OsStr::new("--connect");
+            || argument == std::ffi::OsStr::new("--connect")
+            || argument == std::ffi::OsStr::new("--json");
         if argument == std::ffi::OsStr::new("--strict") && !strict {
             strict = true;
         } else if argument == std::ffi::OsStr::new("--connect") && !connect {
             connect = true;
+        } else if argument == std::ffi::OsStr::new("--json") && !json {
+            json = true;
         } else if state.is_none() && !flag {
             state = Some(std::path::PathBuf::from(argument));
         } else {
-            eprintln!("Usage: mailswiftsync doctor [state.db] [--strict] [--connect]");
+            eprintln!("Usage: mailswiftsync doctor [state.db] [--strict] [--connect] [--json]");
             std::process::exit(2);
         }
     }
+    // Without an argument, check the ledger the desktop app itself uses,
+    // once it exists; before the first launch there is nothing to inspect.
+    let state = state.or_else(|| {
+        crate::storage_paths::persistent_state_path()
+            .ok()
+            .filter(|path| path.exists())
+    });
     let report = crate::doctor::run(state.as_deref(), connect);
+    // People reading a terminal get a checklist; pipes and scripts keep the
+    // JSON report, which `--json` also forces.
+    if !json && std::io::stdout().is_terminal() {
+        out!("{}", crate::doctor::render_text(&report));
+        if strict {
+            std::process::exit(crate::doctor::strict_exit_code(&report));
+        }
+        return Ok(());
+    }
     match serde_json::to_string_pretty(&report) {
         Ok(rendered) => {
             out!("{rendered}");

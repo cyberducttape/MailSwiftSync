@@ -54,8 +54,11 @@ Print provider setup guidance.
 Print bundled provider-pair qualification status as versioned JSON. This is
 the reviewed status in the executable, not a live qualification evidence lookup.
 .TP
-.B doctor [STATE] [--strict] [--connect]
-Report engine qualification, directory permissions, and host readiness.
+.B doctor [STATE] [--strict] [--connect] [--json]
+Report engine qualification, directory permissions, and host readiness. In a
+terminal it prints a checklist; when the output is piped, or with
+.BR --json ,
+it prints the JSON report.
 .TP
 .B headless STATE preflight|live|batch-preflight|batch-live [--acknowledge-destination-loss]
 Run the durable controller without a window. A live plan that may remove

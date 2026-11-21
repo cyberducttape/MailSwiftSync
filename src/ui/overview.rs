@@ -21,6 +21,7 @@ impl App {
             self.language
                 .text("A calm, evidence-led workspace for moving mailboxes safely."),
         );
+        self.engine_setup_banner(ui);
         if !self.persistence_available {
             let state_path = self
                 .state_path

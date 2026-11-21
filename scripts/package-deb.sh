@@ -63,6 +63,11 @@ install -m 0644 assets/fonts/OFL.txt \
 install -m 0644 docs/distribution/mailswiftsync.1 \
   "$stage/usr/share/man/man1/mailswiftsync.1"
 gzip -n -9 "$stage/usr/share/man/man1/mailswiftsync.1"
+# Desktop menu entry and icon, so the application appears in menus.
+install -D -m 0644 docs/distribution/mailswiftsync.desktop \
+  "$stage/usr/share/applications/mailswiftsync.desktop"
+install -D -m 0644 assets/icons/mailswiftsync.svg \
+  "$stage/usr/share/icons/hicolor/scalable/apps/mailswiftsync.svg"
 # Completions come from the shipped binary so they list its exact commands.
 install -d -m 0755 "$stage/usr/share/bash-completion/completions" \
   "$stage/usr/share/zsh/vendor-completions" \

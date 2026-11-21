@@ -488,6 +488,7 @@ impl App {
             engine_setup_receiver: None,
             engine_setup_progress: None,
             engine_setup_status: None,
+            engine_presence: crate::ui::engine::EnginePresence::Unchecked,
             oauth_authorization_receiver: None,
             oauth_authorization_cancel: None,
             oauth_authorization_stage: None,

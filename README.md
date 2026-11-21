@@ -8,6 +8,34 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 
+## Quick start
+
+**1. Install** (no admin rights needed; the installer verifies the download's SHA-256 checksum):
+
+```bash
+# Linux and macOS
+curl -fsSL https://raw.githubusercontent.com/cyberducttape/MailSwiftSync/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cyberducttape/MailSwiftSync/main/install.ps1 | iex
+```
+
+The installer puts `mailswiftsync` on your PATH, adds it to your applications
+menu or Start menu, and offers to install the qualified imapsync 2.314
+engine that copies the mail. Run it again at any time to update.
+
+**2. Open MailSwiftSync** from your applications menu, or run `mailswiftsync`.
+
+**3. Migrate one mailbox:** on **Overview**, click **Configure first mailbox**,
+fill in the source and destination accounts, and click **Run preflight**. When
+the preflight looks right, clear **Dry run / preflight** and click
+**Start live migration**. Nothing is ever deleted from the source mailbox.
+
+Something not working? Run `mailswiftsync doctor` for a setup check, or see
+[Install](#install) for manual and packaged installation.
+
 ![Migration plan — Retro 80s Neon theme](docs/wiki/assets/migration-plan.png)
 
 > Screenshots show the running desktop application in the Retro 80s Neon theme, using synthetic demo data and an isolated workspace.
@@ -149,6 +177,8 @@ the source repository; they are not part of the normal operator distribution.
 Choose native Dovecot tooling directly when you already have a well-tested server-side workflow and do not need a desktop control plane. Choose MailSwiftSync when you need to coordinate and document a heterogeneous or multi-mailbox migration locally. It is deliberately not a hosted service and does not replace the engines' own mailbox semantics.
 
 ## Install
+
+The [Quick start](#quick-start) installer does everything below for you. Use these steps for a manual, packaged (Debian/RPM), or source installation; [docs/distribution/INSTALL.md](docs/distribution/INSTALL.md) covers verifying release signatures.
 
 ### 1. Install the selected migration engine
 

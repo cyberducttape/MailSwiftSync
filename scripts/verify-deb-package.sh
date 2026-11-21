@@ -23,7 +23,9 @@ for required in \
   "./usr/share/man/man1/mailswiftsync.1.gz" \
   "./usr/share/bash-completion/completions/mailswiftsync" \
   "./usr/share/zsh/vendor-completions/_mailswiftsync" \
-  "./usr/share/fish/vendor_completions.d/mailswiftsync.fish"; do
+  "./usr/share/fish/vendor_completions.d/mailswiftsync.fish" \
+  "./usr/share/applications/mailswiftsync.desktop" \
+  "./usr/share/icons/hicolor/scalable/apps/mailswiftsync.svg"; do
   printf '%s\n' "${files[@]}" | grep -Fxq "$required" || {
     echo "package is missing required file: $required" >&2
     exit 1

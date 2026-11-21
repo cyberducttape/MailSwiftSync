@@ -47,6 +47,11 @@ impl eframe::App for App {
     /// minimized or hidden, so a running migration keeps draining events.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        // Tests drive frames without a real engine on PATH; they set the
+        // presence they need instead of spawning `imapsync --version`.
+        if !cfg!(test) {
+            self.start_engine_presence_check();
+        }
         if ctx.input(|input| input.viewport().close_requested()) && self.running() {
             // The desktop owns the controller. Closing it would trigger the
             // platform process-containment policy and interrupt the engine;
@@ -462,6 +467,7 @@ crate::ui::name_modal(ui, &modal_heading);
             self.language
                 .text("Choose the systems and accounts involved in this migration."),
         );
+        self.engine_setup_banner(ui);
         if self.running() {
             ui.label(
                 egui::RichText::new(self.language.message("ui.plan-locked-during-migration"))
