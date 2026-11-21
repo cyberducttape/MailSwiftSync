@@ -124,16 +124,29 @@ then, install the verified package files directly.
 ## Configure the migration engine
 
 5. Install the engine required by the migration:
-   - arbitrary IMAP-to-IMAP on Debian/Ubuntu or Windows: run
-     `mailswiftsync install-engine` (or **Install qualified imapsync 2.314** in
-     **Choose migration engine**). It downloads imapsync 2.314 from the
-     official distribution over HTTPS, refuses it unless its SHA-256 matches
-     the digest pinned in MailSwiftSync, installs it (`apt-get` via `sudo`, or
-     `pkexec` from the desktop, on Debian/Ubuntu; MailSwiftSync's private
-     per-user `engines` directory on Windows), and confirms the version. It
+   - arbitrary IMAP-to-IMAP on Debian/Ubuntu, Fedora/RHEL, Arch, macOS
+     (with Homebrew) or Windows: run `mailswiftsync install-engine` (or
+     **Install qualified imapsync 2.314** in **Choose migration engine**). It
      asks for confirmation first; pass `--yes` for a non-interactive install.
-   - arbitrary IMAP-to-IMAP on macOS or other platforms: install imapsync 2.314
-     manually from the official distribution
+     Then, per platform:
+     - Debian/Ubuntu: downloads the official 2.314 `.deb` over HTTPS, refuses
+       it unless its SHA-256 matches the digest pinned in MailSwiftSync, and
+       installs it with `apt-get` (via `sudo`, or `pkexec` from the desktop).
+     - Fedora/RHEL and Arch: installs imapsync's Perl modules from the
+       distribution with `dnf` or `pacman` (same elevation), then takes the
+       `imapsync` script from the official 2.314 tarball, verified against its
+       pinned SHA-256, into MailSwiftSync's private per-user `engines`
+       directory. The distribution's own imapsync package is never installed.
+       RHEL, CentOS Stream, Rocky and AlmaLinux need EPEL and CRB enabled;
+       Arch should be up to date (`sudo pacman -Syu`).
+     - macOS: runs `brew install imapsync` (Homebrew builds it from the same
+       official tarball; no password needed).
+     - Windows: unpacks the verified portable engine into the private
+       `engines` directory.
+
+     Every route then runs the engine and accepts it only if it reports 2.314.
+   - arbitrary IMAP-to-IMAP on other platforms, or macOS without Homebrew:
+     install imapsync 2.314 manually from the official distribution
      (<https://imapsync.lamiral.info/dist2/>) following its `INSTALL.d`
      instructions, or use the pinned container image. `install-engine` prints
      this guidance on these platforms and changes nothing.

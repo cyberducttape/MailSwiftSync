@@ -10,8 +10,15 @@
 //! - Debian/Ubuntu: the verified `.deb` is installed with the system package
 //!   manager so its Perl dependencies resolve; elevation uses `sudo` from a
 //!   terminal or `pkexec` from the desktop.
+//! - Fedora/RHEL (dnf) and Arch (pacman): the distribution's own Perl
+//!   packages supply imapsync's modules (dnf resolves them by `perl(Module)`
+//!   name), and the `imapsync` script itself is taken from the verified
+//!   official 2.314 tarball into the private engines directory. The distro
+//!   imapsync package is never installed, so its version cannot drift.
 //! - Windows: the verified portable zip is unpacked into a private per-user
 //!   engines directory; no elevation is needed.
+//! - macOS: Homebrew's `imapsync` formula, which builds from the same
+//!   official tarball; the version check below still decides.
 //! - Elsewhere the installer explains the supported manual route instead of
 //!   guessing at a Perl module installation.
 
@@ -46,6 +53,94 @@ pub(crate) const WINDOWS_PORTABLE: Artifact = Artifact {
     max_bytes: 64 * 1024 * 1024,
 };
 
+pub(crate) const SOURCE_TARBALL: Artifact = Artifact {
+    url: "https://imapsync.lamiral.info/dist2/imapsync-2.314.tgz",
+    file_name: "imapsync-2.314.tgz",
+    sha256: "34e1715c6584889ff3bd9c0acc2fab254446282beda90c8e5a71a83b3a59dbca",
+    max_bytes: 64 * 1024 * 1024,
+};
+
+/// The engine script inside the official tarball.
+const TARBALL_SCRIPT: &str = "imapsync-2.314/imapsync";
+const MAX_SCRIPT_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Perl modules the 2.314 script loads, by the `perl(Module)` names Fedora
+/// and RHEL packages provide. `procps-ng` supplies the `ps` it calls.
+const DNF_REQUIREMENTS: &[&str] = &[
+    "perl(Authen::NTLM)",
+    "perl(Compress::Zlib)",
+    "perl(Data::Dumper)",
+    "perl(Data::Uniqid)",
+    "perl(Digest::HMAC_MD5)",
+    "perl(Digest::HMAC_SHA1)",
+    "perl(Digest::MD5)",
+    "perl(Digest::SHA)",
+    "perl(Encode)",
+    "perl(Encode::IMAPUTF7)",
+    "perl(English)",
+    "perl(File::Copy::Recursive)",
+    "perl(File::Glob)",
+    "perl(File::Path)",
+    "perl(File::Spec)",
+    "perl(File::Tail)",
+    "perl(Getopt::Long)",
+    "perl(IO::Socket::SSL)",
+    "perl(IO::Tee)",
+    "perl(IPC::Open3)",
+    "perl(JSON::WebToken)",
+    "perl(Mail::IMAPClient)",
+    "perl(MIME::Base64)",
+    "perl(Pod::Usage)",
+    "perl(Proc::ProcessTable)",
+    "perl(Readonly)",
+    "perl(Regexp::Common)",
+    "perl(Sys::Hostname)",
+    "perl(Sys::MemInfo)",
+    "perl(Term::ReadKey)",
+    "perl(Test::More)",
+    "perl(Text::ParseWords)",
+    "perl(Time::HiRes)",
+    "perl(Time::Local)",
+    "perl(Unicode::String)",
+    "perl(URI::Escape)",
+    "procps-ng",
+];
+
+/// The Arch `imapsync` package's runtime dependencies (extra, 2.314).
+const PACMAN_REQUIREMENTS: &[&str] = &[
+    "perl",
+    "perl-cgi",
+    "perl-crypt-openssl-rsa",
+    "perl-data-uniqid",
+    "perl-date-manip",
+    "perl-digest-sha1",
+    "perl-email-address",
+    "perl-encode-imaputf7",
+    "perl-file-copy-recursive",
+    "perl-file-tail",
+    "perl-html-parser",
+    "perl-http-daemon-ssl",
+    "perl-io-socket-inet6",
+    "perl-io-socket-ssl",
+    "perl-io-tee",
+    "perl-json-webtoken",
+    "perl-libwww",
+    "perl-mail-imapclient",
+    "perl-module-runtime",
+    "perl-module-scandeps",
+    "perl-net-dns",
+    "perl-net-server",
+    "perl-ntlm",
+    "perl-package-stash",
+    "perl-proc-processtable",
+    "perl-readonly",
+    "perl-regexp-common",
+    "perl-sys-meminfo",
+    "perl-term-readkey",
+    "perl-unicode-string",
+    "procps-ng",
+];
+
 /// Directory inside the Windows zip that holds the engine.
 const WINDOWS_ARCHIVE_ROOT: &str = "imapsync_2.314/";
 const WINDOWS_EXECUTABLE: &str = "imapsync.exe";
@@ -57,6 +152,55 @@ const MAX_ENGINE_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
 pub(crate) enum InstallMethod {
     DebianPackage,
     WindowsPortable,
+    /// Fedora/RHEL Perl packages plus the verified tarball script.
+    DnfPerlScript,
+    /// Arch Perl packages plus the verified tarball script.
+    PacmanPerlScript,
+    /// Homebrew's imapsync formula on macOS.
+    Homebrew,
+}
+
+impl InstallMethod {
+    /// Whether the system package manager needs root (sudo or pkexec).
+    pub(crate) fn needs_elevation(self) -> bool {
+        matches!(
+            self,
+            Self::DebianPackage | Self::DnfPerlScript | Self::PacmanPerlScript
+        )
+    }
+
+    /// Whether the engine lands outside the standard `imapsync` on PATH, so
+    /// the saved profile must name its path.
+    pub(crate) fn saves_engine_path(self) -> bool {
+        self != Self::DebianPackage
+    }
+
+    /// What the installer will do, for the confirmation prompt.
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::DebianPackage => "install it with apt-get (sudo will ask for your password)",
+            Self::WindowsPortable => "unpack it into MailSwiftSync's private engines directory",
+            Self::DnfPerlScript => {
+                "install its Perl modules with dnf (sudo will ask for your password) and place the verified script in MailSwiftSync's private engines directory"
+            }
+            Self::PacmanPerlScript => {
+                "install its Perl modules with pacman (sudo will ask for your password) and place the verified script in MailSwiftSync's private engines directory"
+            }
+            Self::Homebrew => {
+                "install Homebrew's imapsync formula, which is built from that same release (no password needed)"
+            }
+        }
+    }
+
+    /// The artifact MailSwiftSync downloads and verifies itself, if any.
+    pub(crate) fn artifact(self) -> Option<&'static Artifact> {
+        match self {
+            Self::DebianPackage => Some(&DEBIAN_PACKAGE),
+            Self::WindowsPortable => Some(&WINDOWS_PORTABLE),
+            Self::DnfPerlScript | Self::PacmanPerlScript => Some(&SOURCE_TARBALL),
+            Self::Homebrew => None,
+        }
+    }
 }
 
 /// How this host can obtain the qualified engine.
@@ -90,15 +234,43 @@ pub(crate) struct InstalledEngine {
     pub(crate) version: String,
 }
 
-const MACOS_GUIDANCE: &str = "Automatic installation is not available on macOS because imapsync needs Perl modules from CPAN. Install imapsync 2.314 from the official tarball (https://imapsync.lamiral.info/dist2/imapsync-2.314.tgz) following its INSTALL.d/INSTALL.OnMac.txt, or run the pinned MailSwiftSync container image, then enter the imapsync path in MailSwiftSync.";
-const OTHER_GUIDANCE: &str = "Automatic installation supports Debian/Ubuntu (apt) and Windows. Install imapsync 2.314 from the official distribution (https://imapsync.lamiral.info/dist2/) using your platform's INSTALL.d instructions, or run the pinned MailSwiftSync container image, then enter the imapsync path in MailSwiftSync.";
+const MACOS_GUIDANCE: &str = "Automatic installation on macOS uses Homebrew, which is not installed. Install Homebrew from https://brew.sh and run `mailswiftsync install-engine` again, or install imapsync 2.314 from the official tarball (https://imapsync.lamiral.info/dist2/imapsync-2.314.tgz) following its INSTALL.d/INSTALL.Darwin.txt, then enter the imapsync path in MailSwiftSync.";
+const OTHER_GUIDANCE: &str = "Automatic installation supports Debian/Ubuntu (apt), Fedora/RHEL (dnf), Arch (pacman), macOS (Homebrew), and Windows. Install imapsync 2.314 from the official distribution (https://imapsync.lamiral.info/dist2/) using your platform's INSTALL.d instructions, or run the pinned MailSwiftSync container image, then enter the imapsync path in MailSwiftSync.";
+
+const APT_GET: &str = "/usr/bin/apt-get";
+const DNF: &str = "/usr/bin/dnf";
+const PACMAN: &str = "/usr/bin/pacman";
+/// Homebrew's default prefixes on Apple silicon and Intel Macs.
+const BREW_CANDIDATES: [&str; 2] = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
+
+/// What the installer can see about the host's package managers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HostFacts {
+    debian_release_file: bool,
+    apt: bool,
+    dnf: bool,
+    pacman: bool,
+    brew: bool,
+}
 
 pub(crate) fn plan_for_host() -> InstallPlan {
     plan_for(
         std::env::consts::OS,
-        Path::new("/etc/debian_version").exists(),
-        Path::new("/usr/bin/apt-get").exists(),
+        HostFacts {
+            debian_release_file: Path::new("/etc/debian_version").exists(),
+            apt: Path::new(APT_GET).exists(),
+            dnf: Path::new(DNF).exists(),
+            pacman: Path::new(PACMAN).exists(),
+            brew: homebrew().is_some(),
+        },
     )
+}
+
+fn homebrew() -> Option<PathBuf> {
+    BREW_CANDIDATES
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
 }
 
 /// Whether the desktop can request elevation for the package manager.
@@ -106,12 +278,15 @@ pub(crate) fn desktop_elevation_available() -> bool {
     Path::new("/usr/bin/pkexec").exists()
 }
 
-fn plan_for(os: &str, debian_release_file: bool, apt_available: bool) -> InstallPlan {
+fn plan_for(os: &str, host: HostFacts) -> InstallPlan {
     match os {
         "windows" => InstallPlan::Automatic(InstallMethod::WindowsPortable),
-        "linux" if debian_release_file && apt_available => {
+        "linux" if host.debian_release_file && host.apt => {
             InstallPlan::Automatic(InstallMethod::DebianPackage)
         }
+        "linux" if host.dnf => InstallPlan::Automatic(InstallMethod::DnfPerlScript),
+        "linux" if host.pacman => InstallPlan::Automatic(InstallMethod::PacmanPerlScript),
+        "macos" if host.brew => InstallPlan::Automatic(InstallMethod::Homebrew),
         "macos" => InstallPlan::Manual(MACOS_GUIDANCE),
         _ => InstallPlan::Manual(OTHER_GUIDANCE),
     }
@@ -377,28 +552,204 @@ fn unpack_windows_engine_with_limits(
     executable.ok_or_else(|| format!("{WINDOWS_EXECUTABLE} is missing from the engine archive"))
 }
 
-fn package_install_command(elevation: Elevation, package: &Path) -> Command {
+/// The package-manager invocation (program first, absolute path) for a
+/// method that installs system packages. `package` is the verified `.deb`.
+fn package_manager_argv(method: InstallMethod, package: &Path) -> Vec<std::ffi::OsString> {
+    let mut argv: Vec<std::ffi::OsString> = match method {
+        InstallMethod::DebianPackage => vec![
+            APT_GET.into(),
+            "install".into(),
+            "--no-install-recommends".into(),
+            "--yes".into(),
+            package.into(),
+        ],
+        InstallMethod::DnfPerlScript => vec![
+            DNF.into(),
+            "install".into(),
+            "--assumeyes".into(),
+            "--setopt=install_weak_deps=False".into(),
+        ],
+        InstallMethod::PacmanPerlScript => {
+            vec![
+                PACMAN.into(),
+                "-S".into(),
+                "--needed".into(),
+                "--noconfirm".into(),
+            ]
+        }
+        InstallMethod::WindowsPortable | InstallMethod::Homebrew => Vec::new(),
+    };
+    match method {
+        InstallMethod::DnfPerlScript => argv.extend(DNF_REQUIREMENTS.iter().map(Into::into)),
+        InstallMethod::PacmanPerlScript => argv.extend(PACMAN_REQUIREMENTS.iter().map(Into::into)),
+        _ => {}
+    }
+    argv
+}
+
+fn package_install_command(elevation: Elevation, argv: &[std::ffi::OsString]) -> Command {
     let mut command = Command::new(match elevation {
         Elevation::Sudo => "sudo",
         Elevation::Pkexec => "pkexec",
     });
-    command
-        .arg("/usr/bin/apt-get")
-        .arg("install")
-        .arg("--no-install-recommends")
-        .arg("--yes")
-        .arg(package);
+    command.args(argv);
     command
 }
 
+fn shell_quote(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./=:+@%".contains(&byte))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
 /// The exact privileged command, for operators who prefer to run it.
+fn manual_command(argv: &[std::ffi::OsString]) -> String {
+    let mut words = vec!["sudo".to_owned()];
+    for (index, word) in argv.iter().enumerate() {
+        let word = word.to_string_lossy();
+        let word = if index == 0 {
+            Path::new(word.as_ref())
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| word.into_owned())
+        } else {
+            word.into_owned()
+        };
+        words.push(shell_quote(&word));
+    }
+    words.join(" ")
+}
+
+/// The Debian route's privileged command for the verified package.
+#[cfg(all(test, unix))]
 pub(crate) fn manual_package_command(package: &Path) -> String {
-    let package = package.display().to_string();
-    let shell_quoted_package = format!("'{}'", package.replace('\'', "'\\''"));
-    format!(
-        "sudo apt-get install --no-install-recommends --yes {}",
-        shell_quoted_package
-    )
+    manual_command(&package_manager_argv(InstallMethod::DebianPackage, package))
+}
+
+/// Run the elevated package manager, explaining how to retry by hand.
+fn run_package_manager(
+    method: InstallMethod,
+    elevation: Elevation,
+    package: &Path,
+) -> Result<(), String> {
+    let argv = package_manager_argv(method, package);
+    let manual = manual_command(&argv);
+    let status = package_install_command(elevation, &argv)
+        .status()
+        .map_err(|error| {
+            format!("could not start the package manager ({error}); run it yourself: {manual}")
+        })?;
+    if status.success() {
+        return Ok(());
+    }
+    let hint = match method {
+        InstallMethod::DnfPerlScript => {
+            " On RHEL, CentOS Stream, Rocky or AlmaLinux, enable EPEL and CRB first."
+        }
+        InstallMethod::PacmanPerlScript => {
+            " If packages were not found, update the system with `sudo pacman -Syu` first."
+        }
+        _ => " Review apt/dpkg output before retrying.",
+    };
+    Err(format!(
+        "package installation did not complete successfully ({status}). The package manager may have changed system state.{hint} To retry manually run: {manual}"
+    ))
+}
+
+/// Copy the engine script out of the verified official tarball into
+/// `destination/imapsync`, executable by the owner. Only the one regular
+/// file at [`TARBALL_SCRIPT`] is read; every other entry is skipped.
+pub(crate) fn extract_tarball_script(
+    archive: &Path,
+    destination: &Path,
+) -> Result<PathBuf, String> {
+    let file = std::fs::File::open(archive)
+        .map_err(|error| format!("could not open {}: {error}", archive.display()))?;
+    let mut tar = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
+    let script = read_tar_member(&mut tar, TARBALL_SCRIPT, MAX_SCRIPT_BYTES)?
+        .ok_or_else(|| format!("{TARBALL_SCRIPT} is missing from the engine tarball"))?;
+    crate::credentials::ensure_private_directory(destination)
+        .map_err(|error| format!("could not prepare {}: {error}", destination.display()))?;
+    let executable = destination.join("imapsync");
+    let partial = destination.join(format!(".imapsync.{}.partial", Uuid::new_v4()));
+    let written = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o700);
+        let mut out = options.open(&partial)?;
+        out.write_all(&script)?;
+        out.sync_all()?;
+        std::fs::rename(&partial, &executable)
+    })();
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("could not write {}: {error}", executable.display()));
+    }
+    Ok(executable)
+}
+
+/// Read one regular file from a ustar/GNU tar stream by exact name.
+fn read_tar_member(
+    tar: &mut impl Read,
+    wanted: &str,
+    max_bytes: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    let corrupt = |what: &str| format!("the engine tarball is corrupt ({what})");
+    let mut header = [0_u8; 512];
+    loop {
+        if let Err(error) = tar.read_exact(&mut header) {
+            return if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                Ok(None)
+            } else {
+                Err(corrupt(&error.to_string()))
+            };
+        }
+        if header.iter().all(|byte| *byte == 0) {
+            return Ok(None);
+        }
+        let field = |range: std::ops::Range<usize>| {
+            let bytes = &header[range];
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            String::from_utf8_lossy(&bytes[..end]).into_owned()
+        };
+        let size_text = field(124..136);
+        let size = u64::from_str_radix(size_text.trim(), 8).map_err(|_| corrupt("entry size"))?;
+        let prefix = if &header[257..262] == b"ustar" {
+            field(345..500)
+        } else {
+            String::new()
+        };
+        let name = match (prefix.is_empty(), field(0..100)) {
+            (true, name) => name,
+            (false, name) => format!("{prefix}/{name}"),
+        };
+        let regular = matches!(header[156], b'0' | 0);
+        let padded = size.div_ceil(512) * 512;
+        if regular && name == wanted {
+            if size > max_bytes {
+                return Err(format!("{wanted} is larger than expected ({size} bytes)"));
+            }
+            let mut contents = vec![0_u8; size as usize];
+            tar.read_exact(&mut contents)
+                .map_err(|_| corrupt("truncated entry"))?;
+            return Ok(Some(contents));
+        }
+        let skipped = std::io::copy(&mut tar.by_ref().take(padded), &mut std::io::sink())
+            .map_err(|error| corrupt(&error.to_string()))?;
+        if skipped != padded {
+            return Err(corrupt("truncated entry"));
+        }
+    }
 }
 
 fn confirm_qualified(executable: &Path) -> Result<InstalledEngine, String> {
@@ -427,22 +778,40 @@ pub(crate) fn install(
         InstallMethod::DebianPackage => {
             let package = fetch_verified(&DEBIAN_PACKAGE, &directory, &mut progress)?;
             progress(InstallProgress::Installing);
-            let status = package_install_command(elevation, &package)
+            run_package_manager(method, elevation, &package)?;
+            progress(InstallProgress::Checking);
+            confirm_qualified(Path::new(DEBIAN_EXECUTABLE))
+        }
+        InstallMethod::DnfPerlScript | InstallMethod::PacmanPerlScript => {
+            let archive = fetch_verified(&SOURCE_TARBALL, &directory, &mut progress)?;
+            progress(InstallProgress::Installing);
+            run_package_manager(method, elevation, &archive)?;
+            let destination = directory.join(format!("imapsync-{QUALIFIED_IMAPSYNC_VERSION}"));
+            let executable = extract_tarball_script(&archive, &destination)?;
+            progress(InstallProgress::Checking);
+            confirm_qualified(&executable)
+        }
+        InstallMethod::Homebrew => {
+            let brew = homebrew().ok_or("Homebrew is no longer installed")?;
+            progress(InstallProgress::Installing);
+            let status = Command::new(&brew)
+                .args(["install", "imapsync"])
                 .status()
                 .map_err(|error| {
                     format!(
-                        "could not start the package manager ({error}); run it yourself: {}",
-                        manual_package_command(&package)
+                        "could not start Homebrew ({error}); run it yourself: brew install imapsync"
                     )
                 })?;
             if !status.success() {
                 return Err(format!(
-                    "package installation did not complete successfully ({status}). The package manager may have changed system state. Review apt/dpkg output before retrying. To retry manually run: {}",
-                    manual_package_command(&package)
+                    "`brew install imapsync` did not complete successfully ({status}); review Homebrew's output and retry"
                 ));
             }
             progress(InstallProgress::Checking);
-            confirm_qualified(Path::new(DEBIAN_EXECUTABLE))
+            let executable = brew.with_file_name("imapsync");
+            confirm_qualified(&executable).map_err(|error| {
+                format!("{error}. Homebrew may ship a different imapsync release; run `brew upgrade imapsync` or install 2.314 from the official tarball")
+            })
         }
         InstallMethod::WindowsPortable => {
             let archive = fetch_verified(&WINDOWS_PORTABLE, &directory, &mut progress)?;
@@ -458,7 +827,7 @@ pub(crate) fn install(
 #[cfg(test)]
 mod tests {
     use super::{
-        Artifact, DEBIAN_PACKAGE, InstallMethod, InstallPlan, InstallProgress, plan_for,
+        Artifact, DEBIAN_PACKAGE, HostFacts, InstallMethod, InstallPlan, InstallProgress, plan_for,
         sha256_hex, store_verified, unpack_windows_engine,
     };
     use std::io::Write;
@@ -489,26 +858,182 @@ mod tests {
     }
 
     #[test]
-    fn only_debian_with_apt_and_windows_are_automatic() {
+    fn each_supported_package_manager_gets_an_automatic_route() {
+        let host = |configure: fn(&mut HostFacts)| {
+            let mut facts = HostFacts::default();
+            configure(&mut facts);
+            facts
+        };
+        let debian = host(|facts| {
+            facts.debian_release_file = true;
+            facts.apt = true;
+        });
         assert_eq!(
-            plan_for("linux", true, true),
+            plan_for("linux", debian),
             InstallPlan::Automatic(InstallMethod::DebianPackage)
         );
+        // apt without Debian's release file, or the file without apt, is not
+        // Debian; with nothing else available the route is manual.
         assert!(matches!(
-            plan_for("linux", false, true),
+            plan_for("linux", host(|facts| facts.apt = true)),
             InstallPlan::Manual(_)
         ));
         assert!(matches!(
-            plan_for("linux", true, false),
+            plan_for("linux", host(|facts| facts.debian_release_file = true)),
             InstallPlan::Manual(_)
         ));
         assert_eq!(
-            plan_for("windows", false, false),
-            InstallPlan::Automatic(InstallMethod::WindowsPortable)
+            plan_for("linux", host(|facts| facts.dnf = true)),
+            InstallPlan::Automatic(InstallMethod::DnfPerlScript)
+        );
+        assert_eq!(
+            plan_for("linux", host(|facts| facts.pacman = true)),
+            InstallPlan::Automatic(InstallMethod::PacmanPerlScript)
+        );
+        assert_eq!(
+            plan_for("macos", host(|facts| facts.brew = true)),
+            InstallPlan::Automatic(InstallMethod::Homebrew)
         );
         assert!(
-            matches!(plan_for("macos", false, false), InstallPlan::Manual(text) if text.contains("2.314"))
+            matches!(plan_for("macos", HostFacts::default()), InstallPlan::Manual(text) if text.contains("2.314") && text.contains("brew.sh"))
         );
+        assert_eq!(
+            plan_for("windows", HostFacts::default()),
+            InstallPlan::Automatic(InstallMethod::WindowsPortable)
+        );
+        assert!(matches!(
+            plan_for("freebsd", host(|facts| facts.brew = true)),
+            InstallPlan::Manual(_)
+        ));
+        for method in [
+            InstallMethod::DebianPackage,
+            InstallMethod::DnfPerlScript,
+            InstallMethod::PacmanPerlScript,
+        ] {
+            assert!(method.needs_elevation());
+        }
+        assert!(!InstallMethod::Homebrew.needs_elevation());
+        assert!(!InstallMethod::WindowsPortable.needs_elevation());
+        assert!(!InstallMethod::DebianPackage.saves_engine_path());
+        assert!(InstallMethod::DnfPerlScript.saves_engine_path());
+        assert!(InstallMethod::Homebrew.artifact().is_none());
+    }
+
+    #[test]
+    fn script_routes_install_perl_modules_but_never_the_distro_imapsync() {
+        use super::{manual_command, package_manager_argv};
+        let tarball = std::path::Path::new("/unused/imapsync-2.314.tgz");
+        let dnf = manual_command(&package_manager_argv(InstallMethod::DnfPerlScript, tarball));
+        assert!(dnf.starts_with(
+            "sudo dnf install --assumeyes --setopt=install_weak_deps=False 'perl(Authen::NTLM)'"
+        ));
+        assert!(dnf.contains("'perl(Mail::IMAPClient)'") && dnf.ends_with(" procps-ng"));
+        let pacman = manual_command(&package_manager_argv(
+            InstallMethod::PacmanPerlScript,
+            tarball,
+        ));
+        assert!(pacman.starts_with("sudo pacman -S --needed --noconfirm perl perl-cgi "));
+        assert!(pacman.contains(" perl-mail-imapclient "));
+        for command in [dnf, pacman] {
+            assert!(!command.contains("tgz"), "{command}");
+            assert!(
+                !command.split(' ').any(|word| word == "imapsync"),
+                "{command}"
+            );
+        }
+    }
+
+    fn tar_entry(name: &str, kind: u8, contents: &[u8]) -> Vec<u8> {
+        let mut header = [0_u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        header[100..107].copy_from_slice(b"0000644");
+        header[124..135].copy_from_slice(format!("{:011o}", contents.len()).as_bytes());
+        header[156] = kind;
+        header[257..263].copy_from_slice(b"ustar\0");
+        let mut entry = header.to_vec();
+        entry.extend_from_slice(contents);
+        entry.resize(entry.len().div_ceil(512) * 512, 0);
+        entry
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn tarball_extraction_takes_only_the_engine_script() {
+        let directory = private_directory("engine-tarball");
+        let mut tar = Vec::new();
+        tar.extend(tar_entry("imapsync-2.314/README", b'0', b"readme"));
+        // A symlink or directory with the script's name is never used.
+        tar.extend(tar_entry("imapsync-2.314/imapsync", b'2', b""));
+        tar.extend(tar_entry(
+            "imapsync-2.314/imapsync",
+            b'0',
+            b"#!/usr/bin/env perl\nprint \"2.314\\n\";\n",
+        ));
+        tar.extend(tar_entry("imapsync-2.314/X/imapsync", b'0', b"other"));
+        tar.extend([0_u8; 1024]);
+        let archive = directory.join("imapsync-2.314.tgz");
+        std::fs::write(&archive, gzip(&tar)).unwrap();
+
+        let destination = directory.join("imapsync-2.314");
+        let executable = super::extract_tarball_script(&archive, &destination).unwrap();
+        assert_eq!(executable, destination.join("imapsync"));
+        assert_eq!(
+            std::fs::read(&executable).unwrap(),
+            b"#!/usr/bin/env perl\nprint \"2.314\\n\";\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&executable).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 1);
+
+        // A tarball without the script, or a truncated one, is refused.
+        let missing = directory.join("missing.tgz");
+        std::fs::write(
+            &missing,
+            gzip(&tar_entry("imapsync-2.314/README", b'0', b"x")),
+        )
+        .unwrap();
+        assert!(
+            super::extract_tarball_script(&missing, &directory.join("m"))
+                .unwrap_err()
+                .contains("missing")
+        );
+        let truncated = directory.join("truncated.tgz");
+        let entry = tar_entry("imapsync-2.314/imapsync", b'0', &[b'x'; 900]);
+        std::fs::write(&truncated, gzip(&entry[..700])).unwrap();
+        assert!(
+            super::extract_tarball_script(&truncated, &directory.join("t"))
+                .unwrap_err()
+                .contains("corrupt")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Opt-in network check that the pinned official tarball still contains
+    /// the 2.314 script: `MAILSWIFTSYNC_TEST_ENGINE_DOWNLOAD=1 cargo test --
+    /// --ignored real_tarball`.
+    #[test]
+    #[ignore]
+    fn real_tarball_matches_the_pin_and_holds_the_script() {
+        if std::env::var_os("MAILSWIFTSYNC_TEST_ENGINE_DOWNLOAD").is_none() {
+            return;
+        }
+        let directory = private_directory("engine-real-tarball");
+        let archive = super::fetch_verified(&super::SOURCE_TARBALL, &directory, |_| {}).unwrap();
+        let script =
+            super::extract_tarball_script(&archive, &directory.join("imapsync-2.314")).unwrap();
+        let text = std::fs::read_to_string(script).unwrap();
+        assert!(text.starts_with("#!/usr/bin/env perl"));
+        assert!(text.contains("2.314"));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[cfg(unix)]
