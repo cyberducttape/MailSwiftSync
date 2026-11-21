@@ -89,8 +89,7 @@ impl App {
 crate::ui::name_modal(ui, &modal_heading);
             ui.label(
                 self.language
-                    .text("This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.")
-                    .replace("{}", &self.queue.len().to_string()),
+                    .count_message(self.queue.len() as u64, "ui.this-removes-mailbox-row-s-selection-in-memory-passwords-and-the-durable-ba-ac76940716", "ui.this-removes-mailbox-row-s-selection-in-memory-passwords-and-the-durable-ba-ac76940716-one"),
             );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -349,8 +348,7 @@ crate::ui::name_modal(ui, &modal_heading);
                     ui.label(
                         RichText::new(
                             self.language
-                                .text("⚠ {} selected mailbox(es) use destination mirror or --delete2: destination-only messages/mailboxes may be removed or replaced.")
-                                .replace("{}", &summary.destructive_count.to_string()),
+                                .count_message(summary.destructive_count as u64, "ui.selected-mailbox-es-use-destination-mirror-or-delete2-destination-only-mess-fbd121e777", "ui.selected-mailbox-es-use-destination-mirror-or-delete2-destination-only-mess-fbd121e777-one"),
                         )
                         .strong().family(crate::ui::fonts::medium())
                         .color(self.theme_colors().danger),
@@ -538,10 +536,11 @@ crate::ui::name_modal(ui, &modal_heading);
         ) {
             Ok(applied) => {
                 self.mark_bulk_jobs_changed();
-                self.bulk_message = self
-                    .language
-                    .text("Applied the keyring ID to {} row(s) without a credential reference.")
-                    .replace("{}", &applied.to_string());
+                self.bulk_message = self.language.count_message(
+                    applied as u64,
+                    "ui.applied-the-keyring-id-to-row-s-without-a-credential-reference",
+                    "ui.applied-the-keyring-id-to-row-s-without-a-credential-reference-one",
+                );
             }
             Err(error) => self.bulk_message = error,
         }

@@ -44,6 +44,16 @@ impl UiLanguage {
     pub(crate) fn message(self, key: &'static str) -> &'static str {
         locale_catalog().message(self, key).unwrap_or(key)
     }
+
+    /// A counted message: the `one` key for exactly one item, otherwise the
+    /// `many` key with `{}` replaced by the count. Avoids "mailbox(es)".
+    pub(crate) fn count_message(self, count: u64, many: &'static str, one: &'static str) -> String {
+        if count == 1 {
+            self.message(one).to_owned()
+        } else {
+            self.message(many).replace("{}", &count.to_string())
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -290,7 +300,6 @@ mod tests {
             "Task center",
             "Migration running",
             "No active migration",
-            "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.",
             "Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.",
             "• {}: {} → {}",
             "Export verification report…",
@@ -333,7 +342,6 @@ mod tests {
             "A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.",
             "Elapsed {}",
             "{} visible of {} loaded",
-            "Selected {} mailbox row(s) for focused review.",
             "Imported {} mailbox rows. Review them and run preflight before migration.",
             "Choose the worksheet containing the migration rows before importing.",
             "A mailbox file is already being imported.",
@@ -525,6 +533,35 @@ mod tests {
                 for language in TRANSLATED {
                     assert_ne!(language.text(text), text, "missing {language:?}: {text}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn counted_messages_use_the_singular_for_exactly_one() {
+        let (many, one) = ("ui.blocker-count", "ui.blocker-count-one");
+        assert_eq!(UiLanguage::English.count_message(1, many, one), "1 blocker");
+        assert_eq!(
+            UiLanguage::English.count_message(0, many, one),
+            "0 blockers"
+        );
+        assert_eq!(
+            UiLanguage::English.count_message(3, many, one),
+            "3 blockers"
+        );
+        assert_eq!(
+            UiLanguage::German.count_message(1, many, one),
+            "1 Blockierung"
+        );
+        assert_eq!(
+            UiLanguage::German.count_message(2, many, one),
+            "2 Blockierungen"
+        );
+        // No locale keeps the old "(s)"/"(es)" form for converted messages.
+        for language in UiLanguage::all() {
+            for count in [1, 2] {
+                let text = language.count_message(count, many, one);
+                assert!(!text.contains("(s)") && !text.contains("(en)"), "{text}");
             }
         }
     }
