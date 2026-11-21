@@ -436,9 +436,11 @@ impl App {
                     let preflight_status = if self.preflight.is_empty() {
                         self.language.message("ui.not-assessed").to_owned()
                     } else if preflight_blockers > 0 {
-                        self.language
-                            .message("ui.blocker-count")
-                            .replace("{}", &preflight_blockers.to_string())
+                        self.language.count_message(
+                            preflight_blockers as u64,
+                            "ui.blocker-count",
+                            "ui.blocker-count-one",
+                        )
                     } else if preflight_unknown > 0 {
                         format!("{preflight_unknown} checks unresolved")
                     } else {
