@@ -434,13 +434,29 @@ mod tests {
             cancelled: &dyn Fn() -> bool,
             outstanding: &AtomicUsize,
         ) -> DnsResult {
-            resolve_with_helper(
-                helper,
-                address,
-                Instant::now() + timeout,
-                cancelled,
-                outstanding,
-            )
+            // Another test thread may fork while a just-written stub is still
+            // open for writing; exec then fails with ETXTBSY until that child
+            // execs. That is a test-harness race, not resolver behaviour.
+            let mut attempts = 0;
+            loop {
+                let result = resolve_with_helper(
+                    helper,
+                    address,
+                    Instant::now() + timeout,
+                    cancelled,
+                    outstanding,
+                );
+                attempts += 1;
+                match result {
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                            && attempts < 20 =>
+                    {
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    result => return result,
+                }
+            }
         }
 
         /// True once `pid` has exited (absent, or a zombie awaiting its new
