@@ -24,8 +24,9 @@ case_dir() { rm -rf "$work/dir"; mkdir -p "$work/dir"; }
 case_dir
 ( load --dir "$work/dir"; install_binary "$work/program" ) 2>/dev/null ||
   fail "fresh install failed"
-[ -f "$work/dir/mailswiftsync" ] && [ -x "$work/dir/mailswiftsync" ] ||
+if [ ! -f "$work/dir/mailswiftsync" ] || [ ! -x "$work/dir/mailswiftsync" ]; then
   fail "fresh install did not produce an executable file"
+fi
 
 printf 'old\n' >"$work/dir/mailswiftsync"
 ( load --dir "$work/dir"; install_binary "$work/program" ) 2>/dev/null ||
@@ -48,8 +49,9 @@ mkdir "$work/elsewhere"
 ln -s "$work/elsewhere" "$work/dir/mailswiftsync"
 ( load --dir "$work/dir"; install_binary "$work/program" ) 2>/dev/null ||
   fail "replacing a symlink to a directory failed"
-[ -f "$work/dir/mailswiftsync" ] && [ ! -L "$work/dir/mailswiftsync" ] ||
+if [ ! -f "$work/dir/mailswiftsync" ] || [ -L "$work/dir/mailswiftsync" ]; then
   fail "a symlink to a directory was followed instead of replaced"
+fi
 [ -z "$(ls -A "$work/elsewhere")" ] || fail "the link target directory was written to"
 
 case_dir
