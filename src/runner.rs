@@ -776,8 +776,9 @@ mod tests {
     use super::{
         RunContext, TerminalEvidenceSource, automap_blocks_live_certification,
         configure_process_group, infer_automap_folder_mapping, message_verification_enabled,
-        message_verification_limitation, persist_engine_identity_before_launch, process_tail_text,
-        record_process_tail, resolve_imapsync_identity, run_streaming, terminal_evidence_source,
+        message_verification_limitation, persist_engine_identity_before_launch,
+        probe_engine_version_within, process_tail_text, record_process_tail,
+        resolve_imapsync_identity, run_streaming, terminal_evidence_source,
         validate_body_hash_limits, validate_destination_folder_policy, wait_with_timeout,
     };
     use crate::{
@@ -1224,6 +1225,34 @@ mod tests {
         assert_eq!(last.source_messages, Some(300));
         assert_eq!(last.messages_left, Some(0));
         assert!(snapshots.len() < 300, "snapshots must be throttled");
+    }
+
+    #[test]
+    fn a_failed_version_probe_says_why() {
+        let probe = |body: &str| {
+            let path = std::env::temp_dir().join(format!(
+                "mailswiftsync-version-reason-{}-{}.sh",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            let result =
+                probe_engine_version_within(&path.to_string_lossy(), Duration::from_secs(10));
+            fs::remove_file(path).unwrap();
+            result.unwrap_err()
+        };
+        assert!(probe("exit 3").contains("exited with 3"));
+        assert!(probe("exit 0").contains("printed nothing"));
+        assert!(probe("sleep 30").contains("did not answer within 10 seconds"));
+        assert!(
+            probe_engine_version_within(
+                "/path/that/does/not/exist/imapsync",
+                Duration::from_secs(1)
+            )
+            .unwrap_err()
+            .contains("--version` failed")
+        );
     }
 
     #[test]
