@@ -2,10 +2,24 @@
 
 use super::*;
 
+/// How long a launch-time `--version` probe may take. Generous because the
+/// packaged Windows imapsync.exe unpacks its bundled Perl on a cold start,
+/// which a virus scan can stretch well past a few seconds.
+pub(crate) const ENGINE_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Ask an engine for its version without passing credentials or mailbox
 /// arguments. This is best-effort metadata: an old wrapper may not implement
 /// `--version`, in which case the run explicitly remains unversioned.
 pub(crate) fn probe_engine_version(executable: &str) -> Option<String> {
+    probe_engine_version_within(executable, ENGINE_VERSION_PROBE_TIMEOUT).ok()
+}
+
+/// Like [`probe_engine_version`], but says why no version was read, so an
+/// installer can report a timeout or failure instead of a bare "unknown".
+pub(crate) fn probe_engine_version_within(
+    executable: &str,
+    timeout: Duration,
+) -> Result<String, String> {
     let cancel = AtomicBool::new(false);
     let mut candidates = vec![(executable.to_owned(), vec!["--version".into()])];
     if std::path::Path::new(executable)
@@ -22,29 +36,42 @@ pub(crate) fn probe_engine_version(executable: &str) -> Option<String> {
             vec!["--version".into()],
         ));
     }
+    let mut reasons = Vec::new();
     for (candidate, args) in candidates {
-        let Ok((status, lines, _)) = run_capture_lines(
-            &candidate,
-            &args,
-            &[],
-            &cancel,
-            &[],
-            Duration::from_secs(5),
-            None,
-            None,
-        ) else {
+        let (status, lines, _) =
+            match run_capture_lines(&candidate, &args, &[], &cancel, &[], timeout, None, None) {
+                Ok(captured) => captured,
+                Err(error) => {
+                    reasons.push(format!("`{candidate} --version` failed: {error}"));
+                    continue;
+                }
+            };
+        if status.timed_out {
+            reasons.push(format!(
+                "`{candidate} --version` did not answer within {} seconds",
+                timeout.as_secs()
+            ));
             continue;
-        };
-        if status.exit_code == Some(0)
-            && let Some(line) = lines
-                .into_iter()
-                .map(|line| line.trim().to_owned())
-                .find(|line| !line.is_empty() && line.len() <= 512)
+        }
+        if status.exit_code != Some(0) {
+            reasons.push(format!(
+                "`{candidate} --version` exited with {}",
+                status
+                    .exit_code
+                    .map_or_else(|| "no exit code".to_owned(), |code| code.to_string())
+            ));
+            continue;
+        }
+        match lines
+            .into_iter()
+            .map(|line| line.trim().to_owned())
+            .find(|line| !line.is_empty() && line.len() <= 512)
         {
-            return Some(line);
+            Some(line) => return Ok(line),
+            None => reasons.push(format!("`{candidate} --version` printed nothing")),
         }
     }
-    None
+    Err(reasons.join("; "))
 }
 
 #[derive(Clone, Debug)]
