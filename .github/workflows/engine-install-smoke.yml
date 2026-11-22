@@ -89,6 +89,10 @@ jobs:
           state="$(mktemp -d)"
           chmod 700 "$state"
           export MAILSWIFTSYNC_STATE_PATH="$state/state.db"
+          # The job runs as root but GitHub mounts HOME (/github/home) owned
+          # by the runner account, which the private-directory check rightly
+          # refuses for the saved profile. Keep the profile private too.
+          export XDG_CONFIG_HOME="$state/config"
           ./mailswiftsync install-engine --yes
           report="$(./mailswiftsync doctor --json)"
           printf '%s\n' "$report"
