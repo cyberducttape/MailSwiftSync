@@ -385,7 +385,7 @@ fn check_executable_version_with_reader_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
-    let mut child = match command.spawn() {
+    let mut child = match crate::process::spawn_in_process_group(&mut command) {
         Ok(child) => child,
         Err(error) => {
             return DoctorCheck {
