@@ -1120,7 +1120,10 @@ mod tests {
     ) {
         let file = std::fs::File::create(path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
-        let options = SimpleFileOptions::default();
+        // Deflated like every real workbook; Stored would hide a build
+        // without deflate support.
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         let content_types = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/{worksheet_part_path}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#
         );
