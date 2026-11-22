@@ -272,7 +272,32 @@ pub(crate) mod tests {
         app.store
             .queue_durable_scan(&project_id, |row| states.push(row.durable_state))
             .unwrap();
-        assert_eq!(states, ["ready", "ready", "ready"], "{}", app.bulk_message);
+        if states != ["ready", "ready", "ready"] {
+            // This has failed rarely under a fully loaded test run and could
+            // not be reproduced; report every run's outcome so the next
+            // failure names its cause.
+            let ledger = rusqlite::Connection::open(&state_path).unwrap();
+            let mut statement = ledger
+                .prepare("SELECT status, coalesce(failure_code, ''), detail FROM runs ORDER BY started_at")
+                .unwrap();
+            let runs = statement
+                .query_map([], |row: &rusqlite::Row<'_>| {
+                    Ok(format!(
+                        "{} [{}] {}",
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            panic!(
+                "durable states {states:?}; message: {}; runs:\n{}",
+                app.bulk_message,
+                runs.join("\n")
+            );
+        }
         // A successful dry run records each row's credential binding for the
         // live gate, in this session only.
         assert_eq!(app.queue.preflight_credentials.len(), 3);

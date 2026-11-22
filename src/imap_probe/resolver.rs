@@ -566,31 +566,40 @@ printf '%s\n' "$2" '[::1]:993'"#,
         let pid_file = stub.directory.join("pid");
         let outstanding = AtomicUsize::new(0);
 
+        // The deadline must leave the shell time to start and record its pid
+        // even on a loaded CI host; a 300 ms deadline sometimes killed it
+        // first, and the pid file then never appeared.
         let started = Instant::now();
         let error = helper::resolve(
             &stub.program,
             "slow.example.test:993",
-            Duration::from_millis(300),
+            Duration::from_secs(2),
             &|| false,
             &outstanding,
         )
         .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
         assert!(helper::process_gone(helper::wait_for_pid(&pid_file)));
         assert_eq!(outstanding.load(Ordering::Acquire), 0);
 
         std::fs::remove_file(&pid_file).unwrap();
-        let cancel_at = Instant::now() + Duration::from_millis(300);
+        // Cancel once the helper has demonstrably started (its pid file
+        // exists), not after a fixed delay that a slow host can outrun.
+        let give_up = Instant::now() + Duration::from_secs(10);
         let error = helper::resolve(
             &stub.program,
             "slow.example.test:993",
             Duration::from_secs(30),
-            &|| Instant::now() >= cancel_at,
+            &|| pid_file.exists() || Instant::now() >= give_up,
             &outstanding,
         )
         .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted, "{error}");
         assert!(helper::process_gone(helper::wait_for_pid(&pid_file)));
         assert_eq!(outstanding.load(Ordering::Acquire), 0);
     }
