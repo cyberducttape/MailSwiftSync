@@ -45,10 +45,14 @@ function Find-AssetUrl([string]$Asset) {
     # Optional; avoids the anonymous API rate limit on shared CI runners.
     if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
     if ($Version) {
-        $releases = @(Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases/tags/$Version")
+        $response = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases/tags/$Version"
     } else {
-        $releases = @(Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases?per_page=30")
+        $response = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases?per_page=30"
     }
+    # Invoke-RestMethod can hand back a JSON array as one object, and @()
+    # would then hold a single item; the pipeline enumerates it so each
+    # release (and its draft flag and tag) is examined on its own.
+    $releases = @($response | ForEach-Object { $_ })
     foreach ($release in $releases) {
         # Never install from a draft (visible to authenticated callers);
         # prereleases stay eligible because preview builds are published so.
