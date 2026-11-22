@@ -172,8 +172,9 @@ detect_target() {
   esac
 }
 
-# Print the download URL of the newest release asset named exactly $1, or of
-# the requested --version. Releases are listed newest first.
+# Print the download URL of the newest published release's archive named
+# $1.tar.gz or $1.zip, or of the requested --version. Releases are listed
+# newest first.
 find_asset_url() {
   asset="$1"
   if [ -n "$version" ]; then
@@ -191,7 +192,21 @@ find_asset_url() {
   else
     download "$api" "$work/releases.json" 2>/dev/null || return 1
   fi
-  published_asset_urls <"$work/releases.json" | grep "/$asset\$" | head -n 1
+  published_asset_urls <"$work/releases.json" | select_archive "$asset"
+}
+
+# Print the first URL (newest release first) whose file is $1.tar.gz or
+# $1.zip, matched literally.
+select_archive() {
+  while IFS= read -r candidate; do
+    case "${candidate##*/}" in
+      "$1.tar.gz" | "$1.zip")
+        printf '%s\n' "$candidate"
+        return 0
+        ;;
+    esac
+  done
+  return 1
 }
 
 # A token is used only if it is a plain token string, so it cannot break out
@@ -258,16 +273,13 @@ install_binary() {
 }
 
 # Set url and archive_name to the newest published build for $1.
+# The newest release wins whichever archive format it uses: macOS builds
+# moved from .tar.gz to .zip, so searching all releases for one format first
+# would pick an older release.
 find_published() {
-  url=""
-  for extension in tar.gz zip; do
-    url="$(find_asset_url "mailswiftsync-$1.$extension" || true)"
-    if [ -n "$url" ]; then
-      archive_name="mailswiftsync-$1.$extension"
-      return 0
-    fi
-  done
-  return 1
+  url="$(find_asset_url "mailswiftsync-$1" || true)"
+  [ -n "$url" ] || return 1
+  archive_name="${url##*/}"
 }
 
 # The armored public key whose fingerprint is RELEASE_GPG_FINGERPRINT.

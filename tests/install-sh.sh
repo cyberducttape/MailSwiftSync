@@ -24,8 +24,9 @@ case_dir() { rm -rf "$work/dir"; mkdir -p "$work/dir"; }
 case_dir
 ( load --dir "$work/dir"; install_binary "$work/program" ) 2>/dev/null ||
   fail "fresh install failed"
-[ -f "$work/dir/mailswiftsync" ] && [ -x "$work/dir/mailswiftsync" ] ||
+if [ ! -f "$work/dir/mailswiftsync" ] || [ ! -x "$work/dir/mailswiftsync" ]; then
   fail "fresh install did not produce an executable file"
+fi
 
 printf 'old\n' >"$work/dir/mailswiftsync"
 ( load --dir "$work/dir"; install_binary "$work/program" ) 2>/dev/null ||
@@ -48,8 +49,9 @@ mkdir "$work/elsewhere"
 ln -s "$work/elsewhere" "$work/dir/mailswiftsync"
 ( load --dir "$work/dir"; install_binary "$work/program" ) 2>/dev/null ||
   fail "replacing a symlink to a directory failed"
-[ -f "$work/dir/mailswiftsync" ] && [ ! -L "$work/dir/mailswiftsync" ] ||
+if [ ! -f "$work/dir/mailswiftsync" ] || [ -L "$work/dir/mailswiftsync" ]; then
   fail "a symlink to a directory was followed instead of replaced"
+fi
 [ -z "$(ls -A "$work/elsewhere")" ] || fail "the link target directory was written to"
 
 case_dir
@@ -116,6 +118,19 @@ case "$selected" in */v1.0.0-alpha.3/*) ;; *) fail "pretty-printed selection pic
 printf '[{"assets":[{"browser_download_url":"https://x/y.tar.gz"}]}]' >"$work/nodraft.json"
 [ -z "$( load; published_asset_urls <"$work/nodraft.json" )" ] ||
   fail "an asset without a draft field was selected"
+
+# The newest release wins regardless of archive format (macOS moved from
+# .tar.gz to .zip), and names are matched exactly.
+cat >"$work/formats.json" <<'JSON'
+[{"draft":false,"assets":[{"browser_download_url":"https://github.com/o/r/releases/download/v3/mailswiftsync-aarch64-apple-darwin.zip"},{"browser_download_url":"https://github.com/o/r/releases/download/v3/mailswiftsync-aarch64-apple-darwin.zip.sha256"}]},
+ {"draft":false,"assets":[{"browser_download_url":"https://github.com/o/r/releases/download/v1/mailswiftsync-aarch64-apple-darwin.tar.gz"}]}]
+JSON
+selected="$( load; published_asset_urls <"$work/formats.json" | select_archive mailswiftsync-aarch64-apple-darwin )"
+[ "$selected" = "https://github.com/o/r/releases/download/v3/mailswiftsync-aarch64-apple-darwin.zip" ] ||
+  fail "archive selection picked '$selected' instead of the newest release's .zip"
+if ( load; printf 'https://x/v1/mailswiftsync-x86_64-apple-darwinXzip\n' | select_archive mailswiftsync-x86_64-apple-darwin ) >/dev/null; then
+  fail "archive names are not matched literally"
+fi
 
 # --- token handling --------------------------------------------------------
 # shellcheck disable=SC2034 # read by github_token_usable
