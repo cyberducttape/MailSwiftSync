@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.1.0-alpha.4] - 2026-11-21
+
+Third technical preview: easier setup on more platforms and hardened
+one-line installers. Like earlier previews, binaries are checksummed and
+carry build provenance attestations but are not platform-signed while no
+signing identity is configured.
+
 - Installer hardening (audit findings MSS-01, 02, 03, 05, 06, 07):
   `install.sh` refuses to "install" over a directory and verifies the final
   program is an executable file, replaces a symlink instead of following it,
@@ -22,13 +29,25 @@
   directory, without installing the distribution's own imapsync package; on
   macOS it uses Homebrew's `imapsync` formula. The one-line `install.sh`
   offers the engine on macOS when Homebrew is present.
-- The desktop app no longer leaves an empty console window open on Windows.
-- The account card offers server settings derived from the account address
-  while the Server field is empty, computed offline.
+- The desktop window and taskbar show the MailSwiftSync icon; Linux desktop
+  entries match the window by app id.
+- For an unrecognized domain, the account card can look up that domain's own
+  published mail settings (Mozilla autoconfig over HTTPS) on request; no
+  third party is contacted and the address is not sent.
+- Counted messages use real singular and plural forms instead of
+  "mailbox(es)"; the Activity run card keeps its actions at the right edge;
+  the Verification exports are grouped into Reports and Data and support.
+- The one-line installers pick the newest published release whatever its
+  archive format (macOS builds are `.zip`), and the Installer smoke workflow
+  now runs after every release and checks that each platform installs that
+  release.
 
 ## [0.1.0-alpha.3] - 2026-11-21
 
-Republishes the 0.1.0-alpha.2 content. The `v0.1.0-alpha.2` release run
+Republishes the 0.1.0-alpha.2 content, plus two fixes: the desktop app no
+longer leaves an empty console window open on Windows, and the account card
+offers server settings derived from the account address while the Server
+field is empty (computed offline). The `v0.1.0-alpha.2` release run
 built, tested, and packaged every target but stopped at publication: the
 Windows checksum file was written with a CRLF line ending, so the release
 verifier looked for a file name ending in a carriage return. Windows now
