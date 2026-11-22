@@ -144,10 +144,10 @@ jobs:
         run: cargo build --locked --release
       - name: Install the engine and confirm it is qualified
         shell: pwsh
+        # The default per-user state location, as on a real desktop: the
+        # runner's temp folder grants other accounts write access, which the
+        # private-state check rightly refuses. The runner is a fresh VM.
         run: |
-          $state = Join-Path $env:RUNNER_TEMP ('msw-' + [Guid]::NewGuid())
-          New-Item -ItemType Directory $state | Out-Null
-          $env:MAILSWIFTSYNC_STATE_PATH = Join-Path $state 'state.db'
           $exe = 'target\release\mailswiftsync.exe'
           & $exe install-engine --yes
           if ($LASTEXITCODE -ne 0) { throw "install-engine failed ($LASTEXITCODE)" }
