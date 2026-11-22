@@ -129,6 +129,49 @@ fi
 grep -q 'Authorization: Bearer \$GITHUB_TOKEN" *\\$' "$root/install.sh" &&
   fail "the token is still passed on curl's command line"
 
+# --- publisher signature (MSS-04) -----------------------------------------
+if command -v gpg >/dev/null 2>&1; then
+  keys="$work/keys"
+  mkdir -m 700 "$keys" "$keys/trusted" "$keys/other"
+  for name in trusted other; do
+    gpg --homedir "$keys/$name" --batch --passphrase '' --quick-gen-key \
+      "MailSwiftSync $name test <$name@example.invalid>" ed25519 sign never 2>/dev/null
+  done
+  fingerprint="$(gpg --homedir "$keys/trusted" --with-colons --list-keys 2>/dev/null | awk -F: '/^fpr/ { print $10; exit }')"
+  gpg --homedir "$keys/trusted" --armor --export >"$keys/trusted.asc"
+  printf '%s  mailswiftsync-x86_64-unknown-linux-gnu.tar.gz\n' "$(printf x | sha256sum | cut -d ' ' -f 1)" >"$work/sum"
+  gpg --homedir "$keys/trusted" --batch --yes --armor --detach-sign -o "$work/sum.good.asc" "$work/sum" 2>/dev/null
+  gpg --homedir "$keys/other" --batch --yes --armor --detach-sign -o "$work/sum.other.asc" "$work/sum" 2>/dev/null
+  printf 'tampered\n' >"$work/sum.tampered"
+
+  signed() {
+    # signed TAG CHECKSUM SIGNATURE: run the check with the test key trusted.
+    (
+      load
+      # shellcheck disable=SC2034 # read by verify_checksum_signature
+      RELEASE_GPG_FINGERPRINT="$fingerprint"
+      # shellcheck disable=SC2329 # replaces the installer's embedded key
+      release_public_key() { cat "$keys/trusted.asc"; }
+      verify_checksum_signature "$@"
+    ) >/dev/null 2>&1
+  }
+  signed v1.0.0 "$work/sum" "$work/sum.good.asc" || fail "a valid signature was rejected"
+  signed v1.0.0-alpha.1 "$work/sum" "$work/sum.good.asc" || fail "a valid preview signature was rejected"
+  signed v1.0.0 "$work/sum.tampered" "$work/sum.good.asc" && fail "a tampered checksum was accepted"
+  signed v1.0.0 "$work/sum" "$work/sum.other.asc" && fail "a signature by another key was accepted"
+  signed v1.0.0-alpha.1 "$work/sum" "$work/sum.other.asc" && fail "a foreign signature was accepted on a preview"
+  signed v1.0.0 "$work/sum" "" && fail "a stable release without a signature was accepted"
+  signed v1.0.0-alpha.1 "$work/sum" "" || fail "an unsigned preview was rejected"
+  # No trust anchor yet (the shipped state): nothing is enforced, and a
+  # stable release says so.
+  ( load; verify_checksum_signature v1.0.0 "$work/sum" "" ) >/dev/null 2>&1 ||
+    fail "the unconfigured installer refused a release"
+  ( load; verify_checksum_signature v1.0.0 "$work/sum" "" ) 2>&1 >/dev/null | grep -q "no release signing key" ||
+    fail "the unconfigured installer did not warn on a stable release"
+else
+  echo "skipping publisher signature tests: gpg is not installed" >&2
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "install.sh tests: $failures failure(s)" >&2
   exit 1
