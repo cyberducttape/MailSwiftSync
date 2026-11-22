@@ -1,0 +1,157 @@
+name: Engine install smoke
+
+# Runs `mailswiftsync install-engine --yes` through every automatic route it
+# supports, on real hosts and distribution images, and requires `doctor` to
+# report the qualified imapsync 2.314 afterwards. The routes download from
+# the official imapsync distribution, so this also catches a moved or
+# changed upstream artifact (the pinned SHA-256 would refuse it).
+on:
+  pull_request:
+    paths:
+      - "src/engine_install.rs"
+      - "src/cli/provider.rs"
+      - "src/doctor.rs"
+      - "src/runner/engine_identity.rs"
+      - ".github/workflows/engine-install-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/engine_install.rs"
+      - "src/cli/provider.rs"
+      - "src/doctor.rs"
+      - "src/runner/engine_identity.rs"
+      - ".github/workflows/engine-install-smoke.yml"
+  schedule:
+    - cron: "17 5 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: Build Linux binary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.92.0
+      - name: Build
+        run: cargo build --locked --release
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: mailswiftsync-linux
+          path: target/release/mailswiftsync
+          if-no-files-found: error
+          retention-days: 1
+
+  linux:
+    name: install-engine (${{ matrix.name }})
+    needs: build-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on Ubuntu 24.04, so every image here has a newer or equal
+          # glibc. Images are pinned by digest like the repository's other
+          # containers; refresh them with `podman pull <tag>` and
+          # `podman image inspect --format '{{.Digest}}' <tag>`.
+          - name: Debian/Ubuntu apt
+            image: ubuntu:24.04@sha256:9a04f13b3f80ef056361e30868593b1cfd2279fe19e4081cb93a90bf56819d6a
+            prepare: apt-get update && apt-get install -y --no-install-recommends sudo ca-certificates
+          - name: Fedora dnf
+            image: fedora:latest@sha256:53d138f25f6738257c78553d51369b662efc0e0eb1cd1556a2fe0ad5a115be88
+            prepare: dnf -y install sudo
+          - name: Arch pacman
+            image: archlinux:latest@sha256:fcee73ea1b96e236248f53a213f71276cc9072d9025b58bce9915e32f19963ae
+            # Arch supports only full upgrades; the installer never refreshes
+            # the package database itself.
+            prepare: pacman -Syu --noconfirm sudo
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Prepare the image
+        run: ${{ matrix.prepare }}
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: mailswiftsync-linux
+      - name: Install the engine and confirm it is qualified
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mailswiftsync
+          state="$(mktemp -d)"
+          chmod 700 "$state"
+          export MAILSWIFTSYNC_STATE_PATH="$state/state.db"
+          ./mailswiftsync install-engine --yes
+          report="$(./mailswiftsync doctor --json)"
+          printf '%s\n' "$report"
+          printf '%s' "$report" | tr -d '\n' |
+            grep -Eq '"name":[[:space:]]*"imapsync executable",[[:space:]]*"status":[[:space:]]*"qualified"'
+
+  macos:
+    name: install-engine (macOS Homebrew)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.92.0
+      - name: Build
+        run: cargo build --locked --release
+      - name: Install the engine and confirm it is qualified
+        run: |
+          set -euo pipefail
+          state="$(mktemp -d)"
+          chmod 700 "$state"
+          export MAILSWIFTSYNC_STATE_PATH="$state/state.db"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          target/release/mailswiftsync install-engine --yes
+          report="$(target/release/mailswiftsync doctor --json)"
+          printf '%s\n' "$report"
+          printf '%s' "$report" | tr -d '\n' |
+            grep -Eq '"name":[[:space:]]*"imapsync executable",[[:space:]]*"status":[[:space:]]*"qualified"'
+
+  windows:
+    name: install-engine (Windows portable)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.92.0
+      - name: Initialize MSVC build environment
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+      - name: Select the MSVC linker explicitly
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
+          if (-not (Test-Path $linker)) { throw "Could not locate the x64 MSVC linker at $linker" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build
+        run: cargo build --locked --release
+      - name: Install the engine and confirm it is qualified
+        shell: pwsh
+        run: |
+          $state = Join-Path $env:RUNNER_TEMP ('msw-' + [Guid]::NewGuid())
+          New-Item -ItemType Directory $state | Out-Null
+          $env:MAILSWIFTSYNC_STATE_PATH = Join-Path $state 'state.db'
+          $exe = 'target\release\mailswiftsync.exe'
+          & $exe install-engine --yes
+          if ($LASTEXITCODE -ne 0) { throw "install-engine failed ($LASTEXITCODE)" }
+          $json = & $exe doctor --json | Out-String
+          Write-Host $json
+          $check = ($json | ConvertFrom-Json).checks | Where-Object { $_.name -eq 'imapsync executable' }
+          if ($check.status -ne 'qualified') { throw "imapsync executable is '$($check.status)': $($check.detail)" }
