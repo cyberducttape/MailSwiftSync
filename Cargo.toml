@@ -42,7 +42,8 @@ sha2 = "0.11"
 # Same parser epaint uses; validates system fallback fonts before egui would panic on them.
 skrifa = "0.50"
 zeroize = "1.8"
-zip = { version = "9.0", default-features = false }
+# Deflate is required: real imapsync Windows zips and .xlsx files use it.
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1.1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 httparse = "1.10"

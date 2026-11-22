@@ -1151,7 +1151,10 @@ mod tests {
         let archive = directory.join("engine.zip");
         {
             let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
-            let options = zip::write::SimpleFileOptions::default();
+            // Deflated like the published imapsync zip; Stored would hide a
+            // build without deflate support.
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
             zip.start_file("imapsync_2.314/imapsync.exe", options)
                 .unwrap();
             zip.write_all(b"MZ").unwrap();
