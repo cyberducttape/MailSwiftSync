@@ -29,6 +29,12 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $Repo = 'cyberducttape/MailSwiftSync'
+# Authenticode publisher (certificate subject), empty until a release signing
+# identity is configured (docs/distribution/RELEASE_SIGNING.md). Once set, a
+# stable release (vX.Y.Z) is refused unless its program carries a valid
+# signature from this publisher; a present but invalid or foreign signature
+# is refused on every channel.
+$TrustedPublisher = ''
 $Target = 'x86_64-pc-windows-msvc'
 $ArchiveName = "mailswiftsync-$Target.zip"
 
@@ -38,6 +44,29 @@ function Confirm-Step([string]$Question) {
     if ($Yes) { return $true }
     $answer = Read-Host "$Question [Y/n]"
     return ($answer -eq '' -or $answer -match '^(y|yes)$')
+}
+
+function Test-StableTag([string]$Tag) { return $Tag -match '^v\d+\.\d+\.\d+$' }
+
+function Assert-Publisher([string]$Path, [string]$Tag) {
+    $stable = Test-StableTag $Tag
+    if (-not $TrustedPublisher) {
+        if ($stable) { Write-Warning 'This installer has no expected publisher yet, so the Authenticode signature was not checked.' }
+        return
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -eq 'NotSigned') {
+        if ($stable) { throw "Stable release $Tag is not Authenticode signed; nothing was installed." }
+        Write-Host '    Preview build without a publisher signature (checksum verified only).'
+        return
+    }
+    if ($signature.Status -ne 'Valid') {
+        throw "The Authenticode signature of $Tag is $($signature.Status); nothing was installed."
+    }
+    if ($signature.SignerCertificate.Subject -ne $TrustedPublisher) {
+        throw "$Tag is signed by '$($signature.SignerCertificate.Subject)', not '$TrustedPublisher'; nothing was installed."
+    }
+    Write-Host "    Publisher signature verified ($TrustedPublisher)."
 }
 
 function Find-AssetUrl([string]$Asset) {
@@ -102,6 +131,7 @@ try {
         Where-Object { $_.Name -in @("mailswiftsync-$Target.exe", 'mailswiftsync.exe') } |
         Select-Object -First 1
     if (-not $binary) { throw 'The archive does not contain the MailSwiftSync program.' }
+    Assert-Publisher $binary.FullName $asset.Tag
 
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
     $exe = Join-Path $InstallDir 'mailswiftsync.exe'

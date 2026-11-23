@@ -20,6 +20,12 @@
 set -eu
 
 REPO="cyberducttape/MailSwiftSync"
+# Publisher trust anchors, empty until a release signing identity is
+# configured (docs/distribution/RELEASE_SIGNING.md). Once set, a stable
+# release (vX.Y.Z) is refused unless its signature verifies against them;
+# a signature that is present but wrong is refused on every channel.
+RELEASE_GPG_FINGERPRINT=""
+MACOS_TEAM_ID=""
 install_dir="${MAILSWIFTSYNC_INSTALL_DIR:-$HOME/.local/bin}"
 version=""
 from_source=0
@@ -276,6 +282,74 @@ find_published() {
   archive_name="${url##*/}"
 }
 
+# The armored public key whose fingerprint is RELEASE_GPG_FINGERPRINT.
+release_public_key() {
+  cat <<'KEY'
+KEY
+}
+
+# Whether a release tag is a stable release rather than a preview.
+is_stable_tag() {
+  printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+}
+
+# verify_checksum_signature TAG CHECKSUM SIGNATURE|""
+# Check the Linux release checksum's detached GPG signature against the
+# embedded key. Returns normally when the release may be installed.
+verify_checksum_signature() {
+  if [ -z "$RELEASE_GPG_FINGERPRINT" ]; then
+    if is_stable_tag "$1"; then
+      warn "this installer has no release signing key yet, so the publisher signature was not checked"
+    fi
+    return 0
+  fi
+  if [ -z "$3" ]; then
+    is_stable_tag "$1" && die "stable release $1 has no checksum signature; refusing to install it"
+    say "    Preview build without a publisher signature (checksum verified only)."
+    return 0
+  fi
+  if ! need gpg; then
+    is_stable_tag "$1" && die "gpg is required to check the publisher signature of $1"
+    warn "gpg is not installed, so the publisher signature was not checked"
+    return 0
+  fi
+  keyring="$work/gnupg"
+  rm -rf "$keyring"
+  mkdir -m 700 "$keyring"
+  release_public_key | gpg --homedir "$keyring" --batch --quiet --import 2>/dev/null ||
+    die "could not load the embedded release signing key"
+  status="$(gpg --homedir "$keyring" --batch --status-fd 1 --verify "$3" "$2" 2>/dev/null || true)"
+  if ! printf '%s\n' "$status" | grep -q "^\[GNUPG:\] VALIDSIG .*$RELEASE_GPG_FINGERPRINT"; then
+    die "the checksum signature of $1 does not verify against the MailSwiftSync release key; nothing was installed"
+  fi
+  say "    Publisher signature verified (key $RELEASE_GPG_FINGERPRINT)."
+}
+
+# verify_macos_signature TAG BINARY
+# Check the macOS program's code signature and team. Returns normally when
+# the release may be installed.
+verify_macos_signature() {
+  if [ -z "$MACOS_TEAM_ID" ]; then
+    if is_stable_tag "$1"; then
+      warn "this installer has no expected macOS signing team yet, so the code signature was not checked"
+    fi
+    return 0
+  fi
+  details="$(codesign -dv --verbose=2 "$2" 2>&1 || true)"
+  case "$details" in
+    *"not signed at all"*)
+      is_stable_tag "$1" && die "stable release $1 is not code-signed; refusing to install it"
+      say "    Preview build without a code signature (checksum verified only)."
+      return 0
+      ;;
+  esac
+  codesign --verify --strict "$2" 2>/dev/null ||
+    die "the code signature of $1 is invalid; nothing was installed"
+  printf '%s\n' "$details" | grep -qx "TeamIdentifier=$MACOS_TEAM_ID" ||
+    die "$1 is signed by a different team than MailSwiftSync's ($MACOS_TEAM_ID); nothing was installed"
+  say "    Code signature verified (team $MACOS_TEAM_ID)."
+}
+
 # Not called from a condition, so `set -e` stops on any failure here.
 install_published() {
   target="$1"
@@ -290,6 +364,17 @@ install_published() {
     die "checksum mismatch for $archive_name (expected $expected, got $actual); nothing was installed"
   fi
   say "    SHA-256 verified: $actual"
+  release_tag="${url%/*}"
+  release_tag="${release_tag##*/}"
+  case "$archive_name" in
+    *.tar.gz)
+      signature=""
+      if download "$url.sha256.asc" "$work/$archive_name.sha256.asc" 2>/dev/null; then
+        signature="$work/$archive_name.sha256.asc"
+      fi
+      verify_checksum_signature "$release_tag" "$work/$archive_name.sha256" "$signature"
+      ;;
+  esac
 
   mkdir -p "$work/bundle"
   case "$archive_name" in
@@ -307,6 +392,9 @@ install_published() {
     fi
   done
   [ -n "$binary" ] || die "the archive does not contain the mailswiftsync program"
+  case "$archive_name" in
+    *.zip) [ "$(uname -s)" = Darwin ] && verify_macos_signature "$release_tag" "$binary" ;;
+  esac
   install_binary "$binary"
   installed_label="MailSwiftSync $(printf '%s\n' "$url" | sed 's|.*/releases/download/\([^/]*\)/.*|\1|')"
 }
