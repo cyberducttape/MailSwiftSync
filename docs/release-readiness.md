@@ -15,7 +15,10 @@ Required CI inputs are `RELEASE_GPG_PRIVATE_KEY_BASE64`,
 `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and
 `APPLE_TEAM_ID`. They are deployment secrets, not repository defaults; missing
 inputs intentionally fail the tag workflow instead of publishing unsigned
-artifacts.
+artifacts. Preview tags may publish unsigned. The one-line installers verify
+publisher signatures against trust anchors embedded in the scripts; see
+[Release signing setup](distribution/RELEASE_SIGNING.md) for the secrets and
+the one-time anchor change.
 
 ## Linux distribution gate
 
