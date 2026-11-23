@@ -328,12 +328,13 @@ pub(super) fn spawn_retrying_busy_executable(
     }
 }
 
-/// Windows has no ETXTBSY race of this kind; spawn directly.
+/// Windows has no ETXTBSY race of this kind; spawn directly, falling back
+/// when the host job forbids breakaway.
 #[cfg(not(unix))]
 pub(super) fn spawn_retrying_busy_executable(
     command: &mut std::process::Command,
 ) -> std::io::Result<std::process::Child> {
-    command.spawn()
+    crate::process::spawn_in_process_group(command)
 }
 
 #[allow(clippy::too_many_arguments)]
