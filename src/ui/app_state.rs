@@ -195,6 +195,10 @@ pub(crate) struct App {
     /// A streamed report export running on its own read-only connection:
     /// the artifact name and the export result.
     pub(crate) report_export_receiver: Option<Receiver<(&'static str, Result<(), String>)>>,
+    /// Whether the user [0] and server [1] fields of the source [0] and
+    /// destination [1] account cards have been edited or left, so empty
+    /// "required" fields are flagged only after the operator used them.
+    pub(crate) account_fields_touched: [[bool; 2]; 2],
     /// Opt-in lookup of a domain's published IMAP settings: which account
     /// (source?), the domain, and the result.
     pub(crate) autoconfig_receiver: Option<Receiver<AutoconfigLookup>>,

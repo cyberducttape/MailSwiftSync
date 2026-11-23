@@ -1893,6 +1893,32 @@ fn apply_environment_allowlist(command: &mut Command, allowlist: &[&str]) {
     }
 }
 
+/// Spawn a command prepared by [`configure_process_group`].
+///
+/// Windows refuses `CREATE_BREAKAWAY_FROM_JOB` with ERROR_ACCESS_DENIED when
+/// MailSwiftSync itself runs inside a job that does not allow breakaway (CI
+/// runners, some terminals, service managers and sandboxes). The engine then
+/// starts inside that job instead; nested jobs still let the supervisor add
+/// it to MailSwiftSync's own kill-on-close job.
+pub(crate) fn spawn_in_process_group(
+    command: &mut Command,
+) -> std::io::Result<std::process::Child> {
+    let result = command.spawn();
+    #[cfg(windows)]
+    if result
+        .as_ref()
+        .is_err_and(|error| error.raw_os_error() == Some(ERROR_ACCESS_DENIED_CODE))
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0);
+        return command.spawn();
+    }
+    result
+}
+
+#[cfg(windows)]
+const ERROR_ACCESS_DENIED_CODE: i32 = windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32;
+
 pub(crate) fn configure_process_group(command: &mut Command) {
     #[cfg(windows)]
     {
