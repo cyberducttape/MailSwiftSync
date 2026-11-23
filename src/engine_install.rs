@@ -752,18 +752,32 @@ fn read_tar_member(
     }
 }
 
+/// The first run after installation can be the slowest the engine ever has:
+/// the packaged Windows build unpacks its bundled Perl and is virus-scanned.
+const FIRST_RUN_VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 fn confirm_qualified(executable: &Path) -> Result<InstalledEngine, String> {
-    let identity = crate::runner::resolve_imapsync_identity(&executable.to_string_lossy());
-    if identity.output_profile != crate::verification::ImapsyncOutputProfile::Packaged2314 {
+    let version = crate::runner::probe_engine_version_within(
+        &executable.to_string_lossy(),
+        FIRST_RUN_VERSION_TIMEOUT,
+    )
+    .map_err(|reason| {
+        format!(
+            "{} did not report its version ({reason}); it should be the qualified imapsync {QUALIFIED_IMAPSYNC_VERSION}",
+            executable.display()
+        )
+    })?;
+    if crate::verification::imapsync_output_profile(Some(&version))
+        != crate::verification::ImapsyncOutputProfile::Packaged2314
+    {
         return Err(format!(
-            "{} reports \"{}\", not the qualified imapsync {QUALIFIED_IMAPSYNC_VERSION}",
-            executable.display(),
-            identity.version
+            "{} reports \"{version}\", not the qualified imapsync {QUALIFIED_IMAPSYNC_VERSION}",
+            executable.display()
         ));
     }
     Ok(InstalledEngine {
         executable: executable.to_path_buf(),
-        version: identity.version,
+        version,
     })
 }
 

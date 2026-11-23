@@ -162,6 +162,19 @@ impl App {
             } else {
                 (&mut profile.destination_host, &mut profile.destination_user)
             };
+            // The address comes first: typing it offers the server settings
+            // below. "Required" errors wait until a field has been used, so
+            // a fresh plan does not open covered in red.
+            let touched = &mut self.account_fields_touched[usize::from(!source)];
+            let user_response = crate::ui::form_row(ui, language.message("ui.user"), |ui| {
+                ui.add(
+                    crate::ui::field(user)
+                        .hint_text(language.message("ui.user-hint"))
+                        .desired_width(f32::INFINITY),
+                )
+            });
+            touched[0] |= user_response.changed() || user_response.lost_focus();
+            inline_field_error(ui, language, language.message("ui.user"), user, touched[0]);
             if fixed_endpoint {
                 // Provider presets own the endpoint; it remains editable
                 // under Advanced connection settings.
@@ -171,15 +184,18 @@ impl App {
                         .color(ui.visuals().weak_text_color()),
                 );
             } else {
-                crate::ui::form_row(ui, language.message("ui.server"), |ui| {
+                let host_response = crate::ui::form_row(ui, language.message("ui.server"), |ui| {
                     ui.add(crate::ui::field(host).desired_width(f32::INFINITY))
                 });
-                inline_field_error(ui, language, language.message("ui.server"), host, true);
+                touched[1] |= host_response.changed() || host_response.lost_focus();
+                inline_field_error(
+                    ui,
+                    language,
+                    language.message("ui.server"),
+                    host,
+                    touched[1],
+                );
             }
-            crate::ui::form_row(ui, language.message("ui.user"), |ui| {
-                ui.add(crate::ui::field(user).desired_width(f32::INFINITY))
-            });
-            inline_field_error(ui, language, language.message("ui.user"), user, true);
             if !local_dovecot && !fixed_endpoint && host.trim().is_empty() {
                 let selected = if source {
                     self.source_provider
@@ -339,16 +355,24 @@ impl App {
             }
         }
         if missing {
+            // Guidance for the next step, not an error: it reads as one only
+            // once the account has been started.
+            let started = self.account_fields_touched[usize::from(!source)][0];
             ui.label(
                 RichText::new(format!(
-                    "⚠ {}",
+                    "{}{}",
+                    if started { "⚠ " } else { "" },
                     language.text(if oauth {
                         "Connect the account or provide an access token before testing it."
                     } else {
                         "Enter the password or a saved keyring ID before testing the account."
                     })
                 ))
-                .color(colors.danger)
+                .color(if started {
+                    colors.danger
+                } else {
+                    colors.text_secondary
+                })
                 .size(12.0),
             );
         }
