@@ -485,6 +485,7 @@ impl App {
             manual_oauth_refresh_receiver: None,
             report_export_receiver: None,
             keyring_operation_receiver: None,
+            account_fields_touched: [[false; 2]; 2],
             autoconfig_receiver: None,
             autoconfig_pending: None,
             engine_setup_receiver: None,
