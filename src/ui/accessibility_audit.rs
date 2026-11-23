@@ -648,3 +648,38 @@ fn account_address_offers_server_settings_while_the_server_is_empty() {
     let shown = text(&mut harness);
     assert!(!shown.contains("Use server imap.example.org"), "{shown}");
 }
+
+#[test]
+fn a_fresh_plan_flags_required_account_fields_only_after_they_are_used() {
+    let mut harness = Harness::new(1.0, false);
+    harness.app.active_view = WorkspaceView::Plan;
+    harness.app.source_provider = crate::provider::ProviderPreset::GenericImap;
+    harness.app.destination_provider = crate::provider::ProviderPreset::GenericImap;
+    for value in [
+        &mut harness.app.form.profile.source_host,
+        &mut harness.app.form.profile.source_user,
+        &mut harness.app.form.profile.destination_host,
+        &mut harness.app.form.profile.destination_user,
+    ] {
+        value.clear();
+    }
+    let text = |harness: &mut Harness| {
+        harness
+            .tree()
+            .values()
+            .filter_map(|node| node.label().or_else(|| node.value()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let fresh = text(&mut harness);
+    assert!(!fresh.contains("Server is required."), "{fresh}");
+    assert!(!fresh.contains("User is required."), "{fresh}");
+    assert!(!fresh.contains("⚠ Enter the password"), "{fresh}");
+
+    // Once the source fields have been used, empty ones are flagged.
+    harness.app.account_fields_touched[0] = [true, true];
+    let used = text(&mut harness);
+    assert!(used.contains("Server is required."), "{used}");
+    assert!(used.contains("User is required."), "{used}");
+    assert!(used.contains("⚠ Enter the password"), "{used}");
+}
