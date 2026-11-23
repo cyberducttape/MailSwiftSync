@@ -16,7 +16,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const IMAPSYNC_DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
+/// Same allowance as a launch-time probe: the packaged Windows imapsync.exe
+/// unpacks its bundled Perl on a cold start.
+const IMAPSYNC_DOCTOR_TIMEOUT: Duration = crate::runner::ENGINE_VERSION_PROBE_TIMEOUT;
 
 #[derive(Debug)]
 pub(crate) struct DoctorCheck {
@@ -385,7 +387,7 @@ fn check_executable_version_with_reader_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
-    let mut child = match command.spawn() {
+    let mut child = match crate::process::spawn_in_process_group(&mut command) {
         Ok(child) => child,
         Err(error) => {
             return DoctorCheck {
@@ -450,7 +452,10 @@ fn check_executable_version_with_reader_timeout(
         Ok(outcome) if outcome.timed_out => DoctorCheck {
             name,
             status: "blocked",
-            detail: format!("{path} did not return --version within 5 seconds"),
+            detail: format!(
+                "{path} did not return --version within {} seconds",
+                IMAPSYNC_DOCTOR_TIMEOUT.as_secs()
+            ),
         },
         Ok(outcome) if outcome.cancelled => DoctorCheck {
             name,
