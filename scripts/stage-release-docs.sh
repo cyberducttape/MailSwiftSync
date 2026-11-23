@@ -63,6 +63,7 @@ distribution_documents=(
   docs/distribution/INSTALL.md
   docs/distribution/SERVICE.md
   docs/distribution/CREDENTIAL-LIFECYCLE.md
+  docs/distribution/RELEASE_SIGNING.md
   docs/distribution/mailswiftsync-supervise.service
   docs/distribution/mailswiftsync-control.service
   docs/automation-contract.md
